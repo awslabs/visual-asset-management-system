@@ -1,0 +1,240 @@
+//@todo improve code reuse with decorators or pipe
+
+export const verifyIsBool = (value) => {
+  if (typeof value === "boolean" || value instanceof Boolean) return true;
+  else return false;
+};
+
+export const verifyIsString = (value) => {
+  if (typeof value === "string" || value instanceof String) return true;
+  else return false;
+};
+
+export const verifyIsNumber = (value) => {
+  if (typeof value === "number" && !isNaN(value)) return true;
+  else return false;
+};
+
+export const verifyIsObject = (value) => {
+  if (typeof value === "object" || value instanceof Object) return true;
+  else return false;
+};
+
+export const verifyIsNotEmpty = (value) => {
+  if (value !== "") return true;
+  else return false;
+};
+
+export const verifyStringMaxLength = (value, maxLength) => {
+  if (value.length <= maxLength) return true;
+  else return false;
+};
+
+/*
+Starts with . followed by 1 to 7 lowercase letters
+ */
+export const validateFileType = (value) => {
+  const regex = /^[\\.]([a-z]){1,7}/;
+  if (!regex.test(value)) return false;
+  return true;
+};
+
+export const fileTypePropType = function (props, propName) {
+  //check if prop is supplied by option element
+  let testValue = props[propName];
+  if (testValue && testValue.hasOwnProperty("value"))
+    testValue = testValue.value;
+
+  if (testValue === null || !verifyIsNotEmpty(testValue)) {
+    return new Error(`Invalid value for ${propName}. Value cannot be empty.`);
+  }
+
+  if (!verifyIsString(testValue)) {
+    return new Error(`Invalid value for ${propName}. Expected a string.`);
+  }
+
+  const regex = /^[\\.]([a-z]){1,7}/;
+  if (!regex.test(testValue)) {
+    return new Error(
+      `Invalid value for ${propName}. Expected a valid filetype.`
+    );
+  }
+
+  return null;
+};
+
+/*
+All lower case, no special chars or spaces except - and _ only letters for first character min 8 and max 64
+ */
+export const validateEntityId = (value) => {
+  const regex = /^[a-zA-Z]([-_a-zA-Z0-9]){2,64}/;
+  if (!regex.test(value)) return false;
+  return true;
+};
+
+export const entityIdPropType = function (props, propName) {
+  //check if prop is supplied by option element
+  let testValue = props[propName];
+  if (testValue && testValue.hasOwnProperty("value"))
+    testValue = testValue.value;
+
+  if (testValue === null || !verifyIsNotEmpty(testValue)) {
+    return new Error(`Invalid value for ${propName}. Value cannot be empty.`);
+  }
+
+  if (!verifyIsString(testValue)) {
+    return new Error(`Invalid value for ${propName}. Expected a string.`);
+  }
+
+  const regex = /^[a-zA-Z]([-_a-zA-Z0-9]){2,64}/;
+  if (!regex.test(testValue)) {
+    return new Error(
+      `Invalid value for ${propName}. Expected a valid entity id.`
+    );
+  }
+
+  return null;
+};
+
+export const formatEntityId = (s) => {
+  return s
+    .replace(/[\s+-]/g, "-")
+    .replace(/[^\w-]/g, "")
+    .toLowerCase();
+};
+
+export const entityIdArrayPropType = function (props, propName) {
+  const testValues = props[propName];
+  if (!Array.isArray(testValues)) {
+    return new Error(`Invalid value for ${propName}. Value must be an array.`);
+  }
+  for (let i = 0; i < testValues.length; i++) {
+    let testValue = testValues[i];
+    if (testValue && testValue.hasOwnProperty("value"))
+      testValue = testValue.value;
+
+    if (testValue === null || !verifyIsNotEmpty(testValue)) {
+      return new Error(`Invalid value for ${propName}. Value cannot be empty.`);
+    }
+
+    if (!verifyIsString(testValue)) {
+      return new Error(`Invalid value for ${propName}. Expected a string.`);
+    }
+
+    const regex = /^[a-zA-Z]([-_a-zA-Z0-9]){2,64}/;
+    if (!regex.test(testValue)) {
+      return new Error(
+        `Invalid value for ${propName}. Expected a valid entity id.`
+      );
+    }
+  }
+
+  return null;
+};
+
+export const boolPropType = (props, propName) => {
+  //check if prop is supplied by option element
+  let testValue = props[propName];
+  if (testValue && testValue.hasOwnProperty("value"))
+    testValue = testValue.value;
+
+  if (!verifyIsBool(testValue)) {
+    return new Error(`Invalid prop ${propName}. Value must be boolean.`);
+  }
+
+  return null;
+};
+
+export const objectPropType = (props, propName) => {
+  let testValue = props[propName];
+
+  if (!verifyIsObject(testValue)) {
+    return new Error(`Invalid prop ${propName}. Value must be object.`);
+  }
+
+  return null;
+};
+
+export const stringMaxLength = (maxLength, props, propName) => {
+  //check if prop is supplied by option element
+  let testValue = props[propName];
+  if (testValue && testValue.hasOwnProperty("value"))
+    testValue = testValue.value;
+
+  if (testValue === null || !verifyIsNotEmpty(testValue)) {
+    return new Error(`Invalid prop ${propName}. Value cannot be empty.`);
+  }
+
+  if (!verifyIsString(testValue)) {
+    return new Error(`Invalid prop ${propName}. Expected a string.`);
+  }
+
+  if (!verifyStringMaxLength(testValue, maxLength)) {
+    return new Error(
+      `Invalid prop ${propName}. Value exceeds maximum length of ${maxLength}.`
+    );
+  }
+
+  return null;
+};
+
+export const entityPropType = function (props, propName) {
+  if (!props[propName].propTypes) {
+    return new Error(
+      `Invalid prop ${propName}. Not valid entity, no PropTypes.`
+    );
+  }
+  return null;
+};
+
+export const typedObjectPropType = function (type, props, propName, object) {
+  let testValue;
+  if (object) {
+    testValue = Object.assign({}, object);
+  } else {
+    testValue = props[propName];
+  }
+
+  if (!verifyIsObject(testValue)) {
+    return new Error(`Invalid prop ${propName}. Value must be object.`);
+  }
+
+  for (const prop in testValue) {
+    const results = type.propTypes[prop](type, prop);
+    if (results !== null) {
+      return results;
+    }
+  }
+
+  return null;
+};
+
+export const typedObjectArrayPropType = function (type, props, propName) {
+  const testValues = props[propName];
+  if (!Array.isArray(testValues)) {
+    return new Error(`Invalid value for ${propName}. Value must be an array.`);
+  }
+  for (let i = 0; i < testValues.length; i++) {
+    let testValue = testValues[i];
+    const results = typedObjectPropType(type, null, null, testValue);
+    if (results !== null) {
+      return results;
+    }
+  }
+
+  return null;
+};
+export const EntityPropTypes = {
+  ENTITY_ID: entityIdPropType,
+  ENTITY_ID_ARRAY: entityIdArrayPropType,
+  ENTITY: entityPropType,
+  FILE_TYPE: fileTypePropType,
+  STRING_32: stringMaxLength.bind(null, 32),
+  STRING_64: stringMaxLength.bind(null, 64),
+  STRING_128: stringMaxLength.bind(null, 128),
+  STRING_256: stringMaxLength.bind(null, 256),
+  BOOL: boolPropType,
+  OBJECT: objectPropType,
+  TYPED_OBJECT: typedObjectPropType,
+  TYPED_OBJECT_ARRAY: typedObjectArrayPropType,
+};

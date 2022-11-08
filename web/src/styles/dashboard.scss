@@ -1,0 +1,10 @@
+@use "~@awsui/design-tokens/index.scss" as awsui;
+@use "./base";
+
+.custom-link-font-weight-light {
+  font-weight: lighter;
+}
+
+.custom-dashboard-container {
+  height: 100%;
+}

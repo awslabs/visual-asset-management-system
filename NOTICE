@@ -1,0 +1,20 @@
+Amazon VAMS
+
+Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+**********************
+THIRD PARTY COMPONENTS
+**********************
+This software includes third party software subject to the following copyrights:
+
+* React - MIT - https://github.com/facebook/react/blob/main/LICENSE
+* Create-react-app - MIT - https://github.com/facebook/create-react-app/blob/main/LICENSE
+* Nodejs - MIT - https://github.com/nodejs/node/blob/master/LICENSE
+* Babylonjs - Apache 2.0 - https://github.com/BabylonJS/Babylon.js/blob/master/license.md
+* React-router - MIT - https://github.com/remix-run/react-router/blob/main/LICENSE.md
+* PapaParse - MIT - https://github.com/mholt/PapaParse/blob/master/LICENSE
+* React Flow - MIT - https://github.com/wbkd/react-flow/blob/main/LICENSE
+* arraybuffer-to-buffer - MIT - https://www.npmjs.com/package/arraybuffer-to-buffer
+* fcs - MIT - https://github.com/MorganConrad/fcs/blob/master/LICENSE.md
+* buffer - MIT - https://github.com/feross/buffer/blob/master/LICENSE
+* dompurify - Apache 2.0 - https://github.com/cure53/DOMPurify/blob/main/LICENSE

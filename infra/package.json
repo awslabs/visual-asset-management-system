@@ -1,0 +1,52 @@
+{
+  "name": "infra",
+  "version": "0.1.0",
+  "bin": {
+    "infra": "bin/infra.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "jest",
+    "cdk": "cdk",
+    "cdk.synth.app": "cdk --app 'npx ts-node bin/infra.ts' synth",
+    "cdk.deploy.app": "cdk --app 'npx ts-node bin/infra.ts' deploy",
+    "deploy.dev": "npm run cdk.deploy.app -- --region us-east-1 -c stack-name='dev' --require-approval never --parameters ",
+    "deploy.alpha": "npm run cdk.deploy.app -- --region us-east-1 -c stack-name='alpha' --require-approval never --parameters ",
+    "deploy.bms": "npm run cdk.deploy.app -- --region eu-west-1 -c stack-name='bms' --require-approval never --parameters "
+  },
+  "devDependencies": {
+    "@aws-cdk/assert": "~1.139.0",
+    "@types/jest": "^26.0.10",
+    "@types/node": "10.17.27",
+    "aws-cdk": "~1.139.0",
+    "jest": "^26.4.2",
+    "ts-jest": "^26.2.0",
+    "ts-node": "^9.0.0",
+    "typescript": "~3.9.7"
+  },
+  "dependencies": {
+    "@aws-cdk/aws-amplify": "~1.139.0",
+    "@aws-cdk/aws-apigatewayv2": "~1.139.0",
+    "@aws-cdk/aws-apigatewayv2-authorizers": "~1.139.0",
+    "@aws-cdk/aws-apigatewayv2-integrations": "~1.139.0",
+    "@aws-cdk/aws-s3": "~1.139.0",
+    "@aws-cdk/aws-s3-deployment": "~1.139.0",
+    "@aws-cdk/aws-dynamodb": "~1.139.0",
+    "@aws-cdk/aws-logs": "~1.139.0",
+    "@aws-cdk/aws-cognito": "~1.139.0",
+    "@aws-cdk/aws-iam": "~1.139.0",
+    "@aws-cdk/aws-ssm": "~1.139.0",
+    "@aws-cdk/aws-wafv2": "~1.139.0",
+    "@aws-cdk/aws-cloudfront": "~1.139.0",
+    "@aws-cdk/aws-cloudfront-origins": "~1.139.0",
+    "@aws-cdk/aws-events-targets": "~1.139.0",
+    "@aws-cdk/aws-lambda": "~1.139.0",
+    "@aws-cdk/aws-lambda-python": "~1.139.0",
+    "@aws-cdk/aws-lambda-nodejs": "~1.139.0",
+    "@aws-cdk/cloudformation-include": "~1.139.0",
+    "@aws-cdk/aws-cloudtrail": "~1.139.0",
+    "@aws-cdk/core": "~1.139.0",
+    "source-map-support": "^0.5.16"
+  }
+}
