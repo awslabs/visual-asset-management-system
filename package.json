@@ -1,6 +1,6 @@
 {
   "name": "project-root",
-  "version": "1.1.1",
+  "version": "1.0.0",
   "scripts": {
     "buildanddeploy.dev": "npm run build && npm run deploy.dev",
     "build": "cd web && npm install && npm run build",
