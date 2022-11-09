@@ -1,0 +1,10 @@
+{
+  "threshold": 0,
+  "reporters": ["html", "console", "badge"],
+  "ignore": [
+    "**/node_modules/**",
+    "**/cdk.out/**",
+    "**/web/build/**"
+  ],
+  "absolute": true
+}

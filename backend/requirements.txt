@@ -1,0 +1,31 @@
+attrs==22.1.0; python_version >= "3.5"
+boto3==1.24.45; python_version >= "3.7"
+botocore==1.27.45; python_version >= "3.7"
+certifi==2022.6.15; python_version >= "3.7" and python_version < "4"
+charset-normalizer==2.1.0; python_version >= "3.7" and python_version < "4" and python_full_version >= "3.6.0"
+dill==0.3.5.1; python_version >= "2.7" and python_full_version < "3.0.0" or python_full_version >= "3.7.0"
+google-pasta==0.2.0
+idna==3.3; python_version >= "3.7" and python_version < "4"
+importlib-metadata==4.12.0; python_version >= "3.7"
+jmespath==1.0.1; python_version >= "3.7"
+multiprocess==0.70.13; python_version >= "2.7" and python_full_version < "3.0.0" or python_full_version >= "3.7.0"
+numpy==1.23.1
+packaging==21.3; python_version >= "3.6"
+pandas==1.4.3; python_version >= "3.8"
+pathos==0.2.9; python_version >= "2.7" and python_full_version < "3.0.0" or python_full_version >= "3.7.0"
+pox==0.3.1; python_version >= "2.7" and python_full_version < "3.0.0" or python_full_version >= "3.7.0"
+ppft==1.7.6.5; python_version >= "2.7" and python_full_version < "3.0.0" or python_full_version >= "3.7.0"
+protobuf3-to-dict==0.1.5
+protobuf==3.20.1; python_version >= "3.7"
+pyparsing==3.0.9; python_full_version >= "3.6.8" and python_version >= "3.6"
+python-dateutil==2.8.2; python_version >= "3.8" and python_full_version < "3.0.0" or python_full_version >= "3.3.0" and python_version >= "3.8"
+pytz==2022.1; python_version >= "3.8"
+pyyaml==6.0; python_version >= "3.6"
+requests==2.28.1; python_version >= "3.7" and python_version < "4"
+s3transfer==0.6.0; python_version >= "3.7"
+sagemaker==2.75.1
+six==1.16.0; python_version >= "3.8" and python_full_version < "3.0.0" or python_full_version >= "3.7.0" and python_version >= "3.8"
+smdebug-rulesconfig==1.0.1; python_version >= "2.7"
+stepfunctions==2.3.0
+urllib3==1.26.11; python_version >= "3.7" and python_full_version < "3.0.0" and python_version < "4" or python_full_version >= "3.6.0" and python_version < "4" and python_version >= "3.7"
+zipp==3.8.1; python_version >= "3.7"

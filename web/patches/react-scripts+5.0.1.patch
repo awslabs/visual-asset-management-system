@@ -1,0 +1,36 @@
+diff --git a/node_modules/react-scripts/config/webpack.config.js b/node_modules/react-scripts/config/webpack.config.js
+index e465d8e..9efc4fe 100644
+--- a/node_modules/react-scripts/config/webpack.config.js
++++ b/node_modules/react-scripts/config/webpack.config.js
+@@ -320,6 +320,9 @@ module.exports = function (webpackEnv) {
+         .map(ext => `.${ext}`)
+         .filter(ext => useTypeScript || !ext.includes('ts')),
+       alias: {
++       'Buffer': 'buffer',
++       'react/jsx-dev-runtime': 'react/jsx-dev-runtime.js',
++       'react/jsx-runtime': 'react/jsx-runtime.js',
+         // Support React Native Web
+         // https://www.smashingmagazine.com/2016/08/a-glimpse-into-the-future-with-react-native-for-web/
+         'react-native': 'react-native-web',
+@@ -330,6 +333,10 @@ module.exports = function (webpackEnv) {
+         }),
+         ...(modules.webpackAliases || {}),
+       },
++      fallback: { 
++        "stream": false,
++        buffer: require.resolve('buffer/'),
++      },
+       plugins: [
+         // Prevents users from importing files from outside of src/ (or node_modules/).
+         // This often causes confusion because we only process files within src/ with babel.
+@@ -604,6 +611,10 @@ module.exports = function (webpackEnv) {
+       ].filter(Boolean),
+     },
+     plugins: [
++        new webpack.ProvidePlugin({
++            Buffer: ['buffer', 'Buffer'],
++        }),
++      // https://github.com/webpack/changelog-v5/issues/10
+       // Generates an `index.html` file with the <script> injected.
+       new HtmlWebpackPlugin(
+         Object.assign(
