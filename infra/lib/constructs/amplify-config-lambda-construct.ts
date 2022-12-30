@@ -46,7 +46,7 @@ export class AmplifyConfigLambdaConstruct extends Construct {
     constructor(parent: Construct, name: string, props: AmplifyConfigLambdaConstructProps) {
         super(parent, name);
 
-        props = { ...defaultProps, ...props };
+        props = { ...props };
 
         const lambdaFn = new lambda.Function(this, "Lambda", {
             runtime: lambda.Runtime.PYTHON_3_9,

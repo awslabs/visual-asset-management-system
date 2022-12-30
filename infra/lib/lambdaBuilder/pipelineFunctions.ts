@@ -88,7 +88,8 @@ export function buildCreatePipelineFunction(
         actions: [                 
             "ecr:CreateRepository",
             "ecr:DeleteRepository", 
-            "ecr:DescribeRepositories" 
+            "ecr:DescribeRepositories",
+            "ecr:TagResource"
         ],
         resources: [ '*' ]
     }));
