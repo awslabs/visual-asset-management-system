@@ -10,11 +10,11 @@
     "watch": "tsc -w",
     "test": "jest",
     "cdk": "cdk",
-    "cdk.synth.app": "cdk --app 'npx ts-node bin/infra.ts' synth",
-    "cdk.deploy.app": "cdk --app 'npx ts-node bin/infra.ts' deploy",
-    "deploy.dev": "npm run cdk.deploy.app -- --region us-east-1 -c stack-name='dev' --require-approval never --parameters ",
-    "deploy.alpha": "npm run cdk.deploy.app -- --region us-east-1 -c stack-name='alpha' --require-approval never --parameters ",
-    "deploy.bms": "npm run cdk.deploy.app -- --region eu-west-1 -c stack-name='bms' --require-approval never --parameters "
+    "cdk.synth.app": "cdk synth",
+    "cdk.deploy.app": "cdk deploy --all",
+    "deploy.dev": "npm run cdk.deploy.app -- --require-approval never --context ",
+    "deploy.alpha": "npm run cdk.deploy.app -- --require-approval never --context ",
+    "deploy.bms": "npm run cdk.deploy.app -- --c stack-name=bms -c region=eu-west-1 --require-approval never --context "
   },
   "devDependencies": {
     "@aws-cdk/assert": "2.47.0",

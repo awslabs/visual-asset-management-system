@@ -13,7 +13,7 @@ import {AmplifyConfigLambdaConstruct} from "./constructs/amplify-config-lambda-c
 import {CloudFrontS3WebSiteConstruct} from "./constructs/cloudfront-s3-website-construct";
 import {CognitoWebNativeConstruct} from "./constructs/cognito-web-native-construct";
 import {ApiGatewayV2CloudFrontConstruct} from "./constructs/apigatewayv2-cloudfront-construct";
-import { Wafv2BasicConstruct, WAFScope } from "./constructs/wafv2-basic-construct";
+import {SsmParameterReaderConstruct} from "./constructs/ssm-parameter-reader-construct";
 import { Construct } from "constructs";
 import { NagSuppressions } from 'cdk-nag';
 
@@ -21,15 +21,23 @@ interface EnvProps {
     prod: boolean, //ToDo: replace with env
     env?: cdk.Environment;
     stackName: string;
+    ssmWafArnParameterName: string;
+    ssmWafArnParameterRegion: string;
 }
 
 export class VAMS extends cdk.Stack {
     constructor(scope: Construct, id: string, props: EnvProps) {
-        super(scope, id);
+        super(scope, id, props);
+ 
+         const cfWafWebAcl = new SsmParameterReaderConstruct(this, "SsmWafParameter", {
+             ssmParameterName: props.ssmWafArnParameterName,
+             ssmParameterRegion: props.ssmWafArnParameterRegion,
+         }).getValue();
 
         const adminEmailAddress = new cdk.CfnParameter(this, "adminEmailAddress", {
             type: "String",
-            description: "Email address for login and where your password is sent to. You wil be sent a temporary password for the turbine to authenticate to Cognito."
+            description: "Email address for login and where your password is sent to. You wil be sent a temporary password for the turbine to authenticate to Cognito.",
+            default: process.env.VAMS_ADMIN_EMAIL || scope.node.tryGetContext("adminEmailAddress"),
         });
 
         const webAppBuildPath = "../web/build";
@@ -48,20 +56,14 @@ export class VAMS extends cdk.Stack {
             storageResources: storageResources,
         });
         const congitoUser = new cognito.CfnUserPoolUser(this, "AdminUser", {
-            username: adminEmailAddress.valueAsString,
+            username: process.env.VAMS_ADMIN_EMAIL || scope.node.tryGetContext("adminEmailAddress"),
             userPoolId: cognitoResources.userPoolId,
             desiredDeliveryMediums: ["EMAIL"],
             userAttributes: [{
                 name: "email",
-                value: adminEmailAddress.valueAsString
+                value: process.env.VAMS_ADMIN_EMAIL || scope.node.tryGetContext("adminEmailAddress")
             }]
         });
-
-        const wafv2CF = new Wafv2BasicConstruct(this, "Wafv2CF", {
-            ...props,
-            wafScope: WAFScope.CLOUDFRONT,
-        });
-
 
         // initialize api gateway and bind it to /api route of cloudfront
         const api = new ApiGatewayV2CloudFrontConstruct(this, "api", {
@@ -73,7 +75,7 @@ export class VAMS extends cdk.Stack {
         const website = new CloudFrontS3WebSiteConstruct(this, "WebApp", {
             ...props,
             webSiteBuildPath: webAppBuildPath,
-            webAcl: wafv2CF.webacl.attrArn,
+            webAcl: cfWafWebAcl,
             apiUrl: api.apiUrl,
             assetBucketUrl: storageResources.s3.assetBucket.bucketRegionalDomainName,
         });
@@ -94,7 +96,6 @@ export class VAMS extends cdk.Stack {
             appClientId: cognitoResources.webClientId,
             identityPoolId: cognitoResources.identityPoolId,
             userPoolId: cognitoResources.userPoolId,
-            env: {region: cdk.Stack.of(this).region || process.env.AWS_REGION }
         });
 
         const assetBucketOutput = new cdk.CfnOutput(this, "AssetBucketNameOutput", {
@@ -121,7 +122,7 @@ export class VAMS extends cdk.Stack {
         ], true);
 
 
-        NagSuppressions.addResourceSuppressionsByPath(this, "/dev/WebApp/WebAppDistribution/Resource", [
+        NagSuppressions.addResourceSuppressionsByPath(this, `/${props.stackName}/WebApp/WebAppDistribution/Resource`, [
             {
                 id: "AwsSolutions-CFR4",
                 reason: "This requires use of a custom viewer certificate which should be provided by customers."
@@ -129,11 +130,11 @@ export class VAMS extends cdk.Stack {
         ],true);
 
         const refactorPaths = [
-            "/dev/VAMSWorkflowIAMRole/Resource", 
-            "/dev/lambdaPipelineRole", 
-            "/dev/pipelineService", 
-            "/dev/workflowService", 
-            "/dev/listExecutions"
+            `/${props.stackName}/VAMSWorkflowIAMRole/Resource`, 
+            `/${props.stackName}/lambdaPipelineRole`, 
+            `/${props.stackName}/pipelineService`, 
+            `/${props.stackName}/workflowService`, 
+            `/${props.stackName}/listExecutions`
         ]
         for(let path of refactorPaths) {
             const reason = 

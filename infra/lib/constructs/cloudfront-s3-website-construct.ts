@@ -62,7 +62,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
     props = { ...defaultProps, ...props };
 
     const accessLogsBucket = new s3.Bucket(this, "AccessLogsBucket", {
-      encryption: s3.BucketEncryption.KMS_MANAGED,
+      encryption: s3.BucketEncryption.S3_MANAGED,
       serverAccessLogsPrefix: "web-app-access-log-bucket-logs/",
       versioned: true,
       blockPublicAccess: BlockPublicAccess.BLOCK_ALL
@@ -124,8 +124,8 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
         contentSecurityPolicy: {
           contentSecurityPolicy: 
             `default-src 'none'; style-src 'self' 'unsafe-inline'; ` 
-            + `connect-src 'self' https://cognito-idp.us-east-1.amazonaws.com/ https://cognito-identity.us-east-1.amazonaws.com https://${props.apiUrl} https://${props.assetBucketUrl}; `
-            + `script-src 'self' https://cognito-idp.us-east-1.amazonaws.com/ https://cognito-identity.us-east-1.amazonaws.com https://${props.apiUrl} https://${props.assetBucketUrl}; `
+            + `connect-src 'self' https://cognito-idp.${props.env?.region}.amazonaws.com/ https://cognito-identity.${props.env?.region}.amazonaws.com https://${props.apiUrl} https://${props.assetBucketUrl}; `
+            + `script-src 'self' https://cognito-idp.${props.env?.region}.amazonaws.com/ https://cognito-identity.${props.env?.region}.amazonaws.com https://${props.apiUrl} https://${props.assetBucketUrl}; `
             + `img-src 'self' data: https://${props.assetBucketUrl}; `
             + `media-src 'self' data: https://${props.assetBucketUrl}; `
             + `object-src 'none'; `

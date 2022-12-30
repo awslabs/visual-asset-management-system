@@ -31,7 +31,7 @@ export interface storageResources {
 export function storageResourcesBuilder(scope: Construct): storageResources {
 
     const accessLogsBucket = new s3.Bucket(scope, "AccessLogsBucket", {
-        encryption: s3.BucketEncryption.KMS_MANAGED,
+        encryption: s3.BucketEncryption.S3_MANAGED,
         serverAccessLogsPrefix: 'access-log-bucket-logs/',
         versioned: true,
         blockPublicAccess: BlockPublicAccess.BLOCK_ALL
