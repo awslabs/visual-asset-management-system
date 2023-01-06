@@ -144,7 +144,8 @@ fabric.properties
 .LSOverride
 
 # Icon must end with two \r
-Icon
+Icon
+
 
 # Thumbnails
 ._*
@@ -334,3 +335,7 @@ tags
 
 
 report
+
+test.yaml
+test.json
+test.bat

@@ -4,6 +4,7 @@
  */
 
  import * as cdk from 'aws-cdk-lib';
+import { NestedStack } from 'aws-cdk-lib';
 import * as wafv2 from "aws-cdk-lib/aws-wafv2";
 import { Construct } from "constructs";
 export enum WAFScope {
@@ -30,7 +31,7 @@ const defaultProps: Partial<Wafv2BasicConstructProps> = {
 /**
  * Deploys the notification handlers
  */
-export class Wafv2BasicConstruct extends Construct {
+export class Wafv2BasicConstruct extends NestedStack {
     public webacl: wafv2.CfnWebACL;
 
     constructor(parent: Construct, name: string, props: Wafv2BasicConstructProps) {

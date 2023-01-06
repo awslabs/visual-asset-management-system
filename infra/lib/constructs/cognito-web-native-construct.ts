@@ -8,10 +8,17 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import * as cdk from 'aws-cdk-lib';
 
-import {storageResources} from "../storage-builder";
+import {storageResources} from "../constructs/storage-builder-construct";
 import { Construct } from "constructs";
-import { NagSuppressions } from "cdk-nag";
-import { Duration } from "aws-cdk-lib";
+import { Duration, NestedStack } from "aws-cdk-lib";
+
+export function CognitoStack(parent:Construct,id:string,props:CognitoWebNativeConstructProps) {
+    
+    const cognitoResources = new CognitoWebNativeConstruct(parent, id, {
+        ...props
+    });
+    return cognitoResources;
+}
 
 export interface CognitoWebNativeConstructProps extends cdk.StackProps {
     storageResources: storageResources
@@ -28,7 +35,7 @@ const defaultProps: Partial<CognitoWebNativeConstructProps> = {
 /**
  * Deploys Cognito with an Authenticated & UnAuthenticated Role with a Web and Native client
  */
-export class CognitoWebNativeConstruct extends Construct {
+export class CognitoWebNativeConstruct extends NestedStack {
     public userPool: cognito.UserPool;
     public webClientUserPool: cognito.UserPoolClient;
     public nativeClientUserPool: cognito.UserPoolClient;
@@ -250,7 +257,6 @@ export class CognitoWebNativeConstruct extends Construct {
         new ssm.StringParameter(this, "COGNITO_NATIVE_CLIENT_ID", {
             stringValue: userPoolNativeClient.userPoolClientId,
         });
-
         // assign public properties
         this.userPool = userPool;
         this.webClientUserPool = userPoolWebClient;
@@ -262,4 +268,20 @@ export class CognitoWebNativeConstruct extends Construct {
         this.webClientId = userPoolWebClient.userPoolClientId;
         this.nativeClientId = userPoolNativeClient.userPoolClientId;
     }
+}
+export function CognitoUser(parent:Construct,cognitoResources:CognitoWebNativeConstruct){
+    const adminEmailAddress = new cdk.CfnParameter(parent, "adminEmailAddress", {
+        type: "String",
+        description: "Email address for login and where your password is sent to. You wil be sent a temporary password for the turbine to authenticate to Cognito."
+    });
+    const cognitoUser = new cognito.CfnUserPoolUser(parent, "AdminUser", {
+        username: adminEmailAddress.valueAsString,
+        userPoolId: cognitoResources.userPoolId,
+        desiredDeliveryMediums: ["EMAIL"],
+        userAttributes: [{
+            name: "email",
+            value: adminEmailAddress.valueAsString
+        }]
+    });
+    return cognitoUser
 }
