@@ -64,6 +64,10 @@ Sample use cases that have leveraged early iterations of VAMS include:
 
 5) `cdk deploy dev --parameters adminEmailAddress=myuser@example.com` - replace with your email address to deploy. An account is created in an AWS Cognito User Pool using this email address. Expect an email from no-reply@verificationemail.com with a temporary password. 
 
+6) To modify the tags to all resources (i.e. for searchability), modify the `infra/tsconfig.json` file. They are located under `context.environments.common`.
+
+7) To add a permission boundary or IAM RoleName Prefix modify `infra/tsconfig.json` to include those under `context.environments.aws`.
+
 #### Deployment Success
 
 1) Navigate to URL provided in `{stackName].WebAppCloudFrontDistributionDomainName{uuid}` from `cdk deploy` output.

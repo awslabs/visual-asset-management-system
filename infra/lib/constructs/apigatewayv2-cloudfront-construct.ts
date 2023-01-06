@@ -10,7 +10,7 @@ import * as cloudfrontOrigins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from "constructs";
-
+import { NestedStack } from "aws-cdk-lib";
 export interface ApiGatewayV2CloudFrontProps extends cdk.StackProps {
     /**
      * The Cognito UserPool to use for the default authorizer
@@ -42,7 +42,7 @@ const defaultProps: Partial<ApiGatewayV2CloudFrontProps> = {
  * Creates:
  * - ApiGatewayV2 HttpApi
  */
-export class ApiGatewayV2CloudFrontConstruct extends Construct {
+export class ApiGatewayV2CloudFrontConstruct extends NestedStack {
     /**
      * Returns the ApiGatewayV2 instance to attach lambdas or other routes
      */

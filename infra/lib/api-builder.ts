@@ -11,7 +11,7 @@ import { ApiGatewayV2LambdaConstruct } from "./constructs/apigatewayv2-lambda-co
 import { ApiGatewayV2CloudFrontConstruct } from "./constructs/apigatewayv2-cloudfront-construct";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as path from "path";
-import { storageResources } from "./storage-builder";
+import { storageResources } from "./constructs/storage-builder-construct";
 import { buildConfigService } from "./lambdaBuilder/configFunctions";
 import {
   buildCreateDatabaseLambdaFunction,
@@ -37,12 +37,25 @@ import {
   buildEnablePipelineFunction,
   buildPipelineService,
 } from "./lambdaBuilder/pipelineFunctions";
+import { NestedStack } from 'aws-cdk-lib';
 
 
 interface apiGatewayLambdaConfiguration {
   routePath: string;
   method: apigwv2.HttpMethod;
   api: apigwv2.HttpApi;
+}
+
+export class ApiBuilderNestedStack extends NestedStack {
+  constructor(
+    parent: Construct, 
+    name: string,
+    api: ApiGatewayV2CloudFrontConstruct,
+    storageResources: storageResources
+    ) {
+    super(parent, name);
+    apiBuilder(this,api,storageResources);
+  }
 }
 
 function attachFunctionToApi(
@@ -67,7 +80,7 @@ export function apiBuilder(
   scope: Construct,
   api: ApiGatewayV2CloudFrontConstruct,
   storageResources: storageResources
-  ) {
+) {
   const layer = new lambda.LayerVersion(scope, "stepfunctions", {
     code: lambda.Code.fromAsset(
       path.join(__dirname, "./lambda_layers/stepfunctions.zip")
@@ -79,13 +92,13 @@ export function apiBuilder(
 
   //config resources
   const createConfigFunction = buildConfigService(
-    scope, 
+    scope,
     storageResources.s3.assetBucket
   )
 
   attachFunctionToApi(scope, createConfigFunction, {
-    routePath: '/secure-config', 
-    method: apigwv2.HttpMethod.GET, 
+    routePath: '/secure-config',
+    method: apigwv2.HttpMethod.GET,
     api: api.apiGatewayV2
   })
 
@@ -232,7 +245,7 @@ export function apiBuilder(
     scope,
     storageResources.dynamo.pipelineStorageTable,
     storageResources.s3.artefactsBucket,
-    storageResources.s3.sagemakerBucket, 
+    storageResources.s3.sagemakerBucket,
     storageResources.s3.assetBucket,
     enablePipelineFunction
   );
@@ -335,12 +348,12 @@ export function apiBuilder(
 
   //Enabling API Gateway Access Logging: Currently the only way to do this is via V1 constructs
   //https://github.com/aws/aws-cdk/issues/11100#issuecomment-904627081
-  
+
   const accessLogs = new logs.LogGroup(scope, 'VAMS-API-AccessLogs')
   const stage = api.apiGatewayV2.defaultStage?.node.defaultChild as apigateway.CfnStage
   stage.accessLogSettings = {
-      destinationArn: accessLogs.logGroupArn,
-      format: JSON.stringify({
+    destinationArn: accessLogs.logGroupArn,
+    format: JSON.stringify({
       requestId: '$context.requestId',
       userAgent: '$context.identity.userAgent',
       sourceIp: '$context.identity.sourceIp',
@@ -352,6 +365,6 @@ export function apiBuilder(
       protocol: '$context.protocol',
       responseLength: '$context.responseLength',
       domainName: '$context.domainName'
-      })
+    })
   }
 }

@@ -9,7 +9,7 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
 import * as s3deployment from "aws-cdk-lib/aws-s3-deployment";
 import * as cdk from 'aws-cdk-lib';
-import { Duration } from "aws-cdk-lib";
+import { Duration, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { requireTLSAddToResourcePolicy } from "../security";
 
@@ -41,7 +41,7 @@ const defaultProps: Partial<CloudFrontS3WebSiteConstructProps> = {
  *
  * On redeployment, will automatically invalidate the CloudFront distribution cache
  */
-export class CloudFrontS3WebSiteConstruct extends Construct {
+export class CloudFrontS3WebSiteConstruct extends NestedStack {
   /**
    * The origin access identity used to access the S3 website
    */
