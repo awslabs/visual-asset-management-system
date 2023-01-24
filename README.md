@@ -45,6 +45,10 @@ Sample use cases that have leveraged early iterations of VAMS include:
 * AWS CDK cli
 * Programatic access to AWS account at minimum access levels outlined above.
 
+### Screenshots
+![Assets View](./diagrams/screenshots/assets_view.jpeg)
+![Asset Detail View](./diagrams/screenshots/asset_detail_view.jpeg)
+![Workflows](./diagrams/screenshots/workflow.jpeg)
 
 ### Deploy VAMS for the First Time
 
@@ -88,6 +92,17 @@ Please note, depending on what changes are in flight, VAMS may not be available 
 
 VAMS Backend is composed of AWS Lambda functions that are accessed through an AWS API Gateway.
 
+#### Architecture diagrams for Individual components
+
+#### Asset Management
+![asset_management](./diagrams/asset_management.jpeg)
+
+#### Pipelines Creation
+Pipelines are a feature in VAMS that allow you to edit 
+![pipelines_creation](./diagrams/pipeline_creation.jpeg)
+
+#### Workflows Execution
+![Workflows Execution](/diagrams/workflow_execution.jpeg)
 ### Frontend
 
 VAMS Frontend is a ReactJS application.
@@ -96,6 +111,7 @@ VAMS Frontend is a ReactJS application.
 
 VAMS API and frontend are authorized through AWS Cognito user accounts only.
 
+![Security](./diagrams/security.jpeg)
 
 ### Code Layout
 
@@ -111,7 +127,7 @@ Checkout the [VAMS workshop](https://catalog.us-east-1.prod.workshops.aws/worksh
 
 ## Developers
 
-Checkout the [developer guide](./DeveloperGuide.md).
+To know more about how VAMS works and for instructions on configuring pipeline & workflow, refer to the Developer Guide [developer guide](./DeveloperGuide.md).
 
 ## Security
 
