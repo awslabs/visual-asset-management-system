@@ -61,7 +61,7 @@ export function storageResourcesBuilder(scope: Construct): storageResources {
           },
         ],
         versioned: true,
-        encryption: s3.BucketEncryption.KMS_MANAGED,
+        encryption: s3.BucketEncryption.S3_MANAGED,
         serverAccessLogsBucket: accessLogsBucket, 
         serverAccessLogsPrefix: "asset-bucket-logs/", 
         blockPublicAccess: BlockPublicAccess.BLOCK_ALL
@@ -70,7 +70,7 @@ export function storageResourcesBuilder(scope: Construct): storageResources {
 
     const artefactsBucket = new s3.Bucket(scope, "ArtefactsBucket", {
         versioned: false,
-        encryption: s3.BucketEncryption.KMS_MANAGED, 
+        encryption: s3.BucketEncryption.S3_MANAGED,
         serverAccessLogsBucket: accessLogsBucket, 
         serverAccessLogsPrefix: "artefacts-bucket-logs/", 
         blockPublicAccess: BlockPublicAccess.BLOCK_ALL
@@ -79,7 +79,7 @@ export function storageResourcesBuilder(scope: Construct): storageResources {
 
     const sagemakerBucket = new s3.Bucket(scope, "SagemakerBucket", {
         versioned: false,
-        encryption: s3.BucketEncryption.KMS_MANAGED, 
+        encryption: s3.BucketEncryption.S3_MANAGED,
         serverAccessLogsBucket: accessLogsBucket, 
         serverAccessLogsPrefix: "sagemaker-bucket-logs/", 
         blockPublicAccess: BlockPublicAccess.BLOCK_ALL
