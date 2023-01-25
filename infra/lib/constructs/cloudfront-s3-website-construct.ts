@@ -62,7 +62,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
     props = { ...defaultProps, ...props };
 
     const accessLogsBucket = new s3.Bucket(this, "AccessLogsBucket", {
-      encryption: s3.BucketEncryption.KMS_MANAGED,
+      encryption: s3.BucketEncryption.S3_MANAGED,
       serverAccessLogsPrefix: "web-app-access-log-bucket-logs/",
       versioned: true,
       blockPublicAccess: BlockPublicAccess.BLOCK_ALL
