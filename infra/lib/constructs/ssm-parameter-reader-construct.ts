@@ -14,7 +14,12 @@
  */
 
 import * as cdk from "aws-cdk-lib";
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as iam from "aws-cdk-lib/aws-iam";
+import * as custom_resources from 'aws-cdk-lib/custom-resources';
 import { Construct } from "constructs";
+import { CfnCustomResource, CustomResource } from "aws-cdk-lib";
+import { CfnFunction } from "aws-cdk-lib/aws-lambda";
 
 export interface SsmParameterReaderConstructProps extends cdk.StackProps {
     readonly ssmParameterName: string;
@@ -39,7 +44,7 @@ const defaultProps: Partial<SsmParameterReaderConstructProps> = {
  *
  */
 export class SsmParameterReaderConstruct extends Construct {
-    public ssmParameter: cdk.custom_resources.AwsCustomResource;
+    public ssmParameter: cdk.CustomResource;
 
     constructor(parent: Construct, name: string, props: SsmParameterReaderConstructProps) {
         super(parent, name);
@@ -51,27 +56,92 @@ export class SsmParameterReaderConstruct extends Construct {
         const physicalResourceId = props.pullEveryTime
             ? Date.UTC.toString()
             : `${props.ssmParameterName}-${props.ssmParameterRegion}`;
-
-        this.ssmParameter = new cdk.custom_resources.AwsCustomResource(this, "Param", {
-            onUpdate: {
-                service: "SSM",
-                action: "getParameter",
-                parameters: { Name: `${props.ssmParameterName}` },
-                region: props.ssmParameterRegion,
-                physicalResourceId: cdk.custom_resources.PhysicalResourceId.of(physicalResourceId),
+        
+        const ssmGetParameterFunction = new lambda.Function(this, "getSSMParameterFunction", {
+            runtime: lambda.Runtime.PYTHON_3_9,
+            code: lambda.Code.fromInline(this.ssmGetParameterLambda()),
+            handler: "index.lambda_handler",
+            timeout: cdk.Duration.seconds(15),
+            environment: {
+                REGION: props.ssmParameterRegion,
+                PHYSICAL_RESOURCE_ID: physicalResourceId,
             },
-            policy: cdk.custom_resources.AwsCustomResourcePolicy.fromSdkCalls({
-                resources: [
-                    `arn:aws:ssm:${props.ssmParameterRegion}:${stack.account}:parameter/${props.ssmParameterName}`,
-                ],
-            }),
         });
+
+        const getParameterPolicy = new iam.PolicyStatement();
+        getParameterPolicy.addResources(`arn:aws:ssm:${props.ssmParameterRegion}:${stack.account}:parameter/${props.ssmParameterName}`);
+        getParameterPolicy.addActions('ssm:GetParameters')
+
+        ssmGetParameterFunction.addToRolePolicy(getParameterPolicy);
+
+        const ssmGetParameterProvider = new custom_resources.Provider(this, "ssmGetParameterProvider", {
+            onEventHandler: ssmGetParameterFunction,
+        })
+        //const cfnProvider = ssmGetParameterProvider.node.defaultChild as CfnCustomResource
+        const cfnFunction = ssmGetParameterProvider.node.children[0].node.defaultChild as CfnFunction
+        cfnFunction.runtime = "nodejs18.x"
+        console.log(cfnFunction)
+
+        this.ssmParameter = new CustomResource(this, 'Param', {
+            serviceToken: ssmGetParameterProvider.serviceToken,
+            properties: {
+                ParameterName: `${props.ssmParameterName}`
+            },
+        })
+
+        // this.ssmParameter = new cdk.custom_resources.AwsCustomResource(this, "Param", {
+        //     onUpdate: {
+        //         service: "SSM",
+        //         action: "getParameter",
+        //         parameters: { Name: `${props.ssmParameterName}` },
+        //         region: props.ssmParameterRegion,
+        //         physicalResourceId: cdk.custom_resources.PhysicalResourceId.of(physicalResourceId),
+        //     },
+        //     policy: cdk.custom_resources.AwsCustomResourcePolicy.fromSdkCalls({
+        //         resources: [
+        //             `arn:aws:ssm:${props.ssmParameterRegion}:${stack.account}:parameter/${props.ssmParameterName}`,
+        //         ],
+        //     }),
+        // });
+        
+    }
+
+    private ssmGetParameterLambda(): string {
+        // string requires left justification so that the python code is correctly indented
+        return `
+        import json
+        import boto3
+        import os
+        
+        ssm = boto3.client('ssm',region_name= os.getenv("REGION", None) )
+        
+        def lambda_handler(event, context):
+            
+            print(event)
+            props = event['ResourceProperties']
+            param_name = props['ParameterName']
+            
+            param_response = ssm.get_parameter(
+                Name=param_name,
+            )['Parameter']
+            print(param_response)
+            
+            output = {
+                    'PhysicalResourceId': os.getenv("PHYSICAL_RESOURCE_ID", None),
+                    'Data': {
+                        'ParameterValue': param_response["Value"]
+                    }
+                }
+            
+            print("Output: " + json.dumps(output))
+            return output
+      `;
     }
 
     /**
      * @returns string value of the parameter
      */
     public getValue() {
-        return this.ssmParameter.getResponseField("Parameter.Value");
+        return this.ssmParameter.getAtt("ParameterValue").toString();
     }
 }
