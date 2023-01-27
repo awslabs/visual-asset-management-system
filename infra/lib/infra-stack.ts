@@ -5,7 +5,6 @@
 
 import * as cdk from 'aws-cdk-lib';
 import * as cognito from "aws-cdk-lib/aws-cognito";
-import * as logs from 'aws-cdk-lib/aws-logs';
 import * as cloudTrail from 'aws-cdk-lib/aws-cloudtrail';
 import {apiBuilder} from "./api-builder";
 import {storageResourcesBuilder} from "./storage-builder";
@@ -13,7 +12,6 @@ import {AmplifyConfigLambdaConstruct} from "./constructs/amplify-config-lambda-c
 import {CloudFrontS3WebSiteConstruct} from "./constructs/cloudfront-s3-website-construct";
 import {CognitoWebNativeConstruct} from "./constructs/cognito-web-native-construct";
 import {ApiGatewayV2CloudFrontConstruct} from "./constructs/apigatewayv2-cloudfront-construct";
-import {SsmParameterReaderConstruct} from "./constructs/ssm-parameter-reader-construct";
 import { Construct } from "constructs";
 import { NagSuppressions } from 'cdk-nag';
 
@@ -23,16 +21,19 @@ interface EnvProps {
     stackName: string;
     ssmWafArnParameterName: string;
     ssmWafArnParameterRegion: string;
+    ssmWafArn: string;
 }
 
 export class VAMS extends cdk.Stack {
     constructor(scope: Construct, id: string, props: EnvProps) {
-        super(scope, id, props);
+        super(scope, id, {...props, crossRegionReferences: true});
  
-         const cfWafWebAcl = new SsmParameterReaderConstruct(this, "SsmWafParameter", {
-             ssmParameterName: props.ssmWafArnParameterName,
-             ssmParameterRegion: props.ssmWafArnParameterRegion,
-         }).getValue();
+        //  const cfWafWebAcl = new SsmParameterReaderConstruct(this, "SsmWafParameter", {
+        //      ssmParameterName: props.ssmWafArnParameterName,
+        //      ssmParameterRegion: props.ssmWafArnParameterRegion,
+        //  }).getValue();
+
+        const cfWafWebAcl = props.ssmWafArn;
 
         const adminEmailAddress = new cdk.CfnParameter(this, "adminEmailAddress", {
             type: "String",

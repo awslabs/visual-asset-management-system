@@ -15,7 +15,7 @@ import { Aspects } from 'aws-cdk-lib';
 const app = new cdk.App();
 
 /** development variables **/
-const region = process.env.AWS_REGION || app.node.tryGetContext("region");
+const region = process.env.AWS_REGION || app.node.tryGetContext("region") || "us-east-1";
 const stackName = (process.env.STACK_NAME || app.node.tryGetContext("stack-name")) + "-" + region;
 const dockerDefaultPlatform = process.env.DOCKER_DEFAULT_PLATFORM ;
 const enableCdkNag = process.env.CDK_NAG_ENABLED || false; 
@@ -38,7 +38,7 @@ const cfWafStack = new CfWafStack(app, `vams-waf-${stackName || process.env.DEMO
     env: {
         account: process.env.CDK_DEFAULT_ACCOUNT,
         region: "us-east-1",
-    }
+    },
 })
 
 const vamsStack = new VAMS(app, `vams-${stackName || process.env.DEMO_LABEL || 'dev'}`, {
@@ -51,6 +51,7 @@ const vamsStack = new VAMS(app, `vams-${stackName || process.env.DEMO_LABEL || '
     },
     ssmWafArnParameterName: cfWafStack.ssmWafArnParameterName,
     ssmWafArnParameterRegion: cfWafStack.region,
+    ssmWafArn: cfWafStack.wafArn
 });
 
 vamsStack.addDependency(cfWafStack);

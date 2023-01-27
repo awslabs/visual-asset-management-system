@@ -27,10 +27,10 @@ export class CfWafStack extends cdk.Stack {
     //This can only be made in us-east-1, so it'll be made in a separate region from the region agnostic VAMS stack
     //but we can take the info from here and place it into the cloudfront construct in that stack
     public ssmWafArnParameterName: string;
+    public wafArn: string;
     
-
     constructor(scope: Construct, id: string, props: EnvProps) {
-        super(scope, id, props);
+        super(scope, id, {...props, crossRegionReferences: true});
 
         // ssm parameter name must be unique in a region
         this.ssmWafArnParameterName = "waf_acl_arn_" + this.stackName;
@@ -45,5 +45,7 @@ export class CfWafStack extends cdk.Stack {
             description: "WAF ACL ARN",
             stringValue: wafv2CF.webacl.attrArn,
         });
+
+        this.wafArn = wafv2CF.webacl.attrArn;
     }
 }
