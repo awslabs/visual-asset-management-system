@@ -27,13 +27,6 @@ interface EnvProps {
 export class VAMS extends cdk.Stack {
     constructor(scope: Construct, id: string, props: EnvProps) {
         super(scope, id, {...props, crossRegionReferences: true});
- 
-        //  const cfWafWebAcl = new SsmParameterReaderConstruct(this, "SsmWafParameter", {
-        //      ssmParameterName: props.ssmWafArnParameterName,
-        //      ssmParameterRegion: props.ssmWafArnParameterRegion,
-        //  }).getValue();
-
-        const cfWafWebAcl = props.ssmWafArn;
 
         const adminEmailAddress = new cdk.CfnParameter(this, "adminEmailAddress", {
             type: "String",
@@ -76,7 +69,7 @@ export class VAMS extends cdk.Stack {
         const website = new CloudFrontS3WebSiteConstruct(this, "WebApp", {
             ...props,
             webSiteBuildPath: webAppBuildPath,
-            webAcl: cfWafWebAcl,
+            webAcl: props.ssmWafArn,
             apiUrl: api.apiUrl,
             assetBucketUrl: storageResources.s3.assetBucket.bucketRegionalDomainName,
         });
