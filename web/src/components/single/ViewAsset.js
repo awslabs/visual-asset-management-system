@@ -31,6 +31,7 @@ import {
  * No viewer yet for cad and archive file formats
  */
 import {
+  cadFileFormats,
   columnarFileFormats,
   modelFileFormats,
   presentationFileFormats,
@@ -41,9 +42,16 @@ import { WorkflowExecutionListDefinition } from "../list/list-definitions/Workfl
 import CreateUpdateAsset from "../createupdate/CreateUpdateAsset";
 import { actionTypes } from "../createupdate/form-definitions/types/FormDefinition";
 import WorkflowSelectorWithModal from "../selectors/WorkflowSelectorWithModal";
+import OpenCascadeViewer from "../viewers/OpenCascadeViewer";
 
 const checkFileFormat = (filetype) => {
   filetype = filetype.toLowerCase();
+  if (
+    cadFileFormats.includes(filetype) ||
+    cadFileFormats.includes("." + filetype)
+  ) {
+    return "cad";
+  }
   if (
     modelFileFormats.includes(filetype) ||
     modelFileFormats.includes("." + filetype)
@@ -240,6 +248,8 @@ export default function ViewAsset() {
           if (defaultViewType === "plot") {
             newViewerOptions.push({ text: "Plot", id: "plot" });
             newViewerOptions.push({ text: "Column", id: "column" });
+          } else if (defaultViewType === "cad") {
+            newViewerOptions.push({ text: "cad", id: "cad"});
           } else if (defaultViewType === "3d") {
             newViewerOptions.push({ text: "3d", id: "3d" });
           } else if (defaultViewType === "html") {
@@ -248,6 +258,9 @@ export default function ViewAsset() {
           setViewerOptions(newViewerOptions);
           if (!window.location.hash) setViewType(defaultViewType);
           else {
+            if(window.location.hash === "#cad") {
+              setViewType("cad");
+            }
             if (window.location.hash === "#preview") {
               setViewType("preview");
             }
@@ -388,6 +401,12 @@ export default function ViewAsset() {
                               imgKey={asset?.previewLocation?.Key}
                             />
                           )}
+                        {viewType === "cad" &&
+                          <OpenCascadeViewer
+                            assetKey={asset?.assetLocation?.Key}
+                            className="visualizer-container-canvas"
+                          />
+                        }
                         {viewType === "3d" && (
                           <ThreeDViewer
                             assetKey={asset?.assetLocation?.Key}

@@ -28,6 +28,7 @@ Javascript Libraries:
 | buffer                   | buffer@6.0.3                    | MIT                     |
 | dompurify                | dompurify@2.4.0                 | (MPL-2.0 OR Apache-2.0) |
 | fcs                      | fcs@0.1.2                       | MIT                     |
+| opencascade              | opencascade@2.0.0-beta.94e2944  | LGPL-2.1-only           |
 | patch-package            | patch-package@6.5.0             | MIT                     |
 | postinstall-postinstall  | postinstall-postinstall@2.1.0   | MIT                     |
 | prop-types               | prop-types@15.8.1               | MIT                     |
