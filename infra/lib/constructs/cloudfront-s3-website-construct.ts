@@ -126,6 +126,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
             + `img-src 'self' data: https://${props.assetBucketUrl}; `
             + `media-src 'self' data: https://${props.assetBucketUrl}; `
             + `object-src 'none'; `
+            + `base-uri 'self'; `
             + `frame-ancestors 'none'; font-src 'self'; `
             + `manifest-src 'self'`,
           override: true,
