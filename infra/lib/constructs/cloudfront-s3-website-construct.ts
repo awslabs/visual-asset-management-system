@@ -99,10 +99,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
       originAccessIdentity: originAccessIdentity,
     });
 
-
     const responseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(this, "ResponseHeadersPolicy", {
-    
-      // TODO parameterize region
       securityHeadersBehavior: {
         strictTransportSecurity: {
           accessControlMaxAge: Duration.days(365 * 2 ),
@@ -125,7 +122,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
           contentSecurityPolicy: 
             `default-src 'none'; style-src 'self' 'unsafe-inline'; ` 
             + `connect-src 'self' https://cognito-idp.${props.env?.region}.amazonaws.com/ https://cognito-identity.${props.env?.region}.amazonaws.com https://${props.apiUrl} https://${props.assetBucketUrl}; `
-            + `script-src 'self' https://cognito-idp.${props.env?.region}.amazonaws.com/ https://cognito-identity.${props.env?.region}.amazonaws.com https://${props.apiUrl} https://${props.assetBucketUrl}; `
+            + `script-src 'unsafe-eval' 'self' https://cognito-idp.${props.env?.region}.amazonaws.com/ https://cognito-identity.${props.env?.region}.amazonaws.com https://${props.apiUrl} https://${props.assetBucketUrl}; `
             + `img-src 'self' data: https://${props.assetBucketUrl}; `
             + `media-src 'self' data: https://${props.assetBucketUrl}; `
             + `object-src 'none'; `
@@ -142,6 +139,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
       "WebAppDistribution",
       {
         defaultBehavior: {
+          compress: true,
           responseHeadersPolicy: {
             responseHeadersPolicyId: responseHeadersPolicy.responseHeadersPolicyId
           },
