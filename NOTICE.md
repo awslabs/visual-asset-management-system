@@ -43,6 +43,7 @@ Javascript Libraries:
 | styled-components        | styled-components@5.3.6         | MIT                     |
 | typescript               | typescript@4.4.4                | Apache-2.0              |
 | web-vitals               | web-vitals@1.1.2                | Apache-2.0              |
+| workbox                  | workbox@6.5.4                   | MIT                     |
 
 
 Python Libraries
