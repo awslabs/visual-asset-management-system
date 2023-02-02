@@ -13,6 +13,7 @@ import "./styles/index.scss";
 import App from "./App";
 import reportWebVitals from "./reportWebVitals";
 import ConfigLoader from "./ConfigLoader";
+import * as serviceWorkerRegistration from './serviceWorkerRegistration';
 
 window.LOG_LEVEL = "INFO";
 
@@ -25,4 +26,5 @@ ReactDOM.render(
   document.getElementById("root")
 );
 
+serviceWorkerRegistration.register();
 reportWebVitals();

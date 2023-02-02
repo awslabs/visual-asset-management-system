@@ -7,6 +7,18 @@
     "yarn": ">= 1.22.18"
   },
   "dependencies": {
+    "workbox-background-sync": "^6.5.4",
+    "workbox-broadcast-update": "^6.5.4",
+    "workbox-cacheable-response": "^6.5.4",
+    "workbox-core": "^6.5.4",
+    "workbox-expiration": "^6.5.4",
+    "workbox-google-analytics": "^6.5.4",
+    "workbox-navigation-preload": "^6.5.4",
+    "workbox-precaching": "^6.5.4",
+    "workbox-range-requests": "^6.5.4",
+    "workbox-routing": "^6.5.4",
+    "workbox-strategies": "^6.5.4",
+    "workbox-streams": "^6.5.4",
     "@aws-amplify/ui-react": "^2.1.5",
     "@awsui/collection-hooks": "^1.0.21",
     "@awsui/components-react": "^3.0.288",
