@@ -20,6 +20,87 @@ import {
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 
+// write normal buffer
+function createNormals(openCascade, triangulation, myFace, myT, aLocation) {
+    const pc = new openCascade.Poly_Connect_2(myT);
+    const myNormal = new openCascade.TColgp_Array1OfDir_2(1, triangulation.NbNodes());
+    openCascade.StdPrs_ToolTriangulatedShape.Normal(myFace, pc, myNormal);
+
+    let normals = new Float32Array(myNormal.Length() * 3);
+    for (let i = myNormal.Lower(); i <= myNormal.Upper(); i++) {
+        const t1 = aLocation.Transformation();
+        const d1 = myNormal.Value(i);
+        const d = d1.Transformed(t1);
+
+        normals[3 * (i - 1)] = d.X();
+        normals[3 * (i - 1) + 1] = d.Y();
+        normals[3 * (i - 1) + 2] = d.Z();
+
+        t1.delete();
+        d1.delete();
+        d.delete();
+    }
+    pc.delete();
+    myNormal.delete();
+    return normals;
+}
+
+function createVertexBuffer(triangulation, aLocation) {
+    let vertices = new Float32Array(triangulation.NbNodes() * 3);
+    // write vertex buffer
+    for (let i = 1; i <= triangulation.NbNodes(); i++) {
+        const t1 = aLocation.Transformation();
+        const p = triangulation.Node(i);
+        const p1 = p.Transformed(t1);
+        vertices[3 * (i - 1)] = p1.X();
+        vertices[3 * (i - 1) + 1] = p1.Y();
+        vertices[3 * (i - 1) + 2] = p1.Z();
+        p.delete();
+        t1.delete();
+        p1.delete();
+    }
+    return vertices;
+}
+
+function createIndices(openCascade, myFace, myT) {
+    // write triangle buffer
+    const orient = myFace.Orientation_1();
+    const triangles = myT.get().Triangles();
+    let indices;
+    let triLength = triangles.Length() * 3;
+    if (triLength > 65535)
+        indices = new Uint32Array(triLength);
+    else
+        indices = new Uint16Array(triLength);
+
+    for (let nt = 1; nt <= myT.get().NbTriangles(); nt++) {
+        const t = triangles.Value(nt);
+        let n1 = t.Value(1);
+        let n2 = t.Value(2);
+        let n3 = t.Value(3);
+        if (orient !== openCascade.TopAbs_Orientation.TopAbs_FORWARD) {
+            let tmp = n1;
+            n1 = n2;
+            n2 = tmp;
+        }
+
+        indices[3 * (nt - 1)] = n1 - 1;
+        indices[3 * (nt - 1) + 1] = n2 - 1;
+        indices[3 * (nt - 1) + 2] = n3 - 1;
+        t.delete();
+    }
+    triangles.delete();
+    return indices;
+}
+
+function createGeometry(vertices, normals, indices) {
+    let geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+    return geometry;
+}
+
 function visualize(openCascade, shape) {
     let geometries = []
     const ExpFace = new openCascade.TopExp_Explorer_1();
@@ -41,81 +122,14 @@ function visualize(openCascade, shape) {
             continue;
         }
 
-        const pc = new openCascade.Poly_Connect_2(myT);
         const triangulation = myT.get();
 
-        let vertices = new Float32Array(triangulation.NbNodes() * 3);
+        const vertices = createVertexBuffer(triangulation, aLocation);
+        const normals = createNormals(openCascade, triangulation, myFace, myT, aLocation);
+        const indices = createIndices(openCascade, myFace, myT);
 
-        // write vertex buffer
-        for (let i = 1; i <= triangulation.NbNodes(); i++) {
-            const t1 = aLocation.Transformation();
-            const p = triangulation.Node(i);
-            const p1 = p.Transformed(t1);
-            vertices[3 * (i - 1)] = p1.X();
-            vertices[3 * (i - 1) + 1] = p1.Y();
-            vertices[3 * (i - 1) + 2] = p1.Z();
-            p.delete();
-            t1.delete();
-            p1.delete();
-        }
+        geometries.push(createGeometry(vertices, normals, indices));
 
-        // write normal buffer
-        const myNormal = new openCascade.TColgp_Array1OfDir_2(1, triangulation.NbNodes());
-        openCascade.StdPrs_ToolTriangulatedShape.Normal(myFace, pc, myNormal);
-
-        let normals = new Float32Array(myNormal.Length() * 3);
-        for (let i = myNormal.Lower(); i <= myNormal.Upper(); i++) {
-            const t1 = aLocation.Transformation();
-            const d1 = myNormal.Value(i);
-            const d = d1.Transformed(t1);
-
-            normals[3 * (i - 1)] = d.X();
-            normals[3 * (i - 1) + 1] = d.Y();
-            normals[3 * (i - 1) + 2] = d.Z();
-
-            t1.delete();
-            d1.delete();
-            d.delete();
-        }
-
-        myNormal.delete();
-
-        // write triangle buffer
-        const orient = myFace.Orientation_1();
-        const triangles = myT.get().Triangles();
-        let indices;
-        let triLength = triangles.Length() * 3;
-        if (triLength > 65535)
-            indices = new Uint32Array(triLength);
-        else
-            indices = new Uint16Array(triLength);
-
-        for (let nt = 1; nt <= myT.get().NbTriangles(); nt++) {
-            const t = triangles.Value(nt);
-            let n1 = t.Value(1);
-            let n2 = t.Value(2);
-            let n3 = t.Value(3);
-            if (orient !== openCascade.TopAbs_Orientation.TopAbs_FORWARD) {
-                let tmp = n1;
-                n1 = n2;
-                n2 = tmp;
-            }
-
-            indices[3 * (nt - 1)] = n1 - 1;
-            indices[3 * (nt - 1) + 1] = n2 - 1;
-            indices[3 * (nt - 1) + 2] = n3 - 1;
-            t.delete();
-        }
-        triangles.delete();
-
-        let geometry = new THREE.BufferGeometry();
-        geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
-        geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
-
-        geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-        geometries.push(geometry);
-
-        pc.delete();
         aLocation.delete();
         myT.delete();
         inc.delete();
@@ -126,44 +140,25 @@ function visualize(openCascade, shape) {
     return geometries;
 }
 
-const loadSTEPorIGES2 = async (openCascade, addFunction, scene) => {
-    // const fileType = (() => {
-    //     switch (inputFile.name.toLowerCase().split(".").pop()) {
-    //         case "step":
-    //         case "stp":
-    //             return "step";
-    //         case "iges":
-    //         case "igs":
-    //             return "iges";
-    //         default:
-    //             return undefined;
-    //     }
-    // })();
-    const fileType = "step";
-    // Writes the uploaded file to Emscripten's Virtual Filesystem
-    // openCascade.FS.createDataFile("/", `file.${fileType}`, fileText, true, true);
-    // Choose the correct OpenCascade file parsers to read the CAD file
-    var reader = null;
-    if (fileType === "step") {
-        reader = new openCascade.STEPControl_Reader_1();
-    } else if (fileType === "iges") {
-        reader = new openCascade.IGESControl_Reader_1();
-    } else { console.error("opencascade.js can't parse this extension! (yet)"); }
-    const readResult = reader.ReadFile(`file.${fileType}`);            // Read the file
+const load = async (openCascade, addFunction, scene, reader, fileName) => {
+    const readResult = reader.ReadFile(fileName);
     if (readResult === openCascade.IFSelect_ReturnStatus.IFSelect_RetDone) {
-        console.log("file loaded successfully!     Converting to OCC now...");
-        const numRootsTransferred = reader.TransferRoots(new openCascade.Message_ProgressRange_1());    // Translate all transferable roots to OpenCascade
+        console.log("file loaded successfully! Converting to OCC now...");
+
+        // Translate all transferable roots to OpenCascade
+        const numRootsTransferred = reader.TransferRoots(new openCascade.Message_ProgressRange_1());
         console.log("run roots transferred", numRootsTransferred);
-        const stepShape = reader.OneShape();         // Obtain the results of translation in one OCCT shape
-        console.log(" converted successfully!  Triangulating now...");
+        // Obtain the results of translation in one OCCT shape
+        const stepShape = reader.OneShape();
+        console.log("converted successfully!  Triangulating now...");
 
         // Out with the old, in with the new!
         scene.remove(scene.getObjectByName("shape"));
         await addFunction(openCascade, stepShape, scene);
-        console.log(" triangulated and added to the scene!");
+        console.log("triangulated and added to the scene!");
 
         // Remove the file when we're done (otherwise we run into errors on reupload)
-        openCascade.FS.unlink(`/file.${fileType}`);
+        openCascade.FS.unlink(`/${fileName}`);
     } else {
         console.error("Something in OCCT went wrong trying to read ");
     }
@@ -181,10 +176,10 @@ const setupThreeJSViewport = (viewport) => {
         const viewportRect = viewport.getBoundingClientRect();
         const width = viewportRect.width;
         const height = viewportRect.height;
-        renderer.setSize(viewportRect.width, viewportRect.height );
+        renderer.setSize(viewportRect.width, viewportRect.height);
         renderer.domElement.width = viewportRect.width;
         renderer.domElement.height = viewportRect.height;
-        camera.aspect = width / height; 
+        camera.aspect = width / height;
         camera.updateProjectionMatrix();
     }
 
@@ -237,6 +232,9 @@ export default function OpenCascadeViewer({ assetKey }) {
     const [openCascade, setOpenCascade] = useState(null);
     const [scene, setScene] = useState(null);
 
+    const fileType = "step";
+    const fileName = `file.${fileType}`
+
     useEffect(() => {
         if (!openCascade) {
             console.log("loading opencascade");
@@ -257,15 +255,14 @@ export default function OpenCascadeViewer({ assetKey }) {
         const fetch = async () => {
             const file = await Storage.get(assetKey, { download: true });
             file.Body.text().then(async fileText => {
-                const fileType = "step";
                 // Writes the uploaded file to Emscripten's Virtual Filesystem
-                openCascade.FS.createDataFile("/", `file.${fileType}`, fileText, true, true);
+                openCascade.FS.createDataFile("/", fileName, fileText, true, true);
                 console.log("file loaded");
             }).then(() => setLoaded(true));
         };
         fetch();
 
-    }, [loaded, openCascade, assetKey]);
+    }, [loaded, openCascade, assetKey, fileName]);
 
     useEffect(() => {
         if (scene) {
@@ -280,11 +277,12 @@ export default function OpenCascadeViewer({ assetKey }) {
             return;
         }
 
-        loadSTEPorIGES2(openCascade, addShapeToScene, scene);
+        const reader = new openCascade.STEPControl_Reader_1();
+        load(openCascade, addShapeToScene, scene, reader, fileName);
 
-    }, [loaded, openCascade, scene])
+    }, [loaded, openCascade, scene, fileName])
 
     return (
-        <div ref={viewport} style={{ width: "100%", height: "100%" }}  />
+        <div ref={viewport} style={{ width: "100%", height: "100%" }} />
     );
 }

@@ -23,7 +23,6 @@ clientsClaim();
 // This variable must be present somewhere in your service worker file,
 // even if you decide not to use precaching. See https://cra.link/PWA
 
-
 const wbman = self.__WB_MANIFEST;
 
 wbman.push({
@@ -31,7 +30,6 @@ wbman.push({
   "url": "/static/media/opencascade.full.da1e7571cd100a1fcdc0.wasm",
 });
 
-console.log(wbman);
 precacheAndRoute(wbman);
 
 // Set up App Shell-style routing, so that all navigation requests
@@ -85,6 +83,7 @@ self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
   }
+  console.log("event received in service worker", event);
 });
 
 // Any other custom service worker logic can go here.
