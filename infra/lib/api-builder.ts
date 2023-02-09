@@ -38,6 +38,7 @@ import {
   buildPipelineService,
 } from "./lambdaBuilder/pipelineFunctions";
 
+import { buildMetadataFunctions } from "./lambdaBuilder/metadataFunctions";
 
 interface apiGatewayLambdaConfiguration {
   routePath: string;
@@ -332,6 +333,18 @@ export function apiBuilder(
     method: apigwv2.HttpMethod.POST,
     api: api.apiGatewayV2,
   });
+
+
+  // metdata
+  const metadataCrudFunctions = buildMetadataFunctions(scope, storageResources.dynamo.metadataStorageTable);
+  const methods = [apigwv2.HttpMethod.PUT, apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST, apigwv2.HttpMethod.DELETE];
+  for(let i = 0; i < methods.length; i++) {
+    attachFunctionToApi(scope, metadataCrudFunctions[i], {
+      routePath: "/metadata/{assetId}",
+      method: methods[i],
+      api: api.apiGatewayV2,
+    });
+  }
 
   //Enabling API Gateway Access Logging: Currently the only way to do this is via V1 constructs
   //https://github.com/aws/aws-cdk/issues/11100#issuecomment-904627081

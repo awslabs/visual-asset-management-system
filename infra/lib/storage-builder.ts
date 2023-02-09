@@ -26,6 +26,7 @@ export interface storageResources {
         databaseStorageTable: dynamodb.Table, 
         workflowStorageTable: dynamodb.Table, 
         workflowExecutionStorageTable: dynamodb.Table,
+        metadataStorageTable: dynamodb.Table,
     }
 }
 export function storageResourcesBuilder(scope: Construct): storageResources {
@@ -176,6 +177,22 @@ export function storageResourcesBuilder(scope: Construct): storageResources {
         contributorInsightsEnabled: true, 
         encryption: dynamodb.TableEncryption.AWS_MANAGED
     })
+
+    const metadataStorageTable = new dynamodb.Table(scope, "MetadataStorageTable", {
+        billingMode: dynamodb.BillingMode.PAY_PER_REQUEST, 
+        pointInTimeRecovery: true,
+        partitionKey: {
+            name: "pk", 
+            type: dynamodb.AttributeType.STRING
+        }, 
+        sortKey: {
+            name: "sk", 
+            type: dynamodb.AttributeType.STRING
+        },
+        contributorInsightsEnabled: true, 
+        encryption: dynamodb.TableEncryption.AWS_MANAGED
+    });
+
     return {
         s3: {
             assetBucket: assetBucket,
@@ -189,7 +206,8 @@ export function storageResourcesBuilder(scope: Construct): storageResources {
             pipelineStorageTable: pipelineStorageTable, 
             databaseStorageTable: databaseStorageTable, 
             workflowStorageTable: workflowStorageTable, 
-            workflowExecutionStorageTable: workflowExecutionStorageTable
+            workflowExecutionStorageTable: workflowExecutionStorageTable,
+            metadataStorageTable: metadataStorageTable,
         }
     }
 }
