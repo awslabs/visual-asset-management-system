@@ -28,10 +28,11 @@ export class VAMS extends cdk.Stack {
     constructor(scope: Construct, id: string, props: EnvProps) {
         super(scope, id, {...props, crossRegionReferences: true});
 
+        const providedAdminEmailAddress = process.env.VAMS_ADMIN_EMAIL || scope.node.tryGetContext("adminEmailAddress")
         const adminEmailAddress = new cdk.CfnParameter(this, "adminEmailAddress", {
             type: "String",
             description: "Email address for login and where your password is sent to. You wil be sent a temporary password for the turbine to authenticate to Cognito.",
-            default: process.env.VAMS_ADMIN_EMAIL || scope.node.tryGetContext("adminEmailAddress"),
+            default: providedAdminEmailAddress,
         });
 
         const webAppBuildPath = "../web/build";
@@ -49,13 +50,14 @@ export class VAMS extends cdk.Stack {
             ...props,
             storageResources: storageResources,
         });
+
         const congitoUser = new cognito.CfnUserPoolUser(this, "AdminUser", {
-            username: process.env.VAMS_ADMIN_EMAIL || scope.node.tryGetContext("adminEmailAddress"),
+            username: providedAdminEmailAddress,
             userPoolId: cognitoResources.userPoolId,
             desiredDeliveryMediums: ["EMAIL"],
             userAttributes: [{
                 name: "email",
-                value: process.env.VAMS_ADMIN_EMAIL || scope.node.tryGetContext("adminEmailAddress")
+                value: providedAdminEmailAddress
             }]
         });
 
