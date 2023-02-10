@@ -1,13 +1,13 @@
 
 lint:
-	flake8
+	poetry run flake8
 
 typecheck:
-	mypy .
+	poetry run mypy .
 
 coverage:
-	coverage run -m pytest
-	coverage report
+	poetry run coverage run -m pytest
+	poetry run coverage report
 
 install:
 	poetry install
