@@ -1,4 +1,4 @@
-   name: ci-checks
+   name: Build
 
    on:
      push:
