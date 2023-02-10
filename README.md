@@ -1,21 +1,8 @@
-```             ____               
-               ,---,               ,'  , `.  .--.--.    
-       ,---.  '  .' \           ,-+-,.' _ | /  /    '.  
-      /__./| /  ;    '.      ,-+-. ;   , |||  :  /`. /  
- ,---.;  ; |:  :       \    ,--.'|'   |  ;|;  |  |--`     
-/___/ \  | |:  |   /\   \  |   |  ,', |  ':|  :  ;_          
-\   ;  \ ' ||  :  ' ;.   : |   | /  | |  || \  \    `.         
- \   \  \: ||  |  ;/  \   \'   | :  | :  |,  `----.   \      
-  ;   \  ' .'  :  | \  \ ,';   . |  ; |--'   __ \  \  |    
-   \   \   '|  |  '  '--'  |   : |  | ,     /  /`--'  / 
-    \   `  ;|  :  :        |   : '  |/     '--'.     /  
-     :   \ ||  | ,'        ;   | |`-'        `--'---'   
-      '---" `--''          |   ;/                       
-                           '---'                            
-```
-
 # Visual Asset Management System(VAMS) 
 
+![Logo](./web/logo_white.png)
+
+![Build](https://github.com/awslabs/visual-asset-management-system/actions/workflows/ci.yml/badge.svg) 
 ## Introduction
 
 *Visual Asset Management System (VAMS)* is a purpose-built, AWS native solution for the management and distribution of specialized visual assets used in spatial computing. VAMS offers a simplified solution for organizations to ingest, store, and manage visual assets in the cloud, which empowers any user with a web browser to upload, manage, visualize, transform, and retrieve visual assets. Existing workflows that leverage both custom code and pre-built or third-party applications can also be migrated to VAMS and ran in the AWS cloud, as opposed to being limited by the on-premise capacity available. VAMS is customizable and expandable with option of being further tailored to specific use-cases by development teams.
