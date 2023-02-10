@@ -18,15 +18,12 @@ const app = new cdk.App();
 const region = process.env.AWS_REGION || app.node.tryGetContext("region") || "us-east-1";
 const stackName = (process.env.STACK_NAME || app.node.tryGetContext("stack-name")) + "-" + region;
 const dockerDefaultPlatform = process.env.DOCKER_DEFAULT_PLATFORM ;
-const enableCdkNag = process.env.CDK_NAG_ENABLED || false; 
+const enableCdkNag = true; 
 
 console.log('CDK_NAG_ENABLED 👉', enableCdkNag);
 console.log('STACK_NAME 👉', stackName);
 console.log('REGION 👉', region);
 console.log('DOCKER_DEFAULT_PLATFORM 👉', dockerDefaultPlatform);
-
-/** demo factory variables **/
-console.log('DEMO_LABEL 👉', process.env.DEMO_LABEL);
 
 if(enableCdkNag) {
     Aspects.of(app).add(new AwsSolutionsChecks({ verbose: true }))

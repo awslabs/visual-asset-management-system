@@ -56,6 +56,8 @@ Sample use cases that have leveraged early iterations of VAMS include:
 
 1) `cd ./web nvm use` - make sure you're node version matches the project. Make sure Docker daemon is running.
 
+2) `yarn install` - make sure you install the packages required by the web app
+
 2) `npm run build` - build the web app. 
 
 3) `cd ../infra npm install` - installs dependencies defined in package.json.
