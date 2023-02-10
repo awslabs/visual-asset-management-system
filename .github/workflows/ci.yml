@@ -18,6 +18,12 @@
         with:
           python-version: 3.9
 
+      - name: setup node for the whole package
+        uses: actions/setup-node@v3
+      
+      - name: npm install 
+        run: npm install
+
       - name: Install Poetry Action
         uses: snok/install-poetry@v1
         with:
@@ -26,7 +32,27 @@
           virtualenvs-in-project: true
           virtualenvs-path: backend/.venv
           installer-parallel: true
-      
+     
+      - name: Run yarn install
+        uses: Borales/actions-yarn@v4.2.0
+        with:
+          dir: 'web'
+          cmd: install
+
+      - name: web build
+        working-directory: web
+        env:
+          CI: ""
+        run: npm run build
+
+      - name: cdk package install
+        working-directory: infra
+        run: npm install
+
+      - name: cdk package build
+        working-directory: infra
+        run: CDK_NAG_ENABLED=true npx cdk synth
+
       - name: run checks
         working-directory: backend
         run: make all
