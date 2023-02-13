@@ -15,6 +15,7 @@ import {
   SpaceBetween,
 } from "@cloudscape-design/components";
 
+import Metadata from "./Metadata";
 import { AmplifyS3Image } from "@aws-amplify/ui-react/legacy";
 import React, { useEffect, useState } from "react";
 import { useParams } from "react-router";
@@ -480,7 +481,7 @@ export default function ViewAsset() {
                 width: "100%",
               }}
             >
-              <div style={{ position: "absolute", width: "100%" }}>
+              <div style={{ width: "100%" }}>
                 <RelatedTableList
                   allItems={allItems}
                   loading={loading}
@@ -491,6 +492,10 @@ export default function ViewAsset() {
                   HeaderControls={WorkflowHeaderControls}
                 />
               </div>
+              <Metadata
+                databaseId={databaseId}
+                assetId={assetId}
+              />
             </div>
           </SpaceBetween>
         </Box>
