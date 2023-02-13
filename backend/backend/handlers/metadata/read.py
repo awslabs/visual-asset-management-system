@@ -14,6 +14,8 @@ def get_metadata(assetId):
             "sk": assetId,
         }
     )
+    if "Item" not in resp:
+        raise ValidationError(404, "Item Not Found")
     return resp['Item']
 
 
