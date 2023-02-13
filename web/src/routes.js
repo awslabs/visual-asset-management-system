@@ -4,7 +4,7 @@
  */
 
 import { Route, Routes } from "react-router-dom";
-import AppLayout from "@awsui/components-react/app-layout";
+import AppLayout from "@cloudscape-design/components/app-layout";
 import LandingPage from "./pages/LandingPage";
 import { Navigation } from "./layout/Navigation";
 import Databases from "./pages/Databases";

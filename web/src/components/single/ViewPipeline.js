@@ -10,7 +10,7 @@ import {
   SpaceBetween,
   Textarea,
   TextContent,
-} from "@awsui/components-react";
+} from "@cloudscape-design/components";
 import React, { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { fetchAllPipelines } from "../../services/APIService";

@@ -15,7 +15,7 @@ import {
   SideNavigation,
   Badge,
   Icon,
-} from "@awsui/components-react";
+} from "@cloudscape-design/components";
 import { appLayoutLabels, externalLinkProps } from "./helpers/labels";
 import {
   getHeaderCounterText,

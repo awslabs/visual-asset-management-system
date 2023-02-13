@@ -10,7 +10,7 @@ import {
   Grid,
   SpaceBetween,
   TextContent,
-} from "@awsui/components-react";
+} from "@cloudscape-design/components";
 import { AssetContext } from "../../context/AssetContex";
 
 const generateUUID = () => {

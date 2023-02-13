@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import Table, { TableProps } from '@awsui/components-react/table';
+import Table, { TableProps } from '@cloudscape-design/components/table';
 import React from 'react';
 import { ITreeNode } from '../Model/TreeNode';
 import { ButtonWithTreeLines } from './ButtonWithTreeLines';

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import Button from '@awsui/components-react/button';
+import Button from '@cloudscape-design/components/button';
 import React from 'react';
 import { EmptySpace, LeftPad, Wrapper, ButtonWrapper } from './Common/StyledComponents';
 import { ExpandableTableNodeStatus, ITreeNode } from '../Model/TreeNode';

@@ -13,7 +13,8 @@ import {
   Header,
   SegmentedControl,
   SpaceBetween,
-} from "@awsui/components-react";
+} from "@cloudscape-design/components";
+
 import { AmplifyS3Image } from "@aws-amplify/ui-react/legacy";
 import React, { useEffect, useState } from "react";
 import { useParams } from "react-router";

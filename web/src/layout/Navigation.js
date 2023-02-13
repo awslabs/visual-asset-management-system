@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { SideNavigation } from "@awsui/components-react";
+import { SideNavigation } from "@cloudscape-design/components";
 import config from "../config";
 
 const navHeader = {

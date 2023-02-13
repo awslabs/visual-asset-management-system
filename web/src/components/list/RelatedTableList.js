@@ -12,7 +12,7 @@ import {
   Pagination,
   Select,
   TextFilter,
-} from "@awsui/components-react";
+} from "@cloudscape-design/components";
 import {
   RelatedTable,
   useTreeCollection,

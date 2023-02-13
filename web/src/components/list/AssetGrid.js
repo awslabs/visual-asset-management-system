@@ -22,7 +22,7 @@ import {
   Textarea,
   Multiselect,
   Tabs,
-} from "@awsui/components-react";
+} from "@cloudscape-design/components";
 
 import { highlightMatches } from "../../common/utils/utils";
 

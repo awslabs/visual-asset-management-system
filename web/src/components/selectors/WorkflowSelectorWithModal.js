@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Modal, Select } from "@awsui/components-react";
+import { Modal, Select } from "@cloudscape-design/components";
 import React, { useEffect, useState } from "react";
 import { fetchDatabaseWorkflows, runWorkflow } from "../../services/APIService";
 import { addColumnSortLabels } from "../../common/helpers/labels";

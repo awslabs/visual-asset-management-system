@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useCollection, UseCollectionOptions, UseCollectionResult } from '@awsui/collection-hooks';
+import { useCollection, UseCollectionOptions, UseCollectionResult } from '@cloudscape-design/collection-hooks';
 import { useEffect, useState } from 'react';
-import { TableProps } from '@awsui/components-react/table';
+import { TableProps } from '@cloudscape-design/components/table';
 import { ITreeNode, TreeMap } from '../Model/TreeNode';
 import { TreeUtility } from '../Model/TreeUtility';
 

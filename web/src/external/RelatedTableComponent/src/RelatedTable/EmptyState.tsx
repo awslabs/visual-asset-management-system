@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import Box from '@awsui/components-react/box';
+import Box from '@cloudscape-design/components/box';
 import * as React from 'react';
 
 export interface EmptyStateProps extends React.ReactPortal {

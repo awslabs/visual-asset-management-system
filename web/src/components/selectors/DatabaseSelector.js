@@ -5,7 +5,7 @@
 
 import React, { useEffect, useState } from "react";
 import { fetchAllDatabases } from "../../services/APIService";
-import { Select } from "@awsui/components-react";
+import { Select } from "@cloudscape-design/components";
 
 const DatabaseSelector = (props) => {
   const [reload, setReload] = useState(true);

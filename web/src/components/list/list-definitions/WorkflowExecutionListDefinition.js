@@ -5,7 +5,7 @@
 
 import React from "react";
 import ListDefinition from "./types/ListDefinition";
-import { Badge, Link, StatusIndicator } from "@awsui/components-react";
+import { Badge, Link, StatusIndicator } from "@cloudscape-design/components";
 import ColumnDefinition from "./types/ColumnDefinition";
 
 export const WorkflowExecutionListDefinition = new ListDefinition({
