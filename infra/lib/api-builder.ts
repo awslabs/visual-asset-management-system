@@ -334,7 +334,7 @@ export function apiBuilder(
         scope,
         uploadAssetWorkflowStateMachine
     );
-    attachFunctionToApi(scope, runWorkflowFunction, {
+    attachFunctionToApi(scope, uploadAssetWorkflowFunction, {
         routePath: "/assets/uploadAssetWorkflow",
         method: apigwv2.HttpMethod.POST,
         api: api.apiGatewayV2,
