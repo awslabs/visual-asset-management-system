@@ -1,6 +1,7 @@
 # Visual Asset Management System(VAMS) 
 
-![Logo](./web/logo_white.png)
+![Logo](./web/logo_dark.png#gh-light-mode-only)
+![Logo](./web/logo_white.png#gh-dark-mode-only)
 
 ![Build](https://github.com/awslabs/visual-asset-management-system/actions/workflows/ci.yml/badge.svg) 
 ## Introduction

@@ -192,16 +192,19 @@ export function buildUploadAssetWorkflowFunction(
     scope: Construct, 
     uploadAssetWorkflowStateMachine: sfn.StateMachine
 ): lambda.Function {
-    const name = "uploadAssetWorkflow" 
+    const name = "upload_asset_workflow" 
 
     //TODO: Need to send separpate PR for actual code.
     //TODO: Currently only passing this as part of the infra change. 
     const uploadAssetWorkflowFunction = new lambda.DockerImageFunction(scope, name, {
         code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`),{
-            cmd: [`backend.handlers.assets.${name}.lambda_handler`], 
+            cmd: [`backend.functions.assets.${name}.lambda_handler.lambda_handler`], 
         }),
         timeout: Duration.minutes(15), 
         memorySize: 3008,
+        environment: {
+            UPLOAD_WORKFLOW_ARN: uploadAssetWorkflowStateMachine.stateMachineArn,
+        },
     })
     uploadAssetWorkflowStateMachine.grantStartExecution(uploadAssetWorkflowFunction)
 
