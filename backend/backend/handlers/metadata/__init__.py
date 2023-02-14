@@ -69,12 +69,12 @@ def to_update_expr(record):
 
 
 
-def create_or_update(assetId, metadata):
+def create_or_update(databaseId, assetId, metadata):
     keys_map, values_map, expr = to_update_expr(metadata)
     return table.update_item(
         Key={
-            "pk": assetId,
-            "sk": assetId,
+            "databaseId": databaseId,
+            "assetId": assetId,
         },
         ExpressionAttributeNames=keys_map,
         ExpressionAttributeValues=values_map,
@@ -91,6 +91,8 @@ class ValidationError(Exception):
 
 def validate_event(event):
     if "pathParameters" not in event or "assetId" not in event['pathParameters']:
+        raise ValidationError(404, { "error": "missing path parameters"})
+    if "pathParameters" not in event or "databaseId" not in event['pathParameters']:
         raise ValidationError(404, { "error": "missing path parameters"})
 
 

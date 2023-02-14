@@ -8,20 +8,21 @@ import traceback
 from backend.handlers.metadata import logger, mask_sensitive_data, build_response, ValidationError, table, validate_event
 
 
-def delete_item(assetId):
+def delete_item(databaseId, assetId):
     table.delete_item(
         Key={
-            "pk": assetId,
-            "sk": assetId,
-        }
+            "databaseId": databaseId,
+            "assetId": assetId,
+        },
     )
 
 def lambda_handler(event, context):
     logger.info(mask_sensitive_data(event))
     try:
         validate_event(event)
+        databaseId = event['pathParameters']['databaseId']
         assetId = event['pathParameters']['assetId']
-        delete_item(assetId)        
+        delete_item(databaseId, assetId)        
         response = { "status": "OK", "message": "{assetId} deleted".format(assetId=assetId) }
         return build_response(200, json.dumps(response))
     except ValidationError as ex:

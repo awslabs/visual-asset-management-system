@@ -7,11 +7,11 @@ import traceback
 from backend.handlers.metadata import logger, mask_sensitive_data, build_response, table, validate_event, ValidationError
 
 
-def get_metadata(assetId):
+def get_metadata(databaseId, assetId):
     resp = table.get_item(
         Key={
-            "pk": assetId,
-            "sk": assetId,
+            "databaseId": databaseId,
+            "assetId": assetId,
         }
     )
     if "Item" not in resp:
@@ -23,11 +23,12 @@ def lambda_handler(event, context):
     logger.info(mask_sensitive_data(event))
     try:
         validate_event(event)
+        databaseId = event['pathParameters']['databaseId']
         assetId = event['pathParameters']['assetId']
 
         return build_response(200, json.dumps({
             "version": "1", 
-            "metadata": get_metadata(assetId)
+            "metadata": get_metadata(databaseId, assetId)
         }))
 
     except ValidationError as ex:

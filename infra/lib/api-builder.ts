@@ -357,7 +357,7 @@ export function apiBuilder(
     ];
     for (let i = 0; i < methods.length; i++) {
         attachFunctionToApi(scope, metadataCrudFunctions[i], {
-            routePath: "/metadata/{assetId}",
+            routePath: "/metadata/{databaseId}/{assetId}",
             method: methods[i],
             api: api.apiGatewayV2,
         });

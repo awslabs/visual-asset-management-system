@@ -17,19 +17,19 @@ class TableRow {
     type: string | null | undefined;
 }
 
-const put = async (assetId: string, record: Metadata) => {
+const put = async (databaseId: string, assetId: string, record: Metadata) => {
     if(Object.keys(record).length < 1) {
         return;
     }
-    return API.put("api", "metadata/" + assetId, {
+    return API.put("api", `metadata/${databaseId}/${assetId}`, {
         body: {
             version: "1",
             metadata: record,
         },
     });
 };
-const get = async (assetId: string): Promise<object> => {
-    return API.get("api", "metadata/" + assetId, {});
+const get = async (databaseId: string, assetId: string): Promise<object> => {
+    return API.get("api", `metadata/${databaseId}/${assetId}`, {});
 };
 
 class MetadataInputs {
@@ -50,7 +50,7 @@ const MetadataTable = ({ assetId, databaseId }: MetadataInputs) => {
 
     const metaToTableRow = (meta: Metadata) =>
         Object.keys(meta)
-            .filter((key) => key !== "pk" && key != "sk")
+            .filter((key) => key !== "databaseId" && key !== "assetId")
             .map((key, idx): TableRow => {
                 return {
                     idx: idx,
@@ -68,9 +68,8 @@ const MetadataTable = ({ assetId, databaseId }: MetadataInputs) => {
             return;
         }
 
-        get(assetId)
+        get(databaseId, assetId)
             .catch((x) => {
-                console.log("catch", x.response.status);
                 // if 404 , then set an initial status to empty
                 if (x.response.status === 404) {
                     setLoading(false);
@@ -78,7 +77,10 @@ const MetadataTable = ({ assetId, databaseId }: MetadataInputs) => {
             })
             .then((result) => {
                 setLoading(false);
-                setItems(metaToTableRow((result as MetadataApi).metadata));
+                const meta = result as MetadataApi;
+                if (meta.metadata) {
+                    setItems(metaToTableRow(meta.metadata));
+                }
             });
     }, [loading, items]);
 
@@ -155,7 +157,6 @@ const MetadataTable = ({ assetId, databaseId }: MetadataInputs) => {
                 loadingText="Loading..."
                 submitEdit={async (blah, column, newValue) => {
                     const item: TableRow = blah as TableRow;
-                    console.log("submitEdit", item, column, newValue);
                     const next: TableRow[] = [...items];
                     switch (column.id) {
                         case "description":
@@ -167,7 +168,7 @@ const MetadataTable = ({ assetId, databaseId }: MetadataInputs) => {
                     }
                     setItems(next);
 
-                    await put(assetId, tableRowToMeta(next));
+                    await put(databaseId, assetId, tableRowToMeta(next));
                 }}
                 items={items}
                 columnDefinitions={[

@@ -11,9 +11,10 @@ def lambda_handler(event, context):
         validate_event(event)
         
         body = validate_body(event)
+        databaseId = event['pathParameters']['databaseId']
         assetId = event['pathParameters']['assetId']
 
-        create_or_update(assetId, body['metadata'])
+        create_or_update(databaseId, assetId, body['metadata'])
 
         return build_response(200, json.dumps({ "status": "OK" }))
     except ValidationError as ex:
