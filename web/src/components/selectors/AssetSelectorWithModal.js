@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Modal } from "@awsui/components-react";
+import { Modal } from "@cloudscape-design/components";
 import React, { useState } from "react";
 import AssetSelector from "./AssetSelector";
 

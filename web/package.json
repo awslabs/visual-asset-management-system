@@ -13,6 +13,7 @@
     "@awsui/design-tokens": "^3.0.16",
     "@awsui/global-styles": "^1.0.9",
     "@babylonjs/core": "^4.2.0",
+    "@cloudscape-design/components": "^3.0.196",
     "@types/styled-components": "^5.1.21",
     "arraybuffer-to-buffer": "^0.0.7",
     "aws-amplify": "4.3.39",

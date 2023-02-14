@@ -12,7 +12,7 @@ import {
   Grid,
   SpaceBetween,
   TextContent,
-} from "@awsui/components-react";
+} from "@cloudscape-design/components";
 import { useParams } from "react-router";
 import TableList from "../components/list/TableList";
 import PropTypes from "prop-types";

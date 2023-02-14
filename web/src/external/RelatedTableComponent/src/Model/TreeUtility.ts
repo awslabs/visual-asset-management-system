@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { TableProps } from '@awsui/components-react/table';
+import { TableProps } from '@cloudscape-design/components';
 import { ExpandableTableNodeStatus, ITreeNode, TreeMap, TreeNode } from './TreeNode';
 
 export class TreeUtility {

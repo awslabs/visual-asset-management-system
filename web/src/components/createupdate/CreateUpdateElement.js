@@ -10,7 +10,7 @@ import {
   FormField,
   Modal,
   SpaceBetween,
-} from "@awsui/components-react";
+} from "@cloudscape-design/components";
 import React, { useEffect, useState } from "react";
 import PropTypes from "prop-types";
 import FormDefinition from "./form-definitions/types/FormDefinition";

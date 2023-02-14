@@ -38,6 +38,8 @@ import {
     buildEnablePipelineFunction,
     buildPipelineService,
 } from "./lambdaBuilder/pipelineFunctions";
+
+import { buildMetadataFunctions } from "./lambdaBuilder/metadataFunctions";
 import { buildUploadAssetWorkflow } from "./uploadAssetWorkflowBuilder";
 import { Policy, PolicyStatement } from "aws-cdk-lib/aws-iam";
 
@@ -328,7 +330,7 @@ export function apiBuilder(
         api: api.apiGatewayV2,
     });
     const uploadAssetWorkflowStateMachine = buildUploadAssetWorkflow(scope, uploadAssetFunction);
-    uploadAssetFunction.grantInvoke(uploadAssetWorkflowStateMachine)
+    uploadAssetFunction.grantInvoke(uploadAssetWorkflowStateMachine);
 
     const uploadAssetWorkflowFunction = buildUploadAssetWorkflowFunction(
         scope,
@@ -342,6 +344,27 @@ export function apiBuilder(
     //Enabling API Gateway Access Logging: Currently the only way to do this is via V1 constructs
     //https://github.com/aws/aws-cdk/issues/11100#issuecomment-904627081
 
+    // metdata
+    const metadataCrudFunctions = buildMetadataFunctions(
+        scope,
+        storageResources.dynamo.metadataStorageTable
+    );
+    const methods = [
+        apigwv2.HttpMethod.PUT,
+        apigwv2.HttpMethod.GET,
+        apigwv2.HttpMethod.POST,
+        apigwv2.HttpMethod.DELETE,
+    ];
+    for (let i = 0; i < methods.length; i++) {
+        attachFunctionToApi(scope, metadataCrudFunctions[i], {
+            routePath: "/metadata/{databaseId}/{assetId}",
+            method: methods[i],
+            api: api.apiGatewayV2,
+        });
+    }
+
+    //Enabling API Gateway Access Logging: Currently the only way to do this is via V1 constructs
+    //https://github.com/aws/aws-cdk/issues/11100#issuecomment-904627081
     const accessLogs = new logs.LogGroup(scope, "VAMS-API-AccessLogs");
     const stage = api.apiGatewayV2.defaultStage?.node.defaultChild as apigateway.CfnStage;
     stage.accessLogSettings = {

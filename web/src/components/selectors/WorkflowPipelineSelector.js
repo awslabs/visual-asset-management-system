@@ -5,7 +5,7 @@
 
 import React, { useContext, useEffect, useState } from "react";
 import { fetchDatabasePipelines } from "../../services/APIService";
-import { Select } from "@awsui/components-react";
+import { Select } from "@cloudscape-design/components";
 import { WorkflowContext } from "../../context/WorkflowContex";
 
 const WorkflowPipelineSelector = (props) => {

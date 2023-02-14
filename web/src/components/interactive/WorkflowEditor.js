@@ -18,7 +18,7 @@ import ReactFlow, {
   Controls,
   Background,
 } from "react-flow-renderer";
-import { Button, Icon, Select } from "@awsui/components-react";
+import { Button, Icon, Select } from "@cloudscape-design/components";
 import { useParams } from "react-router";
 import AssetSelector from "../selectors/AssetSelector";
 import WorkflowPipelineSelector from "../selectors/WorkflowPipelineSelector";

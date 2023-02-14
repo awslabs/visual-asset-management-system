@@ -8,7 +8,7 @@ import ReactDOM from "react-dom";
 import { Cache } from "aws-amplify";
 import { Authenticator } from "@aws-amplify/ui-react";
 import { BrowserRouter } from "react-router-dom";
-import { TopNavigation } from "@awsui/components-react";
+import { TopNavigation } from "@cloudscape-design/components";
 import { AppRoutes } from "./routes";
 import logoWhite from "./resources/img/logo_white.png";
 import "@aws-amplify/ui-react/styles.css";

@@ -6,7 +6,7 @@
 import React from "react";
 import FormDefinition from "./types/FormDefinition";
 import ControlDefinition from "./types/ControlDefinition";
-import { Input, Select, Textarea } from "@awsui/components-react";
+import { Input, Select, Textarea } from "@cloudscape-design/components";
 import ElementDefinition from "./types/ElementDefinition";
 import DatabaseSelector from "../../selectors/DatabaseSelector";
 import PipelineSelector from "../../selectors/PipelineSelector";

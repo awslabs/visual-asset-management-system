@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { Grid, TextContent } from "@awsui/components-react";
+import { Grid, TextContent } from "@cloudscape-design/components";
 import {
   cadFileFormats,
   columnarFileFormats,

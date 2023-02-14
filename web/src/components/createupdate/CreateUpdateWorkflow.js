@@ -17,7 +17,7 @@ import {
   Container,
   Header,
   BreadcrumbGroup,
-} from "@awsui/components-react";
+} from "@cloudscape-design/components";
 import React, { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import WorkflowEditor from "../interactive/WorkflowEditor";

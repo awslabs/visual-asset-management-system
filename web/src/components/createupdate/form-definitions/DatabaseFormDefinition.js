@@ -6,7 +6,7 @@
 import React from "react";
 import FormDefinition from "./types/FormDefinition";
 import ControlDefinition from "./types/ControlDefinition";
-import { Input, Textarea } from "@awsui/components-react";
+import { Input, Textarea } from "@cloudscape-design/components";
 import ElementDefinition from "./types/ElementDefinition";
 import {ENTITY_TYPES_NAMES} from "../entity-types/EntitieTypes";
 

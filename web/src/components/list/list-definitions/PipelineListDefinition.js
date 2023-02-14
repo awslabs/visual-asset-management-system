@@ -5,7 +5,7 @@
 
 import React from "react";
 import ListDefinition from "./types/ListDefinition";
-import { Link } from "@awsui/components-react";
+import { Link } from "@cloudscape-design/components";
 import ColumnDefinition from "./types/ColumnDefinition";
 
 export const PipelineListDefinition = new ListDefinition({

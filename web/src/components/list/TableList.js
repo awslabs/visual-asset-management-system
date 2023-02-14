@@ -17,7 +17,7 @@ import {
   Table,
   TextFilter,
   Flashbar,
-} from "@awsui/components-react";
+} from "@cloudscape-design/components";
 import { EmptyState } from "../../common/common-components";
 import ListDefinition from "./list-definitions/types/ListDefinition";
 import { deleteElement } from "../../services/APIService";
