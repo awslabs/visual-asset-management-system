@@ -13,8 +13,7 @@
     "cdk.synth.app": "cdk synth",
     "cdk.deploy.app": "cdk deploy --all",
     "deploy.dev": "npm run cdk.deploy.app -- --require-approval never --context ",
-    "deploy.alpha": "npm run cdk.deploy.app -- --require-approval never --context ",
-    "deploy.bms": "npm run cdk.deploy.app -- --c stack-name=bms -c region=eu-west-1 --require-approval never --context "
+    "deploy.vams": "cdk deploy --all -c stack-name=vams -c region=us-east-1 --require-approval never --context"
   },
   "devDependencies": {
     "@aws-cdk/assert": "2.47.0",
