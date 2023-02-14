@@ -124,8 +124,8 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
         contentSecurityPolicy: {
           contentSecurityPolicy: 
             `default-src 'none'; style-src 'self' 'unsafe-inline'; ` 
-            + `connect-src 'self' https://cognito-idp.us-east-1.amazonaws.com/ https://cognito-identity.us-east-1.amazonaws.com https://${props.apiUrl} https://${props.assetBucketUrl}; `
-            + `script-src 'self' https://cognito-idp.us-east-1.amazonaws.com/ https://cognito-identity.us-east-1.amazonaws.com https://${props.apiUrl} https://${props.assetBucketUrl}; `
+            + `connect-src 'self' https://cognito-idp.${props.env?.region}.amazonaws.com/ https://cognito-identity.${props.env?.region}.amazonaws.com https://${props.apiUrl} https://${props.assetBucketUrl}; `
+            + `script-src 'self' https://cognito-idp.${props.env?.region}.amazonaws.com/ https://cognito-identity.${props.env?.region}.amazonaws.com https://${props.apiUrl} https://${props.assetBucketUrl}; `
             + `img-src 'self' data: https://${props.assetBucketUrl}; `
             + `media-src 'self' data: https://${props.assetBucketUrl}; `
             + `object-src 'none'; `

@@ -8,11 +8,9 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import * as path from "path";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { Construct } from "constructs";
-import * as lambdaPython from "@aws-cdk/aws-lambda-python-alpha"
 import { Duration } from "aws-cdk-lib";
-import { NagSuppressions } from "cdk-nag";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../security";
-
+import * as sfn from "aws-cdk-lib/aws-stepfunctions"
 export function buildAssetService(
     scope: Construct,
     assetStorageTable: dynamodb.Table,
@@ -190,3 +188,26 @@ export function buildRevertAssetFunction(
     return revertAssetFunction;
 }
 
+export function buildUploadAssetWorkflowFunction(
+    scope: Construct, 
+    uploadAssetWorkflowStateMachine: sfn.StateMachine
+): lambda.Function {
+    const name = "upload_asset_workflow" 
+
+    //TODO: Need to send separpate PR for actual code.
+    //TODO: Currently only passing this as part of the infra change. 
+    const uploadAssetWorkflowFunction = new lambda.DockerImageFunction(scope, name, {
+        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`),{
+            cmd: [`backend.functions.assets.${name}.lambda_handler.lambda_handler`], 
+        }),
+        timeout: Duration.minutes(15), 
+        memorySize: 3008,
+        environment: {
+            UPLOAD_WORKFLOW_ARN: uploadAssetWorkflowStateMachine.stateMachineArn,
+        },
+    })
+    uploadAssetWorkflowStateMachine.grantStartExecution(uploadAssetWorkflowFunction)
+
+    suppressCdkNagErrorsByGrantReadWrite(scope);
+    return uploadAssetWorkflowFunction;
+}

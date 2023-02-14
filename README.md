@@ -1,21 +1,9 @@
-```             ____               
-               ,---,               ,'  , `.  .--.--.    
-       ,---.  '  .' \           ,-+-,.' _ | /  /    '.  
-      /__./| /  ;    '.      ,-+-. ;   , |||  :  /`. /  
- ,---.;  ; |:  :       \    ,--.'|'   |  ;|;  |  |--`     
-/___/ \  | |:  |   /\   \  |   |  ,', |  ':|  :  ;_          
-\   ;  \ ' ||  :  ' ;.   : |   | /  | |  || \  \    `.         
- \   \  \: ||  |  ;/  \   \'   | :  | :  |,  `----.   \      
-  ;   \  ' .'  :  | \  \ ,';   . |  ; |--'   __ \  \  |    
-   \   \   '|  |  '  '--'  |   : |  | ,     /  /`--'  / 
-    \   `  ;|  :  :        |   : '  |/     '--'.     /  
-     :   \ ||  | ,'        ;   | |`-'        `--'---'   
-      '---" `--''          |   ;/                       
-                           '---'                            
-```
-
 # Visual Asset Management System(VAMS) 
 
+![Logo](./web/logo_dark.png#gh-light-mode-only)
+![Logo](./web/logo_white.png#gh-dark-mode-only)
+
+![Build](https://github.com/awslabs/visual-asset-management-system/actions/workflows/ci.yml/badge.svg) 
 ## Introduction
 
 *Visual Asset Management System (VAMS)* is a purpose-built, AWS native solution for the management and distribution of specialized visual assets used in spatial computing. VAMS offers a simplified solution for organizations to ingest, store, and manage visual assets in the cloud, which empowers any user with a web browser to upload, manage, visualize, transform, and retrieve visual assets. Existing workflows that leverage both custom code and pre-built or third-party applications can also be migrated to VAMS and ran in the AWS cloud, as opposed to being limited by the on-premise capacity available. VAMS is customizable and expandable with option of being further tailored to specific use-cases by development teams.
@@ -56,13 +44,17 @@ Sample use cases that have leveraged early iterations of VAMS include:
 
 1) `cd ./web nvm use` - make sure you're node version matches the project. Make sure Docker daemon is running.
 
+2) `yarn install` - make sure you install the packages required by the web app
+
 2) `npm run build` - build the web app. 
 
 3) `cd ../infra npm install` - installs dependencies defined in package.json.
 
-4) If you haven't already bootstrapped your aws account with CDK. `cdk bootstrap aws://101010101010/us-east-1` - replace with your account and region. (Note: only us-east-1 is supported with VAMS at this time.)
+4) If you haven't already bootstrapped your aws account with CDK. `cdk bootstrap aws://101010101010/us-east-1` - replace with your account and region.
 
-5) `cdk deploy dev --parameters adminEmailAddress=myuser@example.com` - replace with your email address to deploy. An account is created in an AWS Cognito User Pool using this email address. Expect an email from no-reply@verificationemail.com with a temporary password. 
+5) Set the CDK stack name and the region for deployment with environment variables `export AWS_REGION=us-east-1 && export STACK_NAME=dev` - replace with the region you would like to deploy to and the name you want to associate with the cloudformation stack that the CDK will deploy.
+
+6) `npm run deploy.dev adminEmailAddress=myuser@example.com` - replace with your email address to deploy. An account is created in an AWS Cognito User Pool using this email address. Expect an email from no-reply@verificationemail.com with a temporary password. 
 
 #### Deployment Success
 
@@ -70,13 +62,13 @@ Sample use cases that have leveraged early iterations of VAMS include:
 
 2) Check email for temporary account password to log in with the email address you provided.
 
-### Multiple Deployments Same Account/Region
+### Multiple Deployments With Different or Same Region in Single Account
 
-Provide a unique stack name in the deployment command `cdk deploy STACK_NAME --parameters adminEmailAddress=myuser@amazon.com` to deploy multiple instances of VAMS in the same AWS account. 
+You can change the region and deploy a new instance of VAMS my setting the environment variables to new values (`export AWS_REGION=us-east-1 && export STACK_NAME=dev`) and then running `npm run deploy.dev adminEmailAddress=myuser@example.com` again.
 
 ### Deploy VAMS Updates
 
-To deploy customziations or updates to VAMS, you can update the stack by running `cdk deploy`. A changeset is created and deployed to your stack. 
+To deploy customziations or updates to VAMS, you can update the stack by running `cdk deploy --all`. A changeset is created and deployed to your stack. 
 
 Please note, depending on what changes are in flight, VAMS may not be available to users in part or in whole during the deployment. Please read the change log carefully and test changes before exposing your users to new versions.  
 
@@ -136,7 +128,7 @@ VAMS is provided under a shared responsibility model. Any customization for cust
 
 ## Uninstalling
 
-1. Run `cdk destroy` from infra folder.
+1. Run `cdk destroy --all` from infra folder.
 2. Some resources may not be deleted by CDK (e.g S3 buckets and DynamoDB tables, pipeline stacks). You may delete them using the AWS CLI or the AWS Console.
 
 
