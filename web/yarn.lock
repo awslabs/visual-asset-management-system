@@ -2173,58 +2173,6 @@
   dependencies:
     tslib "^1.8.0"
 
-"@awsui/collection-hooks@^1.0.0", "@awsui/collection-hooks@^1.0.21":
-  version "1.0.49"
-  resolved "https://registry.yarnpkg.com/@awsui/collection-hooks/-/collection-hooks-1.0.49.tgz#7a42ed479917d881b89b61d01dde2c3e52d9143f"
-  integrity sha512-CrzaTBcrffxs+hyw7fT+Q1c06Tqf8XBMNdfD30tBam+i/QRvL/qIh7IA374qXDcZbQAlx2MfhzYbxaZwzncFaQ==
-
-"@awsui/components-react@^3.0.288":
-  version "3.0.741"
-  resolved "https://registry.yarnpkg.com/@awsui/components-react/-/components-react-3.0.741.tgz#12d638025de7225e032bddca8dcb2ae9c0ce1747"
-  integrity sha512-HG7HGvAb7E8sq7yw8FOs3/r/AQRN44L5Zx6zYgb8k/D1M4AbctTclOoTaKEV2W7Uzs2uMTthNk7RQMHa775qNA==
-  dependencies:
-    "@awsui/collection-hooks" "^1.0.0"
-    "@awsui/test-utils-core" "^1.0.0"
-    "@awsui/theming-runtime" "^1.0.0"
-    "@juggle/resize-observer" "^3.3.1"
-    ace-builds "^1.4.13"
-    balanced-match "^1.0.2"
-    clsx "^1.1.0"
-    d3-shape "^1.3.7"
-    date-fns "^2.25.0"
-    mnth "^2.0.0"
-    react-focus-lock "~2.8.1"
-    react-keyed-flatten-children "^1.3.0"
-    react-transition-group "^4.4.2"
-    react-virtual "^2.8.2"
-    tslib "^2.4.0"
-    weekstart "^1.1.0"
-
-"@awsui/design-tokens@^3.0.16":
-  version "3.0.35"
-  resolved "https://registry.yarnpkg.com/@awsui/design-tokens/-/design-tokens-3.0.35.tgz#53f1e2719c0faa4154a2c31310d8d89390f839a9"
-  integrity sha512-Kd8OYyyBt29r8w44Z+POkkPcrB/SeSX+4OAvjBIJ3VeZ3laR13Xs77Z1DUfENgieJT1pRTYHQXpkSx/TVnJ9gw==
-
-"@awsui/global-styles@^1.0.9":
-  version "1.0.19"
-  resolved "https://registry.yarnpkg.com/@awsui/global-styles/-/global-styles-1.0.19.tgz#440df6049e201c932c2f930488af068212decd00"
-  integrity sha512-MkyM/nrLbkSYnVn/ltB1DIjzm4+6uluQWvI6WOj9QrZj0Yq6xaaMwjFQie0SS+TzBhVRCjPvlO16JaS4rKAAJw==
-
-"@awsui/test-utils-core@^1.0.0":
-  version "1.0.34"
-  resolved "https://registry.yarnpkg.com/@awsui/test-utils-core/-/test-utils-core-1.0.34.tgz#08d47306d1f1dde63a5c2b5c401c22568ad4972b"
-  integrity sha512-EGr5pFYNnx3G9Ttep+beO0vzQUsqILnFwTWVdA7BMei7+cOoXqf0et+JK6oxwUZ7JCJmm7orKkDD2/HaHvsZ7g==
-  dependencies:
-    css-selector-tokenizer "^0.8.0"
-    css.escape "^1.5.1"
-
-"@awsui/theming-runtime@^1.0.0":
-  version "1.0.22"
-  resolved "https://registry.yarnpkg.com/@awsui/theming-runtime/-/theming-runtime-1.0.22.tgz#9b1515a90d16d8697f90d23e4647bae9a1fec46d"
-  integrity sha512-W7qZVbR4JRXDiBnrNO9MJlcexaAid6j8ADkfW23BgGukf7vOaORlbLpECEor/L1J9PpNb7CLs2ZMcPWwYpY3+g==
-  dependencies:
-    tslib "^2.4.0"
-
 "@babel/code-frame@^7.0.0", "@babel/code-frame@^7.10.4", "@babel/code-frame@^7.12.13", "@babel/code-frame@^7.16.0", "@babel/code-frame@^7.18.6", "@babel/code-frame@^7.8.3":
   version "7.18.6"
   resolved "https://registry.yarnpkg.com/@babel/code-frame/-/code-frame-7.18.6.tgz#3b25d38c89600baa2dcc219edfa88a74eb2c427a"
@@ -3295,6 +3243,53 @@
   version "0.2.3"
   resolved "https://registry.yarnpkg.com/@bcoe/v8-coverage/-/v8-coverage-0.2.3.tgz#75a2e8b51cb758a7553d6804a5932d7aace75c39"
   integrity sha512-0hYQ8SB4Db5zvZB4axdMHGwEaQjkZzFjQiN9LVYvIFB2nSUHW9tYpxWriPrWDASIxiaXax83REcLxuSdnGPZtw==
+
+"@cloudscape-design/collection-hooks@^1.0.0", "@cloudscape-design/collection-hooks@^1.0.19":
+  version "1.0.19"
+  resolved "https://registry.yarnpkg.com/@cloudscape-design/collection-hooks/-/collection-hooks-1.0.19.tgz#3c0d50751a2c5965b5dcb7e94def81dcda1ea782"
+  integrity sha512-dd5K+o0bTxmNephTglVSwKPTOs+S+hekKCAf1M7dthuCsgEiYVSMAan+Uu+e7EG64atPGIsg+me9BJofF7VmFA==
+
+"@cloudscape-design/components@^3.0.196":
+  version "3.0.196"
+  resolved "https://registry.yarnpkg.com/@cloudscape-design/components/-/components-3.0.196.tgz#ac6ceb29ae8dbe41741cce6859e1b175a66ec380"
+  integrity sha512-4dwRdDo4/n0pjvEqfl/OKprewoL8jKVIacDSvl4CRtNUbbBGVFZBKXLMP6JuAF143LjCklpuvIWSv7a3G0ikcw==
+  dependencies:
+    "@cloudscape-design/collection-hooks" "^1.0.0"
+    "@cloudscape-design/test-utils-core" "^1.0.0"
+    "@cloudscape-design/theming-runtime" "^1.0.0"
+    "@juggle/resize-observer" "^3.3.1"
+    ace-builds "^1.4.13"
+    balanced-match "^1.0.2"
+    clsx "^1.1.0"
+    d3-shape "^1.3.7"
+    date-fns "^2.25.0"
+    mnth "^2.0.0"
+    react-focus-lock "~2.8.1"
+    react-keyed-flatten-children "^1.3.0"
+    react-transition-group "^4.4.2"
+    react-virtual "^2.8.2"
+    tslib "^2.4.0"
+    weekstart "^1.1.0"
+
+"@cloudscape-design/design-tokens@^3.0.8":
+  version "3.0.8"
+  resolved "https://registry.yarnpkg.com/@cloudscape-design/design-tokens/-/design-tokens-3.0.8.tgz#c33f6161a935f9b9d79418a4b9ed663f56f5de8e"
+  integrity sha512-zjG9wt4JfRFngXlFl4VT13bBA9aJSXw4nUPNOBcwMjrvT2drGmph3ESP2Eem1VBv0gyb7Hzz30BRHHh9VojSgQ==
+
+"@cloudscape-design/test-utils-core@^1.0.0":
+  version "1.0.9"
+  resolved "https://registry.yarnpkg.com/@cloudscape-design/test-utils-core/-/test-utils-core-1.0.9.tgz#67180fb5f114d47207eb794df9894de36f46be22"
+  integrity sha512-NCGQOTpxNSnJWwTIaLA2Nv6MR2xVENluCS+yb7ZsQbViqEEFcnHkJ00fTua89GOqVa0oUxJpSSELfKBPBN5QQw==
+  dependencies:
+    css-selector-tokenizer "^0.8.0"
+    css.escape "^1.5.1"
+
+"@cloudscape-design/theming-runtime@^1.0.0":
+  version "1.0.12"
+  resolved "https://registry.yarnpkg.com/@cloudscape-design/theming-runtime/-/theming-runtime-1.0.12.tgz#f810dda35a3b0dc4614ffe8086d19355f536cc79"
+  integrity sha512-hu/vX7BGweBaoSh3BcFbtaK58bbfCCBKv0h4U7LusX/F7mMM/rMKEYYNZa+YLp4N6daQ0TglRADc9HKx+uX9sA==
+  dependencies:
+    tslib "^2.4.0"
 
 "@csstools/normalize.css@*":
   version "12.0.0"

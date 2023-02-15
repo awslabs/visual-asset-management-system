@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as awsui from '@awsui/design-tokens';
+import * as awsui from '@cloudscape-design/design-tokens';
 import React from 'react';
 import { ITreeNode } from '../../Model/TreeNode';
 import { TreeLineModes } from '../../Model/TreeLineModes';

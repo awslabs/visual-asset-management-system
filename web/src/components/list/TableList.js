@@ -5,7 +5,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import PropTypes from "prop-types";
-import { useCollection } from "@awsui/collection-hooks";
+import { useCollection } from "@cloudscape-design/collection-hooks";
 import {
   Button,
   Grid,

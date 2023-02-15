@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
  
-@use "~@awsui/design-tokens/index.scss" as awsui;
+@use '@cloudscape-design/design-tokens/index' as awsui;
 @use "./base";
 
 .custom-link-font-weight-light {

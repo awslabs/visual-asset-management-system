@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
  
-@use "~@awsui/design-tokens/index.scss" as awsui;
+@use '@cloudscape-design/design-tokens/index' as awsui;
+
 @use "./base";
 
 // 912px is the container breakpoint-s, the viewport breakpoint is 912(container width) + 40(closed side navigation width) + 4(negative margin from grid)
