@@ -3296,6 +3296,48 @@
   resolved "https://registry.yarnpkg.com/@bcoe/v8-coverage/-/v8-coverage-0.2.3.tgz#75a2e8b51cb758a7553d6804a5932d7aace75c39"
   integrity sha512-0hYQ8SB4Db5zvZB4axdMHGwEaQjkZzFjQiN9LVYvIFB2nSUHW9tYpxWriPrWDASIxiaXax83REcLxuSdnGPZtw==
 
+"@cloudscape-design/collection-hooks@^1.0.0":
+  version "1.0.19"
+  resolved "https://registry.yarnpkg.com/@cloudscape-design/collection-hooks/-/collection-hooks-1.0.19.tgz#3c0d50751a2c5965b5dcb7e94def81dcda1ea782"
+  integrity sha512-dd5K+o0bTxmNephTglVSwKPTOs+S+hekKCAf1M7dthuCsgEiYVSMAan+Uu+e7EG64atPGIsg+me9BJofF7VmFA==
+
+"@cloudscape-design/components@^3.0.196":
+  version "3.0.196"
+  resolved "https://registry.yarnpkg.com/@cloudscape-design/components/-/components-3.0.196.tgz#ac6ceb29ae8dbe41741cce6859e1b175a66ec380"
+  integrity sha512-4dwRdDo4/n0pjvEqfl/OKprewoL8jKVIacDSvl4CRtNUbbBGVFZBKXLMP6JuAF143LjCklpuvIWSv7a3G0ikcw==
+  dependencies:
+    "@cloudscape-design/collection-hooks" "^1.0.0"
+    "@cloudscape-design/test-utils-core" "^1.0.0"
+    "@cloudscape-design/theming-runtime" "^1.0.0"
+    "@juggle/resize-observer" "^3.3.1"
+    ace-builds "^1.4.13"
+    balanced-match "^1.0.2"
+    clsx "^1.1.0"
+    d3-shape "^1.3.7"
+    date-fns "^2.25.0"
+    mnth "^2.0.0"
+    react-focus-lock "~2.8.1"
+    react-keyed-flatten-children "^1.3.0"
+    react-transition-group "^4.4.2"
+    react-virtual "^2.8.2"
+    tslib "^2.4.0"
+    weekstart "^1.1.0"
+
+"@cloudscape-design/test-utils-core@^1.0.0":
+  version "1.0.9"
+  resolved "https://registry.yarnpkg.com/@cloudscape-design/test-utils-core/-/test-utils-core-1.0.9.tgz#67180fb5f114d47207eb794df9894de36f46be22"
+  integrity sha512-NCGQOTpxNSnJWwTIaLA2Nv6MR2xVENluCS+yb7ZsQbViqEEFcnHkJ00fTua89GOqVa0oUxJpSSELfKBPBN5QQw==
+  dependencies:
+    css-selector-tokenizer "^0.8.0"
+    css.escape "^1.5.1"
+
+"@cloudscape-design/theming-runtime@^1.0.0":
+  version "1.0.12"
+  resolved "https://registry.yarnpkg.com/@cloudscape-design/theming-runtime/-/theming-runtime-1.0.12.tgz#f810dda35a3b0dc4614ffe8086d19355f536cc79"
+  integrity sha512-hu/vX7BGweBaoSh3BcFbtaK58bbfCCBKv0h4U7LusX/F7mMM/rMKEYYNZa+YLp4N6daQ0TglRADc9HKx+uX9sA==
+  dependencies:
+    tslib "^2.4.0"
+
 "@csstools/normalize.css@*":
   version "12.0.0"
   resolved "https://registry.yarnpkg.com/@csstools/normalize.css/-/normalize.css-12.0.0.tgz#a9583a75c3f150667771f30b60d9f059473e62c4"

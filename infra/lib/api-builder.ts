@@ -329,18 +329,6 @@ export function apiBuilder(
         method: apigwv2.HttpMethod.POST,
         api: api.apiGatewayV2,
     });
-    const uploadAssetWorkflowStateMachine = buildUploadAssetWorkflow(scope, uploadAssetFunction);
-    uploadAssetFunction.grantInvoke(uploadAssetWorkflowStateMachine);
-
-    const uploadAssetWorkflowFunction = buildUploadAssetWorkflowFunction(
-        scope,
-        uploadAssetWorkflowStateMachine
-    );
-    attachFunctionToApi(scope, uploadAssetWorkflowFunction, {
-        routePath: "/assets/uploadAssetWorkflow",
-        method: apigwv2.HttpMethod.POST,
-        api: api.apiGatewayV2,
-    });
     //Enabling API Gateway Access Logging: Currently the only way to do this is via V1 constructs
     //https://github.com/aws/aws-cdk/issues/11100#issuecomment-904627081
 
@@ -362,7 +350,22 @@ export function apiBuilder(
             api: api.apiGatewayV2,
         });
     }
+    const uploadAssetWorkflowStateMachine = buildUploadAssetWorkflow(scope, 
+        uploadAssetFunction, 
+        metadataCrudFunctions[2],
+        runWorkflowFunction
+    );
+    uploadAssetFunction.grantInvoke(uploadAssetWorkflowStateMachine);
 
+    const uploadAssetWorkflowFunction = buildUploadAssetWorkflowFunction(
+        scope,
+        uploadAssetWorkflowStateMachine
+    );
+    attachFunctionToApi(scope, uploadAssetWorkflowFunction, {
+        routePath: "/assets/uploadAssetWorkflow",
+        method: apigwv2.HttpMethod.POST,
+        api: api.apiGatewayV2,
+    });
     //Enabling API Gateway Access Logging: Currently the only way to do this is via V1 constructs
     //https://github.com/aws/aws-cdk/issues/11100#issuecomment-904627081
     const accessLogs = new logs.LogGroup(scope, "VAMS-API-AccessLogs");

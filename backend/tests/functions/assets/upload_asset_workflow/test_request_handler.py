@@ -1,5 +1,13 @@
-from backend.functions.assets.upload_asset_workflow.request_handler import UploadAssetWorkflowRequestHandler
-from backend.models.assets import AssetPreviewLocationModel, UploadAssetModel, UploadAssetWorkflowRequestModel
+from backend.functions.assets.upload_asset_workflow.request_handler import (
+    UploadAssetWorkflowRequestHandler
+)
+from backend.models.assets import (
+    AssetPreviewLocationModel,
+    ExecuteWorkflowModel,
+    UpdateMetadataModel,
+    UploadAssetModel,
+    UploadAssetWorkflowRequestModel
+)
 import boto3
 from moto import mock_stepfunctions
 import pytest
@@ -27,13 +35,26 @@ def sample_request():
             key='test_file',
             assetType='step',
             description='Testing',
-            specifiedPipelines=[],
             isDistributable=False,
+            specifiedPipelines=[],
             Comment='Testing',
             previewLocation=AssetPreviewLocationModel(
                 Bucket='test_bucket',
                 Key='test_preview_key'
             )
+        ),
+        updateMetadataModel=UpdateMetadataModel(
+            version="1",
+            metadata={
+                'test': 'test'
+            }
+        ),
+        executeWorkflowModel=ExecuteWorkflowModel(
+            workflowIds=[
+                'test1',
+                'test2',
+                'test3'
+            ]
         )
     )
 
