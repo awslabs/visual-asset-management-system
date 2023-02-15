@@ -198,7 +198,7 @@ Resources:
               echo "export S3_NAME=${SagemakerBucketName}" >>
               /etc/profile.d/jupyter-env.sh
 
-              # initctl restart jupyter-server --no-wait
+              service jupyter-server restart
       OnStart:
         - Content: !Base64 >
             #!/bin/bash
