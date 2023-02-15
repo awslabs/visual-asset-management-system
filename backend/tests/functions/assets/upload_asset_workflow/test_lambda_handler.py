@@ -1,8 +1,15 @@
 import json
 from unittest.mock import patch
-from backend.functions.assets.upload_asset_workflow.request_handler import UploadAssetWorkflowRequestHandler
+from backend.functions.assets.upload_asset_workflow.request_handler import (
+    UploadAssetWorkflowRequestHandler
+)
 from backend.models.assets import (
-    AssetPreviewLocationModel, UploadAssetModel, UploadAssetWorkflowRequestModel, UploadAssetWorkflowResponseModel
+    AssetPreviewLocationModel,
+    ExecuteWorkflowModel,
+    UpdateMetadataModel,
+    UploadAssetModel,
+    UploadAssetWorkflowRequestModel,
+    UploadAssetWorkflowResponseModel
 )
 from moto import mock_stepfunctions
 import pytest
@@ -12,21 +19,34 @@ import pytest
 def sample_request():
     event = {'body': {}}
     requst = json.dumps(UploadAssetWorkflowRequestModel(
-            uploadAssetBody=UploadAssetModel(
-                databaseId='1',
-                assetId='test',
-                bucket='test_bucket',
-                key='test_file',
-                assetType='step',
-                description='Testing',
-                isDistributable=False,
-                specifiedPipelines=[],
-                Comment='Testing',
-                previewLocation=AssetPreviewLocationModel(
-                    Bucket='test_bucket',
-                    Key='test_preview_key'
-                )
+        uploadAssetBody=UploadAssetModel(
+            databaseId='1',
+            assetId='test',
+            bucket='test_bucket',
+            key='test_file',
+            assetType='step',
+            description='Testing',
+            isDistributable=False,
+            specifiedPipelines=[],
+            Comment='Testing',
+            previewLocation=AssetPreviewLocationModel(
+                Bucket='test_bucket',
+                Key='test_preview_key'
             )
+        ),
+        updateMetadataModel=UpdateMetadataModel(
+            version="1",
+            metadata={
+                'test': 'test'
+            }
+        ),
+        executeWorkflowModel=ExecuteWorkflowModel(
+            workflowIds=[
+                'test1',
+                'test2',
+                'test3'
+            ]
+        )
         ).dict()
     )
     event['body'] = requst
