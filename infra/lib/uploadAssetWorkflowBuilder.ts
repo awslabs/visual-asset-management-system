@@ -15,10 +15,14 @@ export function buildUploadAssetWorkflow(
     const callUploadAssetLambdaTask = new tasks.LambdaInvoke(scope, "Upload Asset Task", {
         lambdaFunction: uploadAssetFunction,
         payload: TaskInput.fromJsonPathAt("$.uploadAssetBody"),
+        resultPath: "$.uploadAssetResult",
+        outputPath: "$"
     });
     const callUpdateMetadataTask = new tasks.LambdaInvoke(scope, "Update Metadata Task", {
         lambdaFunction: updateMetadataFunction,
         payload: TaskInput.fromJsonPathAt("$.updateMetadataBody"),
+        resultPath: "$.updateMetadataResult",
+        outputPath: "$"
     });
     const map = new sfn.Map(scope, 'Map State', {
         maxConcurrency: 1,

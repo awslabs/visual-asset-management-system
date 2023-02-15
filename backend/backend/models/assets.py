@@ -34,8 +34,8 @@ class ExecuteWorkflowModel(BaseModel):
 
 class UploadAssetWorkflowRequestModel(BaseModel):
     uploadAssetBody: UploadAssetModel
-    updateMetadataModel: UpdateMetadataModel
-    executeWorkflowModel: ExecuteWorkflowModel
+    updateMetadataBody: UpdateMetadataModel
+    executeWorkflowBody: ExecuteWorkflowModel
 
 
 class UploadAssetWorkflowResponseModel(BaseModel):
@@ -77,7 +77,7 @@ class UploadAssetStepFunctionRequest(BaseModel):
 
 class UploadAssetWorkflowStepFunctionInput(BaseModel):
     uploadAssetBody: UploadAssetStepFunctionRequest
-    updateAssetMetadataBody: UpdateAssetMetadataStepFunctionRequest
+    updateMetadataBody: UpdateAssetMetadataStepFunctionRequest
     executeWorkflowBody: List[ExecuteWorkflowStepFunctionRequest]
 
 
@@ -92,8 +92,8 @@ def GetUploadAssetWorkflowStepFunctionInput(
                 assetId=uploadAssetWorkflowRequestModel.uploadAssetBody.assetId,
     )
     metadataBody = UpdateAssetMetadataBody(
-                version=uploadAssetWorkflowRequestModel.updateMetadataModel.version,
-                metadata=uploadAssetWorkflowRequestModel.updateMetadataModel.metadata
+                version=uploadAssetWorkflowRequestModel.updateMetadataBody.version,
+                metadata=uploadAssetWorkflowRequestModel.updateMetadataBody.metadata
     )
     executeWorkflowBody = [ExecuteWorkflowStepFunctionRequest(
             pathParameters=ExecuteWorkflowPathParameters(
@@ -101,10 +101,10 @@ def GetUploadAssetWorkflowStepFunctionInput(
                 assetId=uploadAssetWorkflowRequestModel.uploadAssetBody.assetId,
                 workflowId=x
             )
-    ) for x in uploadAssetWorkflowRequestModel.executeWorkflowModel.workflowIds]
+    ) for x in uploadAssetWorkflowRequestModel.executeWorkflowBody.workflowIds]
     return UploadAssetWorkflowStepFunctionInput(
         uploadAssetBody=uploadAssetBody,
-        updateAssetMetadataBody=UpdateAssetMetadataStepFunctionRequest(
+        updateMetadataBody=UpdateAssetMetadataStepFunctionRequest(
             pathParameters=metadataPathParameters,
             body=metadataBody
         ),

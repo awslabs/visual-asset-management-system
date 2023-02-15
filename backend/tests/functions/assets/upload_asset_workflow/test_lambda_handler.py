@@ -34,13 +34,13 @@ def sample_request():
                 Key='test_preview_key'
             )
         ),
-        updateMetadataModel=UpdateMetadataModel(
+        updateMetadataBody=UpdateMetadataModel(
             version="1",
             metadata={
                 'test': 'test'
             }
         ),
-        executeWorkflowModel=ExecuteWorkflowModel(
+        executeWorkflowBody=ExecuteWorkflowModel(
             workflowIds=[
                 'test1',
                 'test2',
