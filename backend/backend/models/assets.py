@@ -1,4 +1,5 @@
-from typing import Dict, List
+import json
+from typing import Dict, List, Optional
 from pydantic import BaseModel, Json
 from aws_lambda_powertools.utilities.parser.models import (
     APIGatewayProxyEventV2Model
@@ -34,8 +35,9 @@ class ExecuteWorkflowModel(BaseModel):
 
 class UploadAssetWorkflowRequestModel(BaseModel):
     uploadAssetBody: UploadAssetModel
-    updateMetadataBody: UpdateMetadataModel
-    executeWorkflowBody: ExecuteWorkflowModel
+    copyFrom: Optional[str]
+    updateMetadataBody: Optional[UpdateMetadataModel]
+    executeWorkflowBody: Optional[ExecuteWorkflowModel]
 
 
 class UploadAssetWorkflowResponseModel(BaseModel):
@@ -58,7 +60,7 @@ class UpdateAssetMetadataBody(BaseModel):
 
 class UpdateAssetMetadataStepFunctionRequest(BaseModel):
     pathParameters: UpdateAssetMetadataPathParameters
-    body: UpdateAssetMetadataBody
+    body: str
 
 
 class ExecuteWorkflowPathParameters(BaseModel):
@@ -75,10 +77,17 @@ class UploadAssetStepFunctionRequest(BaseModel):
     body: UploadAssetModel
 
 
+class CopyObjectBody(BaseModel):
+    bucket: str
+    key: str
+    copySource: str
+
+
 class UploadAssetWorkflowStepFunctionInput(BaseModel):
     uploadAssetBody: UploadAssetStepFunctionRequest
-    updateMetadataBody: UpdateAssetMetadataStepFunctionRequest
-    executeWorkflowBody: List[ExecuteWorkflowStepFunctionRequest]
+    copyObjectBody: Optional[CopyObjectBody]
+    updateMetadataBody: Optional[UpdateAssetMetadataStepFunctionRequest]
+    executeWorkflowBody: Optional[List[ExecuteWorkflowStepFunctionRequest]]
 
 
 def GetUploadAssetWorkflowStepFunctionInput(
@@ -87,26 +96,42 @@ def GetUploadAssetWorkflowStepFunctionInput(
     uploadAssetBody = UploadAssetStepFunctionRequest(
             body=uploadAssetWorkflowRequestModel.uploadAssetBody
     )
-    metadataPathParameters = UpdateAssetMetadataPathParameters(
-                databaseId=uploadAssetWorkflowRequestModel.uploadAssetBody.databaseId,
-                assetId=uploadAssetWorkflowRequestModel.uploadAssetBody.assetId,
-    )
-    metadataBody = UpdateAssetMetadataBody(
-                version=uploadAssetWorkflowRequestModel.updateMetadataBody.version,
-                metadata=uploadAssetWorkflowRequestModel.updateMetadataBody.metadata
-    )
-    executeWorkflowBody = [ExecuteWorkflowStepFunctionRequest(
-            pathParameters=ExecuteWorkflowPathParameters(
-                databaseId=uploadAssetWorkflowRequestModel.uploadAssetBody.databaseId,
-                assetId=uploadAssetWorkflowRequestModel.uploadAssetBody.assetId,
-                workflowId=x
-            )
-    ) for x in uploadAssetWorkflowRequestModel.executeWorkflowBody.workflowIds]
+
+    copyObjectBody = None
+    if uploadAssetWorkflowRequestModel.copyFrom is not None:
+        copyObjectBody = CopyObjectBody(
+            bucket=uploadAssetWorkflowRequestModel.uploadAssetBody.bucket,
+            key=uploadAssetWorkflowRequestModel.uploadAssetBody.key,
+            copySource=uploadAssetWorkflowRequestModel.copyFrom
+        )
+
+    updateMetadataBody = None
+    if uploadAssetWorkflowRequestModel.updateMetadataBody is not None:
+        metadataPathParameters = UpdateAssetMetadataPathParameters(
+                    databaseId=uploadAssetWorkflowRequestModel.uploadAssetBody.databaseId,
+                    assetId=uploadAssetWorkflowRequestModel.uploadAssetBody.assetId,
+        )
+        metadataBody = UpdateAssetMetadataBody(
+                    version=uploadAssetWorkflowRequestModel.updateMetadataBody.version,
+                    metadata=uploadAssetWorkflowRequestModel.updateMetadataBody.metadata
+        )
+        updateMetadataBody = UpdateAssetMetadataStepFunctionRequest(
+            pathParameters=metadataPathParameters,
+            body=json.dumps(metadataBody.dict())
+        )
+
+    executeWorkflowBody = None
+    if uploadAssetWorkflowRequestModel.executeWorkflowBody is not None:
+        executeWorkflowBody = [ExecuteWorkflowStepFunctionRequest(
+                pathParameters=ExecuteWorkflowPathParameters(
+                    databaseId=uploadAssetWorkflowRequestModel.uploadAssetBody.databaseId,
+                    assetId=uploadAssetWorkflowRequestModel.uploadAssetBody.assetId,
+                    workflowId=x
+                )
+        ) for x in uploadAssetWorkflowRequestModel.executeWorkflowBody.workflowIds]
     return UploadAssetWorkflowStepFunctionInput(
         uploadAssetBody=uploadAssetBody,
-        updateMetadataBody=UpdateAssetMetadataStepFunctionRequest(
-            pathParameters=metadataPathParameters,
-            body=metadataBody
-        ),
+        copyObjectBody=copyObjectBody,
+        updateMetadataBody=updateMetadataBody,
         executeWorkflowBody=executeWorkflowBody
     )

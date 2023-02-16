@@ -353,9 +353,15 @@ export function apiBuilder(
     const uploadAssetWorkflowStateMachine = buildUploadAssetWorkflow(scope, 
         uploadAssetFunction, 
         metadataCrudFunctions[2],
-        runWorkflowFunction
+        runWorkflowFunction, 
+        storageResources.s3.assetBucket,
+        storageResources.s3.stagingBucket
     );
     uploadAssetFunction.grantInvoke(uploadAssetWorkflowStateMachine);
+    storageResources.s3.assetBucket.grantReadWrite(uploadAssetWorkflowStateMachine)
+    if(storageResources.s3.stagingBucket) {
+        storageResources.s3.stagingBucket.grantRead(uploadAssetWorkflowStateMachine)
+    }
 
     const uploadAssetWorkflowFunction = buildUploadAssetWorkflowFunction(
         scope,
