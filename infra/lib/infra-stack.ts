@@ -22,6 +22,7 @@ interface EnvProps {
     ssmWafArnParameterName: string;
     ssmWafArnParameterRegion: string;
     ssmWafArn: string;
+    stagingBucket?: string;
 }
 
 export class VAMS extends cdk.Stack {
@@ -36,8 +37,8 @@ export class VAMS extends cdk.Stack {
         });
 
         const webAppBuildPath = "../web/build";
-
-        const storageResources = storageResourcesBuilder(this);
+        
+        const storageResources = storageResourcesBuilder(this, props.stagingBucket);
         const trail = new cloudTrail.Trail(this, 'CloudTrail-VAMS', {
             isMultiRegionTrail: false,
             bucket: storageResources.s3.accessLogsBucket, 

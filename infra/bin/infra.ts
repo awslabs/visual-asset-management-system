@@ -19,15 +19,20 @@ const region = process.env.AWS_REGION || app.node.tryGetContext("region") || "us
 const stackName = (process.env.STACK_NAME || app.node.tryGetContext("stack-name")) + "-" + region;
 const dockerDefaultPlatform = process.env.DOCKER_DEFAULT_PLATFORM ;
 const enableCdkNag = true; 
+const stagingBucket = process.env.STAGING_BUCKET || app.node.tryGetContext("staging-bucket")
 
 console.log('CDK_NAG_ENABLED 👉', enableCdkNag);
 console.log('STACK_NAME 👉', stackName);
 console.log('REGION 👉', region);
 console.log('DOCKER_DEFAULT_PLATFORM 👉', dockerDefaultPlatform);
+if(stagingBucket) {
+    console.log('STAGING_BUCKET 👉', stagingBucket)
+}
 
 if(enableCdkNag) {
     Aspects.of(app).add(new AwsSolutionsChecks({ verbose: true }))
 }
+
 
 //The web access firewall currently needs to be in us-east-1
 const cfWafStack = new CfWafStack(app, `vams-waf-${stackName || process.env.DEMO_LABEL || 'dev'}`, {
@@ -48,7 +53,8 @@ const vamsStack = new VAMS(app, `vams-${stackName || process.env.DEMO_LABEL || '
     },
     ssmWafArnParameterName: cfWafStack.ssmWafArnParameterName,
     ssmWafArnParameterRegion: cfWafStack.region,
-    ssmWafArn: cfWafStack.wafArn
+    ssmWafArn: cfWafStack.wafArn,
+    stagingBucket: stagingBucket
 });
 
 vamsStack.addDependency(cfWafStack);

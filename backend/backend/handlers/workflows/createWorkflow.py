@@ -188,6 +188,12 @@ def create_step_function(pipelines, databaseId, workflowId):
             step = create_lambda_step(pipeline, input_s3_uri, output_s3_uri)
         else:
             step = create_sagemaker_step(databaseId, region, role, account_id, job_names, instance_type, i, pipeline, input_s3_uri, output_s3_uri)
+        step.add_retry(retry=stepfunctions.steps.Retry(
+            error_equals=["States.ALL"],
+            interval_seconds=5,
+            backoff_rate=2,
+            max_attempts=3
+        ))
         step.add_catch(catch_state_processing)
         steps.append(step)
 

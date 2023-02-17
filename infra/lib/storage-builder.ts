@@ -18,6 +18,7 @@ export interface storageResources {
         artefactsBucket: s3.Bucket;
         accessLogsBucket: s3.Bucket;
         sagemakerBucket: s3.Bucket;
+        stagingBucket?: s3.IBucket;
     };
     dynamo: {
         assetStorageTable: dynamodb.Table;
@@ -29,7 +30,7 @@ export interface storageResources {
         metadataStorageTable: dynamodb.Table;
     };
 }
-export function storageResourcesBuilder(scope: Construct): storageResources {
+export function storageResourcesBuilder(scope: Construct, staging_bucket?: string): storageResources {
     const accessLogsBucket = new s3.Bucket(scope, "AccessLogsBucket", {
         encryption: s3.BucketEncryption.S3_MANAGED,
         serverAccessLogsPrefix: "access-log-bucket-logs/",
@@ -78,6 +79,10 @@ export function storageResourcesBuilder(scope: Construct): storageResources {
         blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
     });
     requireTLSAddToResourcePolicy(sagemakerBucket);
+
+    let stagingBucket = undefined
+    if(staging_bucket)
+        stagingBucket = s3.Bucket.fromBucketName(scope, "Staging Bucket", staging_bucket)
 
     new s3deployment.BucketDeployment(scope, "DeployArtefacts", {
         sources: [s3deployment.Source.asset("./lib/artefacts")],
@@ -195,6 +200,7 @@ export function storageResourcesBuilder(scope: Construct): storageResources {
             artefactsBucket: artefactsBucket,
             accessLogsBucket: accessLogsBucket,
             sagemakerBucket: sagemakerBucket,
+            stagingBucket: stagingBucket,
         },
         dynamo: {
             assetStorageTable: assetStorageTable,

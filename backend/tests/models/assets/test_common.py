@@ -27,13 +27,14 @@ def sample_request():
                 Key='test_preview_key'
             )
         ),
-        updateMetadataModel=UpdateMetadataModel(
+        copyFrom="test/src",
+        updateMetadataBody=UpdateMetadataModel(
             version="1",
             metadata={
                 'test': 'test'
             }
         ),
-        executeWorkflowModel=ExecuteWorkflowModel(
+        executeWorkflowBody=ExecuteWorkflowModel(
             workflowIds=[
                 'test1',
                 'test2',
@@ -43,7 +44,37 @@ def sample_request():
     )
 
 
+@pytest.fixture()
+def only_required():
+    return UploadAssetWorkflowRequestModel(
+        uploadAssetBody=UploadAssetModel(
+            databaseId='1',
+            assetId='test',
+            bucket='test_bucket',
+            key='test_file',
+            assetType='step',
+            description='Testing',
+            isDistributable=False,
+            specifiedPipelines=[],
+            Comment='Testing',
+            previewLocation=AssetPreviewLocationModel(
+                Bucket='test_bucket',
+                Key='test_preview_key'
+            )
+        )
+    )
+
+
 def test_step_function_input_from_request(sample_request):
-    print("Testing")
     result = GetUploadAssetWorkflowStepFunctionInput(sample_request)
-    assert result is not None
+    assert result.copyObjectBody is not None
+    assert result.updateMetadataBody is not None
+    assert result.executeWorkflowBody is not None
+    assert result.uploadAssetBody is not None
+
+
+def test_step_function_input_required(only_required):
+    result = GetUploadAssetWorkflowStepFunctionInput(only_required)
+    assert result.updateMetadataBody is None
+    assert result.executeWorkflowBody is None
+    assert result.uploadAssetBody is not None
