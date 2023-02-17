@@ -19,7 +19,7 @@ const region = process.env.AWS_REGION || app.node.tryGetContext("region") || "us
 const stackName = (process.env.STACK_NAME || app.node.tryGetContext("stack-name")) + "-" + region;
 const dockerDefaultPlatform = process.env.DOCKER_DEFAULT_PLATFORM ;
 const enableCdkNag = true; 
-const stagingBucket = process.env.STAGING_BUCKT || app.node.tryGetContext("staging-bucket")
+const stagingBucket = process.env.STAGING_BUCKET || app.node.tryGetContext("staging-bucket")
 
 console.log('CDK_NAG_ENABLED 👉', enableCdkNag);
 console.log('STACK_NAME 👉', stackName);
