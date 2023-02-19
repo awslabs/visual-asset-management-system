@@ -22,6 +22,7 @@ let navItems = [
     items: [
       { type: "link", text: "Databases", href: "/databases" },
       { type: "link", text: "Assets", href: "/assets" },
+      { type: "link", text: "Upload Asset", href: "/upload" },
     ],
   },
   {
