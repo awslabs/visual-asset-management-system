@@ -73,7 +73,7 @@ export const AppRoutes = (props) => {
         path={path}
         element={
           <AppLayout
-            disableContentPaddings={true}
+            disableContentPaddings={navigationOpen}
             content={<Page />}
             navigation={<Navigation activeHref={active} />}
             navigationOpen={navigationOpen}

@@ -3,11 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { applyMode, applyDensity } from "@awsui/global-styles";
+import { applyMode, applyDensity } from "@cloudscape-design/global-styles";
 import * as localStorage from "./localStorage";
 import { createPropertyStorage } from "./createPropertyStorage";
 
-import "@awsui/global-styles/index.css";
+import "@cloudscape-design/global-styles/index.css";
 
 export const densityLocalStorageKey = "Awsui-Density-Preference";
 export const densityStorage = createPropertyStorage(
