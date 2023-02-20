@@ -65,7 +65,7 @@ The CDK deployment deploys the VAMS stack into your account. The components that
 
 # API Schema:
 
-Please see [Swagger Spec](../vams/VAMS_API.yaml) for details
+Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-system/blob/main/VAMS_API.yaml) for details
 
 # Updating Backend
 
@@ -74,11 +74,11 @@ The dependencies for the backend lambda functions are handled using poetry. If y
 The lambda handlers are categorized based on the project domain. E.g you will find all assets related functions in `/backend/backend/assets` folder.
 # Testing API
 
-Please see the corresponding [Postman Collection](../vams/VAMS_API_Tests.postman_collection.json) provided. 
+Please see the corresponding [Postman Collection](https://github.com/awslabs/visual-asset-management-system/blob/main/VAMS_API_Tests.postman_collection.json) provided. 
 
 Once the solution is deployed, you will have to put in the below details as Global Variables in the Postman Collection
 
-![Postman Variables](../vams/Postman_Test_Variables.png)
+![Postman Variables](https://github.com/awslabs/visual-asset-management-system/blob/main/Postman_Test_Variables.png)
 # Updating and Testing Frontend
 
 Within the web folder You can do `npm run start` to start a local frontend application. 
