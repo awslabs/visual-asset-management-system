@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import {
     Box,
     ColumnLayout,
@@ -25,7 +25,6 @@ import FormField from "@cloudscape-design/components/form-field";
 import Input from "@cloudscape-design/components/input";
 
 import DatabaseSelector from "../components/selectors/DatabaseSelector";
-import { formatFileSize } from "../components/form/FileUploadControl";
 import {
     cadFileFormats,
     modelFileFormats,
@@ -33,140 +32,27 @@ import {
     previewFileFormats,
 } from "../common/constants/fileFormats";
 
-import MetadataTable, { Metadata, put as saveMetadata } from "../components/single/Metadata";
-import { fetchDatabaseWorkflows, runWorkflow } from "../services/APIService";
-import { API, Storage, Cache } from "aws-amplify";
+import MetadataTable, { Metadata } from "../components/single/Metadata";
+import { fetchDatabaseWorkflows } from "../services/APIService";
 import Table from "@cloudscape-design/components/table";
-import ProgressBar, { ProgressBarProps } from "@cloudscape-design/components/progress-bar";
-import StatusIndicator, {
+import { ProgressBarProps } from "@cloudscape-design/components/progress-bar";
+import {
     StatusIndicatorProps,
 } from "@cloudscape-design/components/status-indicator";
-import { StoragePutOutput } from "@aws-amplify/storage/lib-esm/types/Storage";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
+import {
+    validateEntityIdAsYouType,
+    validateNonZeroLengthTextAsYouType,
+} from "./AssetUpload/validations";
+import { DisplayKV, FileUpload } from "./AssetUpload/components";
+import ProgressScreen from "./AssetUpload/ProgressScreen";
+import onSubmit from "./AssetUpload/onSubmit";
 
 const objectFileFormats = new Array().concat(cadFileFormats, modelFileFormats, columnarFileFormats);
 const objectFileFormatsStr = objectFileFormats.join(", ");
 const previewFileFormatsStr = previewFileFormats.join(", ");
 
-class FileUploadProps {
-    label?: string;
-    errorText?: string;
-    fileFormats!: string;
-    setFile!: (file: File) => void;
-    file: File | undefined;
-    disabled!: boolean;
-}
-
-function getLang() {
-    if (navigator.languages != undefined) return navigator.languages[0];
-    if (navigator.language) return navigator.language;
-    return "en-us";
-}
-const FileUpload = ({
-    errorText,
-    fileFormats,
-    disabled,
-    setFile,
-    file,
-    label,
-}: FileUploadProps) => {
-    const inputRef = useRef<HTMLInputElement>(null);
-
-    return (
-        <FormField errorText={errorText} label={label} description={"File types: " + fileFormats}>
-            <input
-                ref={inputRef}
-                type="file"
-                accept={fileFormats}
-                style={{ display: "none" }}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                    if (e.target.files && e.target.files.length > 0 && e.target.files[0]) {
-                        setFile(e.target.files[0]);
-                    }
-                }}
-            />
-            <SpaceBetween size="l">
-                <Button
-                    disabled={disabled}
-                    variant="normal"
-                    iconName="upload"
-                    onClick={(e) => {
-                        inputRef?.current?.click();
-                    }}
-                >
-                    Choose File
-                </Button>
-                <DisplayFileMeta file={file} />
-            </SpaceBetween>
-        </FormField>
-    );
-};
-class DisplayFileMetaProps {
-    file?: File;
-}
-function DisplayFileMeta({ file }: DisplayFileMetaProps) {
-    return (
-        <Grid gridDefinition={[{ colspan: { default: 6 } }, { colspan: { default: 6 } }]}>
-            {file && (
-                <>
-                    <TextContent>
-                        <strong>Filename:</strong>
-                        <br />
-                        <small>Size</small>
-                        <br />
-                        <small>Last Modified:</small>
-                    </TextContent>
-                    <TextContent>
-                        <strong>{file?.name}</strong>
-                        <br />
-                        <small>{formatFileSize(file?.size)}</small>
-                        <br />
-                        <small>
-                            {new Date(file?.lastModified).toLocaleDateString(getLang(), {
-                                weekday: "long",
-                                year: "numeric",
-                                month: "short",
-                                day: "numeric",
-                            })}
-                        </small>
-                    </TextContent>
-                </>
-            )}
-        </Grid>
-    );
-}
-
-const validateEntityIdAsYouType = (s?: string): string | undefined => {
-    if (!s) {
-        return "Required field.";
-    }
-
-    if (!s.match(/^[a-z].*/)) {
-        return "First character must be a lower case letter.";
-    }
-
-    if (s.length < 4) {
-        return "Must be at least 4 characters.";
-    }
-
-    const valid = /^[a-z][a-z0-9-_]{3,63}$/;
-
-    if (!s.match(valid)) {
-        return "Invalid characters detected.";
-    }
-};
-
-const validateNonZeroLengthTextAsYouType = (s?: string): string | undefined => {
-    if (!s) {
-        return "Required field.";
-    }
-
-    if (s.length < 4) {
-        return "Must be at least 4 characters.";
-    }
-};
-
-class AssetDetail {
+export class AssetDetail {
     assetId?: string;
     databaseId?: string;
     description?: string;
@@ -250,38 +136,11 @@ const UploadForm = () => {
     return (
         <Box padding={{ left: "l", right: "l" }}>
             {showUploadAndExecProgress && (
-                <Box padding={{ top: false ? "s" : "m", horizontal: "l" }}>
-                    <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
-                        <div>
-                            <Box variant="awsui-key-label">Upload Progress</Box>
-                            <ProgressBar
-                                status={assetUploadProgress.status}
-                                value={assetUploadProgress.value}
-                                label="Asset Upload Progress"
-                            />
-                            <ProgressBar
-                                status={previewUploadProgress.status}
-                                value={previewUploadProgress.value}
-                                label="Preview Upload Progress"
-                            />
-                            <Box variant="awsui-key-label">Exec Progress</Box>
-
-                            {Object.keys(execStatus).map((label) => (
-                                <div key={label}>
-                                    <StatusIndicator type={execStatus[label]}>
-                                        {label}
-                                    </StatusIndicator>
-                                </div>
-                            ))}
-                            <div>
-                                <TextContent>
-                                    Please do not close your browser window until processing
-                                    completes.
-                                </TextContent>
-                            </div>
-                        </div>
-                    </Grid>
-                </Box>
+                <ProgressScreen
+                    execStatus={execStatus}
+                    previewUploadProgress={previewUploadProgress}
+                    assetUploadProgress={assetUploadProgress}
+                />
             )}
             {!showUploadAndExecProgress && (
                 <Wizard
@@ -298,202 +157,26 @@ const UploadForm = () => {
                         optional: "optional",
                     }}
                     isLoadingNextStep={freezeWizardButtons}
-                    onNavigate={({ detail }) => setActiveStepIndex(detail.requestedStepIndex)}
-                    activeStepIndex={activeStepIndex}
-                    onSubmit={async (detail) => {
-                        setFreezeWizardButtons(true);
-                        if (
-                            assetDetail.Asset &&
-                            assetDetail.Preview &&
-                            assetDetail.assetId &&
-                            assetDetail.databaseId
-                        ) {
-                            // TODO duplicate logic with AssetFormDefinition and uploadAssetToS3
-                            const config = Cache.getItem("config");
-                            assetDetail.bucket = config.bucket;
-                            assetDetail.assetType = "." + assetDetail.Asset.name.split(".").pop();
-                            assetDetail.key = assetDetail.assetId + assetDetail.assetType;
-                            assetDetail.specifiedPipelines = [];
-                            assetDetail.previewLocation = {
-                                Bucket: config.bucket,
-                                Key:
-                                    assetDetail.assetId +
-                                    "." +
-                                    assetDetail.Preview.name.split(".").pop(),
-                            };
-
-                            const execStatusNew: Record<string, StatusIndicatorProps.Type> = {
-                                "Asset Details": "pending",
-                            };
-                            if (metadata && Object.keys(metadata).length > 0) {
-                                execStatusNew["Metadata"] = "pending";
-                            }
-                            selectedWorkflows.forEach((wf: { workflowId: string }) => {
-                                execStatusNew[wf.workflowId] = "pending";
-                            });
-
-                            setExecStatus(execStatusNew);
-
-                            window.onbeforeunload = function () {
-                                return "";
-                            };
-                            setShowUploadAndExecProgress(true);
-                            const up1 = uploadAssetToS3(
-                                assetDetail.Asset,
-                                assetDetail.assetId,
-                                {
-                                    assetId: assetDetail.assetId,
-                                    databaseId: assetDetail.databaseId,
-                                },
-                                (progress) => {
-                                    setAssetUploadProgress({
-                                        value: (progress.loaded / progress.total) * 100,
-                                    });
-                                }
-                            )
-                                .then((res) => {
-                                    setAssetUploadProgress({
-                                        status: "success",
-                                        value: 100,
-                                    });
-                                })
-                                .catch((err) => {
-                                    setAssetUploadProgress({
-                                        status: "error",
-                                        value: 100,
-                                    });
-                                    return Promise.reject(err);
-                                });
-
-                            const up2 = uploadAssetToS3(
-                                assetDetail.Preview,
-                                assetDetail.assetId,
-                                {
-                                    assetId: assetDetail.assetId,
-                                    databaseId: assetDetail.databaseId,
-                                },
-                                (progress) => {
-                                    setPreviewUploadProgress({
-                                        value: (progress.loaded / progress.total) * 100,
-                                    });
-                                }
-                            )
-                                .then((res) => {
-                                    setPreviewUploadProgress({
-                                        status: "success",
-                                        value: 100,
-                                    });
-                                })
-                                .catch((err) => {
-                                    setPreviewUploadProgress({
-                                        status: "error",
-                                        value: 100,
-                                    });
-                                    return Promise.reject(err);
-                                });
-
-                            await Promise.all([up1, up2])
-                                .then((uploads) => {
-                                    setExecStatus({
-                                        ...execStatus,
-                                        "Asset Detail": "in-progress",
-                                    });
-                                    return API.put("api", "assets", {
-                                        "Content-type": "application/json",
-                                        body: assetDetail,
-                                    })
-                                        .then((res) => {
-                                            setExecStatus((p) => ({
-                                                ...p,
-                                                "Asset Detail": "success",
-                                            }));
-                                        })
-                                        .catch((err) => {
-                                            console.log("err asset detail", err);
-                                            setExecStatus((p) => ({
-                                                ...p,
-                                                "Asset Detail": "error",
-                                            }));
-                                            return Promise.reject(err);
-                                        });
-                                })
-                                .then((res) => {
-                                    setExecStatus((p) => ({
-                                        ...p,
-                                        Metadata: "in-progress",
-                                    }));
-                                    if (assetDetail.assetId && assetDetail.databaseId) {
-                                        return saveMetadata(
-                                            assetDetail.databaseId,
-                                            assetDetail.assetId,
-                                            metadata
-                                        )
-                                            .then((resul) => {
-                                                setExecStatus((p) => ({
-                                                    ...p,
-                                                    Metadata: "success",
-                                                }));
-                                            })
-                                            .catch((err) => {
-                                                console.log("err metadata", err);
-                                                setExecStatus((p) => ({
-                                                    ...p,
-                                                    Metadata: "error",
-                                                }));
-                                                return Promise.reject(err);
-                                            });
-                                    }
-                                    return Promise.reject(
-                                        "missing assetId or databaseId in assetDetail"
-                                    );
-                                })
-                                .then((res) => {
-                                    selectedWorkflows.forEach((wf: { workflowId: string }) => {
-                                        execStatusNew[wf.workflowId] = "in-progress";
-                                    });
-                                    return Promise.all(
-                                        selectedWorkflows.map((wf: { workflowId: string }) => {
-                                            const wfArgs = {
-                                                assetId: assetDetail.assetId,
-                                                databaseId: assetDetail.databaseId,
-                                                workflowId: wf.workflowId,
-                                            };
-                                            return runWorkflow(wfArgs)
-                                                .then((result) => {
-                                                    setExecStatus((previous) => {
-                                                        const n = { ...previous };
-                                                        n[wf.workflowId] = "success";
-                                                        return n;
-                                                    });
-                                                })
-                                                .catch((err) => {
-                                                    console.log("err", wf, err);
-                                                    setExecStatus((previous) => {
-                                                        const n = { ...previous };
-                                                        n[wf.workflowId] = "error";
-                                                        return n;
-                                                    });
-                                                    return Promise.reject(err);
-                                                });
-                                        })
-                                    );
-                                });
-
-                            window.onbeforeunload = null;
-                        }
-                        console.log("detail", detail);
+                    onNavigate={({ detail }) => {
+                        setActiveStepIndex(detail.requestedStepIndex)
+                        console.log("detail on navigate", detail);
                     }}
+                    activeStepIndex={activeStepIndex}
+                    onSubmit={onSubmit({
+                        assetDetail,
+                        setFreezeWizardButtons,
+                        metadata,
+                        selectedWorkflows,
+                        execStatus,
+                        setExecStatus,
+                        setShowUploadAndExecProgress,
+                        setAssetUploadProgress,
+                        setPreviewUploadProgress,
+                    })}
                     allowSkipTo
                     steps={[
                         {
                             title: "Asset Details",
-                            info: <Link variant="info">Info</Link>,
-                            description: (
-                                <Box padding={{ right: "l", left: "l" }}>
-                                    Each instance type includes one or more instance sizes, allowing
-                                    you
-                                </Box>
-                            ),
                             isOptional: false,
                             content: (
                                 <Container header={<Header variant="h2">Asset Details</Header>}>
@@ -716,9 +399,6 @@ const UploadForm = () => {
                                                     value={assetDetail[k as keyof AssetDetail]}
                                                 />
                                             ))}
-                                            {/* <div>
-                                            <pre>{JSON.stringify(metadata, null, 2)}</pre>
-                                        </div> */}
                                         </ColumnLayout>
                                     </Container>
                                     <Container
@@ -752,29 +432,6 @@ const UploadForm = () => {
     );
 };
 
-class DisplayKVProps {
-    label!: string;
-    value!: any;
-}
-
-function DisplayKV({ label, value }: DisplayKVProps): JSX.Element {
-    if (value instanceof File) {
-        return (
-            <div>
-                <Box variant="awsui-key-label">{label}</Box>
-                <DisplayFileMeta file={value} />
-            </div>
-        );
-    }
-
-    return (
-        <div>
-            <Box variant="awsui-key-label">{label}</Box>
-            <div>{value}</div>
-        </div>
-    );
-}
-
 export default function AssetUploadPage({}) {
     return (
         <>
@@ -793,58 +450,3 @@ export default function AssetUploadPage({}) {
     );
 }
 
-class ProgresCallbackArgs {
-    loaded!: number;
-    total!: number;
-}
-
-async function uploadAssetToS3(
-    file: File,
-    keyPrefix: string,
-    metadata: { [k: string]: string },
-    progressCallback: (progress: ProgresCallbackArgs) => void
-): Promise<StoragePutOutput<Record<string, any>>> {
-    const ext = `.${file?.name.split(".").pop()}`;
-    const key = `${keyPrefix}${ext}`;
-    return Storage.put(key, file, { metadata, progressCallback });
-}
-
-{
-    /*
-PUT https://jjykh968wd.execute-api.us-east-1.amazonaws.com/assets
-{
-    "assetId": "blades",
-    "databaseId": "notphillips",
-    "description": "test",
-    "bucket": "vams-dev-us-east-1-assetbucket1d025086-1jo3lq4rgcv4x",
-    "key": "blades.stl",
-    "assetType": ".stl",
-    "specifiedPipelines": [],
-    "isDistributable": false,
-    "Comment": "test",
-    "previewLocation": {
-        "Bucket": "vams-dev-us-east-1-assetbucket1d025086-1jo3lq4rgcv4x",
-        "Key": "blades.png"
-    },
-    "Asset": {},
-    "Preview": {}
-}
-
-
-// GET https://jjykh968wd.execute-api.us-east-1.amazonaws.com/assets
-// {"message": {"Items": [{"assetType": ".stl", "executionId": "", "pipelineId": "", "currentVersion": {"Comment": "test", "S3Version": "8vzRjnkkqZNfkF9e4bGtswukOrKQjymP", "Version": "1", "description": "test", "specifiedPipelines": [], "DateModified": "February 17 2023 - 20:39:30", "FileSize": "1.101284MB"}, "versions": [], "authEdit": [], "specifiedPipelines": [], "previewLocation": {"Bucket": "vams-dev-us-east-1-assetbucket1d025086-1jo3lq4rgcv4x", "Key": "blades.png"}, "assetId": "blades", "assetLocation": {"Bucket": "vams-dev-us-east-1-assetbucket1d025086-1jo3lq4rgcv4x", "Key": "blades.stl"}, "assetName": "blades", "databaseId": "notphillips", "description": "test", "isDistributable": false}, {"assetType": ".glb", "executionId": "", "pipelineId": "", "currentVersion": {"Comment": "test", "S3Version": "c4.Jt1gUkWcriHC3c4k.QOeEFyFjj.zE", "Version": "1", "description": "test", "specifiedPipelines": [], "DateModified": "January 30 2023 - 19:36:36", "FileSize": "0.336576MB"}, "versions": [], "authEdit": [], "specifiedPipelines": [], "previewLocation": {"Bucket": "vams-dev-us-east-1-assetbucket1d025086-1jo3lq4rgcv4x", "Key": "boat.jpeg"}, "assetId": "boat", "assetLocation": {"Bucket": "vams-dev-us-east-1-assetbucket1d025086-1jo3lq4rgcv4x", "Key": "boat.glb"}, "assetName": "boat", "databaseId": "notphillips", "description": "test", "isDistributable": false}, {"assetType": ".STEP", "executionId": "", "pipelineId": "", "currentVersion": {"Comment": "lld_sizing_1-ez_p001225_step", "S3Version": "Kc2_08L0qKZoQq_Ipj5ZHq3UzwcSHkWB", "Version": "1", "description": "lld_sizing_1-ez_p001225_step", "specifiedPipelines": [], "DateModified": "January 25 2023 - 23:35:17", "FileSize": "1.573967MB"}, "versions": [], "authEdit": [], "specifiedPipelines": [], "previewLocation": {"Bucket": "vams-dev-us-east-1-assetbucket1d025086-1jo3lq4rgcv4x", "Key": "lld_sizing_1-ez_p001225_step.jpg"}, "assetId": "lld_sizing_1-ez_p001225_step", "assetLocation": {"Bucket": "vams-dev-us-east-1-assetbucket1d025086-1jo3lq4rgcv4x", "Key": "lld_sizing_1-ez_p001225_step.STEP"}, "assetName": "lld_sizing_1-ez_p001225_step", "databaseId": "phillips", "description": "lld_sizing_1-ez_p001225_step", "isDistributable": false}, {"assetType": ".glb", "executionId": "", "pipelineId": "", "currentVersion": {"Comment": "sa12_philips_laser_system_nexcimer_cart.glb", "S3Version": "MYQyBJZ7bEHtorxePw3DyfAovfEdSxSm", "Version": "1", "description": "sa12_philips_laser_system_nexcimer_cart.glb", "specifiedPipelines": [], "DateModified": "January 25 2023 - 22:46:20", "FileSize": "73.126132MB"}, "versions": [], "authEdit": [], "specifiedPipelines": [], "previewLocation": {"Bucket": "vams-dev-us-east-1-assetbucket1d025086-1jo3lq4rgcv4x", "Key": "sa12_philips_laser_system_nexcimer_cart.png"}, "assetId": "sa12_philips_laser_system_nexcimer_cart", "assetLocation": {"Bucket": "vams-dev-us-east-1-assetbucket1d025086-1jo3lq4rgcv4x", "Key": "sa12_philips_laser_system_nexcimer_cart.glb"}, "assetName": "sa12_philips_laser_system_nexcimer_cart", "databaseId": "phillips", "description": "sa12_philips_laser_system_nexcimer_cart.glb", "isDistributable": false}, {"assetType": ".STEP", "executionId": "", "pipelineId": "", "currentVersion": {"Comment": "TorqMax.STEP", "S3Version": "wVr9hB5GhJPz3UdGPSB4TjEpfQ4ZfDlj", "Version": "1", "description": "torqmax", "specifiedPipelines": [], "DateModified": "January 24 2023 - 20:45:19", "FileSize": "6.703137MB"}, "versions": [], "authEdit": [], "specifiedPipelines": [], "previewLocation": {"Bucket": "vams-dev-us-east-1-assetbucket1d025086-1jo3lq4rgcv4x", "Key": "torqmaxstep.png"}, "assetId": "torqmaxstep", "assetLocation": {"Bucket": "vams-dev-us-east-1-assetbucket1d025086-1jo3lq4rgcv4x", "Key": "torqmaxstep.STEP"}, "assetName": "torqmaxstep", "databaseId": "phillips", "description": "torqmax", "isDistributable": false}, {"assetType": ".stp", "executionId": "", "pipelineId": "", "currentVersion": {"Comment": "test", "S3Version": "ptYaadX35yvuL41c.RzsD6IWCS0WopTH", "Version": "1", "description": "test", "specifiedPipelines": [], "DateModified": "January 31 2023 - 19:05:17", "FileSize": "0.007634MB"}, "versions": [], "authEdit": [], "specifiedPipelines": [], "previewLocation": {"Bucket": "vams-dev-us-east-1-assetbucket1d025086-1jo3lq4rgcv4x", "Key": "test.pdf"}, "assetId": "test", "assetLocation": {"Bucket": "vams-dev-us-east-1-assetbucket1d025086-1jo3lq4rgcv4x", "Key": "test.stp"}, "assetName": "test", "databaseId": "nistsmartconnectedsystemsdivision", "description": "test", "isDistributable": false}, {"assetType": ".stp", "executionId": "", "pipelineId": "", "currentVersion": {"Comment": "test1", "S3Version": "acITU0i3zjvTMV1ppMaQ_sazXPqsJEab", "Version": "1", "description": "test1", "specifiedPipelines": [], "DateModified": "January 31 2023 - 19:07:48", "FileSize": "0.323601MB"}, "versions": [], "authEdit": [], "specifiedPipelines": [], "previewLocation": {"Bucket": "vams-dev-us-east-1-assetbucket1d025086-1jo3lq4rgcv4x", "Key": "test1.pdf"}, "assetId": "test1", "assetLocation": {"Bucket": "vams-dev-us-east-1-assetbucket1d025086-1jo3lq4rgcv4x", "Key": "test1.stp"}, "assetName": "test1", "databaseId": "nistsmartconnectedsystemsdivision", "description": "test1", "isDistributable": false}]}}
-
-
-
-
-Run a workflow
-
-POST /database/nistsmartconnectedsystemsdivision/assets/blades/workflows/workflow1
-
-
-POST /database/nistsmartconnectedsystemsdivision/assets/blades2/workflows/workflow1
-
-
-
-*/
-}
