@@ -1,3 +1,7 @@
+/*
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 import React, { useRef } from "react";
 import { Box, Grid, TextContent } from "@cloudscape-design/components";
 import SpaceBetween from "@cloudscape-design/components/space-between";

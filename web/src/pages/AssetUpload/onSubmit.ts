@@ -1,3 +1,7 @@
+/*
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 import { StoragePutOutput } from "@aws-amplify/storage";
 import { ProgressBarProps } from "@cloudscape-design/components";
 import { NonCancelableCustomEvent } from "@cloudscape-design/components/interfaces";
