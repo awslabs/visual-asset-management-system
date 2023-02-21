@@ -82,7 +82,14 @@ def lambda_handler(event, context):
     print(bucket_name, prefix)
 
     s3 = boto3.client("s3")
-    all_outputs = s3.list_objects(Bucket=bucket_name, Prefix=prefix) 
+    # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3.html#S3.Client.list_objects_v2
+    all_outputs = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
+    if 'IsTruncated' in all_outputs and all_outputs['IsTruncated']:
+        print(
+            "WARN: s3 object listing exceeds 1,000 objects,",
+            "this is unexpected for this operation with the bucket and prefix",
+            bucket_name, prefix
+        )
     print(all_outputs)
     assets = []
     if 'Contents' in all_outputs:
