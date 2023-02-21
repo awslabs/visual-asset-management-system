@@ -23,7 +23,7 @@ const PipelineSelector = (props) => {
     if (reload) {
       getData();
     }
-  }, [reload]);
+  }, [reload, databaseId]);
 
   const SelectControl = (props) => {
     const { isMulti } = props;

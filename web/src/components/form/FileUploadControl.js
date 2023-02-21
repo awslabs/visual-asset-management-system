@@ -23,7 +23,7 @@ const generateUUID = () => {
 };
 
 //@link https://stackoverflow.com/questions/10420352/converting-file-size-in-bytes-to-human-readable-string/10420404
-const formatFileSize = (bytes, si = false, dp = 1) => {
+export const formatFileSize = (bytes, si = false, dp = 1) => {
   const thresh = si ? 1000 : 1024;
   if (Math.abs(bytes) < thresh) {
     return bytes + " B";

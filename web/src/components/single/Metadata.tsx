@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { API } from "aws-amplify";
 import { Box, Button, Header, Table, Input } from "@cloudscape-design/components";
+import { PunctuationSyntaxKind } from "typescript";
 
-class MetadataApi {
+export class MetadataApi {
     version!: string;
     metadata!: Metadata;
 }
-class Metadata {
+export class Metadata {
     [key: string]: string;
 }
 
@@ -17,7 +18,7 @@ class TableRow {
     type: string | null | undefined;
 }
 
-const put = async (databaseId: string, assetId: string, record: Metadata) => {
+export const put = async (databaseId: string, assetId: string, record: Metadata) => {
     if(Object.keys(record).length < 1) {
         return;
     }
@@ -35,9 +36,12 @@ const get = async (databaseId: string, assetId: string): Promise<object> => {
 class MetadataInputs {
     assetId!: string;
     databaseId!: string;
+    initialState?: Metadata;
+    store?: ((databaseId: string, assetId: string, record: Metadata) => Promise<any>);
 }
 
-const MetadataTable = ({ assetId, databaseId }: MetadataInputs) => {
+const MetadataTable = ({ assetId, databaseId, store, initialState }: MetadataInputs) => {
+    const _store = store !== undefined ? store : put;
     const tableRowToMeta = (rows: TableRow[]): Metadata => {
         const result: Metadata = {};
         rows.forEach((row) => {
@@ -68,6 +72,12 @@ const MetadataTable = ({ assetId, databaseId }: MetadataInputs) => {
             return;
         }
 
+        if(initialState !== undefined) {
+            setLoading(false);
+            setItems(metaToTableRow(initialState));
+            return;
+        }
+
         get(databaseId, assetId)
             .catch((x) => {
                 // if 404 , then set an initial status to empty
@@ -78,7 +88,7 @@ const MetadataTable = ({ assetId, databaseId }: MetadataInputs) => {
             .then((result) => {
                 setLoading(false);
                 const meta = result as MetadataApi;
-                if (meta.metadata) {
+                if (meta && meta.metadata) {
                     setItems(metaToTableRow(meta.metadata));
                 }
             });
@@ -168,7 +178,7 @@ const MetadataTable = ({ assetId, databaseId }: MetadataInputs) => {
                     }
                     setItems(next);
 
-                    await put(databaseId, assetId, tableRowToMeta(next));
+                    await _store(databaseId, assetId, tableRowToMeta(next));
                 }}
                 items={items}
                 columnDefinitions={[
@@ -187,6 +197,7 @@ const MetadataTable = ({ assetId, databaseId }: MetadataInputs) => {
                                 return (
                                     <Input
                                         autoFocus={true}
+                                        placeholder="Name"
                                         value={currentValue ?? item.name}
                                         onChange={(event) => {
                                             setValue(event.detail.value);
@@ -210,6 +221,7 @@ const MetadataTable = ({ assetId, databaseId }: MetadataInputs) => {
                                     <Input
                                         autoFocus={true}
                                         value={currentValue ?? item.description}
+                                        placeholder="Description"
                                         onChange={(event) => {
                                             const next = [...items];
                                             next[item.idx]["description"] = event.detail.value;
