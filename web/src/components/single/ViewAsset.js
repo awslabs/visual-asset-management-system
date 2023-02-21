@@ -369,8 +369,10 @@ export default function ViewAsset() {
                 <SpaceBetween direction="vertical" size="m">
                   <Container
                     header={
-                      <Grid gridDefinition={[{ colspan: 2 }, { colspan: 10 }]}>
-                        <Header variant="h2">Visualizer</Header>
+                      <Grid gridDefinition={[{ colspan: 3 }, { colspan: 9 }]}>
+                        <Box margin={{ bottom: "m" }}>
+                          <Header variant="h2">Visualizer</Header>
+                        </Box>
                         <SegmentedControl
                           label="Visualizer Control"
                           options={viewerOptions}

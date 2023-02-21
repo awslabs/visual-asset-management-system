@@ -294,6 +294,7 @@ export const fetchAllPipelines = async (api = API) => {
                 }
             }
         } else {
+            console.log("not fetching pipelines");  
             return false;
         }
     } catch (error) {
