@@ -16,7 +16,7 @@ import {
 } from "@cloudscape-design/components";
 
 import Metadata from "./Metadata";
-import { AmplifyS3Image } from "@aws-amplify/ui-react/legacy";
+import ImgViewer from "../viewers/ImgViewer";
 import React, { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import ThreeDimensionalPlotter from "../viewers/ThreeDimensionalPlotter";
@@ -237,6 +237,7 @@ export default function ViewAsset() {
         if (item !== false) {
           console.log(item);
           setAsset(item);
+
           const defaultViewType = checkFileFormat(item.assetType);
           const newViewerOptions = [{ text: "Preview", id: "preview" }];
           if (defaultViewType === "plot") {
@@ -386,11 +387,8 @@ export default function ViewAsset() {
                     <div className="visualizer-container">
                       <div className="visualizer-container-canvases">
                         {viewType === "preview" &&
-                          asset?.previewLocation?.Key && (
-                            <AmplifyS3Image
-                              className="visualizer-container-preview"
-                              imgKey={asset?.previewLocation?.Key}
-                            />
+                        asset?.previewLocation?.Key && (
+                            <ImgViewer s3key={ asset.previewLocation.Key} />
                           )}
                         {viewType === "3d" && (
                           <ThreeDViewer
