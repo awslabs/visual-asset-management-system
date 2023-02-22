@@ -102,15 +102,34 @@ def _deserialize(raw_data):
 
     return result
 
+def get_account_id():
+    client = boto3.client("sts")
+    return client.get_caller_identity()["Account"]
 
-def getS3MetaData(bucket, key, asset):
+# Note
+# (from https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3.html#S3.Client.copy_object)
+# You can store individual objects of up to 5 TB in Amazon S3.
+# You create a copy of your object up to 5 GB in size in a single
+# atomic action using this API. However, to copy an object greater
+# than 5 GB, you must use the multipart upload Upload Part -
+# Copy (UploadPartCopy) API. For more information, see Copy Object
+# Using the REST Multipart Upload API.
+#
+def copy_object_and_return_new_version(bucket, key, asset):
     #VersionId and ContentLength (bytes)
     copy_source={
         'Bucket':bucket,
         'Key':key,
         'VersionId':asset['currentVersion']['S3Version']
     }
-    resp=s3c.copy_object(Bucket=bucket,CopySource=copy_source,Key=key)
+    account_id = get_account_id()
+    resp=s3c.copy_object(
+        Bucket=bucket,
+        CopySource=copy_source,
+        Key=key,
+        ExpectedBucketOwner=account_id,
+        ExpectedSourceBucketOwner=account_id,
+    )
     asset['currentVersion']['S3Version'] = resp['VersionId']
     return asset
 
@@ -133,7 +152,7 @@ def assetReversion(item, version):
     
     bucket = asset['assetLocation']['Bucket']
     key = asset['assetLocation']['Key']
-    asset = getS3MetaData(bucket, key, asset)
+    asset = copy_object_and_return_new_version(bucket, key, asset)
     return asset
 
 
