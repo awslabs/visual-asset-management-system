@@ -90,8 +90,7 @@ export function buildCreateWorkflowFunction(
   scope: Construct,
   workflowStorageTable: dynamodb.Table,
   assetStorageBucket: s3.Bucket,
-  uploadAllAssetFunction: lambda.Function,
-  layer: lambda.LayerVersion
+  uploadAllAssetFunction: lambda.Function
 ): lambda.Function {
   const role = buildWorkflowRole(
     scope,
@@ -140,8 +139,7 @@ export function buildRunWorkflowFunction(
   pipelineStorageTable: dynamodb.Table,
   assetStorageTable: dynamodb.Table,
   workflowExecutionStorageTable: dynamodb.Table,
-  assetStorageBucket: s3.Bucket,
-  layer: lambda.LayerVersion
+  assetStorageBucket: s3.Bucket
 ): lambda.Function {
   const name = "executeWorkflow";
   const runWorkflowFunction = new lambda.DockerImageFunction(scope, name, {
