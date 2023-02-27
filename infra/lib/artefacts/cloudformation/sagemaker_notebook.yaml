@@ -35,15 +35,16 @@ Parameters:
 Resources:
   ECRepository:
     Metadata:
-    checkov:
-      skip:
-        - id: "CKV_AWS_51"
-          comment: "The image may be built multiple times by the pipeline creator and adding immutability will prevent that from happening"
+      checkov:
+        skip:
+          - id: "CKV_AWS_51"
+            comment: "The image may be built multiple times by the pipeline creator and adding immutability will prevent that from happening"
     Type: 'AWS::ECR::Repository'
     Properties:
       ImageScanningConfiguration:
         ScanOnPush: True
-      EncryptionType: "KMS"
+      EncryptionConfiguration:
+        EncryptionType: "KMS"
       RepositoryName: !Ref PipelineName
   NotebookIAMRole:
     Type: 'AWS::IAM::Role'
@@ -61,9 +62,9 @@ Resources:
   NotebookIAMRolePolicy:
     Type: 'AWS::IAM::ManagedPolicy'
     Metadata:
-      cfn_nag:
+      cdk_nag:
         rules_to_suppress:
-          - id: AwsSolutions-IAM5
+          - id: "AwsSolutions-IAM5"
             reason: "Pipelines will need access to the entire bucket because the asset chosen to run the pipeline is not known at build time"
     Properties:
       Roles:
@@ -245,14 +246,14 @@ Resources:
             EOF
   NotebookInstance:
     Metadata:
-    cfn_nag:
-      rules_to_suppress:
-        - id: AwsSolutions-SM1
-          reason: "Instance is only created to build the container and can be terminated once the container is created. Adding a VPC will require extra cleanup that is not needed for a short lived instance"
-        - id: AwsSolutions-SM2
-          reason: "Instance is only created to build the container and we don't expect to have any long lived data residing on this instance"
-        - id: AwsSolutions-SM3
-          reason: "Access is required to download packages and connect to the notebook instance"
+      cdk_nag:
+        rules_to_suppress:
+          - id: AwsSolutions-SM1
+            reason: "Instance is only created to build the container and can be terminated once the container is created. Adding a VPC will require extra cleanup that is not needed for a short lived instance"
+          - id: AwsSolutions-SM2
+            reason: "Instance is only created to build the container and we don't expect to have any long lived data residing on this instance"
+          - id: AwsSolutions-SM3
+            reason: "Access is required to download packages and connect to the notebook instance"
     DependsOn:
       - NotebookIAMRole
       - NotebookIAMRolePolicy
