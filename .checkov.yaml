@@ -1,0 +1,7 @@
+skip-check: 
+  - CKV_DOCKER_3 #Skipping since the container we are creating is only copying files
+  - CKV_DOCKER_2 #Skipping since this is not a long running container that needs to be run
+  - CKV2_GHA_1
+  - CKV_OPENAPI_3 #the API doc is only used for documentation purposes and is not deployed 
+  - CKV_OPENAPI_4 #the API doc is only used for documentation purposes and is not deployed
+  - CKV_OPENAPI_5 #the API doc is only used for documentation purposes and is not deployed
