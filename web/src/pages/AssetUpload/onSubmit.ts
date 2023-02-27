@@ -11,6 +11,7 @@ import { API, Storage, Cache } from "aws-amplify";
 import { Metadata, MetadataApi } from "../../components/single/Metadata";
 import { AssetDetail } from "../AssetUpload";
 import { generateUUID } from "../../common/utils/utils";
+import path from "path";
 export type ExecStatusType = Record<string, StatusIndicatorProps.Type>;
 
 class BucketKey {
@@ -99,6 +100,7 @@ export default function onSubmit({
                 Key: uuid + "/" + assetDetail.assetId + "." + assetDetail.Preview.name.split(".").pop(),
             };
 
+            assetDetail.assetName = assetDetail.assetId;
             assetDetail.assetId = uuid;
 
 

@@ -25,6 +25,7 @@ def sample_request():
         uploadAssetBody=UploadAssetModel(
             databaseId='1',
             assetId='test',
+            assetName="testname",
             bucket='test_bucket',
             key='test_file',
             assetType='step',

@@ -44,7 +44,14 @@ import CreateUpdateAsset from "../createupdate/CreateUpdateAsset";
 import { actionTypes } from "../createupdate/form-definitions/types/FormDefinition";
 import WorkflowSelectorWithModal from "../selectors/WorkflowSelectorWithModal";
 
-const checkFileFormat = (filetype) => {
+const checkFileFormat = (asset) => {
+  let filetype;
+  if(asset?.generated_artifacts?.gltf?.Key) {
+    filetype = asset?.generated_artifacts?.gltf?.Key.split(".").pop();
+  } else {
+    filetype = asset.assetType;
+  }
+
   filetype = filetype.toLowerCase();
   if (
     modelFileFormats.includes(filetype) ||
@@ -238,7 +245,8 @@ export default function ViewAsset() {
           console.log(item);
           setAsset(item);
 
-          const defaultViewType = checkFileFormat(item.assetType);
+          const defaultViewType = checkFileFormat(item);
+          console.log("default view type", defaultViewType);
           const newViewerOptions = [{ text: "Preview", id: "preview" }];
           if (defaultViewType === "plot") {
             newViewerOptions.push({ text: "Plot", id: "plot" });
@@ -388,11 +396,13 @@ export default function ViewAsset() {
                       <div className="visualizer-container-canvases">
                         {viewType === "preview" &&
                         asset?.previewLocation?.Key && (
-                            <ImgViewer s3key={ asset.previewLocation.Key} />
+                            <ImgViewer
+                              assetKey={asset?.generated_artifacts?.preview?.Key || asset.previewLocation.Key}
+                            />
                           )}
                         {viewType === "3d" && (
                           <ThreeDViewer
-                            assetKey={asset?.assetLocation?.Key}
+                            assetKey={asset?.generated_artifacts?.gltf?.Key || asset?.assetLocation?.Key}
                             className="visualizer-container-canvas"
                           />
                         )}

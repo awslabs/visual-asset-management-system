@@ -17,7 +17,6 @@ const encompassBounds = (meshes, filter = 0) => {
   let max = boundingInfo.maximum.add(meshes[0].position);
   for (let i = 1; i < meshes.length; i++) {
     if (meshes[i].getTotalVertices() <= filter) {
-      console.log("Continuing");
       continue;
     }
     boundingInfo = meshes[i].getBoundingInfo();
@@ -228,7 +227,7 @@ export default function ThreeDViewer(props) {
             const meshes = cacheScene.meshes;
             for (let i = 0; i < meshes.length; i++) {
               const mesh = meshes[i];
-              console.log(mesh);
+              // console.log(mesh);
               mesh.enableEdgesRendering(0.9999999999);
               mesh.edgesWidth = 25.0;
               mesh.edgesColor = new BABYLON.Color4(0, 0, 1, 1);

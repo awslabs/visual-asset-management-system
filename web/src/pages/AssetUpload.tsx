@@ -51,6 +51,7 @@ const previewFileFormatsStr = previewFileFormats.join(", ");
 
 export class AssetDetail {
     assetId?: string;
+    assetName?: string;
     databaseId?: string;
     description?: string;
     bucket?: string;
