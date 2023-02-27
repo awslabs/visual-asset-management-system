@@ -398,6 +398,7 @@ export default function ViewAsset() {
                         asset?.previewLocation?.Key && (
                             <ImgViewer
                               assetKey={asset?.generated_artifacts?.preview?.Key || asset.previewLocation.Key}
+                              altAssetKey={asset.previewLocation.Key}
                             />
                           )}
                         {viewType === "3d" && (
