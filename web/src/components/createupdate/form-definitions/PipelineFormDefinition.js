@@ -55,6 +55,7 @@ export const PipelineFormDefinition = new FormDefinition({
         formElement: Input,
         elementProps: { autoFocus: true },
       }),
+      required: true,
     }),
     new ControlDefinition({
       label: "Database Name",
@@ -64,6 +65,7 @@ export const PipelineFormDefinition = new FormDefinition({
         formElement: DatabaseSelector,
         elementProps: {},
       }),
+      required: true,
     }),
     new ControlDefinition({
       label: "Pipeline Type",
@@ -77,6 +79,29 @@ export const PipelineFormDefinition = new FormDefinition({
           disabled: false,
         },
       }),
+      required: true,
+    }),
+    new ControlDefinition({
+      label: "Container Uri (Optional)",
+      id: "containerUri",
+      constraintText: "ACCOUNT_NUMBER.dkr.ecr.REGION.amazonaws.com/IMAGE_NAME. If you do not provide an image stored in Amazon ECR, an Amazon Sagemaker notebook instance will be provisioned on your behalf with steps to deploy one.",
+      elementDefinition: new ElementDefinition({
+        formElement: Input,
+        elementProps: { autoFocus: false },
+      }),
+      appearsWhen: ["pipelineType", "SageMaker"],
+      required: false,
+    }),
+    new ControlDefinition({
+      label: "Lambda Function Name (Optional)",
+      id: "lambdaName",
+      constraintText: "If no name is provided a template lambda function will be deployed on your behalf",
+      elementDefinition: new ElementDefinition({
+        formElement: Input,
+        elementProps: { autoFocus: false },
+      }),
+      appearsWhen: ["pipelineType", "Lambda"],
+      required: false,
     }),
     new ControlDefinition({
       label: "Description",
@@ -86,6 +111,7 @@ export const PipelineFormDefinition = new FormDefinition({
         formElement: Textarea,
         elementProps: { rows: 4 },
       }),
+      required: true,
     }),
     new ControlDefinition({
       label: "Input Filetype",
@@ -96,6 +122,7 @@ export const PipelineFormDefinition = new FormDefinition({
         formElement: Select,
         elementProps: {},
       }),
+      required: true,
     }),
     new ControlDefinition({
       label: "Output Filetype",
@@ -106,6 +133,7 @@ export const PipelineFormDefinition = new FormDefinition({
         formElement: Select,
         elementProps: {},
       }),
+      required: true,
     }),
   ],
 });

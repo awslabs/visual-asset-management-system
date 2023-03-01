@@ -11,6 +11,7 @@ import { Duration } from "aws-cdk-lib";
 import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 import { requireTLSAddToResourcePolicy } from "./security";
+import { NagSuppressions } from "cdk-nag";
 
 export interface storageResources {
     s3: {
@@ -33,7 +34,6 @@ export interface storageResources {
 export function storageResourcesBuilder(scope: Construct, staging_bucket?: string): storageResources {
     const accessLogsBucket = new s3.Bucket(scope, "AccessLogsBucket", {
         encryption: s3.BucketEncryption.S3_MANAGED,
-        serverAccessLogsPrefix: "access-log-bucket-logs/",
         versioned: true,
         blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
     });
@@ -44,6 +44,10 @@ export function storageResourcesBuilder(scope: Construct, staging_bucket?: strin
     });
 
     requireTLSAddToResourcePolicy(accessLogsBucket);
+
+    NagSuppressions.addResourceSuppressions(accessLogsBucket, [
+        {id: 'AwsSolutions-S1', reason: 'This is an access logs bucket, we do not want access logs to be reporting to itself, causing a loop.'}
+    ]);
 
     const assetBucket = new s3.Bucket(scope, "AssetBucket", {
         cors: [

@@ -99,10 +99,11 @@ def delete_pipeline(databaseId, pipelineId):
     item = get_pipeline(databaseId, pipelineId)
     if item:
         print("Deleting pipeline: ", item)
-        if item['pipelineType'] == 'SageMaker':
-            delete_stack(item['pipelineId'])
-        else: #Lambda Pipeline
-            delete_lambda(item['pipelineId'])
+        if item['userProvidedResource'] == "Not Provided":
+            if item['pipelineType'] == 'SageMaker':
+                delete_stack(item['pipelineId'])
+            else: #Lambda Pipeline
+                delete_lambda(item['pipelineId'])
         
         item['databaseId'] = databaseId + "#deleted"
         table.put_item(

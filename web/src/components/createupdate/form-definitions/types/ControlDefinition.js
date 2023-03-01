@@ -15,6 +15,7 @@ export default function ControlDefinition(props) {
     elementDefinition,
     options,
     defaultOption,
+    appearsWhen,
   } = props;
   this.id = id;
   this.label = label;
@@ -22,6 +23,7 @@ export default function ControlDefinition(props) {
   this.elementDefinition = elementDefinition;
   this.options = options;
   this.defaultOption = defaultOption;
+  this.appearsWhen = appearsWhen;
 }
 
 ControlDefinition.propTypes = {
@@ -31,4 +33,5 @@ ControlDefinition.propTypes = {
   elementDefinition: PropTypes.instanceOf(ElementDefinition),
   options: PropTypes.arrayOf(OptionDefinition),
   defaultOption: PropTypes.instanceOf(OptionDefinition),
+  appearsWhen: PropTypes.array,
 };

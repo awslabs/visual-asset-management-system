@@ -11,6 +11,8 @@ export default function PipelineEntity(props) {
         databaseId,
         description,
         pipelineType,
+        externalContainerUri,
+        externalLambdaName,
         assetType,
         outputType,
     } = props;
@@ -18,6 +20,8 @@ export default function PipelineEntity(props) {
     this.databaseId = databaseId;
     this.description = description;
     this.pipelineType = pipelineType;
+    this.externalContainerUri = externalContainerUri;
+    this.externalLambdaName = externalLambdaName;
     this.assetType = assetType;
     this.outputType = outputType;
 }
@@ -29,4 +33,6 @@ PipelineEntity.propTypes = {
     pipelineType: EntityPropTypes.STRING_32,
     assetType: EntityPropTypes.FILE_TYPE,
     outputType: EntityPropTypes.FILE_TYPE,
+    containerUri: EntityPropTypes.CONTAINER_URI,
+    lambdaName: EntityPropTypes.LAMBDA_NAME,
 };

@@ -125,6 +125,7 @@ export default function CreateUpdateElement(props) {
     if (open) {
       const newFormErrors = Object.assign({}, formErrors);
       const formPropNames = Object.keys(formValues);
+      console.log(formPropNames)
       for (let i = 0; i < formPropNames.length; i++) {
         const formPropName = formPropNames[i];
         //ignore values without validation on entity
@@ -172,6 +173,11 @@ export default function CreateUpdateElement(props) {
               acc[cur] = formValues[cur].value;
             } else {
               acc[cur] = formValues[cur];
+            }
+
+            //the downstream application is written in python, so instead of sending over null we'll need to send over "null"
+            if (acc[cur] == undefined || acc[cur] == null){ 
+              acc[cur] = "null";
             }
             return acc;
           },
@@ -269,13 +275,22 @@ export default function CreateUpdateElement(props) {
                 elementDefinition,
                 options,
                 defaultOption,
+                appearsWhen,
               } = controlDefinition;
               const { FormElement, elementProps } = elementDefinition;
               if (!formValues[id] && defaultOption) {
                 handleUpdateFormValues(id, defaultOption);
               }
+
+              //find the form field that isn't toggled based on pipeline type, then clear it.
+              const optionalFieldHidden = appearsWhen && formValues[appearsWhen[0]] && appearsWhen[1] != formValues[appearsWhen[0]]["label"]
+              if(formValues[id] && optionalFieldHidden){
+                console.log(id+ ": "+ formValues[id])
+                formValues[id] = ""
+              }
+
               return (
-                <div key={i}>
+                optionalFieldHidden || <div key={i}>
                   <FormField
                     constraintText={constraintText}
                     label={label}

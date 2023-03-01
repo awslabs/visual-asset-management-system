@@ -65,6 +65,12 @@ def upload_Pipeline(body):
     print("Setting Time Stamp")
     dtNow = datetime.datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
     
+    userResource = "Not Provided"
+    if body['containerUri'] != "null":
+        userResource = body['containerUri'] 
+    elif body['lambdaName'] != "null":
+        userResource = body['lambdaName']
+
     item = {
         'databaseId': body['databaseId'],
         'pipelineId':body['pipelineId'],
@@ -73,13 +79,17 @@ def upload_Pipeline(body):
         'description': body['description'],
         'dateCreated': json.dumps(dtNow),
         'pipelineType':body['pipelineType'],
+        'userProvidedResource': userResource,
         'enabled':False #Not doing anything with this yet
     }
     table.put_item(
         Item=item,
         ConditionExpression='attribute_not_exists(databaseId) and attribute_not_exists(pipelineId)'
     )
-        
+    #If a lambda function name or ECR container URI was provided by the user, creation is not necessary
+    if userResource != "Not Provided":
+        return json.dumps({"message": 'Succeeded'})
+    
     print("Running CFT")
     if body['pipelineType']=='SageMaker':
         createSagemakerPipeline(body)
