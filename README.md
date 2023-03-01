@@ -48,7 +48,7 @@ Sample use cases that have leveraged early iterations of VAMS include:
 
 2) `npm run build` - build the web app. 
 
-3) `cd ./infra npm install` - installs dependencies defined in package.json.
+3) `cd ../infra npm install` - installs dependencies defined in package.json.
 
 4) If you haven't already bootstrapped your aws account with CDK. `cdk bootstrap aws://101010101010/us-east-1` - replace with your account and region.
 
