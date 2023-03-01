@@ -47,12 +47,13 @@ def write_input_output(input_path, output_path):
             destination_key = output_key + input_key.split("/")[-1]
         else:
             destination_key = output_key + input_key
-            copy_source = {
-                'Bucket': input_bucket,
-                'Key': input_key
-            }
-            print(f"Copying object to {output_bucket}/{destination_key}")
-            s3_client.copy(copy_source, output_bucket, destination_key)
+
+        copy_source = {
+            'Bucket': input_bucket,
+            'Key': input_key
+        }
+        print(f"Copying object to {output_bucket}/{destination_key}")
+        s3_client.copy(copy_source, output_bucket, destination_key)
 
 def lambda_handler(event, context):
     """
