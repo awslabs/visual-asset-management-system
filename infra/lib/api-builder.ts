@@ -72,13 +72,6 @@ export function apiBuilder(
     api: ApiGatewayV2CloudFrontConstruct,
     storageResources: storageResources
 ) {
-    const layer = new lambda.LayerVersion(scope, "stepfunctions", {
-        code: lambda.Code.fromAsset(path.join(__dirname, "./lambda_layers/stepfunctions.zip")),
-        compatibleRuntimes: [lambda.Runtime.PYTHON_3_8],
-        license: "Apache-2.0",
-        description: "Step functions layer",
-    });
-
     //config resources
     const createConfigFunction = buildConfigService(scope, storageResources.s3.assetBucket);
 
@@ -306,8 +299,7 @@ export function apiBuilder(
         scope,
         storageResources.dynamo.workflowStorageTable,
         storageResources.s3.assetBucket,
-        uploadAllAssetFunction,
-        layer
+        uploadAllAssetFunction
     );
     attachFunctionToApi(scope, createWorkflowFunction, {
         routePath: "/workflows",
@@ -321,8 +313,7 @@ export function apiBuilder(
         storageResources.dynamo.pipelineStorageTable,
         storageResources.dynamo.assetStorageTable,
         storageResources.dynamo.workflowExecutionStorageTable,
-        storageResources.s3.assetBucket,
-        layer
+        storageResources.s3.assetBucket
     );
     attachFunctionToApi(scope, runWorkflowFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/workflows/{workflowId}",

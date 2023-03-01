@@ -25,6 +25,22 @@ const defaultProps: Partial<Wafv2BasicConstructProps> = {
     wafScope: WAFScope.CLOUDFRONT,
     stackName: "",
     env: {},
+    rules: [{                
+        priority: 1,
+        overrideAction: {count: {}},   //change this back to none might blocks some  existing requests, however, it will reduce security risk
+        visibilityConfig: {
+            sampledRequestsEnabled: true,
+            cloudWatchMetricsEnabled: true,
+            metricName: "AWS-AWSManagedRulesCommonRuleSet",
+        },
+        name: "AWS-AWSManagedRulesCommonRuleSet",
+        statement: {
+            managedRuleGroupStatement: {
+                vendorName: "AWS",
+                name: "AWSManagedRulesCommonRuleSet",
+            },
+        },
+    }]
 };
 
 /**
