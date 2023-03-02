@@ -100,7 +100,7 @@ const LandingPage = (props) => {
                   Start uploading and managing your digital assets to get
                   started.
                 </Box>
-                <Button href="/assets" variant="primary">
+                <Button href="/upload" variant="primary">
                   Upload Assets
                 </Button>
               </SpaceBetween>
@@ -286,16 +286,10 @@ const LandingPage = (props) => {
                   aria-label="Getting started documentation"
                   className="custom-list-separator"
                 >
-                  <li>
+                   <li>
                     <ExternalLinkItem
-                      href="https://w.amazon.com/bin/view/BDSI_Solutions_Prototyping/VAMS/"
-                      text="VAMS Wiki"
-                    />
-                  </li>
-                  <li>
-                    <ExternalLinkItem
-                      href="https://demo-factory.corp.amazon.com/"
-                      text="Demo Factory"
+                      href="https://github.com/awslabs/visual-asset-management-system"
+                      text="VAMS on Github"
                     />
                   </li>
                 </ul>
