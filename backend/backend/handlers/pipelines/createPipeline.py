@@ -65,11 +65,16 @@ def upload_Pipeline(body):
     print("Setting Time Stamp")
     dtNow = datetime.datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
     
-    userResource = "Not Provided"
+    userResource = {
+        'isProvided': False,
+        'resourceId': ''
+    }
     if body['containerUri'] != "null":
-        userResource = body['containerUri'] 
+        userResource['isProvided'] = True 
+        userResource['resourceId'] = body['containerUri'] 
     elif body['lambdaName'] != "null":
-        userResource = body['lambdaName']
+        userResource['isProvided'] = True 
+        userResource['resourceId'] = body['lambdaName']
 
     item = {
         'databaseId': body['databaseId'],
@@ -79,7 +84,7 @@ def upload_Pipeline(body):
         'description': body['description'],
         'dateCreated': json.dumps(dtNow),
         'pipelineType':body['pipelineType'],
-        'userProvidedResource': userResource,
+        'userProvidedResource': json.dumps(userResource),
         'enabled':False #Not doing anything with this yet
     }
     table.put_item(
