@@ -54,6 +54,7 @@ def only_required():
         uploadAssetBody=UploadAssetModel(
             databaseId='1',
             assetId='test',
+            assetName='test',
             bucket='test_bucket',
             key='test_file',
             assetType='step',
