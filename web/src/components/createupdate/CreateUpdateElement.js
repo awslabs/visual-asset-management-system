@@ -174,10 +174,8 @@ export default function CreateUpdateElement(props) {
             } else {
               acc[cur] = formValues[cur];
             }
-
-            //the downstream application is written in python, so instead of sending over null we'll need to send over "null"
             if (acc[cur] == undefined || acc[cur] == null){ 
-              acc[cur] = "null";
+              acc[cur] = null;
             }
             return acc;
           },
