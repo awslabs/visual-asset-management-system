@@ -16,7 +16,7 @@ import {
 } from "@cloudscape-design/components";
 
 import Metadata from "./Metadata";
-import { AmplifyS3Image } from "@aws-amplify/ui-react/legacy";
+import ImgViewer from "../viewers/ImgViewer";
 import React, { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import ThreeDimensionalPlotter from "../viewers/ThreeDimensionalPlotter";
@@ -44,7 +44,14 @@ import CreateUpdateAsset from "../createupdate/CreateUpdateAsset";
 import { actionTypes } from "../createupdate/form-definitions/types/FormDefinition";
 import WorkflowSelectorWithModal from "../selectors/WorkflowSelectorWithModal";
 
-const checkFileFormat = (filetype) => {
+const checkFileFormat = (asset) => {
+  let filetype;
+  if(asset?.generated_artifacts?.gltf?.Key) {
+    filetype = asset?.generated_artifacts?.gltf?.Key.split(".").pop();
+  } else {
+    filetype = asset.assetType;
+  }
+
   filetype = filetype.toLowerCase();
   if (
     modelFileFormats.includes(filetype) ||
@@ -237,7 +244,9 @@ export default function ViewAsset() {
         if (item !== false) {
           console.log(item);
           setAsset(item);
-          const defaultViewType = checkFileFormat(item.assetType);
+
+          const defaultViewType = checkFileFormat(item);
+          console.log("default view type", defaultViewType);
           const newViewerOptions = [{ text: "Preview", id: "preview" }];
           if (defaultViewType === "plot") {
             newViewerOptions.push({ text: "Plot", id: "plot" });
@@ -386,15 +395,15 @@ export default function ViewAsset() {
                     <div className="visualizer-container">
                       <div className="visualizer-container-canvases">
                         {viewType === "preview" &&
-                          asset?.previewLocation?.Key && (
-                            <AmplifyS3Image
-                              className="visualizer-container-preview"
-                              imgKey={asset?.previewLocation?.Key}
+                        asset?.previewLocation?.Key && (
+                            <ImgViewer
+                              assetKey={asset?.generated_artifacts?.preview?.Key || asset.previewLocation.Key}
+                              altAssetKey={asset.previewLocation.Key}
                             />
                           )}
                         {viewType === "3d" && (
                           <ThreeDViewer
-                            assetKey={asset?.assetLocation?.Key}
+                            assetKey={asset?.generated_artifacts?.gltf?.Key || asset?.assetLocation?.Key}
                             className="visualizer-container-canvas"
                           />
                         )}

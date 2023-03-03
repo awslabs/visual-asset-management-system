@@ -16,7 +16,6 @@ import { useParams } from "react-router";
 import Container from "@cloudscape-design/components/container";
 import Header from "@cloudscape-design/components/header";
 import SpaceBetween from "@cloudscape-design/components/space-between";
-import Link from "@cloudscape-design/components/link";
 import Button from "@cloudscape-design/components/button";
 
 import Wizard from "@cloudscape-design/components/wizard";
@@ -36,9 +35,7 @@ import MetadataTable, { Metadata } from "../components/single/Metadata";
 import { fetchDatabaseWorkflows } from "../services/APIService";
 import Table from "@cloudscape-design/components/table";
 import { ProgressBarProps } from "@cloudscape-design/components/progress-bar";
-import {
-    StatusIndicatorProps,
-} from "@cloudscape-design/components/status-indicator";
+import { StatusIndicatorProps } from "@cloudscape-design/components/status-indicator";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
 import {
     validateEntityIdAsYouType,
@@ -54,6 +51,7 @@ const previewFileFormatsStr = previewFileFormats.join(", ");
 
 export class AssetDetail {
     assetId?: string;
+    assetName?: string;
     databaseId?: string;
     description?: string;
     bucket?: string;
@@ -158,7 +156,7 @@ const UploadForm = () => {
                     }}
                     isLoadingNextStep={freezeWizardButtons}
                     onNavigate={({ detail }) => {
-                        setActiveStepIndex(detail.requestedStepIndex)
+                        setActiveStepIndex(detail.requestedStepIndex);
                         console.log("detail on navigate", detail);
                     }}
                     activeStepIndex={activeStepIndex}
@@ -432,21 +430,18 @@ const UploadForm = () => {
     );
 };
 
-export default function AssetUploadPage({}) {
+export default function AssetUploadPage() {
     return (
-        <>
-            <Box padding={{ top: false ? "s" : "m", horizontal: "l" }}>
-                <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
-                    <div>
-                        <TextContent>
-                            <Header variant="h1">Create Asset</Header>
-                        </TextContent>
+        <Box padding={{ top: false ? "s" : "m", horizontal: "l" }}>
+            <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
+                <div>
+                    <TextContent>
+                        <Header variant="h1">Create Asset</Header>
+                    </TextContent>
 
-                        <UploadForm />
-                    </div>
-                </Grid>
-            </Box>
-        </>
+                    <UploadForm />
+                </div>
+            </Grid>
+        </Box>
     );
 }
-

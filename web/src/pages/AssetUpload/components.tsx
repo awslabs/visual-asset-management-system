@@ -12,7 +12,7 @@ import FormField from "@cloudscape-design/components/form-field";
 import { formatFileSize } from "../../components/form/FileUploadControl";
 
 function getLang() {
-    if (navigator.languages != undefined) return navigator.languages[0];
+    if (navigator.languages !== undefined) return navigator.languages[0];
     if (navigator.language) return navigator.language;
     return "en-us";
 }
@@ -111,6 +111,15 @@ export function DisplayKV({ label, value }: DisplayKVProps): JSX.Element {
             <div>
                 <Box variant="awsui-key-label">{label}</Box>
                 <DisplayFileMeta file={value} />
+            </div>
+        );
+    }
+
+    if (typeof(value) =="boolean") {
+        return (
+            <div>
+                <Box variant="awsui-key-label">{label}</Box>
+                <div>{value ? "Yes" : "No"}</div>
             </div>
         );
     }

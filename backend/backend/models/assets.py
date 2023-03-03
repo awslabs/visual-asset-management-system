@@ -17,6 +17,7 @@ class AssetPreviewLocationModel(BaseModel):
 class UploadAssetModel(BaseModel):
     databaseId: str
     assetId: str
+    assetName: str
     bucket: str
     key: str
     assetType: str

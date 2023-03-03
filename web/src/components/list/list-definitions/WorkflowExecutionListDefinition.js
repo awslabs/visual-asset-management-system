@@ -115,7 +115,7 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
       header: "Pipelines",
       cellWrapper: (props) => {
         const displayPipelines = props?.item?.specifiedPipelines?.functions.map(
-          (item) => <Badge color="grey">{item.name}</Badge>
+          (item) => <Badge key={item.name} color="grey">{item.name}</Badge>
         );
         return <>{displayPipelines}</>;
       },
