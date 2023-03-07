@@ -67,6 +67,77 @@ The CDK deployment deploys the VAMS stack into your account. The components that
 
 Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-system/blob/main/VAMS_API.yaml) for details
 
+# Database Schema
+
+| Table                         | Partition Key | Sort Key   | Attributes                                                                                                                                                    |
+| ----------------------------- | ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AssetStorageTable             | databaseId    | assetId    | assetLocation, assetName, assetType, currentVersion, description, generated_artifacts, isDistributable, previewLocation, versions |
+| JobStorageTable               | jobId         | databaseId |                                                                                                                                                               |
+| PipelineStorageTable           | databaseId    | pipelineId | assetType, dateCreated, description, enabled, outputType, pipelineType                                                                                        |
+| DatabaseStorageTable          | databaseId    | n/a        | assetCount, dateCreated, description                                                                                                                          |
+| WorkflowStorageTable          | databaseId    | workflowId | dateCreated, description, specifiedPipelines, workflow_arn                                                    |
+| WorkflowExecutionStorageTable | pk            | sk         | asset_id, database_id, execution_arn, execution_id, workflow_arn, workflow_id, assets                                                                         |
+| MetadataStorageTable          | databaseId    | assetId    | Varies with user provided attributes                                                                                                                          |
+## AssetStorageTable
+
+| Field               | Data Type | Description                                                                                                    |
+| ------------------- | --------- | -------------------------------------------------------------------------------------------------------------- |
+| assetLocation       | Map       | S3 Bucket and Key for this asset                                                                               |
+| assetName           | String    | The user provided asset name                                                                                   |
+| assetType           | String    | The file extension of the asset                                                                                |
+| currentVersion      | Map       | The current version of the S3 object                                                                           |
+| description         | String    | The user provided description                                                                                  |
+| generated_artifacts | Map       | S3 bucket and key references to artifacts generated automatically through pipelines when an asset is uploaded. |
+| isDistributable     | Boolean   | Whether the asset is distributable                                                                             |
+
+## PipelineStorageTable
+
+| Field        | Data Type | Description                                   |
+| ------------ | --------- | --------------------------------------------- |
+| assetType    | String    | File extension of the asset                   |
+| dateCreated  | String    | Creation date of this record                  |
+| description  | String    | User provided description                     |
+| enabled      | Boolean   | Whether this pipeline is enabled              |
+| outputType   | String    | File extension of the output asset            |
+| pipelineType | String    | Defines the pipeline type — Lambda, SageMaker |
+
+## DatabaseStorageTable
+
+| Field       | Data Type | Description                       |
+| ----------- | --------- | --------------------------------- |
+| assetCount  | String    | Number of assets in this database |
+| dateCreated | String    | Creation date of this record      |
+| description | String    | User provided description         |
+
+
+## WorkflowStorageTable
+
+| Field              | Data Type              | Description                                                         |
+| ------------------ | ---------------------- | ------------------------------------------------------------------- |
+| dateCreated        | String                 | Creation date of this record                                        |
+| description        | String                 | User provided description                                           |
+| specifiedPipelines | Map, List, Map, String | List of pipelines given by their name, outputType, and pipelineType |
+| workflow_arn       | String                 | The ARN identifying the step function state machine |
+
+
+## WorkflowExecutionStorageTable
+
+
+| Field         | Data Type | Description                                  |
+| ------------- | --------- | -------------------------------------------- |
+| asset_id      | String    | Asset identifier for this workflow execution |
+| database_id   | String    | Database to which the asset belongs          |
+| execution_arn | String    | The state machine execution arn              |
+| execution_id  | String    | Execution identifier                         |
+| workflow_arn  | String    | State machine ARN                            |
+| workflow_id   | String    | Workflow identifier                          |
+| assets        | List, Map | List of Maps of asset objects (see AssetStorageTable for attribute definitions) |
+k
+
+## MetadataStorageTable
+
+Attributes are driven by user input. No predetermined fields aside from the partition and sort keys.
+
 # Updating Backend
 
 The dependencies for the backend lambda functions are handled using poetry. If you changed the lambda functions make sure to do a `cdk deploy` to reflect the change.
