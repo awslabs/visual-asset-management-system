@@ -158,6 +158,7 @@ def archive_file(location):
 
 def lambda_handler(event, context):
     print(event)
+    print(context)
     response = {
         'statusCode': 200,
         'body': '',

@@ -7,6 +7,8 @@ import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import * as cdk from 'aws-cdk-lib';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as path from "path";
 
 import {storageResources} from "../storage-builder";
 import { Construct } from "constructs";
@@ -42,6 +44,17 @@ export class CognitoWebNativeConstruct extends Construct {
     constructor(parent: Construct, name: string, props: CognitoWebNativeConstructProps) {
         super(parent, name);
 
+        const preTokenGenFun = new lambda.DockerImageFunction(parent, "pretokengen", {
+            code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`),{
+                cmd: [`backend.handlers.auth.pretokengen.lambda_handler`], 
+            }),
+            timeout: Duration.minutes(2), 
+            memorySize: 1003,
+            environment: {
+            },
+        });
+
+
         const userPool = new cognito.UserPool(this, "UserPool", {
             selfSignUpEnabled: true,
             autoVerify: { email: true },
@@ -52,6 +65,9 @@ export class CognitoWebNativeConstruct extends Construct {
                 emailStyle: cognito.VerificationEmailStyle.CODE,
                 smsMessage:
                     "Hello {username}, Thanks for signing up to app! Your verification code is {####}",
+            },
+            lambdaTriggers: {
+                preTokenGeneration: preTokenGenFun,
             },
             passwordPolicy: {
                 minLength: 8,
