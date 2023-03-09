@@ -64,6 +64,7 @@ const WorkflowPipelineSelector = (props) => {
           value: item.pipelineId,
           type: item.pipelineType,
           outputType: item.outputType,
+          userProvidedResource: item.userProvidedResource,
           tags: [
             `input:${item.assetType}`,
             `output:${item.outputType}`,

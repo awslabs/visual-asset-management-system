@@ -97,12 +97,21 @@ def delete_pipeline(databaseId, pipelineId):
     if "#deleted" in databaseId:
         return response
     item = get_pipeline(databaseId, pipelineId)
+    
     if item:
         print("Deleting pipeline: ", item)
-        if item['pipelineType'] == 'SageMaker':
-            delete_stack(item['pipelineId'])
-        else: #Lambda Pipeline
-            delete_lambda(item['pipelineId'])
+        try:
+            userResource = json.loads(item['userProvidedResource'])
+            if userResource['isProvided'] == False:
+                if item['pipelineType'] == 'SageMaker':
+                    delete_stack(item['pipelineId'])
+                else: #Lambda Pipeline
+                    delete_lambda(item['pipelineId'])
+        except KeyError: #For pipelines created before user provided resources were implemented
+            if item['pipelineType'] == 'SageMaker':
+                delete_stack(item['pipelineId'])
+            else: #Lambda Pipeline
+                delete_lambda(item['pipelineId'])
         
         item['databaseId'] = databaseId + "#deleted"
         table.put_item(

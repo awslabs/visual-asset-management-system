@@ -65,6 +65,17 @@ def upload_Pipeline(body):
     print("Setting Time Stamp")
     dtNow = datetime.datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
     
+    userResource = {
+        'isProvided': False,
+        'resourceId': ''
+    }
+    if body['containerUri'] != None:
+        userResource['isProvided'] = True 
+        userResource['resourceId'] = body['containerUri'] 
+    elif body['lambdaName'] != None:
+        userResource['isProvided'] = True 
+        userResource['resourceId'] = body['lambdaName']
+
     item = {
         'databaseId': body['databaseId'],
         'pipelineId':body['pipelineId'],
@@ -73,13 +84,17 @@ def upload_Pipeline(body):
         'description': body['description'],
         'dateCreated': json.dumps(dtNow),
         'pipelineType':body['pipelineType'],
+        'userProvidedResource': json.dumps(userResource),
         'enabled':False #Not doing anything with this yet
     }
     table.put_item(
         Item=item,
         ConditionExpression='attribute_not_exists(databaseId) and attribute_not_exists(pipelineId)'
     )
-        
+    #If a lambda function name or ECR container URI was provided by the user, creation is not necessary
+    if userResource['isProvided'] == True:
+        return json.dumps({"message": 'Succeeded'})
+    
     print("Running CFT")
     if body['pipelineType']=='SageMaker':
         createSagemakerPipeline(body)
@@ -186,7 +201,7 @@ def lambda_handler(event, context):
     }
     print(event['body'])
     if isinstance(event['body'], str):
-        event['body'] = json.loads(event['body'])    
+        event['body'] = json.loads(event['body']) 
     try:
         reqs=['databaseId','pipelineId','description','assetType','pipelineType','outputType']
         for r in reqs:
