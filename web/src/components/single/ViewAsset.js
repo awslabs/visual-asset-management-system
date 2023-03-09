@@ -20,9 +20,9 @@ import ImgViewer from "../viewers/ImgViewer";
 import React, { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import ThreeDimensionalPlotter from "../viewers/ThreeDimensionalPlotter";
-import ThreeDViewer from "../viewers/3dViewer";
 import ColumnarViewer from "../viewers/ColumnarViewer";
 import HTMLViewer from "../viewers/HTMLViewer";
+import ModelViewer from "../viewers/ModelViewer";
 import {
   fetchAsset,
   fetchWorkflowExecutions,
@@ -57,7 +57,7 @@ const checkFileFormat = (asset) => {
     modelFileFormats.includes(filetype) ||
     modelFileFormats.includes("." + filetype)
   ) {
-    return "3d";
+    return "model";
   }
   if (
     columnarFileFormats.includes(filetype) ||
@@ -251,8 +251,8 @@ export default function ViewAsset() {
           if (defaultViewType === "plot") {
             newViewerOptions.push({ text: "Plot", id: "plot" });
             newViewerOptions.push({ text: "Column", id: "column" });
-          } else if (defaultViewType === "3d") {
-            newViewerOptions.push({ text: "3d", id: "3d" });
+          } else if (defaultViewType === "model") {
+            newViewerOptions.push({ text: "Model", id: "model" });
           } else if (defaultViewType === "html") {
             newViewerOptions.push({ text: "HTML", id: "html" });
           }
@@ -262,8 +262,8 @@ export default function ViewAsset() {
             if (window.location.hash === "#preview") {
               setViewType("preview");
             }
-            if (window.location.hash === "#3d") {
-              setViewType("3d");
+            if (window.location.hash === "#model") {
+              setViewType("model");
             } else if (window.location.hash === "#plot") {
               setViewType("plot");
             } else if (window.location.hash === "#column") {
@@ -328,14 +328,6 @@ export default function ViewAsset() {
                     <>{asset?.isDistributable === true ? "Yes" : "No"}</>
                     <h5>Version</h5>
                     <>{asset?.currentVersion?.Version}</>
-                    {/*<h5>Parent Asset</h5>*/}
-                    {/*<></>*/}
-                    {/*<h5>Parent Pipeline</h5>*/}
-                    {/*<></>*/}
-                    {/*<h5>Number of Pipelines</h5>*/}
-                    {/*<></>*/}
-                    {/*<h5>Child Asset (0)</h5>*/}
-                    {/*<></>*/}
                     <h5>Date Modified</h5>
                     {asset?.currentVersion?.DateModified}
                     {!downloadUrl && (
@@ -401,8 +393,8 @@ export default function ViewAsset() {
                               altAssetKey={asset.previewLocation.Key}
                             />
                           )}
-                        {viewType === "3d" && (
-                          <ThreeDViewer
+                        {viewType === "model" && (
+                          <ModelViewer
                             assetKey={asset?.generated_artifacts?.gltf?.Key || asset?.assetLocation?.Key}
                             className="visualizer-container-canvas"
                           />
