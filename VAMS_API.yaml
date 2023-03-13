@@ -175,6 +175,45 @@ paths:
               application/json:
                 schema:
                   $ref: '#/components/schemas/error'
+  
+  /assets/uploadAssetWorkflow:
+    post:
+      summary: "Single endpoint to upload asset, add metadata and execute workflows"
+      requestBody:
+        required: true
+        content:
+          application/json:
+              schema:
+                type: object
+                properties:
+                  copyFrom:
+                    type: string
+                  uploadAssetBody:
+                    $ref: '#/components/schemas/assets'
+                  updateMetadataBody:
+                    $ref: '#/components/schemas/metadata'
+                  executeWorkflowBody:
+                    $ref: '#/components/schemas/workflows'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/uploadAssetResponse'
+        '404':
+          description: Database OR asset not found.
+          content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/error'
+        '500':
+          description: Error processing request.
+          content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/error'
+
   /database/{databaseId}/assets/{assetId}:
     get:
       summary: "Get an asset."

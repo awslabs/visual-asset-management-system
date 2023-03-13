@@ -8,7 +8,10 @@
 
 *Visual Asset Management System (VAMS)* is a purpose-built, AWS native solution for the management and distribution of specialized visual assets used in spatial computing. VAMS offers a simplified solution for organizations to ingest, store, and manage visual assets in the cloud, which empowers any user with a web browser to upload, manage, visualize, transform, and retrieve visual assets. Existing workflows that leverage both custom code and pre-built or third-party applications can also be migrated to VAMS and ran in the AWS cloud, as opposed to being limited by the on-premise capacity available. VAMS is customizable and expandable with option of being further tailored to specific use-cases by development teams.
 
-*Customer Value:* VAMS addresses a challenge faced by customers embarking on Augmented and Virtual Reality (AR/VR) initiatives and in its early stages was developed in conjunction with HCLS and Automotive customers. Leveraging S3 as a low-cost, high availability storage layer, VAMS provides a purpose-built API for 3D asset management and consumption. This API provides a layer of abstraction, allowing custom integrations to be built. Custom integrations allow workloads and applications, which commonly are only available via a local system and proprietary software, to be shifted to the cloud and unlocking access to the entire breadth and depth of the AWS ecosystem. Organizations that previously had to visualize, transform, interface with, and deliver these assets on local systems, can now do so from a web-based cloud dashboard. Custom applications and automation can also be built leveraging the VAMS API.
+*Customer Value:* VAMS addresses challenges faced by customers embarking on Spatial Computing initiatives, such as Augmented and Virtual Reality (AR/VR). Organizations that previously had to manage these assets on local systems can now do so from a web-based application.
+
+Leveraging Amazon Simple Storage Service (Amazon S3) as a low-cost, high availability storage layer, VAMS provides a purpose-built API for 3D asset management. This API provides a layer of abstraction, allowing custom integrations to be built. Custom integrations allow workloads and applications to be moved to the cloud, unlocking access to the entire breadth and depth of the AWS ecosystem.
+
 
 *Use Cases:*
 Sample use cases that have leveraged early iterations of VAMS include:
@@ -18,14 +21,25 @@ Sample use cases that have leveraged early iterations of VAMS include:
 * Creating workflows for 3D asset modification using VAMS  Workflows
 
 
-## Install 
+## Screenshots
+![Database View](./diagrams/screenshots/database_view.png)
+![assets](./diagrams/screenshots/assets.png)
+![model](./diagrams/screenshots/model_view.png)
+![metadata](./diagrams/screenshots/metadata.png)
+![Workflows](./diagrams/screenshots/workflow_view.png)
 
-> VAMS supports deployment to the AWS us-east-1 region at this time. Support for other regions is coming soon.
+
+## Architecture Overview
+
+![VAMS Architecture](./VAMS_Architecture.jpg)
+
+
+## Install 
 
 ### Requirements
 
 * Python 3.8
-* Poetry (for managing python dependencies in the backend)
+* Poetry (for managing python dependencies in the VAMS backend)
 * Docker 
 * Node >=16.x
 * Yarn >=1.22.19 
@@ -33,14 +47,11 @@ Sample use cases that have leveraged early iterations of VAMS include:
 * AWS CDK cli
 * Programatic access to AWS account at minimum access levels outlined above.
 
-### Screenshots
-![Assets View](./diagrams/screenshots/assets_view.jpeg)
-![Asset Detail View](./diagrams/screenshots/asset_detail_view.jpeg)
-![Workflows](./diagrams/screenshots/workflow.jpeg)
-
 ### Deploy VAMS for the First Time
 
-#### Build & Deploy Steps
+#### Build & Deploy Steps (Linux/Mac)
+
+VAMS Codebase is changing frequently and we recommend you checkout the stable released version from github.
 
 1) `cd ./web nvm use` - make sure you're node version matches the project. Make sure Docker daemon is running.
 
@@ -72,9 +83,14 @@ To deploy customziations or updates to VAMS, you can update the stack by running
 
 Please note, depending on what changes are in flight, VAMS may not be available to users in part or in whole during the deployment. Please read the change log carefully and test changes before exposing your users to new versions.  
 
-## Architecture Overview
+### Already have Assets in S3 that you want to register in VAMS?
+VAMS can be deployed with a `staging-bucket` parameter to enable copying from an existing asset bucket.
 
-![VAMS Architecture](./VAMS_Architecture.jpg)
+to deploy with staging bucket, just pass the `staging-bucket` paramter to your cdk deployment and VAMS will register your existing bucket as a staging bucket.
+
+Once the deployment is complete, you can invoke the `/assets/uploadAssetWorkflow` API to start copying the assets into the VAMS S3 bucket.
+
+Please refer to the uploadAssetWorkflow in the [API docs](./VAMS_API.yaml) to find out about the API request body.
 
 ### Architecture components
 
@@ -115,9 +131,14 @@ VAMS API and frontend are authorized through AWS Cognito user accounts only.
 
 Checkout the [VAMS workshop](https://catalog.us-east-1.prod.workshops.aws/workshops/ab24ff8d-090a-4287-88dd-a04d03a440c1/en-US) for detailed walkthrough
 
+
 ## Developers
 
 To know more about how VAMS works and for instructions on configuring pipeline & workflow, refer to the Developer Guide [developer guide](./DeveloperGuide.md).
+
+# Writing your own VAMS pipelines
+Refer to the ![Writing your own pipelines section in the Developer Guide](./DeveloperGuide.md/#adding-your-own-pipelines).
+
 
 ## Security
 
