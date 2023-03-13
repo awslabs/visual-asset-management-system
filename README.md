@@ -20,6 +20,15 @@ Sample use cases that have leveraged early iterations of VAMS include:
 * Modifications of 3D assets using VAMS Pipelines
 * Creating workflows for 3D asset modification using VAMS  Workflows
 
+
+## Screenshots
+![Database View](./diagrams/screenshots/database_view.png)
+![assets](./diagrams/screenshots/assets.png)
+![model](./diagrams/screenshots/model_view.png)
+![metadata](./diagrams/screenshots/metadata.png)
+![Workflows](./diagrams/screenshots/workflow_view.png)
+
+
 ## Architecture Overview
 
 ![VAMS Architecture](./VAMS_Architecture.jpg)
@@ -30,7 +39,7 @@ Sample use cases that have leveraged early iterations of VAMS include:
 ### Requirements
 
 * Python 3.8
-* Poetry (for managing python dependencies in the vams backend)
+* Poetry (for managing python dependencies in the VAMS backend)
 * Docker 
 * Node >=16.x
 * Yarn >=1.22.19 
@@ -38,14 +47,11 @@ Sample use cases that have leveraged early iterations of VAMS include:
 * AWS CDK cli
 * Programatic access to AWS account at minimum access levels outlined above.
 
-### Screenshots
-![Assets View](./diagrams/screenshots/assets_view.jpeg)
-![Asset Detail View](./diagrams/screenshots/asset_detail_view.jpeg)
-![Workflows](./diagrams/screenshots/workflow.jpeg)
-
 ### Deploy VAMS for the First Time
 
-#### Build & Deploy Steps
+#### Build & Deploy Steps (Linux/Mac)
+
+VAMS Codebase is changing frequently and we recommend you checkout the stable released version from github.
 
 1) `cd ./web nvm use` - make sure you're node version matches the project. Make sure Docker daemon is running.
 

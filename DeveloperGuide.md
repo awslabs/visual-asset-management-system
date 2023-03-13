@@ -151,12 +151,12 @@ When you create pipelines in VAMS, you have two options
 
 ## Lambda pipeline
 
-Lambda pipelines are piplelines that use AWS Lambda as their compute platform.
+AWS Lambda is the compute platform for VAMS Lambda Pipelines.
 
-When you create a lambda pipeline you can either allow VAMS to create a new lambda function  or provide a name of an existing lambda function to be used as a pipeline.
+When you create a VAMS Lambda pipeline you can either allow VAMS to create a new AWS Lambda function  or provide a name of an existing AWS Lambda function to be used as a pipeline.
 
 ### Creating your lambda function through VAMS pipeline
-When you create a Pipeline and dont provide name of an existing lambda function, VAMS will create a lambda function in your AWS account where VAMS is deployed. This lambda function will have the same name as the pipelineId you provided while creating the pipeline. This lambda function contains an example pipeline code. This example code can be modified with your own pipeline business logic. 
+When you create a VAMS Lambda pipeline and dont provide name of an existing AWS Lambda function, VAMS will create an AWS Lambda function in your AWS account where VAMS is deployed. This lambda function will have the same name as the pipelineId you provided while creating the pipeline. This lambda function contains an example pipeline code. This example code can be modified with your own pipeline business logic. 
 
 ### Using existing lambda function as a pipeline
 Sometimes you may want to write your pipelines separately from VAMS stack. Some reasons for this are 
@@ -165,11 +165,11 @@ Sometimes you may want to write your pipelines separately from VAMS stack. Some 
 3. Pipelines are managed in a separate CDK/CloudFormation stack altogether. 
 
 
-If you want to use an existing lambda function as a pipeline in VAMS you can provide the function name of your lambda function in the create pipeline UI. See the section below for the event payload passed by VAMS workflows when your pipelines are executed.
+If you want to use an existing AWS Lambda function as a pipeline in VAMS you can provide the function name of your AWS Lambda function in the create pipeline UI. See the section below for the event payload passed by VAMS workflows when your pipelines are executed.
 
 ## Lambda pipeline interface.
 
-When a VAMS workflow invokes a lambda pipeline, it invokes the corresponding lambda function with an event payload like below:
+When a VAMS workflow invokes a VAMS Lambda pipeline, it invokes the corresponding AWS Lambda function with an event payload like below:
 
 ```
 "body": {
@@ -201,7 +201,7 @@ def lambda_handler(event, context):
 
 ## SageMaker (Container) pipeline
 
-SageMaker pipelines in VAMS provide a way to containerize your pipeline code. This containerization is achieved in two steps
+SageMaker pipelines in VAMS provide a way to containerize your VAMS pipeline code. This containerization is achieved in two steps
 
 When you create a sagemaker pipeline
 
