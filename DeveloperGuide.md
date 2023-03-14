@@ -20,13 +20,16 @@
 
 VAMS Codebase is changing frequently and we recommend you checkout the stable released version from github.
 
-1) `cd ./web nvm use` - make sure you're node version matches the project. Make sure Docker daemon is running.
+You can identify stable releases by their tag. Fetch the tags git fetch --all --tags and then git checkout tags/v1.0.1 or git checkout -b v1.0.1 tags/v1.0.1.
+
+
+1) `cd ./web && nvm use` - make sure you're node version matches the project. Make sure Docker daemon is running.
 
 2) `yarn install` - make sure you install the packages required by the web app
 
 2) `npm run build` - build the web app. 
 
-3) `cd ../infra npm install` - installs dependencies defined in package.json.
+3) `cd ../infra && npm install` - installs dependencies defined in package.json.
 
 4) If you haven't already bootstrapped your aws account with CDK. `cdk bootstrap aws://101010101010/us-east-1` - replace with your account and region.
 
@@ -46,7 +49,7 @@ You can change the region and deploy a new instance of VAMS my setting the envir
 
 ### Deploy VAMS Updates
 
-To deploy customziations or updates to VAMS, you can update the stack by running `cdk deploy --all`. A changeset is created and deployed to your stack. 
+To deploy customzations or updates to VAMS, you can update the stack by running `cdk deploy --all`. A changeset is created and deployed to your stack. 
 
 Please note, depending on what changes are in flight, VAMS may not be available to users in part or in whole during the deployment. Please read the change log carefully and test changes before exposing your users to new versions.  
 
