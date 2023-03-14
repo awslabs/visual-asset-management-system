@@ -1,40 +1,54 @@
 <h1> VAMS Developer Guide </h1>
 
-# Installing VAMS
 
-VAMS is installed using AWS CDK.
+## Install 
 
-## Prerequisites
+### Requirements
+
 * Python 3.8
-* Node 16.x
+* Poetry (for managing python dependencies in the VAMS backend)
+* Docker 
+* Node >=16.x
+* Yarn >=1.22.19 
 * Node Version Manager (nvm)
-* AWS cli
-* CDK cli
-* Amplify cli
+* AWS CDK cli
 * Programatic access to AWS account at minimum access levels outlined above.
 
-# Installation Steps
-### Build & Deploy Steps
+### Deploy VAMS for the First Time
 
-1) `cd ./web nvm use` - make sure you're node version matches the project. 
+#### Build & Deploy Steps (Linux/Mac)
 
-2) `npm run build` - build the web app
+VAMS Codebase is changing frequently and we recommend you checkout the stable released version from github.
 
-3) `cd ../infra npm install` - installs dependencies in package.json
+1) `cd ./web nvm use` - make sure you're node version matches the project. Make sure Docker daemon is running.
 
-4) If you haven't already bootstrapped your aws account with CDK. `cdk bootstrap aws://101010101010/us-east-1` - replace with your account and region
+2) `yarn install` - make sure you install the packages required by the web app
 
-5) `cdk deploy dev --parameters adminEmailAddress=myuser@amazon.com` - replace with your email address to deploy dev stack
+2) `npm run build` - build the web app. 
 
-### Deployment Success
+3) `cd ../infra npm install` - installs dependencies defined in package.json.
+
+4) If you haven't already bootstrapped your aws account with CDK. `cdk bootstrap aws://101010101010/us-east-1` - replace with your account and region.
+
+5) Set the CDK stack name and the region for deployment with environment variables `export AWS_REGION=us-east-1 && export STACK_NAME=dev` - replace with the region you would like to deploy to and the name you want to associate with the cloudformation stack that the CDK will deploy.
+
+6) `npm run deploy.dev adminEmailAddress=myuser@example.com` - replace with your email address to deploy. An account is created in an AWS Cognito User Pool using this email address. Expect an email from no-reply@verificationemail.com with a temporary password. 
+
+#### Deployment Success
 
 1) Navigate to URL provided in `{stackName].WebAppCloudFrontDistributionDomainName{uuid}` from `cdk deploy` output.
 
-2) Check email for temporary account password.
+2) Check email for temporary account password to log in with the email address you provided.
 
-### Multiple Deployments Same Account/Region
+### Multiple Deployments With Different or Same Region in Single Account
 
-Providing a unique stack name in the deployment command `cdk deploy STACK_NAME --parameters adminEmailAddress=myuser@amazon.com` will allow for this to work without conflicts.
+You can change the region and deploy a new instance of VAMS my setting the environment variables to new values (`export AWS_REGION=us-east-1 && export STACK_NAME=dev`) and then running `npm run deploy.dev adminEmailAddress=myuser@example.com` again.
+
+### Deploy VAMS Updates
+
+To deploy customziations or updates to VAMS, you can update the stack by running `cdk deploy --all`. A changeset is created and deployed to your stack. 
+
+Please note, depending on what changes are in flight, VAMS may not be available to users in part or in whole during the deployment. Please read the change log carefully and test changes before exposing your users to new versions.  
 
 
 # Uninstalling
