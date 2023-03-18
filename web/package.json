@@ -8,7 +8,6 @@
   },
   "dependencies": {
     "@aws-amplify/ui-react": "^2.1.5",
-    "@babylonjs/core": "^4.2.0",
     "@cloudscape-design/collection-hooks": "^1.0.19",
     "@cloudscape-design/components": "^3.0.196",
     "@cloudscape-design/design-tokens": "^3.0.8",
