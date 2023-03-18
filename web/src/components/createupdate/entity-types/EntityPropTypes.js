@@ -47,6 +47,15 @@ export const validateFileType = (value) => {
   return result[0] === String(value);
 };
 
+export const validateContainerUri = value => {
+  const regex = /^[0-9]{12}.dkr.ecr.+?amazonaws.com\/.+/g;
+  const result = String(value).match(regex);
+  if (result === null) {
+    return false;
+  }
+  return result[0] === String(value);
+}
+
 export const fileTypePropType = function (props, propName) {
   //check if prop is supplied by option element
   let testValue = props[propName];
@@ -233,6 +242,37 @@ export const typedObjectArrayPropType = function (type, props, propName) {
 
   return null;
 };
+
+export const containerUriPropType = function(props, propName){
+  //check if prop is supplied by option element
+  let testValue = props[propName];
+  if (testValue && testValue.hasOwnProperty("value"))
+    testValue = testValue.value;
+  console.log(testValue);
+  if (!validateContainerUri(testValue)) {
+    if(!verifyIsNotEmpty(testValue) || testValue == null){
+      return null;
+    }
+    return new Error(
+      `Invalid value for ${propName}. Enter a valid Amazon ECR image Uri ACCOUNT_NUMBER.dkr.ecr.REGION.amazonaws.com/IMAGE_NAME`
+    );
+  }
+  return null;
+}
+
+export const validateLambdaName = function(props, propName){
+  //check if prop is supplied by option element
+  let testValue = props[propName];
+  if (testValue && testValue.hasOwnProperty("value"))
+    testValue = testValue.value;
+  
+  if(!verifyIsNotEmpty(testValue)){
+    return null;
+  }
+
+  return stringMaxLength.bind(null, 64)
+}
+
 export const EntityPropTypes = {
   ENTITY_ID: entityIdPropType,
   ENTITY_ID_ARRAY: entityIdArrayPropType,
@@ -242,6 +282,8 @@ export const EntityPropTypes = {
   STRING_64: stringMaxLength.bind(null, 64),
   STRING_128: stringMaxLength.bind(null, 128),
   STRING_256: stringMaxLength.bind(null, 256),
+  CONTAINER_URI: containerUriPropType,
+  LAMBDA_NAME: validateLambdaName,
   BOOL: boolPropType,
   OBJECT: objectPropType,
   TYPED_OBJECT: typedObjectPropType,

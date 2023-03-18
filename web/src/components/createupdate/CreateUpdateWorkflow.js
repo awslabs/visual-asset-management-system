@@ -65,6 +65,7 @@ export default function CreateUpdateWorkflow(props) {
   useEffect(() => {
     const getData = async () => {
       const items = await fetchDatabaseWorkflows({databaseId: databaseId});
+      console.log(items)
       if (items !== false && Array.isArray(items)) {
         setReload(false);
         const currentItem = items.find(
@@ -78,7 +79,8 @@ export default function CreateUpdateWorkflow(props) {
             return {
               value: item.name,
               type: item.pipelineType, 
-              outputType: item.outputType
+              outputType: item.outputType,
+              userProvidedResource: item.userProvidedResource
             };
           }
         );
@@ -142,7 +144,7 @@ export default function CreateUpdateWorkflow(props) {
       setActiveTab("pipelines");
     } else {
       const functions = workflowPipelines.map((item) => {
-        return { name: item.value, pipelineType: item.type, outputType: item.outputType };
+        return { name: item.value, pipelineType: item.type, outputType: item.outputType, userProvidedResource: item.userProvidedResource };
       });
       const config = {
         body: {

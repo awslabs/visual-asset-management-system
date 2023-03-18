@@ -268,8 +268,18 @@ def create_step_function(pipelines, databaseId, workflowId):
 
 
 def create_sagemaker_step(databaseId, region, role, account_id, job_names, instance_type, i, pipeline, input_s3_uri, output_s3_uri):
-    image_uri = account_id+'.dkr.ecr.'+region + \
-        '.amazonaws.com/'+pipeline['name']
+
+    try: 
+        userResource = json.loads(pipeline['userProvidedResource'])
+        if userResource['isProvided'] == False:    
+            image_uri = account_id+'.dkr.ecr.'+region + \
+                '.amazonaws.com/'+pipeline['name']
+        else:
+            image_uri = userResource['resourceId']
+    except KeyError: #For pipelines created before user provided resources were implemented
+        image_uri = account_id+'.dkr.ecr.'+region + \
+                '.amazonaws.com/'+pipeline['name']
+
     processor = Processor(
         role=role,
         image_uri=image_uri,
@@ -307,6 +317,15 @@ def create_sagemaker_step(databaseId, region, role, account_id, job_names, insta
 
 
 def create_lambda_step(pipeline, input_s3_uri, output_s3_uri):
+    try:
+        userResource = json.loads(pipeline['userProvidedResource'])
+        if userResource['isProvided'] == False:
+            functionName = pipeline['name']
+        else:
+            functionName = userResource['resourceId']
+    except KeyError: #For pipelines created before user provided resources were implemented
+        functionName = pipeline['name']
+
     lambda_payload = {
         "body": {
             "inputPath.$": input_s3_uri,
@@ -317,6 +336,6 @@ def create_lambda_step(pipeline, input_s3_uri, output_s3_uri):
         state_id="{}-{}".format(pipeline['name'], uuid.uuid1().hex),
         parameters={
             # replace with the name of your function
-            "FunctionName": pipeline['name'],
+            "FunctionName": functionName,
             "Payload": lambda_payload
         })

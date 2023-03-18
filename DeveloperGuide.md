@@ -1,40 +1,57 @@
 <h1> VAMS Developer Guide </h1>
 
-# Installing VAMS
 
-VAMS is installed using AWS CDK.
+## Install 
 
-## Prerequisites
+### Requirements
+
 * Python 3.8
-* Node 16.x
+* Poetry (for managing python dependencies in the VAMS backend)
+* Docker 
+* Node >=16.x
+* Yarn >=1.22.19 
 * Node Version Manager (nvm)
-* AWS cli
-* CDK cli
-* Amplify cli
+* AWS CDK cli
 * Programatic access to AWS account at minimum access levels outlined above.
 
-# Installation Steps
-### Build & Deploy Steps
+### Deploy VAMS for the First Time
 
-1) `cd ./web nvm use` - make sure you're node version matches the project. 
+#### Build & Deploy Steps (Linux/Mac)
 
-2) `npm run build` - build the web app
+VAMS Codebase is changing frequently and we recommend you checkout the stable released version from github.
 
-3) `cd ../infra npm install` - installs dependencies in package.json
+You can identify stable releases by their tag. Fetch the tags git fetch --all --tags and then git checkout tags/v1.0.1 or git checkout -b v1.0.1 tags/v1.0.1.
 
-4) If you haven't already bootstrapped your aws account with CDK. `cdk bootstrap aws://101010101010/us-east-1` - replace with your account and region
 
-5) `cdk deploy dev --parameters adminEmailAddress=myuser@amazon.com` - replace with your email address to deploy dev stack
+1) `cd ./web && nvm use` - make sure you're node version matches the project. Make sure Docker daemon is running.
 
-### Deployment Success
+2) `yarn install` - make sure you install the packages required by the web app
+
+2) `npm run build` - build the web app. 
+
+3) `cd ../infra && npm install` - installs dependencies defined in package.json.
+
+4) If you haven't already bootstrapped your aws account with CDK. `cdk bootstrap aws://101010101010/us-east-1` - replace with your account and region.
+
+5) Set the CDK stack name and the region for deployment with environment variables `export AWS_REGION=us-east-1 && export STACK_NAME=dev` - replace with the region you would like to deploy to and the name you want to associate with the cloudformation stack that the CDK will deploy.
+
+6) `npm run deploy.dev adminEmailAddress=myuser@example.com` - replace with your email address to deploy. An account is created in an AWS Cognito User Pool using this email address. Expect an email from no-reply@verificationemail.com with a temporary password. 
+
+#### Deployment Success
 
 1) Navigate to URL provided in `{stackName].WebAppCloudFrontDistributionDomainName{uuid}` from `cdk deploy` output.
 
-2) Check email for temporary account password.
+2) Check email for temporary account password to log in with the email address you provided.
 
-### Multiple Deployments Same Account/Region
+### Multiple Deployments With Different or Same Region in Single Account
 
-Providing a unique stack name in the deployment command `cdk deploy STACK_NAME --parameters adminEmailAddress=myuser@amazon.com` will allow for this to work without conflicts.
+You can change the region and deploy a new instance of VAMS my setting the environment variables to new values (`export AWS_REGION=us-east-1 && export STACK_NAME=dev`) and then running `npm run deploy.dev adminEmailAddress=myuser@example.com` again.
+
+### Deploy VAMS Updates
+
+To deploy customzations or updates to VAMS, you can update the stack by running `cdk deploy --all`. A changeset is created and deployed to your stack. 
+
+Please note, depending on what changes are in flight, VAMS may not be available to users in part or in whole during the deployment. Please read the change log carefully and test changes before exposing your users to new versions.  
 
 
 # Uninstalling
@@ -67,11 +84,208 @@ The CDK deployment deploys the VAMS stack into your account. The components that
 
 Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-system/blob/main/VAMS_API.yaml) for details
 
+# Database Schema
+
+| Table                         | Partition Key | Sort Key   | Attributes                                                                                                                                                    |
+| ----------------------------- | ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AssetStorageTable             | databaseId    | assetId    | assetLocation, assetName, assetType, currentVersion, description, generated_artifacts, isDistributable, previewLocation, versions |
+| JobStorageTable               | jobId         | databaseId |                                                                                                                                                               |
+| PipelineStorageTable           | databaseId    | pipelineId | assetType, dateCreated, description, enabled, outputType, pipelineType                                                                                        |
+| DatabaseStorageTable          | databaseId    | n/a        | assetCount, dateCreated, description                                                                                                                          |
+| WorkflowStorageTable          | databaseId    | workflowId | dateCreated, description, specifiedPipelines, workflow_arn                                                    |
+| WorkflowExecutionStorageTable | pk            | sk         | asset_id, database_id, execution_arn, execution_id, workflow_arn, workflow_id, assets                                                                         |
+| MetadataStorageTable          | databaseId    | assetId    | Varies with user provided attributes                                                                                                                          |
+## AssetStorageTable
+
+| Field               | Data Type | Description                                                                                                    |
+| ------------------- | --------- | -------------------------------------------------------------------------------------------------------------- |
+| assetLocation       | Map       | S3 Bucket and Key for this asset                                                                               |
+| assetName           | String    | The user provided asset name                                                                                   |
+| assetType           | String    | The file extension of the asset                                                                                |
+| currentVersion      | Map       | The current version of the S3 object                                                                           |
+| description         | String    | The user provided description                                                                                  |
+| generated_artifacts | Map       | S3 bucket and key references to artifacts generated automatically through pipelines when an asset is uploaded. |
+| isDistributable     | Boolean   | Whether the asset is distributable                                                                             |
+
+## PipelineStorageTable
+
+| Field        | Data Type | Description                                   |
+| ------------ | --------- | --------------------------------------------- |
+| assetType    | String    | File extension of the asset                   |
+| dateCreated  | String    | Creation date of this record                  |
+| description  | String    | User provided description                     |
+| enabled      | Boolean   | Whether this pipeline is enabled              |
+| outputType   | String    | File extension of the output asset            |
+| pipelineType | String    | Defines the pipeline type — Lambda, SageMaker |
+
+## DatabaseStorageTable
+
+| Field       | Data Type | Description                       |
+| ----------- | --------- | --------------------------------- |
+| assetCount  | String    | Number of assets in this database |
+| dateCreated | String    | Creation date of this record      |
+| description | String    | User provided description         |
+
+
+## WorkflowStorageTable
+
+| Field              | Data Type              | Description                                                         |
+| ------------------ | ---------------------- | ------------------------------------------------------------------- |
+| dateCreated        | String                 | Creation date of this record                                        |
+| description        | String                 | User provided description                                           |
+| specifiedPipelines | Map, List, Map, String | List of pipelines given by their name, outputType, and pipelineType |
+| workflow_arn       | String                 | The ARN identifying the step function state machine |
+
+
+## WorkflowExecutionStorageTable
+
+
+| Field         | Data Type | Description                                  |
+| ------------- | --------- | -------------------------------------------- |
+| asset_id      | String    | Asset identifier for this workflow execution |
+| database_id   | String    | Database to which the asset belongs          |
+| execution_arn | String    | The state machine execution arn              |
+| execution_id  | String    | Execution identifier                         |
+| workflow_arn  | String    | State machine ARN                            |
+| workflow_id   | String    | Workflow identifier                          |
+| assets        | List, Map | List of Maps of asset objects (see AssetStorageTable for attribute definitions) |
+k
+
+## MetadataStorageTable
+
+Attributes are driven by user input. No predetermined fields aside from the partition and sort keys.
+
 # Updating Backend
 
 The dependencies for the backend lambda functions are handled using poetry. If you changed the lambda functions make sure to do a `cdk deploy` to reflect the change.
 
 The lambda handlers are categorized based on the project domain. E.g you will find all assets related functions in `/backend/backend/assets` folder.
+
+# Adding your own pipelines
+When you create pipelines in VAMS, you have two options
+1. Create a lambda pipeline
+2. Create a sagemaker pipeline
+
+## Lambda pipeline
+
+AWS Lambda is the compute platform for VAMS Lambda Pipelines.
+
+When you create a VAMS Lambda pipeline you can either allow VAMS to create a new AWS Lambda function  or provide a name of an existing AWS Lambda function to be used as a pipeline.
+
+### Creating your lambda function through VAMS pipeline
+When you create a VAMS Lambda pipeline and dont provide name of an existing AWS Lambda function, VAMS will create an AWS Lambda function in your AWS account where VAMS is deployed. This lambda function will have the same name as the pipelineId you provided while creating the pipeline. This lambda function contains an example pipeline code. This example code can be modified with your own pipeline business logic. 
+
+### Using existing lambda function as a pipeline
+Sometimes you may want to write your pipelines separately from VAMS stack. Some reasons for this are 
+1. Separating pipeline code from VAMS deployment code
+2. Different personas with no access to VAMS are working on pipeline code
+3. Pipelines are managed in a separate CDK/CloudFormation stack altogether. 
+
+
+If you want to use an existing AWS Lambda function as a pipeline in VAMS you can provide the function name of your AWS Lambda function in the create pipeline UI. See the section below for the event payload passed by VAMS workflows when your pipelines are executed.
+
+## Lambda pipeline interface.
+
+When a VAMS workflow invokes a VAMS Lambda pipeline, it invokes the corresponding AWS Lambda function with an event payload like below:
+
+```
+"body": {
+    "inputPath": "<S3 URI of the asset to be used as input>",
+    "outputPath": "<Predetermined output path for assets generated by pipeline's execution>",
+}
+```
+
+A simple lambda handler is provided below for reference. You may chose to override your own function in place of `write_input_output` function in below code.
+
+```
+def lambda_handler(event, context):
+    """
+    Example of a NoOp pipeline
+    Uploads input file to output
+    """
+    print(event)
+    if isinstance(event['body'], str):
+        data = json.loads(event['body'])
+    else:
+        data = event['body']
+
+    write_input_output(data['inputPath'], data['outputPath'])
+    return {
+        'statusCode': 200, 
+        'body': 'Success'
+    }
+```
+
+## SageMaker (Container) pipeline
+
+SageMaker pipelines in VAMS provide a way to containerize your VAMS pipeline code. This containerization is achieved in two steps
+
+When you create a sagemaker pipeline
+
+1. VAMS creates a SageMaker notebook instance in your AWS account. This notebook contains sample code to containerize your pipeline script. You can modify the script section of this notebook with your own pipeline script.
+
+2. When you execute the steps in the notebook, an ECR respository is created with your pipeline script. When workflows execute this pipeline, a sagemaker processing job is created to run the pipeline script.
+
+### Writing your own containers
+
+In some cases you may want to just refer to your existing containers as VAMS pipelines. The reasons could be
+
+1. Separating pipeline code from VAMS deployment code
+2. Different personas with no access to VAMS are working on pipeline code
+3. Pipelines are managed in a separate CDK/CloudFormation stack altogether. 
+
+In such cases you can create your own containers and use the container image uri to register it as a pipeline in VAMS UI.
+
+Follow the section ![Container Pipelines](#container-pipelines) to learn about creating your own container pipelines
+
+### Container Pipelines
+
+Below is an example script that comes with the sagemaker notebook
+
+```
+import numpy
+import math
+import csv
+import pathlib
+import os
+from stl import mesh
+
+INPUT_DIR =  '/opt/ml/processing/input'
+OUTPUT_DIR = '/opt/ml/processing/output'
+
+def main():
+    input_dir = pathlib.Path(INPUT_DIR)
+    file_name = os.listdir(input_dir)[-1]
+    print(os.listdir(input_dir))
+    print(f'Reading file {input_dir / file_name}', flush=True)
+
+    your_mesh = mesh.Mesh.from_file(input_dir / file_name)
+    output_dir = pathlib.Path(OUTPUT_DIR)
+    output_file = file_name.replace('.stl',f'_converted_from_stl.csv')
+    with open(output_dir / output_file,'w') as f1:
+        writer=csv.writer(f1, delimiter=',',lineterminator='\n',)
+        writer.writerow(['x','y','z'])
+        for i in your_mesh.points:
+            for j in range(0, len(i), 3):
+                row = [i[j],i[j+1],i[j+2]]
+                writer.writerow(row)
+
+if __name__ == "__main__":
+    main()
+```
+
+The key things to follow are
+
+1. Processing jobs download the S3 asset to `/opt/ml/processing/input` directory in your container
+2. Your scripts are exepected to output any generated assets to `/opt/ml/processing/output` directory so processing jobs can upload them to S3.
+
+
+### Why SageMaker Processing Jobs?
+The most common use case for SageMaker processing jobs is to run batch inference on an ML model. A processing job downloads input from Amazon Simple Storage Service (Amazon S3), then uploads outputs to Amazon S3 during or after the processing job.
+
+Since VAMS assets are stored in S3, the processing jobs model suits 3d assets manipulation workloads as well. The processing jobs handle the data transfer in/out of S3 and your pipeline scripts can solely focus on handling the asset transformation logic.
+
+
 # Testing API
 
 Please see the corresponding [Postman Collection](https://github.com/awslabs/visual-asset-management-system/blob/main/VAMS_API_Tests.postman_collection.json) provided. 
