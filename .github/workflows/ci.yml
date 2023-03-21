@@ -22,7 +22,9 @@
         uses: actions/setup-node@v3
       
       - name: npm install 
-        run: npm install
+        run: |
+          npm install
+          npm audit
 
       - name: Install Poetry Action
         uses: snok/install-poetry@v1
@@ -43,11 +45,15 @@
         working-directory: web
         env:
           CI: ""
-        run: npm run build
+        run: |
+          npm run build
+          npm audit
 
       - name: cdk package install
         working-directory: infra
-        run: npm install
+        run: |
+          npm install
+          npm audit
 
       - name: cdk package build
         working-directory: infra
