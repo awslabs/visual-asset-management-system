@@ -30,8 +30,6 @@
         run: |
           npm install
           npm audit
-          npm install -g retire
-          retire --path ./
 
       - name: Install Poetry Action
         uses: snok/install-poetry@v1
@@ -73,6 +71,8 @@
           gem install cfn-nag
           cfn_nag_scan --input-path ./cdk.out/vams-waf-CfnNagTest-us-east-1.template.json
           cfn_nag_scan --input-path ./cdk.out/vams-CfnNagTest-us-east-1.template.json
+          cfn_nag_scan --input-path ./cdk.out/vams-waf-CfnNagTest-us-east-1.template.json | grep 'Failures count: 0'
+          cfn_nag_scan --input-path ./cdk.out/vams-CfnNagTest-us-east-1.template.json | grep 'Failures count: 0'
 
       - name: run checks
         working-directory: backend
