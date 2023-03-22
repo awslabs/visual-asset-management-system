@@ -66,12 +66,12 @@
         working-directory: infra
         run: |
           CDK_NAG_ENABLED=true
-          export STACK_NAME=CFN_NAG_TEST
+          export STACK_NAME=CfnNagTest
           export REGION=us-east-1
           npx cdk synth
           gem install cfn-nag
-          cfn_nag_scan --input-path ./cdk.out/vams-waf-CFN_NAG_TEST-us-east-1.template.json
-          cfn_nag_scan --input-path ./cdk.out/vams-CFN_NAG_TEST-us-east-1.template.json
+          cfn_nag_scan --input-path ./cdk.out/vams-waf-CfnNagTest-us-east-1.template.json
+          cfn_nag_scan --input-path ./cdk.out/vams-CfnNagTest-us-east-1.template.json
 
       - name: run checks
         working-directory: backend
