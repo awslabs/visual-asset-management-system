@@ -19,6 +19,7 @@
           python-version: 3.9
       
       - name: Setup Ruby Version
+        uses: actions/checkout@v3
         uses: actions/setup-ruby@v1
         with:
           ruby-version: 2.7
