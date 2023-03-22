@@ -30,6 +30,8 @@
         run: |
           npm install
           npm audit
+          npm install -g retire
+          retire
 
       - name: Install Poetry Action
         uses: snok/install-poetry@v1
@@ -53,14 +55,15 @@
         run: |
           # npm install
           # npm audit
+          # retire
           npm run build
           
-
       - name: cdk package install
         working-directory: infra
         run: |
           npm install
           npm audit
+          retire
 
       - name: cdk package build
         working-directory: infra
