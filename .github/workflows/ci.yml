@@ -1,4 +1,4 @@
-   name: Build
+   name: Build and Scan for Vulnerabilities
  
    on:
      push:
@@ -31,7 +31,7 @@
           npm install
           npm audit
           npm install -g retire
-          retire
+          retire --path ./
 
       - name: Install Poetry Action
         uses: snok/install-poetry@v1
@@ -55,7 +55,6 @@
         run: |
           # npm install
           # npm audit
-          # retire
           npm run build
           
       - name: cdk package install
@@ -63,7 +62,6 @@
         run: |
           npm install
           npm audit
-          retire
 
       - name: cdk package build
         working-directory: infra
