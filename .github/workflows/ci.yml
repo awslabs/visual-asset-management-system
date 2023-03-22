@@ -2,7 +2,7 @@
  
    on:
      push:
-       branches: [ main, jjbain-add-security-tests-to-ci-script ]
+       branches: [ main ]
      pull_request:
        branches: [ main ]
 
@@ -46,8 +46,10 @@
         env:
           CI: ""
         run: |
-          npm run build
+          npm install
           npm audit
+          npm run build
+          
 
       - name: cdk package install
         working-directory: infra
@@ -57,7 +59,9 @@
 
       - name: cdk package build
         working-directory: infra
-        run: CDK_NAG_ENABLED=true npx cdk synth
+        run: |
+          CDK_NAG_ENABLED=true
+          npx cdk synth
 
       - name: run checks
         working-directory: backend
