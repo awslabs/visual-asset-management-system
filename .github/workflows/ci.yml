@@ -88,7 +88,7 @@
           aws configure set default.region us-east-1
           aws configure set aws_access_key_id "$ACCESS_KEY_ID"
           aws configure set aws_secret_access_key "$SECRET_ACCESS_KEY"
-          npm run deploy.dev adminEmailAddress=jjbain+githubtest@amazon.com
+          npm run deploy.dev adminEmailAddress=notinuse@email.com
           pip install scoutsuite
           scout aws
 
@@ -98,5 +98,11 @@
           name: scout-suite-report
           path: infra/scoutsuite-report/
       
+      - name: Tear Down VAMS
+        working-directory: infra
+        run: |
+            npm install -g aws-cdk
+            cdk destroy --all --force
+            aws lambda invoke --function-name TearDownVAMSRetainedResources
 
 
