@@ -85,8 +85,7 @@
           SECRET_ACCESS_KEY: ${{ secrets.SECRET_ACCESS_KEY }}
         run: |
           export STACK_NAME=DeploymentTest
-          export REGION=us-east-2
-          aws configure set default.region us-east-2
+          aws configure set default.region us-east-1
           aws configure set aws_access_key_id "$ACCESS_KEY_ID"
           aws configure set aws_secret_access_key "$SECRET_ACCESS_KEY"
           npm run deploy.dev adminEmailAddress=jjbain+githubtest@amazon.com
