@@ -93,9 +93,9 @@
           scout aws
 
       - name: Create Scout Suite Report
-        working-directory: infra
         uses: actions/upload-artifact@v3
         with:
+          dir: infra
           name: scout-suite-report
           path: ScoutSuite/scoutsuite-report/scoutsuite-results/
       
