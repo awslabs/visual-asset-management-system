@@ -81,10 +81,10 @@
       - name: deploy VAMS
         working-directory: infra
         env:
-          ACCESS_KEY_ID: ${{ secrets.accessKeyId }}
-          SECRET_ACCESS_KEY: ${{ secrets.secretAccessKey }}
+          ACCESS_KEY_ID: ${{ secrets.ACCESS_KEY_ID }}
+          SECRET_ACCESS_KEY: ${{ secrets.SECRET_ACCESS_KEY }}
         run: |
-          export STACK_NAME=CfnNagTest
+          export STACK_NAME=DeploymentTest
           export REGION=us-east-2
           aws configure set default.region us-east-2
           aws configure set aws_access_key_id "$ACCESS_KEY_ID"
