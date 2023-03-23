@@ -96,7 +96,7 @@
         uses: actions/upload-artifact@v3
         with:
           name: scout-suite-report
-          path: scoutsuite-report/scoutsuite-results/
+          path: ScoutSuite/scoutsuite-report/scoutsuite-results/
       
 
 
