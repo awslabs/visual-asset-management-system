@@ -101,6 +101,7 @@
           
       - name: Tear Down VAMS
         run: |
+          npm install -g aws-cdk
           cdk destroy --all --force
           aws lambda invoke --function-name TearDownVAMSRetainedResources
       
