@@ -53,7 +53,7 @@
         run: |
           # npm install
           # npm audit
-          npm run build
+          # npm run build
           
       - name: cdk package install
         working-directory: infra
@@ -84,7 +84,9 @@
           ACCESS_KEY_ID: ${{ secrets.accessKeyId }}
           SECRET_ACCESS_KEY: ${{ secrets.secretAccessKey }}
         run: |
-          aws configure set default.region us-east-1
+          export STACK_NAME=CfnNagTest
+          export REGION=us-east-2
+          aws configure set default.region us-east-2
           aws configure set aws_access_key_id "$ACCESS_KEY_ID"
           aws configure set aws_secret_access_key "$SECRET_ACCESS_KEY"
           npm run deploy.dev adminEmailAddress=jjbain+githubtest@amazon.com
