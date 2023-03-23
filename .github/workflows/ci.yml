@@ -53,7 +53,7 @@
         run: |
           # npm install
           # npm audit
-          # npm run build
+          npm run build
           
       - name: cdk package install
         working-directory: infra
