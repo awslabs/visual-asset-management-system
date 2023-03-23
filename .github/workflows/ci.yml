@@ -93,4 +93,16 @@
           pip install scoutsuite
           scout aws
 
+      - name: Create Scout Suite Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: scout-suite-report
+          path: scoutsuite-report/scoutsuite-results/
+          
+      - name: Tear Down VAMS
+        run: |
+          cdk destroy --all --force
+          aws lambda invoke --function-name TearDownVAMSRetainedResources
+      
+
 
