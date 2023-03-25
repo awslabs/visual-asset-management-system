@@ -2,7 +2,7 @@
  * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
- 
+
 html,
 body {
   touch-action: none;
@@ -11,16 +11,17 @@ body {
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
-    "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
-    sans-serif;
+  "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
+  sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, "Courier New",
-    monospace;
+  monospace;
 }
+
 //
 //button[aria-label="Close modal"] {
 //  display: none !important;
@@ -120,11 +121,11 @@ code {
   width: calc(100% + 40px);
   //position: relative;
   background: repeating-linear-gradient(
-    45deg,
-    #606dbc,
-    #606dbc 10px,
-    #465298 10px,
-    #465298 20px
+                  45deg,
+                  #606dbc,
+                  #606dbc 10px,
+                  #465298 10px,
+                  #465298 20px
   );
   height: 525px;
   overflow: hidden;
@@ -140,12 +141,13 @@ code {
 .visualizer-footer {
   background-color: #00000055;
   text-align: right;
-  height: 24px;
+  height: 34px;
   line-height: 24px;
   bottom: 15px;
   right: 15px;
   position: absolute;
-  padding: 10px;
+  border-radius: 10px;
+  padding: 5px 10px;
   width: auto;
 }
 
@@ -159,7 +161,7 @@ code {
 }
 
 .visualizer-footer a.selected svg {
-  transform: scale(1.4);
+  transform: scale(1);
   fill: yellow;
 }
 
@@ -194,16 +196,33 @@ code {
 .visualizer-container {
   position: relative;
 }
+
 .visualizer-container-canvases {
   width: 100%;
   height: 100%;
   position: absolute;
   transform: translate3d(0, 0, 0);
 }
+
 .visualizer-container > div.visualizer-container-canvases,
 .visualizer-container-preview {
   width: 100%;
   height: 100%;
+  text-align: center;
+  line-height: 100%;
+}
+
+.workflow-editor-spinner,
+.visualizer-container-spinner {
+  display: grid;
+  place-items: center;
+  min-height: 100%;
+  min-width: 100%;
+}
+
+.online_3d_viewer {
+  display: grid;
+  place-items: center;
 }
 
 .visualizer-container div[role="grid"] {

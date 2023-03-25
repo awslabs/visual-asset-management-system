@@ -39,7 +39,7 @@ export const verifyStringMaxLength = (value, maxLength) => {
 Starts with . followed by 1 to 7 lowercase letters
  */
 export const validateFileType = (value) => {
-  const regex = /^[\\.]([a-z]){1,7}$/g;
+  const regex = /^[\\.]([a-z0-9]){1,7}$/g;
   const result = String(value).match(regex);
   if (result === null) {
     return false;

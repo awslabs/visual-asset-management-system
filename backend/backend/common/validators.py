@@ -3,7 +3,7 @@
 
 import re
 id_regex = re.compile('^[a-z]([-_a-z0-9]){3,63}$')
-file_type_regex = re.compile('^[\\.]([a-z]){1,7}')
+file_type_regex = re.compile('^[\\.]([a-z0-9]){1,7}')
 sagemaker_notebook_name_regex = re.compile('^[a-zA-Z0-9](-*[a-zA-Z0-9])*')
 
 def validate_id(name, value):

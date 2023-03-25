@@ -29,7 +29,7 @@ let navItems = [
     type: "section",
     text: "Visualize",
     items: [
-      { type: "link", text: "3D Model Viewer", href: "/visualizers/3d" },
+      { type: "link", text: "3D Model Viewer", href: "/visualizers/model" },
       { type: "link", text: "3D Plotter", href: "/visualizers/plot" },
       { type: "link", text: "Columnar Viewer", href: "/visualizers/column" },
     ],
