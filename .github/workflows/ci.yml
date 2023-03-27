@@ -2,9 +2,9 @@
  
    on:
         push:
-          branches: [jjbain-test-infiltation]
+          branches: [main]
         pull_request:
-          branches: [jjbain-test-infiltation]
+          branches: [main]
 
    jobs:
       build:
