@@ -49,10 +49,10 @@
                 cmd: install
           
           - name: Run yarn audit web directory
-                  uses: Borales/actions-yarn@v4.2.0
-                  with:
-                      dir: "web"
-                      cmd: audit
+            uses: Borales/actions-yarn@v4.2.0
+            with:
+                dir: "web"
+                cmd: audit
 
           - name: Web build
             working-directory: web
