@@ -11,20 +11,20 @@ import { AssetListDefinition } from "../components/list/list-definitions/AssetLi
 import ListPage from "./ListPage";
 
 export default function Assets() {
-  const navigate = useNavigate();
+    const navigate = useNavigate();
 
-  return (
-    <ListPage
-      singularName={"asset"}
-      singularNameTitleCase={"Asset"}
-      pluralName={"assets"}
-      pluralNameTitleCase={"Assets"}
-      onCreateCallback={() => {
-        navigate("/upload");
-      }}
-      listDefinition={AssetListDefinition}
-      fetchAllElements={fetchAllAssets}
-      fetchElements={fetchDatabaseAssets}
-    />
-  );
+    return (
+        <ListPage
+            singularName={"asset"}
+            singularNameTitleCase={"Asset"}
+            pluralName={"assets"}
+            pluralNameTitleCase={"Assets"}
+            onCreateCallback={() => {
+                navigate("/upload");
+            }}
+            listDefinition={AssetListDefinition}
+            fetchAllElements={fetchAllAssets}
+            fetchElements={fetchDatabaseAssets}
+        />
+    );
 }

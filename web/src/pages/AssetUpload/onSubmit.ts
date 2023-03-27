@@ -27,7 +27,7 @@ class AssetPreprocessingBody {
 }
 
 class UploadAssetWorkflowApi {
-    assetPreprocessingBody?: AssetPreprocessingBody; 
+    assetPreprocessingBody?: AssetPreprocessingBody;
     uploadAssetBody!: AssetDetail;
     updateMetadataBody!: MetadataApi;
     executeWorkflowBody!: {
@@ -81,8 +81,6 @@ export default function onSubmit({
             assetDetail.assetId &&
             assetDetail.databaseId
         ) {
-
-            
             // prefix with x so that we pass the assetId validation that requires this regex ^[a-z]([-_a-z0-9]){3,63}$
             const uuid = "x" + generateUUID();
 
@@ -96,13 +94,16 @@ export default function onSubmit({
             assetDetail.specifiedPipelines = [];
             assetDetail.previewLocation = {
                 Bucket: config.bucket,
-                Key: uuid + "/" + assetDetail.assetId + "." + assetDetail.Preview.name.split(".").pop(),
+                Key:
+                    uuid +
+                    "/" +
+                    assetDetail.assetId +
+                    "." +
+                    assetDetail.Preview.name.split(".").pop(),
             };
 
             assetDetail.assetName = assetDetail.assetId;
             assetDetail.assetId = uuid;
-
-
 
             const execStatusNew: Record<string, StatusIndicatorProps.Type> = {
                 "Asset Details": "pending",
@@ -141,32 +142,35 @@ export default function onSubmit({
                     return Promise.reject(err);
                 });
 
-            const up2 = (assetDetail?.previewLocation?.Key && uploadAssetToS3(
-                assetDetail.Preview,
-                assetDetail.previewLocation?.Key,
-                {
-                    assetId: assetDetail.assetId,
-                    databaseId: assetDetail.databaseId,
-                },
-                (progress) => {
-                    setPreviewUploadProgress({
-                        value: (progress.loaded / progress.total) * 100,
-                    });
-                }
-            )
-                .then((res) => {
-                    setPreviewUploadProgress({
-                        status: "success",
-                        value: 100,
-                    });
-                })
-                .catch((err) => {
-                    setPreviewUploadProgress({
-                        status: "error",
-                        value: 100,
-                    });
-                    return Promise.reject(err);
-                })) || Promise.resolve();
+            const up2 =
+                (assetDetail?.previewLocation?.Key &&
+                    uploadAssetToS3(
+                        assetDetail.Preview,
+                        assetDetail.previewLocation?.Key,
+                        {
+                            assetId: assetDetail.assetId,
+                            databaseId: assetDetail.databaseId,
+                        },
+                        (progress) => {
+                            setPreviewUploadProgress({
+                                value: (progress.loaded / progress.total) * 100,
+                            });
+                        }
+                    )
+                        .then((res) => {
+                            setPreviewUploadProgress({
+                                status: "success",
+                                value: 100,
+                            });
+                        })
+                        .catch((err) => {
+                            setPreviewUploadProgress({
+                                status: "error",
+                                value: 100,
+                            });
+                            return Promise.reject(err);
+                        })) ||
+                Promise.resolve();
 
             await Promise.all([up1, up2]).then((uploads) => {
                 const body: UploadAssetWorkflowApi = {
@@ -184,7 +188,7 @@ export default function onSubmit({
                         preview: {
                             Bucket: assetDetail.bucket,
                             Key: uuid + "/" + prevAssetId + ".png",
-                        }
+                        },
                     },
                     executeWorkflowBody: {
                         workflowIds: selectedWorkflows.map(
@@ -198,7 +202,7 @@ export default function onSubmit({
                     uploadAssetBody: assetDetail,
                 };
 
-                if(assetDetail.assetType === ".gltf") {
+                if (assetDetail.assetType === ".gltf") {
                     delete body.assetPreprocessingBody;
                 }
 

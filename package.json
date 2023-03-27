@@ -1,19 +1,22 @@
 {
-  "name": "project-root",
-  "version": "1.2.0",
-  "license": "Apache-2.0",
-  "scripts": {
-    "buildanddeploy.dev": "npm run build && npm run deploy.dev",
-    "build": "cd web && yarn install && npm run build",
-    "deploy.dev": "cd infra && npm install && npm run deploy.dev",
-    "deploy.alpha": "cd infra && npm install && npm run deploy.alpha",
-    "deploy.bms": "cd infra && npm install && npm run deploy.bms",
-    "release": "standard-version"
-  },
-  "devDependencies": {
-    "standard-version": "^9.3.2"
-  },
-  "dependencies": {
-    "minimist": "^1.2.7"
-  }
+    "name": "project-root",
+    "version": "1.2.0",
+    "license": "Apache-2.0",
+    "scripts": {
+        "buildanddeploy.dev": "npm run build && npm run deploy.dev",
+        "build": "cd web && yarn install && npm run build",
+        "deploy.dev": "cd infra && npm install && npm run deploy.dev",
+        "deploy.alpha": "cd infra && npm install && npm run deploy.alpha",
+        "deploy.bms": "cd infra && npm install && npm run deploy.bms",
+        "release": "standard-version",
+        "prettier-check": "prettier -c --config .prettierrc -u --ignore-path .prettierignore .",
+        "prettier-fix": "prettier -w --config .prettierrc -u --ignore-path .prettierignore ."
+    },
+    "devDependencies": {
+        "standard-version": "^9.3.2",
+        "prettier": "^2.8.7"
+    },
+    "dependencies": {
+        "minimist": "^1.2.7"
+    }
 }

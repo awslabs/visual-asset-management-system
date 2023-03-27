@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
- import * as cdk from 'aws-cdk-lib';
+import * as cdk from "aws-cdk-lib";
 import * as wafv2 from "aws-cdk-lib/aws-wafv2";
 import { Construct } from "constructs";
 export enum WAFScope {
@@ -25,22 +25,24 @@ const defaultProps: Partial<Wafv2BasicConstructProps> = {
     wafScope: WAFScope.CLOUDFRONT,
     stackName: "",
     env: {},
-    rules: [{                
-        priority: 1,
-        overrideAction: {count: {}},   //change this back to none might blocks some  existing requests, however, it will reduce security risk
-        visibilityConfig: {
-            sampledRequestsEnabled: true,
-            cloudWatchMetricsEnabled: true,
-            metricName: "AWS-AWSManagedRulesCommonRuleSet",
-        },
-        name: "AWS-AWSManagedRulesCommonRuleSet",
-        statement: {
-            managedRuleGroupStatement: {
-                vendorName: "AWS",
-                name: "AWSManagedRulesCommonRuleSet",
+    rules: [
+        {
+            priority: 1,
+            overrideAction: { count: {} }, //change this back to none might blocks some  existing requests, however, it will reduce security risk
+            visibilityConfig: {
+                sampledRequestsEnabled: true,
+                cloudWatchMetricsEnabled: true,
+                metricName: "AWS-AWSManagedRulesCommonRuleSet",
+            },
+            name: "AWS-AWSManagedRulesCommonRuleSet",
+            statement: {
+                managedRuleGroupStatement: {
+                    vendorName: "AWS",
+                    name: "AWSManagedRulesCommonRuleSet",
+                },
             },
         },
-    }]
+    ],
 };
 
 /**
@@ -55,7 +57,7 @@ export class Wafv2BasicConstruct extends Construct {
         props = { ...defaultProps, ...props };
 
         const wafScopeString = props.wafScope!.toString();
-        
+
         /*
         if (props.wafScope === WAFScope.CLOUDFRONT && props.env?.region !== "us-east-1") {
             throw new Error(

@@ -10,5 +10,5 @@ export const ACTION_TYPES = {
     UPDATE: "UPDATE",
     DELETE: "DELETE",
     REVERT: "REVERT",
-    EXECUTE: "EXECUTE"
+    EXECUTE: "EXECUTE",
 };

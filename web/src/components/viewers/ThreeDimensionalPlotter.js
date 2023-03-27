@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, {useEffect, useRef, useState} from "react";
-import {Storage} from "aws-amplify";
+import React, { useEffect, useRef, useState } from "react";
+import { Storage } from "aws-amplify";
 import {
     Engine,
     Scene,
@@ -21,10 +21,10 @@ import {
     ArcRotateCamera,
     UniversalCamera,
     WebVRFreeCamera,
-    VRDeviceOrientationArcRotateCamera
+    VRDeviceOrientationArcRotateCamera,
 } from "babylonjs";
 import "babylonjs-loaders";
-import {readRemoteFile} from "react-papaparse";
+import { readRemoteFile } from "react-papaparse";
 import FCS from "fcs";
 import arrayBufferToBuffer from "arraybuffer-to-buffer";
 
@@ -32,17 +32,14 @@ let scatterPlot = {};
 let points = [];
 let PCS = null;
 
-const buildScatterPlot = ({dimensions, labels, scene}) => {
+const buildScatterPlot = ({ dimensions, labels, scene }) => {
     scatterPlot.scene = scene;
-    scatterPlot.dimensions = {width: 100, height: 100, depth: 100};
+    scatterPlot.dimensions = { width: 100, height: 100, depth: 100 };
 
     if (dimensions.length > 0) {
-        if (dimensions[0] != undefined)
-            scatterPlot.dimensions.width = parseFloat(dimensions[0]);
-        if (dimensions[1] != undefined)
-            scatterPlot.dimensions.height = parseFloat(dimensions[1]);
-        if (dimensions[2] != undefined)
-            scatterPlot.dimensions.depth = parseFloat(dimensions[2]);
+        if (dimensions[0] != undefined) scatterPlot.dimensions.width = parseFloat(dimensions[0]);
+        if (dimensions[1] != undefined) scatterPlot.dimensions.height = parseFloat(dimensions[1]);
+        if (dimensions[2] != undefined) scatterPlot.dimensions.depth = parseFloat(dimensions[2]);
     }
 
     scatterPlot.labelsInfo = {
@@ -52,12 +49,9 @@ const buildScatterPlot = ({dimensions, labels, scene}) => {
     };
 
     if (Object.keys(labels).length > 0) {
-        if (labels.x != undefined && Array.isArray(labels.x))
-            scatterPlot.labelsInfo.x = labels.x;
-        if (labels.y != undefined && Array.isArray(labels.y))
-            scatterPlot.labelsInfo.y = labels.y;
-        if (labels.z != undefined && Array.isArray(labels.z))
-            scatterPlot.labelsInfo.z = labels.z;
+        if (labels.x != undefined && Array.isArray(labels.x)) scatterPlot.labelsInfo.x = labels.x;
+        if (labels.y != undefined && Array.isArray(labels.y)) scatterPlot.labelsInfo.y = labels.y;
+        if (labels.z != undefined && Array.isArray(labels.z)) scatterPlot.labelsInfo.z = labels.z;
     }
 
     scatterPlot.axis = [];
@@ -115,7 +109,7 @@ const buildScatterPlot = ({dimensions, labels, scene}) => {
     scatterPlot.BBJSaddGrid = function (verts, position, rotation, hightlight) {
         const line = MeshBuilder.CreateLineSystem(
             "linesystem",
-            {lines: verts, updatable: false},
+            { lines: verts, updatable: false },
             scatterPlot.scene
         );
         if (hightlight) {
@@ -160,7 +154,7 @@ const buildScatterPlot = ({dimensions, labels, scene}) => {
     scatterPlot.BBJSaddLabel = function (text) {
         const planeTexture = new DynamicTexture(
             "dynamic texture",
-            {width: 4000, height: 4000},
+            { width: 4000, height: 4000 },
             scatterPlot.scene,
             true,
             DynamicTexture.TRILINEAR_SAMPLINGMODE
@@ -175,22 +169,14 @@ const buildScatterPlot = ({dimensions, labels, scene}) => {
             true
         );
 
-        const material = new StandardMaterial(
-            "outputplane",
-            scatterPlot.scene
-        );
+        const material = new StandardMaterial("outputplane", scatterPlot.scene);
         material.emissiveTexture = planeTexture;
         material.opacityTexture = planeTexture;
         material.backFaceCulling = true;
         material.disableLighting = true;
         material.freeze();
 
-        const outputplane = Mesh.CreatePlane(
-            "outputplane",
-            50,
-            scatterPlot.scene,
-            false
-        );
+        const outputplane = Mesh.CreatePlane("outputplane", 50, scatterPlot.scene, false);
         outputplane.billboardMode = AbstractMesh.BILLBOARDMODE_ALL;
         outputplane.material = material;
 
@@ -237,11 +223,7 @@ const buildScatterPlot = ({dimensions, labels, scene}) => {
 
         if (convertedPoints.length > 0) {
             this._defPos = this.mesh.position.clone();
-            this.mesh.position = new Vector3(
-                this._width,
-                this._height,
-                this._depth
-            );
+            this.mesh.position = new Vector3(this._width, this._height, this._depth);
 
             PCS = new PointsCloudSystem("pcs", 1, scene);
 
@@ -272,8 +254,7 @@ const buildScatterPlot = ({dimensions, labels, scene}) => {
 
     scatterPlot.dispose = function (allmeshes = false) {
         if (scatterPlot.shape != null) {
-            if (scatterPlot.shape.material != undefined)
-                scatterPlot.shape.material.dispose();
+            if (scatterPlot.shape.material != undefined) scatterPlot.shape.material.dispose();
             scatterPlot.shape.dispose();
             scatterPlot.shape = null;
         }
@@ -294,8 +275,7 @@ const buildScatterPlot = ({dimensions, labels, scene}) => {
                 }
             }
             if (scatterPlot.mesh != null) {
-                if (scatterPlot.mesh.material != null)
-                    scatterPlot.mesh.material.dispose();
+                if (scatterPlot.mesh.material != null) scatterPlot.mesh.material.dispose();
                 scatterPlot.mesh.dispose();
             }
             scatterPlot._meshes = [];
@@ -354,10 +334,7 @@ const readFcsFile = (remoteFileUrl, render) => {
                 .split(",").length;
 
             for (let i = 0; i < columnCount; i++) {
-                const row = fcs.dataAsStrings[i]
-                    ?.replace("[", "")
-                    .replace("]", "")
-                    .split(",");
+                const row = fcs.dataAsStrings[i]?.replace("[", "").replace("]", "").split(",");
                 if (row.length > 2) {
                     const x = Number(row[row.length - 3]);
                     const y = Number(row[row.length - 2]);
@@ -377,7 +354,7 @@ const readFcsFile = (remoteFileUrl, render) => {
 const readCsvFile = (remoteFileUrl, render) => {
     readRemoteFile(remoteFileUrl, {
         complete: (results) => {
-            const {data} = results;
+            const { data } = results;
             for (let i = 0; i < data.length; i++) {
                 if (data[i].length > 2) {
                     const x = data[i][data[i].length - 3];
@@ -395,8 +372,7 @@ const readCsvFile = (remoteFileUrl, render) => {
 
 export default function ThreeDimensionalPlotter(props) {
     const reactCanvas = useRef(null);
-    const {assetKey, engineOptions, adaptToDeviceRatio, sceneOptions, ...rest} =
-        props;
+    const { assetKey, engineOptions, adaptToDeviceRatio, sceneOptions, ...rest } = props;
     const [loaded, setLoaded] = useState(false);
     const antialias = true;
 
@@ -412,8 +388,8 @@ export default function ThreeDimensionalPlotter(props) {
     let cursorDown = false;
     let yScale = 2;
     let xScale = 2;
-    let oldCamState = {x: 0, y: 0};
-    let cursorState = {x: 0, y: 0};
+    let oldCamState = { x: 0, y: 0 };
+    let cursorState = { x: 0, y: 0 };
     let render = true;
 
     setTimeout(() => {
@@ -445,11 +421,7 @@ export default function ThreeDimensionalPlotter(props) {
         const canvas = scene.getEngine().getRenderingCanvas();
         scene.clearColor = new Color4(0.1, 0.1, 0.1);
 
-        const light = new HemisphericLight(
-            "light1",
-            new Vector3(0, 0, 0),
-            scene
-        );
+        const light = new HemisphericLight("light1", new Vector3(0, 0, 0), scene);
         light.intensity = 2;
         light.specular = new Color3(0.95, 0.95, 0.81);
 
@@ -466,11 +438,7 @@ export default function ThreeDimensionalPlotter(props) {
         arcCamera.attachControl(canvas, true);
         arcCamera.fov = 1;
 
-        freeCamera = new UniversalCamera(
-            "camera1",
-            new Vector3(350, 350, 1350),
-            scene
-        );
+        freeCamera = new UniversalCamera("camera1", new Vector3(350, 350, 1350), scene);
         freeCamera.setTarget(Vector3.Zero());
         freeCamera.inputs.addMouseWheel();
         freeCamera.speed = 50;
@@ -489,21 +457,16 @@ export default function ThreeDimensionalPlotter(props) {
 
         scene.onPointerMove = function (event) {
             if (cursorDown) {
-                freeCamera.position.y =
-                    oldCamState.y + yScale * (event.clientY - cursorState.y);
+                freeCamera.position.y = oldCamState.y + yScale * (event.clientY - cursorState.y);
                 freeCamera.position.x =
                     oldCamState.x + xScale * -1 * (event.clientX - cursorState.x);
             }
         };
 
         if (navigator.getVRDisplays)
-            camera2 = new WebVRFreeCamera(
-                "camera1",
-                new Vector3(0, 1, 0),
-                scene,
-                false,
-                {trackPosition: true}
-            );
+            camera2 = new WebVRFreeCamera("camera1", new Vector3(0, 1, 0), scene, false, {
+                trackPosition: true,
+            });
         else
             camera2 = new VRDeviceOrientationArcRotateCamera(
                 "vrCam",
@@ -533,12 +496,7 @@ export default function ThreeDimensionalPlotter(props) {
 
     useEffect(() => {
         if (reactCanvas.current) {
-            engine = new Engine(
-                reactCanvas.current,
-                antialias,
-                engineOptions,
-                adaptToDeviceRatio
-            );
+            engine = new Engine(reactCanvas.current, antialias, engineOptions, adaptToDeviceRatio);
             const scene = new Scene(engine, sceneOptions);
             if (scene.isReady()) {
                 onSceneReady(scene);

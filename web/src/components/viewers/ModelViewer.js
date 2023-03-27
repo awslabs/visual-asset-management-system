@@ -3,13 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, {useEffect, useRef, useState} from "react";
-import {Storage} from "aws-amplify";
-import * as OV from 'online-3d-viewer';
+import React, { useEffect, useRef, useState } from "react";
+import { Storage } from "aws-amplify";
+import * as OV from "online-3d-viewer";
 
 export default function ModelViewer(props) {
     const engineElement = useRef(null);
-    const {assetKey, ...rest} = props;
+    const { assetKey, ...rest } = props;
     const [loaded, setLoaded] = useState(false);
 
     useEffect(() => {
@@ -38,17 +38,19 @@ export default function ModelViewer(props) {
     }, [loaded, assetKey]);
 
     return (
-        <div style={{
-            overflow: "auto",
-            backgroundColor: "white",
-            height: "100%",
-            padding: 0
-        }}>
-            <div className="online_3d_viewer"
-                 style={{width: "100%", height: "100%"}}
-                 ref={engineElement}>
-            </div>
+        <div
+            style={{
+                overflow: "auto",
+                backgroundColor: "white",
+                height: "100%",
+                padding: 0,
+            }}
+        >
+            <div
+                className="online_3d_viewer"
+                style={{ width: "100%", height: "100%" }}
+                ref={engineElement}
+            ></div>
         </div>
     );
-
 }

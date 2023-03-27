@@ -32,5 +32,11 @@ export default function ImgViewer({ assetKey, altAssetKey }: ImgViewerProps) {
             Storage.get(altAssetKey, { download: false, expires: 10 }).then(setUrl);
         }
     };
-    return <img src={url} style={{ maxWidth: "100%", maxHeight: "100%", height: "100%" }} onError={fallback} />;
+    return (
+        <img
+            src={url}
+            style={{ maxWidth: "100%", maxHeight: "100%", height: "100%" }}
+            onError={fallback}
+        />
+    );
 }

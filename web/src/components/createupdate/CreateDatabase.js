@@ -10,16 +10,16 @@ import CreateUpdateElement from "./CreateUpdateElement";
 import { actionTypes } from "./form-definitions/types/FormDefinition";
 
 export default function CreateDatabase(props) {
-  const { open, setOpen, setReload } = props;
+    const { open, setOpen, setReload } = props;
 
-  return (
-    <CreateUpdateElement
-      open={open}
-      setOpen={setOpen}
-      setReload={setReload}
-      formDefinition={DatabaseFormDefinition}
-      formEntity={DatabaseEntity}
-      actionType={actionTypes.CREATE}
-    />
-  );
+    return (
+        <CreateUpdateElement
+            open={open}
+            setOpen={setOpen}
+            setReload={setReload}
+            formDefinition={DatabaseFormDefinition}
+            formEntity={DatabaseEntity}
+            actionType={actionTypes.CREATE}
+        />
+    );
 }

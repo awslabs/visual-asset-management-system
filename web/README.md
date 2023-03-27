@@ -2,8 +2,8 @@
 
 In the project directory, you can run:
 
-
 ### `yarn install
+
 Installs all the dependencies
 
 ### `npm start`
