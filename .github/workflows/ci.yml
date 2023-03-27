@@ -119,6 +119,6 @@
             run: |
                 npm install -g aws-cdk
                 cdk destroy --all --force
-                aws lambda invoke --function-name TearDownVAMSRetainedResources
+                aws lambda invoke --function-name TearDownVAMSRetainedResources response.json
 
 
