@@ -1,108 +1,124 @@
    name: Build and Scan for Vulnerabilities
  
    on:
-     push:
-       branches: [ main ]
-     pull_request:
-       branches: [ main ]
+        push:
+          branches: [main]
+        pull_request:
+          branches: [main]
 
    jobs:
-    build:
-      runs-on: ubuntu-latest
-      steps:
-      - name: checkout repo
-        uses: actions/checkout@v3
+      build:
+          runs-on: ubuntu-latest
+          environment: SecurityTesting
+          steps:
+          - name: Checkout repo
+            uses: actions/checkout@v3
 
-      - name: Setup Python Version
-        uses: actions/setup-python@v2
-        with:
-          python-version: 3.9
-      
-      - name: Setup Ruby Version
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: '2.7'
-
-      - name: setup node for the whole package
-        uses: actions/setup-node@v3
-      
-      - name: npm install 
-        run: |
-          npm install
-          npm audit
-
-      - name: Install Poetry Action
-        uses: snok/install-poetry@v1
-        with:
-          version: 1.1.13
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-          virtualenvs-path: backend/.venv
-          installer-parallel: true
-     
-      - name: Run yarn install
-        uses: Borales/actions-yarn@v4.2.0
-        with:
-          dir: 'web'
-          cmd: install
-
-      - name: web build
-        working-directory: web
-        env:
-          CI: ""
-        run: |
-          # npm install
-          # npm audit
-          npm run build
+          - name: Setup Python Version
+            uses: actions/setup-python@v2
+            with:
+                python-version: 3.9
           
-      - name: cdk package install
-        working-directory: infra
-        run: |
-          npm install
-          npm audit
+          - name: Setup Ruby Version
+            uses: ruby/setup-ruby@v1
+            with:
+                ruby-version: '2.7'
 
-      - name: cdk package build
-        working-directory: infra
-        run: |
-          CDK_NAG_ENABLED=true
-          export STACK_NAME=CfnNagTest
-          export REGION=us-east-1
-          npx cdk synth
-          gem install cfn-nag
-          cfn_nag_scan --input-path ./cdk.out/vams-waf-CfnNagTest-us-east-1.template.json
-          cfn_nag_scan --input-path ./cdk.out/vams-CfnNagTest-us-east-1.template.json
-          cfn_nag_scan --input-path ./cdk.out/vams-waf-CfnNagTest-us-east-1.template.json | grep 'Failures count: 0'
-          cfn_nag_scan --input-path ./cdk.out/vams-CfnNagTest-us-east-1.template.json | grep 'Failures count: 0'
+          - name: Setup node for the whole package
+            uses: actions/setup-node@v3
+          
+          - name: Npm install root directory
+            run: npm install
+            
+          - name: Npm audit root directory
+            run:  npm audit
 
-      - name: run checks
-        working-directory: backend
-        run: make all
-      
-      - name: deploy VAMS
-        working-directory: infra
-        env:
-          ACCESS_KEY_ID: ${{ secrets.ACCESS_KEY_ID }}
-          SECRET_ACCESS_KEY: ${{ secrets.SECRET_ACCESS_KEY }}
-        run: |
-          export STACK_NAME=DeploymentTest
-          aws configure set default.region us-east-1
-          aws configure set aws_access_key_id "$ACCESS_KEY_ID"
-          aws configure set aws_secret_access_key "$SECRET_ACCESS_KEY"
-          npm run deploy.dev adminEmailAddress=notinuse@email.com
-          pip install scoutsuite
-          scout aws
+          - name: Install Poetry Action
+            uses: snok/install-poetry@v1
+            with:
+                version: 1.1.13
+                virtualenvs-create: true
+                virtualenvs-in-project: true
+                virtualenvs-path: backend/.venv
+                installer-parallel: true
+          
+          - name: Run yarn install web directory
+            uses: Borales/actions-yarn@v4.2.0
+            with:
+                dir: 'web'
+                cmd: install
+          
+          - name: Run yarn audit web directory
+                  uses: Borales/actions-yarn@v4.2.0
+                  with:
+                      dir: "web"
+                      cmd: audit
 
-      - name: Create Scout Suite Report
-        uses: actions/upload-artifact@v3
-        with:
-          name: scout-suite-report
-          path: infra/scoutsuite-report/
-      
-      - name: Tear Down VAMS
-        working-directory: infra
-        run: |
-            npm install -g aws-cdk
-            cdk destroy --all --force
-            aws lambda invoke --function-name TearDownVAMSRetainedResources
+          - name: Web build
+            working-directory: web
+            env:
+                CI: ""
+            run: npm run build
+              
+          - name: Npm install infrastructure directory
+            working-directory: infra
+            run: npm install
+
+          - name: Npm audit infrastructure directory
+            working-directory: infra
+            run: npm audit
+
+          - name: Synthesize Cloudformation templates
+            working-directory: infra
+            run: |
+                CDK_NAG_ENABLED=true
+                export STACK_NAME=CfnNagTest
+                export REGION=us-east-1
+                npx cdk synth
+
+          - name: Scan VAMS WAF Cloudformation template
+            uses: stelligent/cfn_nag@master
+            with:
+                input_path: infra/cdk.out/vams-waf-CfnNagTest-us-east-1.template.json
+          
+          - name: Scan VAMS Cloudformation template
+            uses: stelligent/cfn_nag@master
+            with:
+                input_path: infra/cdk.out/vams-CfnNagTest-us-east-1.template.json
+
+          - name: run checks
+            working-directory: backend
+            run: make all
+          
+          - name: Deploy VAMS 
+            working-directory: infra
+            env:
+                ACCESS_KEY_ID: ${{ secrets.ACCESS_KEY_ID }}
+                SECRET_ACCESS_KEY: ${{ secrets.SECRET_ACCESS_KEY }}
+            run: |
+                export STACK_NAME=DeploymentTest
+                aws configure set default.region us-east-1
+                aws configure set aws_access_key_id "$ACCESS_KEY_ID"
+                aws configure set aws_secret_access_key "$SECRET_ACCESS_KEY"
+                npm run deploy.dev adminEmailAddress=xxxxxxxx@email.com
+          
+          - name: Run Scout Suite 
+            working-directory: infra
+            run: |
+                pip install scoutsuite
+                scout aws
+
+          - name: Create Scout Suite Report
+            uses: actions/upload-artifact@v3
+            with:
+                name: scout-suite-report
+                path: infra/scoutsuite-report/
+          
+          - name: Tear Down VAMS
+            working-directory: infra
+            run: |
+                npm install -g aws-cdk
+                cdk destroy --all --force
+                aws lambda invoke --function-name TearDownVAMSRetainedResources
 
 
