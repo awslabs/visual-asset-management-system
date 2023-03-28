@@ -10,16 +10,16 @@ import { DatabaseListDefinition } from "../components/list/list-definitions/Data
 import ListPage from "./ListPage";
 
 export default function Databases() {
-  return (
-    <ListPage
-      singularName={"database"}
-      singularNameTitleCase={"Database"}
-      pluralName={"databases"}
-      pluralNameTitleCase={"Databases"}
-      listDefinition={DatabaseListDefinition}
-      CreateNewElement={CreateDatabase}
-      fetchAllElements={fetchAllDatabases}
-      fetchElements={fetchAllDatabases}
-    />
-  );
+    return (
+        <ListPage
+            singularName={"database"}
+            singularNameTitleCase={"Database"}
+            pluralName={"databases"}
+            pluralNameTitleCase={"Databases"}
+            listDefinition={DatabaseListDefinition}
+            CreateNewElement={CreateDatabase}
+            fetchAllElements={fetchAllDatabases}
+            fetchElements={fetchAllDatabases}
+        />
+    );
 }

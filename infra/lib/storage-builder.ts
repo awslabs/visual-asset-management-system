@@ -31,7 +31,10 @@ export interface storageResources {
         metadataStorageTable: dynamodb.Table;
     };
 }
-export function storageResourcesBuilder(scope: Construct, staging_bucket?: string): storageResources {
+export function storageResourcesBuilder(
+    scope: Construct,
+    staging_bucket?: string
+): storageResources {
     const accessLogsBucket = new s3.Bucket(scope, "AccessLogsBucket", {
         encryption: s3.BucketEncryption.S3_MANAGED,
         versioned: true,
@@ -46,7 +49,10 @@ export function storageResourcesBuilder(scope: Construct, staging_bucket?: strin
     requireTLSAddToResourcePolicy(accessLogsBucket);
 
     NagSuppressions.addResourceSuppressions(accessLogsBucket, [
-        {id: 'AwsSolutions-S1', reason: 'This is an access logs bucket, we do not want access logs to be reporting to itself, causing a loop.'}
+        {
+            id: "AwsSolutions-S1",
+            reason: "This is an access logs bucket, we do not want access logs to be reporting to itself, causing a loop.",
+        },
     ]);
 
     const assetBucket = new s3.Bucket(scope, "AssetBucket", {
@@ -84,9 +90,9 @@ export function storageResourcesBuilder(scope: Construct, staging_bucket?: strin
     });
     requireTLSAddToResourcePolicy(sagemakerBucket);
 
-    let stagingBucket = undefined
-    if(staging_bucket)
-        stagingBucket = s3.Bucket.fromBucketName(scope, "Staging Bucket", staging_bucket)
+    let stagingBucket = undefined;
+    if (staging_bucket)
+        stagingBucket = s3.Bucket.fromBucketName(scope, "Staging Bucket", staging_bucket);
 
     new s3deployment.BucketDeployment(scope, "DeployArtefacts", {
         sources: [s3deployment.Source.asset("./lib/artefacts")],

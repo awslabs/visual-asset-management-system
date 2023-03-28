@@ -15,7 +15,7 @@
 
 import { Wafv2BasicConstruct, WAFScope } from "./constructs/wafv2-basic-construct";
 import { Construct } from "constructs";
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from "aws-cdk-lib";
 
 interface EnvProps {
     env?: cdk.Environment;
@@ -23,18 +23,17 @@ interface EnvProps {
 }
 
 export class CfWafStack extends cdk.Stack {
-
     //This can only be made in us-east-1, so it'll be made in a separate region from the region agnostic VAMS stack
     //but we can take the info from here and place it into the cloudfront construct in that stack
     public ssmWafArnParameterName: string;
     public wafArn: string;
-    
+
     constructor(scope: Construct, id: string, props: EnvProps) {
-        super(scope, id, {...props, crossRegionReferences: true});
+        super(scope, id, { ...props, crossRegionReferences: true });
 
         // ssm parameter name must be unique in a region
         this.ssmWafArnParameterName = "waf_acl_arn_" + this.stackName;
-        
+
         const wafv2CF = new Wafv2BasicConstruct(this, "Wafv2CF", {
             ...props,
             wafScope: WAFScope.CLOUDFRONT,

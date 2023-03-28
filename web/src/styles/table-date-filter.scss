@@ -2,46 +2,46 @@
  * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
- 
+
 @use "./base";
 
 .filter-container {
-  display: flex;
-  flex-wrap: wrap;
-  order: 0;
-  flex-grow: 10;
-  margin-right: 2rem;
+    display: flex;
+    flex-wrap: wrap;
+    order: 0;
+    flex-grow: 10;
+    margin-right: 2rem;
 }
 
 .input-filter {
-  order: 0;
-  flex-grow: 1;
-  flex-shrink: 1;
-  width: auto;
-  max-width: 728px;
-  margin-right: 1rem;
+    order: 0;
+    flex-grow: 1;
+    flex-shrink: 1;
+    width: auto;
+    max-width: 728px;
+    margin-right: 1rem;
 }
 
 .date-range-filter {
-  flex-basis: 100%;
-  flex-grow: 0;
-  flex-shrink: 0;
+    flex-basis: 100%;
+    flex-grow: 0;
+    flex-shrink: 0;
 }
 
 .filtering-results {
-  margin-left: 1rem;
-  line-height: 3rem;
+    margin-left: 1rem;
+    line-height: 3rem;
 }
 
 @media (max-width: 1400px) {
-  .filter-container {
-    margin-right: 0;
-  }
+    .filter-container {
+        margin-right: 0;
+    }
 
-  .input-filter {
-    width: 100%;
-    max-width: none;
-    margin-right: 0;
-    margin-bottom: 1rem;
-  }
+    .input-filter {
+        width: 100%;
+        max-width: none;
+        margin-right: 0;
+        margin-bottom: 1rem;
+    }
 }

@@ -3,4 +3,4 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export const THEME = 'OPEN_SOURCE';
+export const THEME = "OPEN_SOURCE";

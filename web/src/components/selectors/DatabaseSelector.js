@@ -8,35 +8,35 @@ import { fetchAllDatabases } from "../../services/APIService";
 import { Select } from "@cloudscape-design/components";
 
 const DatabaseSelector = (props) => {
-  const [reload, setReload] = useState(true);
-  const [allItems, setAllItems] = useState([]);
+    const [reload, setReload] = useState(true);
+    const [allItems, setAllItems] = useState([]);
 
-  useEffect(() => {
-    const getData = async () => {
-      const items = await fetchAllDatabases();
-      if (items !== false && Array.isArray(items)) {
-        setReload(false);
-        setAllItems(items);
-      }
-    };
-    if (reload) {
-      getData();
-    }
-  }, [reload]);
-
-  return (
-    <Select
-      {...props}
-      options={allItems.map((item) => {
-        return {
-          label: item.databaseId,
-          value: item.databaseId,
+    useEffect(() => {
+        const getData = async () => {
+            const items = await fetchAllDatabases();
+            if (items !== false && Array.isArray(items)) {
+                setReload(false);
+                setAllItems(items);
+            }
         };
-      })}
-      filteringType="auto"
-      selectedAriaLabel="Selected"
-    />
-  );
+        if (reload) {
+            getData();
+        }
+    }, [reload]);
+
+    return (
+        <Select
+            {...props}
+            options={allItems.map((item) => {
+                return {
+                    label: item.databaseId,
+                    value: item.databaseId,
+                };
+            })}
+            filteringType="auto"
+            selectedAriaLabel="Selected"
+        />
+    );
 };
 
 export default DatabaseSelector;
