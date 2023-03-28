@@ -16,25 +16,25 @@ import {
     FormField,
     Container,
     Header,
-    BreadcrumbGroup
+    BreadcrumbGroup,
 } from "@cloudscape-design/components";
-import React, {useEffect, useState, Suspense} from "react";
-import {useParams} from "react-router";
+import React, { useEffect, useState, Suspense } from "react";
+import { useParams } from "react-router";
 import CreatePipeline from "./CreatePipeline";
 import WorkflowPipelineSelector from "../selectors/WorkflowPipelineSelector";
 import AssetSelector from "../selectors/AssetSelector";
-import {Cache} from "aws-amplify";
-import {fetchDatabaseWorkflows, saveWorkflow, runWorkflow} from "../../services/APIService";
-import {WorkflowContext} from "../../context/WorkflowContex";
-import {validateEntityId, verifyStringMaxLength} from "./entity-types/EntityPropTypes";
+import { Cache } from "aws-amplify";
+import { fetchDatabaseWorkflows, saveWorkflow, runWorkflow } from "../../services/APIService";
+import { WorkflowContext } from "../../context/WorkflowContex";
+import { validateEntityId, verifyStringMaxLength } from "./entity-types/EntityPropTypes";
 
-const WorkflowEditor = React.lazy(() => import('../interactive/WorkflowEditor'));
+const WorkflowEditor = React.lazy(() => import("../interactive/WorkflowEditor"));
 const sleep = (ms) => {
     return new Promise((resolve) => setTimeout(resolve, ms));
 };
 
 export default function CreateUpdateWorkflow(props) {
-    const {databaseId, workflowId} = useParams();
+    const { databaseId, workflowId } = useParams();
     const [reload, setReload] = useState(true);
     const [loaded, setLoaded] = useState(!workflowId);
     const [saving, setSaving] = useState(false);
@@ -60,31 +60,27 @@ export default function CreateUpdateWorkflow(props) {
         setPipelinesError("");
         setCreateUpdateWorkflowError("");
         setRunWorkflowError("");
-    }
+    };
 
     useEffect(() => {
         const getData = async () => {
-            const items = await fetchDatabaseWorkflows({databaseId: databaseId});
-            console.log(items)
+            const items = await fetchDatabaseWorkflows({ databaseId: databaseId });
+            console.log(items);
             if (items !== false && Array.isArray(items)) {
                 setReload(false);
-                const currentItem = items.find(
-                    ({workflowId}) => workflowId === workflowIdNew
-                );
+                const currentItem = items.find(({ workflowId }) => workflowId === workflowIdNew);
 
                 setWorkflowIDNew(currentItem.workflowId);
                 setWorkflowDescription(currentItem.description);
-                const loadedPipelines = currentItem?.specifiedPipelines?.functions.map(
-                    (item) => {
-                        return {
-                            value: item.name,
-                            type: item.pipelineType,
-                            outputType: item.outputType,
-                            userProvidedResource: item.userProvidedResource
-                        };
-                    }
-                );
-                console.log(loadedPipelines)
+                const loadedPipelines = currentItem?.specifiedPipelines?.functions.map((item) => {
+                    return {
+                        value: item.name,
+                        type: item.pipelineType,
+                        outputType: item.outputType,
+                        userProvidedResource: item.userProvidedResource,
+                    };
+                });
+                console.log(loadedPipelines);
                 setLoadedWorkflowPipelines(loadedPipelines);
                 setLoaded(true);
             }
@@ -133,12 +129,11 @@ export default function CreateUpdateWorkflow(props) {
             setActiveTab("details");
         } else if (!verifyStringMaxLength(workflowDescription, 256)) {
             setWorkflowIDError("");
-            setWorkflowDescriptionError("Invalid prop description. Value exceeds maximum length of 256.");
+            setWorkflowDescriptionError(
+                "Invalid prop description. Value exceeds maximum length of 256."
+            );
             setActiveTab("details");
-        } else if (
-            workflowPipelines.length === 0 ||
-            workflowPipelines[0] === null
-        ) {
+        } else if (workflowPipelines.length === 0 || workflowPipelines[0] === null) {
             setWorkflowDescriptionError("");
             setPipelinesError("Must select pipelines.");
             setActiveTab("pipelines");
@@ -148,7 +143,7 @@ export default function CreateUpdateWorkflow(props) {
                     name: item.value,
                     pipelineType: item.type,
                     outputType: item.outputType,
-                    userProvidedResource: item.userProvidedResource
+                    userProvidedResource: item.userProvidedResource,
                 };
             });
             const config = {
@@ -156,10 +151,10 @@ export default function CreateUpdateWorkflow(props) {
                     workflowId: workflowIdNew,
                     databaseId: databaseId,
                     description: workflowDescription,
-                    specifiedPipelines: {functions: functions},
+                    specifiedPipelines: { functions: functions },
                 },
             };
-            const result = await saveWorkflow({config: config});
+            const result = await saveWorkflow({ config: config });
             if (result !== false && Array.isArray(result)) {
                 if (result[0] === false) {
                     setCreateUpdateWorkflowError(`Unable to save workflow. Error: ${result[1]}`);
@@ -178,7 +173,11 @@ export default function CreateUpdateWorkflow(props) {
         // reset all workflow-related error messages when either save or run workflow is executed
         clearWorkflowErrors();
         setActiveTab("asset");
-        const result = await runWorkflow({databaseId: databaseId, assetId: asset?.value, workflowId: workflowId});
+        const result = await runWorkflow({
+            databaseId: databaseId,
+            assetId: asset?.value,
+            workflowId: workflowId,
+        });
         if (result !== false && Array.isArray(result)) {
             if (result[0] === false) {
                 setRunWorkflowError(`Unable to run workflow. Error: ${result[1]}`);
@@ -219,19 +218,19 @@ export default function CreateUpdateWorkflow(props) {
                         background: "rgba(255,255,255,.5)",
                     }}
                 >
-                    <Spinner size="large"/>
+                    <Spinner size="large" />
                 </div>
             )}
-            <Box padding={{top: "s", horizontal: "l"}}>
+            <Box padding={{ top: "s", horizontal: "l" }}>
                 <SpaceBetween direction="vertical" size="xs">
                     <BreadcrumbGroup
                         items={[
-                            {text: "Databases", href: "/databases/"},
+                            { text: "Databases", href: "/databases/" },
                             {
                                 text: databaseId,
                                 href: "/databases/" + databaseId + "/workflows/",
                             },
-                            {text: "Create Workflow"},
+                            { text: "Create Workflow" },
                         ]}
                         ariaLabel="Breadcrumbs"
                     />
@@ -252,15 +251,15 @@ export default function CreateUpdateWorkflow(props) {
                             </Header>
                         }
                     >
-                        <Grid disableGutters gridDefinition={[{colspan: 12}]}>
-                            <div
-                                style={{borderRight: "solid 1px #eaeded", minHeight: "800px"}}
-                            >
-                                <Suspense fallback={
-                                    <div className="workflow-editor-spinner">
-                                        <Spinner/>
-                                    </div>
-                                }>
+                        <Grid disableGutters gridDefinition={[{ colspan: 12 }]}>
+                            <div style={{ borderRight: "solid 1px #eaeded", minHeight: "800px" }}>
+                                <Suspense
+                                    fallback={
+                                        <div className="workflow-editor-spinner">
+                                            <Spinner />
+                                        </div>
+                                    }
+                                >
                                     <WorkflowEditor
                                         loaded={loaded}
                                         loadedWorkflowPipelines={loadedWorkflowPipelines}
@@ -278,7 +277,7 @@ export default function CreateUpdateWorkflow(props) {
                                 >
                                     <Tabs
                                         activeTabId={activeTab}
-                                        onChange={({detail}) => {
+                                        onChange={({ detail }) => {
                                             setActiveTab(detail.activeTabId);
                                         }}
                                         variant={"container"}
@@ -289,12 +288,17 @@ export default function CreateUpdateWorkflow(props) {
                                                 content: (
                                                     <Form
                                                         errorText={createUpdateWorkflowError}
-                                                        style={{padding: "5px 20px"}}
+                                                        style={{ padding: "5px 20px" }}
                                                     >
-                                                        <SpaceBetween direction="vertical" size="xs">
+                                                        <SpaceBetween
+                                                            direction="vertical"
+                                                            size="xs"
+                                                        >
                                                             <FormField
                                                                 label={"Workflow Name"}
-                                                                constraintText={"Required. All lower case, no special chars or spaces except - and _ only letters for first character min 4 and max 64."}
+                                                                constraintText={
+                                                                    "Required. All lower case, no special chars or spaces except - and _ only letters for first character min 4 and max 64."
+                                                                }
                                                                 errorText={workflowIdError}
                                                             >
                                                                 <Input
@@ -302,13 +306,17 @@ export default function CreateUpdateWorkflow(props) {
                                                                     name="workflowId"
                                                                     value={workflowIdNew}
                                                                     onChange={(event) =>
-                                                                        setWorkflowIDNew(event.detail.value)
+                                                                        setWorkflowIDNew(
+                                                                            event.detail.value
+                                                                        )
                                                                     }
                                                                 />
                                                             </FormField>
                                                             <FormField
                                                                 label={"Description"}
-                                                                constraintText={"Required. Max 256 characters."}
+                                                                constraintText={
+                                                                    "Required. Max 256 characters."
+                                                                }
                                                                 errorText={workflowDescriptionError}
                                                             >
                                                                 <Textarea
@@ -317,7 +325,9 @@ export default function CreateUpdateWorkflow(props) {
                                                                     rows={4}
                                                                     value={workflowDescription}
                                                                     onChange={(event) =>
-                                                                        setWorkflowDescription(event.detail.value)
+                                                                        setWorkflowDescription(
+                                                                            event.detail.value
+                                                                        )
                                                                     }
                                                                 />
                                                             </FormField>
@@ -331,43 +341,63 @@ export default function CreateUpdateWorkflow(props) {
                                                 content: (
                                                     <Form errorText={createUpdateWorkflowError}>
                                                         <FormField errorText={pipelinesError}>
-                                                            <table style={{width: "100%"}}>
+                                                            <table style={{ width: "100%" }}>
                                                                 <tbody>
-                                                                {workflowPipelines.length === 0 && (
-                                                                    <tr>
-                                                                        <td colSpan={2}>
-                                                                            Click <strong>[+ Pipeline]</strong> on
-                                                                            the left to begin.
-                                                                        </td>
-                                                                    </tr>
-                                                                )}
-                                                                {workflowPipelines.map((pipeline, i) => {
-                                                                    return (
-                                                                        <tr key={i}>
-                                                                            <td>{i + 1}:</td>
-                                                                            <td>
-                                                                                <WorkflowPipelineSelector
-                                                                                    database={databaseId}
-                                                                                    index={i}
-                                                                                />
+                                                                    {workflowPipelines.length ===
+                                                                        0 && (
+                                                                        <tr>
+                                                                            <td colSpan={2}>
+                                                                                Click{" "}
+                                                                                <strong>
+                                                                                    [+ Pipeline]
+                                                                                </strong>{" "}
+                                                                                on the left to
+                                                                                begin.
                                                                             </td>
                                                                         </tr>
-                                                                    );
-                                                                })}
+                                                                    )}
+                                                                    {workflowPipelines.map(
+                                                                        (pipeline, i) => {
+                                                                            return (
+                                                                                <tr key={i}>
+                                                                                    <td>
+                                                                                        {i + 1}:
+                                                                                    </td>
+                                                                                    <td>
+                                                                                        <WorkflowPipelineSelector
+                                                                                            database={
+                                                                                                databaseId
+                                                                                            }
+                                                                                            index={
+                                                                                                i
+                                                                                            }
+                                                                                        />
+                                                                                    </td>
+                                                                                </tr>
+                                                                            );
+                                                                        }
+                                                                    )}
                                                                 </tbody>
                                                                 <tfoot>
-                                                                <tr>
-                                                                    <td colSpan={2}>
-                                                                        <div style={{marginTop: "10px"}}>
-                                                                            <Button
-                                                                                onClick={handleOpenCreatePipeline}
-                                                                                variant="primary"
+                                                                    <tr>
+                                                                        <td colSpan={2}>
+                                                                            <div
+                                                                                style={{
+                                                                                    marginTop:
+                                                                                        "10px",
+                                                                                }}
                                                                             >
-                                                                                Create Pipeline
-                                                                            </Button>
-                                                                        </div>
-                                                                    </td>
-                                                                </tr>
+                                                                                <Button
+                                                                                    onClick={
+                                                                                        handleOpenCreatePipeline
+                                                                                    }
+                                                                                    variant="primary"
+                                                                                >
+                                                                                    Create Pipeline
+                                                                                </Button>
+                                                                            </div>
+                                                                        </td>
+                                                                    </tr>
                                                                 </tfoot>
                                                             </table>
                                                         </FormField>
@@ -380,8 +410,9 @@ export default function CreateUpdateWorkflow(props) {
                                                 content: (
                                                     <Form
                                                         errorText={runWorkflowError}
-                                                        style={{padding: "5px 20px"}}>
-                                                        <AssetSelector database={databaseId}/>
+                                                        style={{ padding: "5px 20px" }}
+                                                    >
+                                                        <AssetSelector database={databaseId} />
                                                     </Form>
                                                 ),
                                             },

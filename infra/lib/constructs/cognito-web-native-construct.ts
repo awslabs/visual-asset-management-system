@@ -6,15 +6,15 @@
 import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ssm from "aws-cdk-lib/aws-ssm";
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from "aws-cdk-lib";
 
-import {storageResources} from "../storage-builder";
+import { storageResources } from "../storage-builder";
 import { Construct } from "constructs";
 import { NagSuppressions } from "cdk-nag";
 import { Duration } from "aws-cdk-lib";
 
 export interface CognitoWebNativeConstructProps extends cdk.StackProps {
-    storageResources: storageResources
+    storageResources: storageResources;
 }
 
 /**
@@ -22,7 +22,7 @@ export interface CognitoWebNativeConstructProps extends cdk.StackProps {
  */
 const defaultProps: Partial<CognitoWebNativeConstructProps> = {
     stackName: "",
-    env: {}
+    env: {},
 };
 
 /**
@@ -60,13 +60,13 @@ export class CognitoWebNativeConstruct extends Construct {
                 requireDigits: true,
                 requireSymbols: true,
                 tempPasswordValidity: Duration.days(3),
-            }
+            },
         });
 
         const cfnUserPool = userPool.node.defaultChild as cognito.CfnUserPool;
 
         const userPoolAddOnsProperty: cognito.CfnUserPool.UserPoolAddOnsProperty = {
-            advancedSecurityMode: 'ENFORCED',
+            advancedSecurityMode: "ENFORCED",
         };
         cfnUserPool.userPoolAddOns = userPoolAddOnsProperty;
 
@@ -89,20 +89,17 @@ export class CognitoWebNativeConstruct extends Construct {
                 scopes: [
                     cognito.OAuthScope.PHONE,
                     cognito.OAuthScope.EMAIL,
-                    cognito.OAuthScope.OPENID
+                    cognito.OAuthScope.OPENID,
                 ],
                 flows: {
-                    authorizationCodeGrant: true
-                }
+                    authorizationCodeGrant: true,
+                },
             },
-            supportedIdentityProviders: [
-                cognito.UserPoolClientIdentityProvider.COGNITO,
-            ],
+            supportedIdentityProviders: [cognito.UserPoolClientIdentityProvider.COGNITO],
             userPool: userPool,
             generateSecret: false,
-            userPoolClientName: `aws_appClient_cfn${cdk.Aws.STACK_NAME}`
+            userPoolClientName: `aws_appClient_cfn${cdk.Aws.STACK_NAME}`,
         });
-
 
         const identityPool = new cognito.CfnIdentityPool(this, "IdentityPool", {
             allowUnauthenticatedIdentities: false,
@@ -136,7 +133,7 @@ export class CognitoWebNativeConstruct extends Construct {
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: [
-                    "mobileanalytics:PutEvents", 
+                    "mobileanalytics:PutEvents",
                     "cognito-sync:DescribeDataset",
                     "cognito-sync:DescribeIdentityPoolUsage",
                     "cognito-sync:DescribeIdentityUsage",
@@ -197,13 +194,10 @@ export class CognitoWebNativeConstruct extends Construct {
         authenticatedRole.addToPolicy(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
-                actions: [
-                    "s3:PutObject",
-                    "s3:GetObject"
-                ],
+                actions: ["s3:PutObject", "s3:GetObject"],
                 resources: [
                     props.storageResources.s3.assetBucket.bucketArn,
-                    props.storageResources.s3.assetBucket.bucketArn + "/*"
+                    props.storageResources.s3.assetBucket.bucketArn + "/*",
                 ],
             })
         );

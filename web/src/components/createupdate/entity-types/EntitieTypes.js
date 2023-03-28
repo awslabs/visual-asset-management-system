@@ -7,10 +7,10 @@ import AssetEntity from "./AssetEntity";
 import PipelineEntity from "./PipelineEntity";
 import DatabaseEntity from "./DatabaseEntity";
 
-export const ENTITY_TYPE_= {
+export const ENTITY_TYPE_ = {
     ASSET: AssetEntity,
     DATABASE: DatabaseEntity,
-    PIPELINE: PipelineEntity
+    PIPELINE: PipelineEntity,
 };
 
 export const ENTITY_TYPES_NAMES = {
@@ -18,5 +18,5 @@ export const ENTITY_TYPES_NAMES = {
     DATABASE: "DATABASE",
     PIPELINE: "PIPELINE",
     WORKFLOW: "WORKFLOW",
-    WORKFLOW_EXECUTION: "WORKFLOW_EXECUTION"
+    WORKFLOW_EXECUTION: "WORKFLOW_EXECUTION",
 };

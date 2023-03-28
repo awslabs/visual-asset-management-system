@@ -1,1002 +1,1002 @@
 openapi: "3.0.1"
 info:
-  title: "Amazon Visual Asset Management System API"
-  version: "2022-01-27 01:29:36UTC"
+    title: "Amazon Visual Asset Management System API"
+    version: "2022-01-27 01:29:36UTC"
 servers:
-- url: "{apiGatewayUrl}"
-  variables:
-    apiGatewayUrl:
-      default: ""
+    - url: "{apiGatewayUrl}"
+      variables:
+          apiGatewayUrl:
+              default: ""
 paths:
-  /databases:
-    put:
-      summary: "Create or update a database."
-      requestBody:
-        required: true
-        content:
-            application/json:
+    /databases:
+        put:
+            summary: "Create or update a database."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/database"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        get:
+            summary: "List all databases."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: "#/components/schemas/database"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+    /databases/{databaseId}:
+        get:
+            summary: "Get a database."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/database"
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        delete:
+            summary: "Delete a database."
+            responses:
+                "200":
+                    description: Database deleted.
+                "404":
+                    description: Database not found OR Database contains active workflows/pipelines/assets.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        parameters:
+            - name: "databaseId"
+              in: "path"
+              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
               schema:
-                $ref: '#/components/schemas/database'
-      responses:
-        '200':
-          description: OK
-        '400':
-          description: Invalid parameters.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    get:
-      summary: "List all databases."
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/database'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-  /databases/{databaseId}:
-    get:
-      summary: "Get a database."
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/database'
-        '404':
-          description: Database not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    delete:
-      summary: "Delete a database."
-      responses:
-        '200':
-          description: Database deleted.
-        '404':
-          description: Database not found OR Database contains active workflows/pipelines/assets.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    parameters:
-    - name: "databaseId"
-      in: "path"
-      description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-  /assets:
-    put:
-      summary: "Create or update an asset."
-      requestBody:
-        required: true
-        content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/asset'
-      responses:
-        '200':
-          description: OK
-        '400':
-          description: Invalid parameters.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '404':
-          description: Database not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    get:
-      summary: "List all assets."
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/asset'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-  /assets/all:
-    put:
-      summary: "Create or update one or multiple assets."
-      requestBody:
-        required: true
-        content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/asset'
-      responses:
-        '200':
-          description: OK
-        '400':
-          description: Invalid parameters.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '404':
-          description: Database not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-  
-  /assets/uploadAssetWorkflow:
-    post:
-      summary: "Single endpoint to upload asset, add metadata and execute workflows"
-      requestBody:
-        required: true
-        content:
-          application/json:
-              schema:
-                type: object
-                properties:
-                  copyFrom:
-                    type: string
-                  uploadAssetBody:
-                    $ref: '#/components/schemas/assets'
-                  updateMetadataBody:
-                    $ref: '#/components/schemas/metadata'
-                  executeWorkflowBody:
-                    $ref: '#/components/schemas/workflows'
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/uploadAssetResponse'
-        '404':
-          description: Database OR asset not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+    /assets:
+        put:
+            summary: "Create or update an asset."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/asset"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        get:
+            summary: "List all assets."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: "#/components/schemas/asset"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+    /assets/all:
+        put:
+            summary: "Create or update one or multiple assets."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: array
+                            items:
+                                $ref: "#/components/schemas/asset"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
 
-  /database/{databaseId}/assets/{assetId}:
-    get:
-      summary: "Get an asset."
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
+    /assets/uploadAssetWorkflow:
+        post:
+            summary: "Single endpoint to upload asset, add metadata and execute workflows"
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                copyFrom:
+                                    type: string
+                                uploadAssetBody:
+                                    $ref: "#/components/schemas/assets"
+                                updateMetadataBody:
+                                    $ref: "#/components/schemas/metadata"
+                                executeWorkflowBody:
+                                    $ref: "#/components/schemas/workflows"
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/uploadAssetResponse"
+                "404":
+                    description: Database OR asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+
+    /database/{databaseId}/assets/{assetId}:
+        get:
+            summary: "Get an asset."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/asset"
+                "404":
+                    description: Database OR asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        delete:
+            summary: "Delete an asset."
+            responses:
+                "200":
+                    description: Asset deleted.
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        parameters:
+            - name: "databaseId"
+              in: "path"
+              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
               schema:
-                $ref: '#/components/schemas/asset'
-        '404':
-          description: Database OR asset not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    delete:
-      summary: "Delete an asset."
-      responses:
-        '200':
-          description: Asset deleted.
-        '404':
-          description: Asset not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    parameters:
-    - name: "databaseId"
-      in: "path"
-      description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-    - name: "assetId"
-      in: "path"
-      description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-  /database/{databaseId}/assets/{assetId}/revert:
-    post:
-      summary: "Revert an asset to a previous version."
-      requestBody:
-        required: true
-        content:
-          application/json:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+            - name: "assetId"
+              in: "path"
+              description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
               schema:
-                type: object
-                properties:
-                  version:
-                    type: integer
-      responses:
-        '200':
-          description: Asset reverted.
-        '404':
-          description: Database OR Asset OR Version not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    parameters:
-    - name: "databaseId"
-      in: "path"
-      description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-    - name: "assetId"
-      in: "path"
-      description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-  /database/{databaseId}/assets/{assetId}/download:
-    post:
-      summary: "Generate a presigned url for downloading the given or the latest version of an asset"
-      requestBody:
-        required: true
-        content:
-          application/json:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+    /database/{databaseId}/assets/{assetId}/revert:
+        post:
+            summary: "Revert an asset to a previous version."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                version:
+                                    type: integer
+            responses:
+                "200":
+                    description: Asset reverted.
+                "404":
+                    description: Database OR Asset OR Version not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        parameters:
+            - name: "databaseId"
+              in: "path"
+              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
               schema:
-                type: object
-                required: 
-                  - databaseId
-                  - assetId
-                properties:
-                  databaseId:
-                    type: string
-                  assetId:
-                    type: string
-                  version:
-                    type: string
-      responses:
-        '200':
-          description: Presigned url for asset download is generated.
-          content:
-            application/json:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+            - name: "assetId"
+              in: "path"
+              description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
               schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: url
-        '400':
-          description: DatabaseId OR AssetId invalid.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '401':
-          description: Asset not distributable.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '404':
-          description: Database OR Asset OR Version not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    parameters:
-    - name: "databaseId"
-      in: "path"
-      description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-    - name: "assetId"
-      in: "path"
-      description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-  
-  /database/{databaseId}/assets:
-    get:
-      summary: "List all assets in a database."
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+    /database/{databaseId}/assets/{assetId}/download:
+        post:
+            summary: "Generate a presigned url for downloading the given or the latest version of an asset"
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            required:
+                                - databaseId
+                                - assetId
+                            properties:
+                                databaseId:
+                                    type: string
+                                assetId:
+                                    type: string
+                                version:
+                                    type: string
+            responses:
+                "200":
+                    description: Presigned url for asset download is generated.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: string
+                                        example: url
+                "400":
+                    description: DatabaseId OR AssetId invalid.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "401":
+                    description: Asset not distributable.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "404":
+                    description: Database OR Asset OR Version not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        parameters:
+            - name: "databaseId"
+              in: "path"
+              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/asset'
-        '404':
-          description: Database not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    parameters:
-    - name: "databaseId"
-      in: "path"
-      description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-  /database/{databaseId}/assets/{assetId}/columns:
-    get:
-      summary: "For CSV assets, get the names of all column headers."
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+            - name: "assetId"
+              in: "path"
+              description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
               schema:
-                type: array
-                example: [column1, column2, column3]
-                items:
-                  type: string
-        '404':
-          description: Database OR Asset not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    parameters:
-    - name: "databaseId"
-      in: "path"
-      description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-    - name: "assetId"
-      in: "path"
-      description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-  /database/{databaseId}/assets/{assetId}/metadata:
-    get:
-      summary: "For CSV assets, get certain data within the document based on provided variables."
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+
+    /database/{databaseId}/assets:
+        get:
+            summary: "List all assets in a database."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: "#/components/schemas/asset"
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        parameters:
+            - name: "databaseId"
+              in: "path"
+              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
               schema:
-                type: array
-                items:
-                  type: array
-                  items: 
-                    anyOf:
-                      - type: string
-                      - type: number
-                      - type: integer
-                      - type: boolean
-        '404':
-          description: Database OR Asset not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    parameters:
-    - name: "databaseId"
-      in: "path"
-      description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-    - name: "assetId"
-      in: "path"
-      description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-  /pipelines:
-    put:
-      summary: "Create or update a pipeline."
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/pipeline'
-      responses:
-        '200':
-          description: OK
-        '400':
-          description: Invalid parameters.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '404':
-          description: Database not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    get:
-      summary: "List all pipelines."
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+    /database/{databaseId}/assets/{assetId}/columns:
+        get:
+            summary: "For CSV assets, get the names of all column headers."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                example: [column1, column2, column3]
+                                items:
+                                    type: string
+                "404":
+                    description: Database OR Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        parameters:
+            - name: "databaseId"
+              in: "path"
+              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/pipeline'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-  /database/{databaseId}/pipelines/{pipelineId}:
-    get:
-      summary: "Get a pipeline."
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+            - name: "assetId"
+              in: "path"
+              description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
               schema:
-                $ref: '#/components/schemas/pipeline'
-        '404':
-          description: Database OR Pipeline not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    delete:
-      summary: "Delete a pipeline."
-      responses:
-        '200':
-          description: Pipeline deleted.
-        '404':
-          description: Database OR Pipeline not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    parameters:
-    - name: "databaseId"
-      in: "path"
-      description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-    - name: "pipelineId"
-      in: "path"
-      description: "Unique identifier for pipeline, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-  /database/{databaseId}/pipelines:
-    get:
-      summary: "List all pipelines in a database."
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+    /database/{databaseId}/assets/{assetId}/metadata:
+        get:
+            summary: "For CSV assets, get certain data within the document based on provided variables."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    type: array
+                                    items:
+                                        anyOf:
+                                            - type: string
+                                            - type: number
+                                            - type: integer
+                                            - type: boolean
+                "404":
+                    description: Database OR Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        parameters:
+            - name: "databaseId"
+              in: "path"
+              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/pipeline'
-        '404':
-          description: Database not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    parameters:
-    - name: "databaseId"
-      in: "path"
-      description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-  /workflows:
-    put:
-      summary: "Create or update a workflow."
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/workflow'
-      responses:
-        '200':
-          description: OK
-        '400':
-          description: Invalid parameters.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '404':
-          description: Database not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    get:
-      summary: "List all workflows."
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+            - name: "assetId"
+              in: "path"
+              description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/workflow'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-  /database/{databaseId}/workflows:
-    get:
-      summary: "List all workflows for a database."
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+    /pipelines:
+        put:
+            summary: "Create or update a pipeline."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/pipeline"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        get:
+            summary: "List all pipelines."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: "#/components/schemas/pipeline"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+    /database/{databaseId}/pipelines/{pipelineId}:
+        get:
+            summary: "Get a pipeline."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/pipeline"
+                "404":
+                    description: Database OR Pipeline not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        delete:
+            summary: "Delete a pipeline."
+            responses:
+                "200":
+                    description: Pipeline deleted.
+                "404":
+                    description: Database OR Pipeline not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        parameters:
+            - name: "databaseId"
+              in: "path"
+              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/workflow'
-        '404':
-          description: Database not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    parameters:
-    - name: "databaseId"
-      in: "path"
-      description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-  /database/{databaseId}/workflows/{workflowId}:
-    get:
-      summary: "Get a workflow."
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+            - name: "pipelineId"
+              in: "path"
+              description: "Unique identifier for pipeline, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
               schema:
-                $ref: '#/components/schemas/workflow'
-        '404':
-          description: Database OR Workflow not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    delete:
-      summary: "Delete a workflow."
-      responses:
-        '200':
-          description: Workflow deleted.
-        '404':
-          description: Database OR Workflow not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    parameters:
-    - name: "databaseId"
-      in: "path"
-      description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-    - name: "workflowId"
-      in: "path"
-      description: "Unique identifier for workflow, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-  /database/{databaseId}/assets/{assetId}/workflows/{workflowId}:
-    post:
-      summary: "Execute a workflow using an asset as the input source."
-      responses:
-        '200':
-          description: Workflow execution started.
-        '404':
-          description: Database OR Workflow OR Asset not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    parameters:
-    - name: "databaseId"
-      in: "path"
-      description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-    - name: "assetId"
-      in: "path"
-      description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-    - name: "workflowId"
-      in: "path"
-      description: "Unique identifier for workflow, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-  /database/{databaseId}/assets/{assetId}/workflows/{workflowId}/executions:
-    get:
-      summary: "List all executions for a workflow."
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+    /database/{databaseId}/pipelines:
+        get:
+            summary: "List all pipelines in a database."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: "#/components/schemas/pipeline"
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        parameters:
+            - name: "databaseId"
+              in: "path"
+              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/workflowExecution'
-        '404':
-          description: Database OR Asset OR Workflow not found.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-        '500':
-          description: Error processing request.
-          content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/error'
-    parameters:
-    - name: "databaseId"
-      in: "path"
-      description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-    - name: "assetId"
-      in: "path"
-      description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-    - name: "workflowId"
-      in: "path"
-      description: "Unique identifier for workflow, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-      required: true
-      schema:
-        type: "string"
-        pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+    /workflows:
+        put:
+            summary: "Create or update a workflow."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/workflow"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        get:
+            summary: "List all workflows."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: "#/components/schemas/workflow"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+    /database/{databaseId}/workflows:
+        get:
+            summary: "List all workflows for a database."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: "#/components/schemas/workflow"
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        parameters:
+            - name: "databaseId"
+              in: "path"
+              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
+              schema:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+    /database/{databaseId}/workflows/{workflowId}:
+        get:
+            summary: "Get a workflow."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/workflow"
+                "404":
+                    description: Database OR Workflow not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        delete:
+            summary: "Delete a workflow."
+            responses:
+                "200":
+                    description: Workflow deleted.
+                "404":
+                    description: Database OR Workflow not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        parameters:
+            - name: "databaseId"
+              in: "path"
+              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
+              schema:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+            - name: "workflowId"
+              in: "path"
+              description: "Unique identifier for workflow, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
+              schema:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+    /database/{databaseId}/assets/{assetId}/workflows/{workflowId}:
+        post:
+            summary: "Execute a workflow using an asset as the input source."
+            responses:
+                "200":
+                    description: Workflow execution started.
+                "404":
+                    description: Database OR Workflow OR Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        parameters:
+            - name: "databaseId"
+              in: "path"
+              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
+              schema:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+            - name: "assetId"
+              in: "path"
+              description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
+              schema:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+            - name: "workflowId"
+              in: "path"
+              description: "Unique identifier for workflow, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
+              schema:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+    /database/{databaseId}/assets/{assetId}/workflows/{workflowId}/executions:
+        get:
+            summary: "List all executions for a workflow."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: "#/components/schemas/workflowExecution"
+                "404":
+                    description: Database OR Asset OR Workflow not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+        parameters:
+            - name: "databaseId"
+              in: "path"
+              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
+              schema:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+            - name: "assetId"
+              in: "path"
+              description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
+              schema:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+            - name: "workflowId"
+              in: "path"
+              description: "Unique identifier for workflow, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+              required: true
+              schema:
+                  type: "string"
+                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
 components:
-  schemas:
-    database:
-      type: object
-      properties:
-        databaseId:
-          type: string
-          example: vr-models-training
-          pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-        description:
-          type: string
-          example: 3d models used in training programs.
-      required:  
-        - databaseId
-        - description        
-    asset:
-      type: object
-      properties:
-        assetId:
-          type: string
-          example: blade-12345
-          pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-        databaseId:
-          type: string
-          example: vr-models-training
-          pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-        description:
-          type: string
-          example: 3d models used in training programs.
-        assetType:
-          type: string
-          example: .stl
-          pattern: ^[\\.]([a-z]){1,7}
-        isDistributable:
-          type: boolean
-          example: true
-        assetLocation:
-          $ref: '#/components/schemas/location'
-        previewLocation:
-          $ref: '#/components/schemas/location'
-        specifiedPipelines:
-          type: array
-          items:
-            type: string
-          example: ["convert-to-gltf","reduce-polygons"]
-        currentVersion:
-          $ref: '#/components/schemas/version'
-        versions:
-          type: array
-          items:
-            $ref: '#/components/schemas/version'
-      required:  
-        - assetId
-        - databaseId    
-        - description      
-        - assetType       
-        - isDistributable     
-        - assetLocation
-        - previewLocation
-    location:
-      type: object
-      properties:
-        Key:
-          type: string
-          example: blade-12345.stl
-        Bucket:
-          type: string
-          example: training-models-vams-assets
-      required:  
-        - Key
-        - Bucket
-    version:
-      type: object
-      properties:
-        Comment: 
-          type: string
-        Version:
-          type: string
-        S3Version: 
-          type: string
-        DateModified: 
-          type: string
-        description:
-          type: string
-        specifiedPipelines:
-          type: array
-          items:
-            type: string
-    pipeline:
-      type: object
-      properties:
-        pipelineId:
-          type: string
-          example: convert-to-gltf
-          pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-        databaseId:
-          type: string
-          example: vr-models-training
-          pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-        description:
-          type: string
-          example: Converts models to GLTF.
-      required:  
-        - pipelineId
-        - databaseId
-        - description  
-    workflow:
-      type: object
-      properties:
-        workflowId:
-          type: string
-          example: to-gltf-and-reduce
-          pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-        databaseId:
-          type: string
-          example: vr-models-training
-          pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-        description:
-          type: string
-          example: Converts models to GLTF format then reduces polygons.
-        pipelines:
-          type: array
-          items:
-            type: string
-          example: ["convert-to-gltf","reduce-polygons"]
-      required:  
-        - workflowId
-        - databaseId
-        - description  
-        - pipelines
-    workflowExecution:
-      type: object
-      properties:
-        executionId: 
-          type: string
-        executionStatus: 
-          type: string
-          enum: [pending, running, failed, succeeded]
-        startDate: 
-          type: string
-        stopDate: 
-          type: string
-        Items: 
-          type: array
-          items:
-            $ref: '#/components/schemas/asset'
-    error:
-      type: object
-      properties:
-        message:
-          type: string
+    schemas:
+        database:
+            type: object
+            properties:
+                databaseId:
+                    type: string
+                    example: vr-models-training
+                    pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+                description:
+                    type: string
+                    example: 3d models used in training programs.
+            required:
+                - databaseId
+                - description
+        asset:
+            type: object
+            properties:
+                assetId:
+                    type: string
+                    example: blade-12345
+                    pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+                databaseId:
+                    type: string
+                    example: vr-models-training
+                    pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+                description:
+                    type: string
+                    example: 3d models used in training programs.
+                assetType:
+                    type: string
+                    example: .stl
+                    pattern: ^[\\.]([a-z]){1,7}
+                isDistributable:
+                    type: boolean
+                    example: true
+                assetLocation:
+                    $ref: "#/components/schemas/location"
+                previewLocation:
+                    $ref: "#/components/schemas/location"
+                specifiedPipelines:
+                    type: array
+                    items:
+                        type: string
+                    example: ["convert-to-gltf", "reduce-polygons"]
+                currentVersion:
+                    $ref: "#/components/schemas/version"
+                versions:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/version"
+            required:
+                - assetId
+                - databaseId
+                - description
+                - assetType
+                - isDistributable
+                - assetLocation
+                - previewLocation
+        location:
+            type: object
+            properties:
+                Key:
+                    type: string
+                    example: blade-12345.stl
+                Bucket:
+                    type: string
+                    example: training-models-vams-assets
+            required:
+                - Key
+                - Bucket
+        version:
+            type: object
+            properties:
+                Comment:
+                    type: string
+                Version:
+                    type: string
+                S3Version:
+                    type: string
+                DateModified:
+                    type: string
+                description:
+                    type: string
+                specifiedPipelines:
+                    type: array
+                    items:
+                        type: string
+        pipeline:
+            type: object
+            properties:
+                pipelineId:
+                    type: string
+                    example: convert-to-gltf
+                    pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+                databaseId:
+                    type: string
+                    example: vr-models-training
+                    pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+                description:
+                    type: string
+                    example: Converts models to GLTF.
+            required:
+                - pipelineId
+                - databaseId
+                - description
+        workflow:
+            type: object
+            properties:
+                workflowId:
+                    type: string
+                    example: to-gltf-and-reduce
+                    pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+                databaseId:
+                    type: string
+                    example: vr-models-training
+                    pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+                description:
+                    type: string
+                    example: Converts models to GLTF format then reduces polygons.
+                pipelines:
+                    type: array
+                    items:
+                        type: string
+                    example: ["convert-to-gltf", "reduce-polygons"]
+            required:
+                - workflowId
+                - databaseId
+                - description
+                - pipelines
+        workflowExecution:
+            type: object
+            properties:
+                executionId:
+                    type: string
+                executionStatus:
+                    type: string
+                    enum: [pending, running, failed, succeeded]
+                startDate:
+                    type: string
+                stopDate:
+                    type: string
+                Items:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/asset"
+        error:
+            type: object
+            properties:
+                message:
+                    type: string

@@ -3,13 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import Box from '@cloudscape-design/components/box';
-import * as React from 'react';
+import Box from "@cloudscape-design/components/box";
+import * as React from "react";
 
 export interface EmptyStateProps extends React.ReactPortal {
-  header?: string;
-  description?: string;
-
+    header?: string;
+    description?: string;
 }
 
 /**
@@ -18,20 +17,20 @@ export interface EmptyStateProps extends React.ReactPortal {
  * https://polaris.a2z.com/patterns/design_patterns/empty_states/
  */
 const EmptyState = ({ header, description }: EmptyStateProps) => {
-  return (
-    <Box textAlign="center" color="inherit">
-      {header && (
-        <Box variant="strong" textAlign="center" color="inherit">
-          {header}
+    return (
+        <Box textAlign="center" color="inherit">
+            {header && (
+                <Box variant="strong" textAlign="center" color="inherit">
+                    {header}
+                </Box>
+            )}
+            {description && (
+                <Box variant="p" padding={{ bottom: "s" }} color="inherit">
+                    {description}
+                </Box>
+            )}
         </Box>
-      )}
-      {description && (
-        <Box variant="p" padding={{ bottom: 's' }} color="inherit">
-          {description}
-        </Box>
-      )}
-    </Box>
-  );
+    );
 };
 
 export default EmptyState;

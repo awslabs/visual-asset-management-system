@@ -10,18 +10,25 @@ import CreateUpdateElement from "./CreateUpdateElement";
 import { actionTypes } from "./form-definitions/types/FormDefinition";
 
 export default function CreateUpdateAsset(props) {
-  const { open, setOpen, setReload, databaseId, assetId, actionType = actionTypes.CREATE } = props;
+    const {
+        open,
+        setOpen,
+        setReload,
+        databaseId,
+        assetId,
+        actionType = actionTypes.CREATE,
+    } = props;
 
-  return (
-    <CreateUpdateElement
-      open={open}
-      setOpen={setOpen}
-      setReload={setReload}
-      formDefinition={AssetFormDefinition}
-      formEntity={AssetEntity}
-      databaseId={databaseId}
-      elementId={assetId}
-      actionType={actionType}
-    />
-  );
+    return (
+        <CreateUpdateElement
+            open={open}
+            setOpen={setOpen}
+            setReload={setReload}
+            formDefinition={AssetFormDefinition}
+            formEntity={AssetEntity}
+            databaseId={databaseId}
+            elementId={assetId}
+            actionType={actionType}
+        />
+    );
 }

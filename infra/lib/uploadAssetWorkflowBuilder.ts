@@ -59,9 +59,7 @@ export function buildUploadAssetWorkflow(
         const copyObjectTask = new tasks.CallAwsService(scope, "S3 Copy Object", {
             service: "s3",
             action: "copyObject",
-            iamResources: [
-                stagingBucket.arnForObjects("*")
-            ],
+            iamResources: [stagingBucket.arnForObjects("*")],
             inputPath: "$.copyObjectBody",
             parameters: {
                 Bucket: JsonPath.stringAt("$.bucket"),

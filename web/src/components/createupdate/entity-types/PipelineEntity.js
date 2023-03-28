@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {EntityPropTypes} from "./EntityPropTypes";
+import { EntityPropTypes } from "./EntityPropTypes";
 
 export default function PipelineEntity(props) {
     const {

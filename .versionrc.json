@@ -1,14 +1,14 @@
 {
-  "types": [
-    {"type": "feat", "section": "Features"},
-    {"type": "fix", "section": "Bug Fixes"},
-    {"type": "chore", "section": "Chores"},
-    {"type": "docs", "hidden": true},
-    {"type": "style", "hidden": true},
-    {"type": "refactor", "hidden": true},
-    {"type": "perf", "hidden": true},
-    {"type": "test", "hidden": true}
-  ],
-  "commitUrlFormat": "https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/vams/commits/{{hash}}",
-  "compareUrlFormat": "https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/vams/compare/{{previousTag}}...{{currentTag}}"
+    "types": [
+        { "type": "feat", "section": "Features" },
+        { "type": "fix", "section": "Bug Fixes" },
+        { "type": "chore", "section": "Chores" },
+        { "type": "docs", "hidden": true },
+        { "type": "style", "hidden": true },
+        { "type": "refactor", "hidden": true },
+        { "type": "perf", "hidden": true },
+        { "type": "test", "hidden": true }
+    ],
+    "commitUrlFormat": "https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/vams/commits/{{hash}}",
+    "compareUrlFormat": "https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/vams/compare/{{previousTag}}...{{currentTag}}"
 }
