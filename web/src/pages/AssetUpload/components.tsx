@@ -115,7 +115,7 @@ export function DisplayKV({ label, value }: DisplayKVProps): JSX.Element {
         );
     }
 
-    if (typeof(value) =="boolean") {
+    if (typeof value == "boolean") {
         return (
             <div>
                 <Box variant="awsui-key-label">{label}</Box>

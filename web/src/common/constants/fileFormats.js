@@ -4,7 +4,20 @@
  */
 
 export const cadFileFormats = [".step", ".dwg", ".sldasm", ".stp", ".fcstd", "3dm", "brep", ".ifc"];
-export const modelFileFormats = [".obj", ".gltf", ".glb", ".stl", ".3ds", ".ply", ".fbx", ".dae", ".wrl", ".3mf", ".off", ".bim"];
+export const modelFileFormats = [
+    ".obj",
+    ".gltf",
+    ".glb",
+    ".stl",
+    ".3ds",
+    ".ply",
+    ".fbx",
+    ".dae",
+    ".wrl",
+    ".3mf",
+    ".off",
+    ".bim",
+];
 export const columnarFileFormats = [".rds", ".fcs", ".csv"];
 export const previewFileFormats = [".png", ".jpg", ".svg", ".gif"];
 export const archiveFileFormats = [".zip"];
@@ -21,5 +34,5 @@ export const FILE_FORMATS = {
     COLUMNAR: columnarFileFormats,
     PREVIEW: previewFileFormats,
     ARCHIVE: archiveFileFormats,
-    PRESENTATION: presentationFileFormats
+    PRESENTATION: presentationFileFormats,
 };

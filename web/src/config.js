@@ -4,5 +4,5 @@
  */
 
 export default {
-  "APP_TITLE": "Amazon VAMS",
-} 
+    APP_TITLE: "Amazon VAMS",
+};

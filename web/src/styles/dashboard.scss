@@ -2,14 +2,14 @@
  * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
- 
-@use '@cloudscape-design/design-tokens/index' as awsui;
+
+@use "@cloudscape-design/design-tokens/index" as awsui;
 @use "./base";
 
 .custom-link-font-weight-light {
-  font-weight: lighter;
+    font-weight: lighter;
 }
 
 .custom-dashboard-container {
-  height: 100%;
+    height: 100%;
 }
