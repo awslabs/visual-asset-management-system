@@ -10,7 +10,6 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
-import { NagSuppressions } from "cdk-nag";
 import { IHttpRouteAuthorizer } from "@aws-cdk/aws-apigatewayv2-alpha";
 export interface AmplifyConfigLambdaConstructProps extends cdk.StackProps {
     /**
@@ -30,14 +29,6 @@ export interface AmplifyConfigLambdaConstructProps extends cdk.StackProps {
      */
     api: apigatewayv2.HttpApi;
 }
-
-/**
- * Default input properties
- */
-const defaultProps: Partial<AmplifyConfigLambdaConstructProps> = {
-    stackName: "",
-    env: {},
-};
 
 /**
  * Deploys a lambda to the api gateway under the path `/api/amplify-config`.

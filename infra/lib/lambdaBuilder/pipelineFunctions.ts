@@ -9,10 +9,8 @@ import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as iam from "aws-cdk-lib/aws-iam";
 import { Construct } from "constructs";
-import * as lambdaPython from "@aws-cdk/aws-lambda-python-alpha";
 import { Duration } from "aws-cdk-lib";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../security";
-import { NagSuppressions } from "cdk-nag";
 
 export function buildCreatePipelineFunction(
     scope: Construct,

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 /*
  * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -10,20 +11,11 @@ import * as cdk from "aws-cdk-lib";
 
 import { storageResources } from "../storage-builder";
 import { Construct } from "constructs";
-import { NagSuppressions } from "cdk-nag";
 import { Duration } from "aws-cdk-lib";
 
 export interface CognitoWebNativeConstructProps extends cdk.StackProps {
     storageResources: storageResources;
 }
-
-/**
- * Default input properties
- */
-const defaultProps: Partial<CognitoWebNativeConstructProps> = {
-    stackName: "",
-    env: {},
-};
 
 /**
  * Deploys Cognito with an Authenticated & UnAuthenticated Role with a Web and Native client

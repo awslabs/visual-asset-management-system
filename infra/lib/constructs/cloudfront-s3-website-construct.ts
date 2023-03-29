@@ -134,7 +134,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
             }
         );
 
-        let cloudFrontDistribution = new cloudfront.Distribution(this, "WebAppDistribution", {
+        const cloudFrontDistribution = new cloudfront.Distribution(this, "WebAppDistribution", {
             defaultBehavior: {
                 responseHeadersPolicy: {
                     responseHeadersPolicyId: responseHeadersPolicy.responseHeadersPolicyId,
