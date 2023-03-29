@@ -201,7 +201,14 @@ const WorkflowEditor = (props) => {
                 setFirstLoad(false);
             }
         }
-    }, [firstload, elements, loadedWorkflowPipelines, handleAddPipeline, workflowPipelines, setWorkflowPipelines]);
+    }, [
+        firstload,
+        elements,
+        loadedWorkflowPipelines,
+        handleAddPipeline,
+        workflowPipelines,
+        setWorkflowPipelines,
+    ]);
 
     return (
         <>

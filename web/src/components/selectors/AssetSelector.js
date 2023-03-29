@@ -10,10 +10,7 @@ import { WorkflowContext } from "../../context/WorkflowContex";
 /**
  * No viewer yet for cad and archive file formats
  */
-import {
-    columnarFileFormats,
-    modelFileFormats,
-} from "../../common/constants/fileFormats";
+import { columnarFileFormats, modelFileFormats } from "../../common/constants/fileFormats";
 
 const AssetSelector = (props) => {
     const { database, pathViewType } = props;
