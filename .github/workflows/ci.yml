@@ -30,8 +30,7 @@ jobs:
             - name: Prettier Check
               run: npm run prettier-check
 
-            - name: eslint
-              run: npm run lint
+
 
             - name: Install Poetry Action
               uses: snok/install-poetry@v1
@@ -67,6 +66,9 @@ jobs:
             - name: Npm audit infrastructure directory
               working-directory: infra
               run: npm audit
+
+            - name: eslint
+              run: npm run lint
 
             - name: Synthesize Cloudformation templates
               working-directory: infra
