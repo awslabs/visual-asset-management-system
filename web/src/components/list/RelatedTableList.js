@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useRef, useState } from "react";
+import React, { useState } from "react";
 import PropTypes from "prop-types";
 import {
     Button,
@@ -19,25 +19,9 @@ import ListDefinition from "./list-definitions/types/ListDefinition";
 
 export default function RelatedTableList(props) {
     //props
-    const {
-        allItems,
-        loading,
-        listDefinition,
-        databaseId,
-        parentId,
-        childId,
-        setReload,
-        HeaderControls,
-    } = props;
-    const {
-        columnDefinitions,
-        visibleColumns,
-        filterColumns,
-        pluralName,
-        pluralNameTitleCase,
-        elementId,
-        deleteRoute,
-    } = listDefinition;
+    const { allItems, loading, listDefinition, databaseId, HeaderControls } = props;
+    const { columnDefinitions, visibleColumns, filterColumns, pluralName, pluralNameTitleCase } =
+        listDefinition;
 
     const filteredVisibleColumns = visibleColumns.filter((columnName) => {
         if (!databaseId) return true;
@@ -57,13 +41,11 @@ export default function RelatedTableList(props) {
             return acc;
         }, {})
     );
-    const [deleting, setDeleting] = useState(false);
 
     //private functions
     const getMatchesCountText = (items) => {
         return `Found ${items} ${pluralName}.`;
     };
-    const filterTextElement = useRef();
     const highlightMatches = (text, match = "") => {
         let newText = text + "";
         if (match !== "") {
@@ -147,7 +129,11 @@ export default function RelatedTableList(props) {
         newActiveFilters[prop] = value;
         setActiveFilters(newActiveFilters);
     };
-
+    // This removes a warning about refs and forwardRef from the browser console.
+    // Better solutions are very welcome.
+    if (collectionProps.ref) {
+        delete collectionProps.ref;
+    }
     return (
         <RelatedTable
             {...collectionProps}
@@ -212,7 +198,7 @@ export default function RelatedTableList(props) {
                     </div>
                     <div style={{ float: "right" }}>
                         <Grid
-                            gridDefinition={filteredFilterColumns.map((filterColumn, i) => {
+                            gridDefinition={filteredFilterColumns.map((filterColumn) => {
                                 return {
                                     colspan: {
                                         default: String(Math.floor(12 / (filterColumn.length + 1))),
