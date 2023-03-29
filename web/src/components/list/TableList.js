@@ -3,15 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import PropTypes from "prop-types";
 import { useCollection } from "@cloudscape-design/collection-hooks";
 import {
     Button,
     Grid,
     Header,
-    Icon,
-    Link,
     Pagination,
     Select,
     Table,
@@ -60,7 +58,6 @@ export default function TableList(props) {
     const getMatchesCountText = (items) => {
         return `Found ${items} ${pluralName}.`;
     };
-    const filterTextElement = useRef();
     const highlightMatches = (text, match = "") => {
         let newText = text + "";
         if (match !== "") {

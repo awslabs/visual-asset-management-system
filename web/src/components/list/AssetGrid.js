@@ -3,25 +3,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
     Cards,
     TextFilter,
     Grid,
     Box,
-    Checkbox,
     Button,
     Table,
     Select,
     Modal,
     Icon,
     TextContent,
-    SpaceBetween,
-    Input,
-    Textarea,
-    Multiselect,
-    Tabs,
 } from "@cloudscape-design/components";
 
 import { highlightMatches } from "../../common/utils/utils";
@@ -45,10 +39,10 @@ export default function AssetGrid(props) {
             setAssetData([]);
             setFilteredList([]);
             setLoaded(false);
-            const config = {
-                body: { databaseId: database },
-                headers: {},
-            };
+            // const config = {
+            //     body: { databaseId: database },
+            //     headers: {},
+            // };
             // const response = await API.post(
             //     "api",
             //     "/Assets/listAssets",
@@ -311,7 +305,6 @@ export default function AssetGrid(props) {
                             content: (e) => {
                                 const asset = e;
                                 const location = e?.assetLocation;
-                                const preview = e?.previewLocation;
                                 const key = location?.Key;
                                 let signedURL;
                                 (async () => {

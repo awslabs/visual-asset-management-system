@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import ReactDOM from "react-dom";
 import { Cache } from "aws-amplify";
 import { Authenticator } from "@aws-amplify/ui-react";

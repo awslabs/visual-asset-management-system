@@ -9,7 +9,7 @@ import DOMPurify from "dompurify";
 
 export default function HTMLViewer(props) {
     const shadowElement = useRef(null);
-    const { assetKey, ...rest } = props;
+    const { assetKey } = props;
     const [loaded, setLoaded] = useState(false);
 
     useEffect(() => {

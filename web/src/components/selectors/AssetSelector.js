@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { fetchAllAssets, fetchDatabaseAssets } from "../../services/APIService";
 import { Select } from "@cloudscape-design/components";
 import { WorkflowContext } from "../../context/WorkflowContex";
@@ -13,8 +13,6 @@ import { WorkflowContext } from "../../context/WorkflowContex";
 import {
     columnarFileFormats,
     modelFileFormats,
-    cadFileFormats,
-    archiveFileFormats,
 } from "../../common/constants/fileFormats";
 
 const AssetSelector = (props) => {

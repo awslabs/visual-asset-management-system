@@ -14,7 +14,6 @@ const WorkflowPipelineSelector = (props) => {
     const {
         reloadPipelines,
         setReloadPipelines,
-        pipelines,
         setPipelines,
         workflowPipelines,
         setWorkflowPipelines,

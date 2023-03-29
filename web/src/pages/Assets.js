@@ -6,7 +6,6 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
 import { fetchAllAssets, fetchDatabaseAssets } from "../services/APIService";
-import CreateUpdateAsset from "../components/createupdate/CreateUpdateAsset";
 import { AssetListDefinition } from "../components/list/list-definitions/AssetListDefinition";
 import ListPage from "./ListPage";
 

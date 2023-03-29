@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useCallback, useRef, useEffect, useContext } from "react";
+import { useState, useCallback, useRef, useEffect, useContext } from "react";
 
 import ReactFlow, {
     removeElements,
@@ -12,7 +12,7 @@ import ReactFlow, {
     Controls,
     Background,
 } from "react-flow-renderer";
-import { Button, Icon, Select } from "@cloudscape-design/components";
+import { Button, Icon } from "@cloudscape-design/components";
 import { useParams } from "react-router";
 import AssetSelector from "../selectors/AssetSelector";
 import WorkflowPipelineSelector from "../selectors/WorkflowPipelineSelector";
@@ -45,7 +45,7 @@ const onLoad = (reactFlowInstance) => {
 
 const WorkflowEditor = (props) => {
     let { databaseId } = useParams();
-    const { loaded, loadedWorkflowPipelines, setLoadedWorkflowPipelines } = props;
+    const { loaded, loadedWorkflowPipelines } = props;
     const { workflowPipelines, setWorkflowPipelines, setActiveTab } = useContext(WorkflowContext);
     const [firstload, setFirstLoad] = useState(false);
 

@@ -29,9 +29,6 @@ import { WorkflowContext } from "../../context/WorkflowContex";
 import { validateEntityId, verifyStringMaxLength } from "./entity-types/EntityPropTypes";
 
 const WorkflowEditor = React.lazy(() => import("../interactive/WorkflowEditor"));
-const sleep = (ms) => {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-};
 
 export default function CreateUpdateWorkflow(props) {
     const { databaseId, workflowId } = useParams();

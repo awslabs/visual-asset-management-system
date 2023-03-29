@@ -6,7 +6,6 @@
 import * as React from "react";
 import TextFilter from "@cloudscape-design/components/text-filter";
 import Pagination from "@cloudscape-design/components/pagination";
-import { TableProps, TextFilterProps } from "@cloudscape-design/components";
 import EmptyState, { EmptyStateProps } from "../RelatedTable/EmptyState";
 import { RelatedTableProps } from "../RelatedTable/RelatedTableComponent";
 import { useTreeCollection, UseTreeCollection } from "../Hooks/useTreeCollection";

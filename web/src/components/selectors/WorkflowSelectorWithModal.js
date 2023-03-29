@@ -6,7 +6,6 @@
 import { Modal, Select } from "@cloudscape-design/components";
 import React, { useEffect, useState } from "react";
 import { fetchDatabaseWorkflows, runWorkflow } from "../../services/APIService";
-import { addColumnSortLabels } from "../../common/helpers/labels";
 
 export default function WorkflowSelectorWithModal(props) {
     const { databaseId, assetId, setOpen, open } = props;
