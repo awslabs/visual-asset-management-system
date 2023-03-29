@@ -19,7 +19,7 @@ const App = React.lazy(() => import("./App"));
 ReactDOM.render(
     <React.StrictMode>
         <ConfigLoader>
-            <Suspense fallback={() => <></>}>
+            <Suspense fallback={<div />}>
                 <App />
             </Suspense>
         </ConfigLoader>
