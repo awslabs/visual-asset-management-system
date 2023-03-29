@@ -10,11 +10,16 @@
         "deploy.bms": "cd infra && npm install && npm run deploy.bms",
         "release": "standard-version",
         "prettier-check": "prettier -c --config .prettierrc -u --ignore-path .prettierignore .",
-        "prettier-fix": "prettier -w --config .prettierrc -u --ignore-path .prettierignore ."
+        "prettier-fix": "prettier -w --config .prettierrc -u --ignore-path .prettierignore .",
+        "lint": "eslint web/src infra/lib infra/bin infra/test"
     },
     "devDependencies": {
-        "standard-version": "^9.3.2",
-        "prettier": "^2.8.7"
+        "@typescript-eslint/eslint-plugin": "^5.57.0",
+        "@typescript-eslint/parser": "^5.57.0",
+        "eslint": "^8.37.0",
+        "eslint-plugin-react": "^7.32.2",
+        "prettier": "^2.8.7",
+        "standard-version": "^9.3.2"
     },
     "dependencies": {
         "minimist": "^1.2.7"
