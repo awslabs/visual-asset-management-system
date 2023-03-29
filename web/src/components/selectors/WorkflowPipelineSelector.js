@@ -38,14 +38,14 @@ const WorkflowPipelineSelector = (props) => {
         if (reload) {
             getData();
         }
-    }, [reload]);
+    }, [database, reload, setPipelines]);
 
     useEffect(() => {
         if (reloadPipelines) {
             setReload(true);
             setTimeout(() => setReloadPipelines(false), 100);
         }
-    }, [reloadPipelines]);
+    }, [reloadPipelines, setReloadPipelines]);
 
     return (
         <Select

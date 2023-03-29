@@ -96,7 +96,7 @@ const MetadataTable = ({ assetId, databaseId, store, initialState }: MetadataInp
                     setItems(metaToTableRow(meta.metadata));
                 }
             });
-    }, [loading, items]);
+    }, [loading, items, initialState, databaseId, assetId]);
 
     const HeaderControls = () => {
         return (

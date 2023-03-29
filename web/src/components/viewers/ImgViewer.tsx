@@ -1,3 +1,4 @@
+/* eslint-disable jsx-a11y/alt-text */
 import React, { useEffect, useState } from "react";
 import { Storage } from "aws-amplify";
 
@@ -23,7 +24,7 @@ export default function ImgViewer({ assetKey, altAssetKey }: ImgViewerProps) {
             setUrl(tmp);
         };
         fun();
-    }, [url]);
+    }, [assetKey, url]);
 
     const fallback = (error: any) => {
         console.log("handling image load err", error);

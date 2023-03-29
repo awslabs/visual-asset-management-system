@@ -24,7 +24,7 @@ export default function WorkflowSelectorWithModal(props) {
         if (reload) {
             getData();
         }
-    }, [reload]);
+    }, [databaseId, reload]);
 
     const handleExecuteWorkflow = async (event) => {
         const newWorkflowId = event.detail.selectedOption.value;

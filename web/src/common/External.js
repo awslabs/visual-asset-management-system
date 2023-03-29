@@ -22,7 +22,7 @@ function External(url) {
             externalScript.src = url;
         };
         LoadExternalScript();
-    }, []);
+    }, [url]);
 
     return <></>;
 }

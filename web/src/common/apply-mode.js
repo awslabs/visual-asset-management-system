@@ -17,10 +17,14 @@ window.addEventListener("load", function () {
         const urlParams = new URLSearchParams(window.location.search);
 
         const mode = urlParams.get("awsui-mode");
-        mode !== null ? applyMode(mode) : null;
+        if (mode !== null) {
+            applyMode(mode);
+        }
 
         const density = urlParams.get("awsui-density");
-        density !== null ? applyDensity(density) : null;
+        if (density !== null) {
+            applyDensity(density);
+        }
     } catch (e) {
         /*URLSearchParams is not supported by some browsers, ignore this*/
     }

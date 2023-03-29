@@ -40,7 +40,7 @@ export default function ViewPipeline() {
         if (reload) {
             getData();
         }
-    }, [reload]);
+    }, [pipelineName, reload]);
 
     return (
         <Grid padding={{ top: "s", horizontal: "l" }}>

@@ -53,6 +53,7 @@ const AssetSelector = (props) => {
                             }
                             return false;
                         }
+                        return false;
                     });
                 }
                 setAllItems(items);
@@ -61,7 +62,7 @@ const AssetSelector = (props) => {
         if (reload) {
             getData();
         }
-    }, [reload]);
+    }, [database, pathViewType, reload]);
 
     return (
         <Select

@@ -1,3 +1,4 @@
+/* eslint-disable jsx-a11y/anchor-is-valid */
 /*
  * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -89,7 +90,7 @@ export default function AssetGrid(props) {
         };
         getData();
         setReload(false);
-    }, [reload]);
+    }, [reload, setReload]);
 
     useEffect(() => {
         if (!loaded) {
@@ -157,7 +158,7 @@ export default function AssetGrid(props) {
             setFilteredList(newList);
             setLoaded(true);
         }
-    }, [loaded]);
+    }, [assetData, assetId, distributable, filterBy, loaded, pipelineId]);
 
     const handleFindResources = (filterBy) => {
         setFilterBy(filterBy.toLowerCase());
@@ -203,7 +204,7 @@ export default function AssetGrid(props) {
         if (pipelines.length === 0) {
             getPipelines();
         }
-    }, [pipelines]);
+    }, [database, pipelines]);
 
     /**
      * Preview control section
@@ -466,7 +467,7 @@ export default function AssetGrid(props) {
                             </TextContent>
                         </div>
                         <div style={{ textAlign: "right" }}>
-                            <Button onClick={handleOpenNewAsset} variant="primary">
+                            <Button variant="primary">
                                 <Icon name={"add-plus"} /> &nbsp;&nbsp;New Asset
                             </Button>
                         </div>

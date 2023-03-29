@@ -85,7 +85,7 @@ export default function CreateUpdateWorkflow(props) {
         if (reload && workflowId) {
             getData();
         }
-    }, [reload]);
+    }, [databaseId, reload, workflowId, workflowIdNew]);
 
     useEffect(() => {
         const cachedActiveTab = Cache.getItem("workflowActiveTab");
@@ -96,7 +96,7 @@ export default function CreateUpdateWorkflow(props) {
         ) {
             setActiveTab(cachedActiveTab);
         }
-    }, [null]);
+    }, []);
 
     useEffect(() => {
         const cachedActiveTab = Cache.getItem("workflowActiveTab");

@@ -38,7 +38,7 @@ function App() {
     useEffect(() => {
         const cachedNavigationOpen = Cache.getItem("navigationOpen");
         setNavigationOpen(cachedNavigationOpen);
-    }, [null]);
+    }, []);
 
     useEffect(() => {
         const cachedNavigationOpen = Cache.getItem("navigationOpen");

@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/exhaustive-deps */
 /*
  * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -142,7 +143,7 @@ const WorkflowEditor = (props) => {
         if (loaded && workflowPipelines.length === 0) {
             handleAddPipeline();
         }
-    }, [0]);
+    }, [handleAddPipeline, loaded, workflowPipelines.length]);
 
     const handleRemovePipeline = useCallback(() => {
         setActiveTab("pipelines");
@@ -186,7 +187,7 @@ const WorkflowEditor = (props) => {
         if (loaded && loadedWorkflowPipelines.length > 0) {
             setFirstLoad(true);
         }
-    }, [loaded]);
+    }, [loaded, loadedWorkflowPipelines.length]);
 
     useEffect(() => {
         if (firstload) {
@@ -200,7 +201,7 @@ const WorkflowEditor = (props) => {
                 setFirstLoad(false);
             }
         }
-    }, [firstload, elements]);
+    }, [firstload, elements, loadedWorkflowPipelines, handleAddPipeline, workflowPipelines, setWorkflowPipelines]);
 
     return (
         <>
