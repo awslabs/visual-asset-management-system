@@ -99,7 +99,6 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
             this,
             "ResponseHeadersPolicy",
             {
-                // TODO parameterize region
                 securityHeadersBehavior: {
                     strictTransportSecurity: {
                         accessControlMaxAge: Duration.days(365 * 2),
@@ -136,6 +135,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
 
         const cloudFrontDistribution = new cloudfront.Distribution(this, "WebAppDistribution", {
             defaultBehavior: {
+                compress: true,
                 responseHeadersPolicy: {
                     responseHeadersPolicyId: responseHeadersPolicy.responseHeadersPolicyId,
                 },
@@ -146,6 +146,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
                 allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
                 viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
             },
+
             errorResponses: [
                 {
                     httpStatus: 404,
