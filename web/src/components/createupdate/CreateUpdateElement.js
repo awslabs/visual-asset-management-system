@@ -1,3 +1,5 @@
+/* eslint-disable react/forbid-foreign-prop-types */
+/* eslint-disable react-hooks/exhaustive-deps */
 /*
  * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -159,7 +161,7 @@ export default function CreateUpdateElement(props) {
                     } else {
                         acc[cur] = formValues[cur];
                     }
-                    if (acc[cur] == undefined || acc[cur] == null) {
+                    if (acc[cur] === undefined || acc[cur] == null) {
                         acc[cur] = null;
                     }
                     return acc;
@@ -268,7 +270,7 @@ export default function CreateUpdateElement(props) {
                             const optionalFieldHidden =
                                 appearsWhen &&
                                 formValues[appearsWhen[0]] &&
-                                appearsWhen[1] != formValues[appearsWhen[0]]["label"];
+                                appearsWhen[1] !== formValues[appearsWhen[0]]["label"];
                             if (formValues[id] && optionalFieldHidden) {
                                 console.log(id + ": " + formValues[id]);
                                 formValues[id] = "";

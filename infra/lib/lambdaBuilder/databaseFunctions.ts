@@ -7,7 +7,6 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as path from "path";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { Construct } from "constructs";
-import * as lambdaPython from "@aws-cdk/aws-lambda-python-alpha";
 import { Duration } from "aws-cdk-lib";
 
 export function buildCreateDatabaseLambdaFunction(

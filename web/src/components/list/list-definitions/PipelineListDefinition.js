@@ -32,7 +32,6 @@ export const PipelineListDefinition = new ListDefinition({
             id: "pipelineId",
             header: "Name",
             cellWrapper: (props) => {
-                const { item } = props;
                 return <>{props.children}</>;
             },
             sortingField: "pipelineId",

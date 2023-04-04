@@ -29,9 +29,6 @@ import { WorkflowContext } from "../../context/WorkflowContex";
 import { validateEntityId, verifyStringMaxLength } from "./entity-types/EntityPropTypes";
 
 const WorkflowEditor = React.lazy(() => import("../interactive/WorkflowEditor"));
-const sleep = (ms) => {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-};
 
 export default function CreateUpdateWorkflow(props) {
     const { databaseId, workflowId } = useParams();
@@ -88,7 +85,7 @@ export default function CreateUpdateWorkflow(props) {
         if (reload && workflowId) {
             getData();
         }
-    }, [reload]);
+    }, [databaseId, reload, workflowId, workflowIdNew]);
 
     useEffect(() => {
         const cachedActiveTab = Cache.getItem("workflowActiveTab");
@@ -99,7 +96,7 @@ export default function CreateUpdateWorkflow(props) {
         ) {
             setActiveTab(cachedActiveTab);
         }
-    }, [null]);
+    }, []);
 
     useEffect(() => {
         const cachedActiveTab = Cache.getItem("workflowActiveTab");

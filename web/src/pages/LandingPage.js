@@ -22,24 +22,37 @@ import buildWorkflowsImageSrc from "../resources/img/build_workflows.png";
 import uploadAndManageImageSrc from "../resources/img/upload_and_manage.png";
 import visualize3dVrImageSrc from "../resources/img/visualize_3d_vr.png";
 
+const CarouselRadio = ({ id, setSlide, slide }) => {
+    return (
+        <input
+            type="radio"
+            name="radio-buttons"
+            id={id}
+            onChange={(evt) => setSlide(evt.target.id)}
+            checked={slide === id}
+        />
+    );
+};
+
 const LandingPage = (props) => {
     const { navigationOpen } = props;
     const [carouselHeight, setCarouselHeight] = useState(400);
+    const [slide, setSlide] = useState("img-1");
     const firstCarouselImageEl = useRef(null);
 
-    function handleResize() {
-        const currentHeight = firstCarouselImageEl?.current?.clientHeight;
-        if (currentHeight !== carouselHeight) {
-            setCarouselHeight(currentHeight);
-        }
-    }
-
-    setTimeout(() => handleResize(), 1000);
-
-    window.addEventListener("resize", handleResize);
-
     useEffect(() => {
-        handleResize();
+        function handleResize() {
+            const currentHeight = firstCarouselImageEl?.current?.clientHeight;
+            if (currentHeight !== carouselHeight) {
+                setCarouselHeight(currentHeight);
+            }
+        }
+        setTimeout(() => handleResize(), 100);
+
+        window.addEventListener("resize", handleResize);
+        return () => {
+            window.removeEventListener("resize", handleResize);
+        };
     }, [navigationOpen, carouselHeight]);
 
     return (
@@ -131,11 +144,10 @@ const LandingPage = (props) => {
                                             className="slides"
                                             style={{ height: carouselHeight + "px" }}
                                         >
-                                            <input
-                                                type="radio"
-                                                name="radio-buttons"
+                                            <CarouselRadio
                                                 id="img-1"
-                                                checked
+                                                setSlide={setSlide}
+                                                slide={slide}
                                             />
                                             <li className="slide-container">
                                                 <div className="slide-image">
@@ -146,7 +158,11 @@ const LandingPage = (props) => {
                                                     />
                                                 </div>
                                             </li>
-                                            <input type="radio" name="radio-buttons" id="img-2" />
+                                            <CarouselRadio
+                                                id="img-2"
+                                                setSlide={setSlide}
+                                                slide={slide}
+                                            />
                                             <li className="slide-container">
                                                 <div className="slide-image">
                                                     <img
@@ -155,7 +171,12 @@ const LandingPage = (props) => {
                                                     />
                                                 </div>
                                             </li>
-                                            <input type="radio" name="radio-buttons" id="img-3" />
+                                            <CarouselRadio
+                                                id="img-3"
+                                                setSlide={setSlide}
+                                                slide={slide}
+                                            />
+
                                             <li className="slide-container">
                                                 <div className="slide-image">
                                                     <img
@@ -164,7 +185,12 @@ const LandingPage = (props) => {
                                                     />
                                                 </div>
                                             </li>
-                                            <input type="radio" name="radio-buttons" id="img-4" />
+                                            <CarouselRadio
+                                                id="img-4"
+                                                setSlide={setSlide}
+                                                slide={slide}
+                                            />
+
                                             <li className="slide-container">
                                                 <div className="slide-image">
                                                     <img

@@ -11,7 +11,7 @@ import {
     Textarea,
     TextContent,
 } from "@cloudscape-design/components";
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { fetchAllPipelines } from "../../services/APIService";
 
@@ -40,7 +40,7 @@ export default function ViewPipeline() {
         if (reload) {
             getData();
         }
-    }, [reload]);
+    }, [pipelineName, reload]);
 
     return (
         <Grid padding={{ top: "s", horizontal: "l" }}>

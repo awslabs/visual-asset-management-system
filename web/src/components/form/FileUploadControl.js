@@ -3,15 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useContext, useEffect, useState } from "react";
+import React, { useContext, useEffect, useState, useRef } from "react";
 import { Button, FormField, Grid, SpaceBetween, TextContent } from "@cloudscape-design/components";
 import { AssetContext } from "../../context/AssetContex";
-
-const generateUUID = () => {
-    return ([1e7] + -1e3 + -4e3 + -8e3 + -1e11).replace(/[018]/g, (c) =>
-        (c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (c / 4)))).toString(16)
-    );
-};
 
 //@link https://stackoverflow.com/questions/10420352/converting-file-size-in-bytes-to-human-readable-string/10420404
 export const formatFileSize = (bytes, si = false, dp = 1) => {
@@ -36,7 +30,7 @@ const FileUploadControl = (props) => {
     const { disabled, controlName, fileFormats } = props;
     const { formValues, setFormValues, formErrors } = useContext(AssetContext);
     const [file, setFile] = useState(null);
-    const [inputId, setInputId] = useState(generateUUID());
+    const inputRef = useRef();
 
     useEffect(() => {
         if (file) {
@@ -44,16 +38,16 @@ const FileUploadControl = (props) => {
             newFormValues[controlName] = file;
             setFormValues(newFormValues);
         }
-    }, [file]);
-    let uploadInterval;
+    }, [file, controlName, formValues, setFormValues]);
+
     return (
         <>
             <FormField errorText={formErrors[controlName]}>
                 <input
+                    ref={inputRef}
                     type="file"
                     accept={fileFormats}
                     style={{ display: "none" }}
-                    id={inputId}
                     onChange={(e) => {
                         setFile(e.target.files[0]);
                     }}
@@ -66,16 +60,19 @@ const FileUploadControl = (props) => {
                         type="file"
                         iconName="upload"
                         onClick={(e) => {
-                            document.getElementById(inputId).click();
+                            inputRef.current.click();
                         }}
                     >
                         Choose File
                     </Button>
                     <Grid
-                        gridDefinition={[
-                            { colspan: { default: "6" } },
-                            { colspan: { default: "6" } },
-                        ]}
+                        gridDefinition={
+                            (file && [
+                                { colspan: { default: "6" } },
+                                { colspan: { default: "6" } },
+                            ]) ||
+                            []
+                        }
                     >
                         {file && (
                             <>

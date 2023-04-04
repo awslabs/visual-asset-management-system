@@ -6,7 +6,6 @@
 import { Modal, Select } from "@cloudscape-design/components";
 import React, { useEffect, useState } from "react";
 import { fetchDatabaseWorkflows, runWorkflow } from "../../services/APIService";
-import { addColumnSortLabels } from "../../common/helpers/labels";
 
 export default function WorkflowSelectorWithModal(props) {
     const { databaseId, assetId, setOpen, open } = props;
@@ -25,7 +24,7 @@ export default function WorkflowSelectorWithModal(props) {
         if (reload) {
             getData();
         }
-    }, [reload]);
+    }, [databaseId, reload]);
 
     const handleExecuteWorkflow = async (event) => {
         const newWorkflowId = event.detail.selectedOption.value;

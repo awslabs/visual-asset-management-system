@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 /*
  * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -144,7 +145,7 @@ export class VAMS extends cdk.Stack {
             `/${props.stackName}/workflowService`,
             `/${props.stackName}/listExecutions`,
         ];
-        for (let path of refactorPaths) {
+        for (const path of refactorPaths) {
             const reason = `Intention is to refactor this model away moving forward 
                  so that this type of access is not required within the stack.
                  Customers are advised to isolate VAMS to its own account in test and prod

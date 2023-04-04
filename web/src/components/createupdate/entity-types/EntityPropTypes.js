@@ -1,3 +1,4 @@
+/* eslint-disable react/forbid-foreign-prop-types */
 /*
  * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -94,12 +95,16 @@ export const entityIdPropType = function (props, propName) {
     let testValue = props[propName];
     if (testValue && testValue.hasOwnProperty("value")) testValue = testValue.value;
 
+    if (testValue === undefined) {
+        return null;
+    }
+
     if (testValue === null || !verifyIsNotEmpty(testValue)) {
         return new Error(`Invalid value for ${propName}. Value cannot be empty.`);
     }
 
     if (!verifyIsString(testValue)) {
-        return new Error(`Invalid value for ${propName}. Expected a string.`);
+        return new Error(`Invalid value for ${propName}. Expected a string. Received ${testValue}`);
     }
 
     if (!validateEntityId(testValue)) {

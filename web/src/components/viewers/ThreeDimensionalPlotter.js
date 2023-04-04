@@ -1,3 +1,6 @@
+/* eslint-disable react-hooks/exhaustive-deps */
+/* eslint-disable no-loop-func */
+/* eslint-disable no-unused-vars */
 /*
  * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -37,9 +40,9 @@ const buildScatterPlot = ({ dimensions, labels, scene }) => {
     scatterPlot.dimensions = { width: 100, height: 100, depth: 100 };
 
     if (dimensions.length > 0) {
-        if (dimensions[0] != undefined) scatterPlot.dimensions.width = parseFloat(dimensions[0]);
-        if (dimensions[1] != undefined) scatterPlot.dimensions.height = parseFloat(dimensions[1]);
-        if (dimensions[2] != undefined) scatterPlot.dimensions.depth = parseFloat(dimensions[2]);
+        if (dimensions[0] !== undefined) scatterPlot.dimensions.width = parseFloat(dimensions[0]);
+        if (dimensions[1] !== undefined) scatterPlot.dimensions.height = parseFloat(dimensions[1]);
+        if (dimensions[2] !== undefined) scatterPlot.dimensions.depth = parseFloat(dimensions[2]);
     }
 
     scatterPlot.labelsInfo = {
@@ -49,9 +52,9 @@ const buildScatterPlot = ({ dimensions, labels, scene }) => {
     };
 
     if (Object.keys(labels).length > 0) {
-        if (labels.x != undefined && Array.isArray(labels.x)) scatterPlot.labelsInfo.x = labels.x;
-        if (labels.y != undefined && Array.isArray(labels.y)) scatterPlot.labelsInfo.y = labels.y;
-        if (labels.z != undefined && Array.isArray(labels.z)) scatterPlot.labelsInfo.z = labels.z;
+        if (labels.x !== undefined && Array.isArray(labels.x)) scatterPlot.labelsInfo.x = labels.x;
+        if (labels.y !== undefined && Array.isArray(labels.y)) scatterPlot.labelsInfo.y = labels.y;
+        if (labels.z !== undefined && Array.isArray(labels.z)) scatterPlot.labelsInfo.z = labels.z;
     }
 
     scatterPlot.axis = [];
@@ -254,7 +257,7 @@ const buildScatterPlot = ({ dimensions, labels, scene }) => {
 
     scatterPlot.dispose = function (allmeshes = false) {
         if (scatterPlot.shape != null) {
-            if (scatterPlot.shape.material != undefined) scatterPlot.shape.material.dispose();
+            if (scatterPlot.shape.material !== undefined) scatterPlot.shape.material.dispose();
             scatterPlot.shape.dispose();
             scatterPlot.shape = null;
         }

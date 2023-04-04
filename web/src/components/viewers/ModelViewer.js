@@ -9,7 +9,7 @@ import * as OV from "online-3d-viewer";
 
 export default function ModelViewer(props) {
     const engineElement = useRef(null);
-    const { assetKey, ...rest } = props;
+    const { assetKey } = props;
     const [loaded, setLoaded] = useState(false);
 
     useEffect(() => {

@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from "react";
 import FormDefinition from "./types/FormDefinition";
 import ControlDefinition from "./types/ControlDefinition";
 import { Input, Textarea } from "@cloudscape-design/components";

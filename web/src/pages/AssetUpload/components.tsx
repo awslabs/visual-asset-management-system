@@ -70,7 +70,11 @@ class DisplayFileMetaProps {
 }
 export function DisplayFileMeta({ file }: DisplayFileMetaProps) {
     return (
-        <Grid gridDefinition={[{ colspan: { default: 6 } }, { colspan: { default: 6 } }]}>
+        <Grid
+            gridDefinition={
+                (file && [{ colspan: { default: 6 } }, { colspan: { default: 6 } }]) || []
+            }
+        >
             {file && (
                 <>
                     <TextContent>

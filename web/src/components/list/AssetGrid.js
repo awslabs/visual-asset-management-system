@@ -1,27 +1,22 @@
+/* eslint-disable jsx-a11y/anchor-is-valid */
 /*
  * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
     Cards,
     TextFilter,
     Grid,
     Box,
-    Checkbox,
     Button,
     Table,
     Select,
     Modal,
     Icon,
     TextContent,
-    SpaceBetween,
-    Input,
-    Textarea,
-    Multiselect,
-    Tabs,
 } from "@cloudscape-design/components";
 
 import { highlightMatches } from "../../common/utils/utils";
@@ -45,10 +40,10 @@ export default function AssetGrid(props) {
             setAssetData([]);
             setFilteredList([]);
             setLoaded(false);
-            const config = {
-                body: { databaseId: database },
-                headers: {},
-            };
+            // const config = {
+            //     body: { databaseId: database },
+            //     headers: {},
+            // };
             // const response = await API.post(
             //     "api",
             //     "/Assets/listAssets",
@@ -95,7 +90,7 @@ export default function AssetGrid(props) {
         };
         getData();
         setReload(false);
-    }, [reload]);
+    }, [reload, setReload]);
 
     useEffect(() => {
         if (!loaded) {
@@ -163,7 +158,7 @@ export default function AssetGrid(props) {
             setFilteredList(newList);
             setLoaded(true);
         }
-    }, [loaded]);
+    }, [assetData, assetId, distributable, filterBy, loaded, pipelineId]);
 
     const handleFindResources = (filterBy) => {
         setFilterBy(filterBy.toLowerCase());
@@ -209,7 +204,7 @@ export default function AssetGrid(props) {
         if (pipelines.length === 0) {
             getPipelines();
         }
-    }, [pipelines]);
+    }, [database, pipelines]);
 
     /**
      * Preview control section
@@ -311,7 +306,6 @@ export default function AssetGrid(props) {
                             content: (e) => {
                                 const asset = e;
                                 const location = e?.assetLocation;
-                                const preview = e?.previewLocation;
                                 const key = location?.Key;
                                 let signedURL;
                                 (async () => {
@@ -473,7 +467,7 @@ export default function AssetGrid(props) {
                             </TextContent>
                         </div>
                         <div style={{ textAlign: "right" }}>
-                            <Button onClick={handleOpenNewAsset} variant="primary">
+                            <Button variant="primary">
                                 <Icon name={"add-plus"} /> &nbsp;&nbsp;New Asset
                             </Button>
                         </div>

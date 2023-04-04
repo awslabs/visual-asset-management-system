@@ -65,6 +65,9 @@ jobs:
               working-directory: infra
               run: npm audit
 
+            - name: eslint
+              run: npm run lint
+
             - name: Synthesize Cloudformation templates
               working-directory: infra
               run: |

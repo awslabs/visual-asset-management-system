@@ -5,8 +5,7 @@
 
 import React, { useEffect, useState } from "react";
 import { API } from "aws-amplify";
-import { Box, Button, Header, Table, Input } from "@cloudscape-design/components";
-import { PunctuationSyntaxKind } from "typescript";
+import { Button, Header, Table, Input } from "@cloudscape-design/components";
 
 export class MetadataApi {
     version!: string;
@@ -97,7 +96,7 @@ const MetadataTable = ({ assetId, databaseId, store, initialState }: MetadataInp
                     setItems(metaToTableRow(meta.metadata));
                 }
             });
-    }, [loading, items]);
+    }, [loading, items, initialState, databaseId, assetId]);
 
     const HeaderControls = () => {
         return (

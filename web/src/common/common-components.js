@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from "react";
 import {
     Alert,
     AppLayout,
@@ -12,9 +11,6 @@ import {
     Button,
     Header,
     SpaceBetween,
-    SideNavigation,
-    Badge,
-    Icon,
 } from "@cloudscape-design/components";
 import { appLayoutLabels, externalLinkProps } from "./helpers/labels";
 import { getHeaderCounterText, getServerHeaderCounterText } from "./helpers/tableCounterStrings";

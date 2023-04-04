@@ -20,9 +20,8 @@ import ListDefinition from "../components/list/list-definitions/types/ListDefini
 import RelatedTableList from "../components/list/RelatedTableList";
 
 export default function ListPage(props) {
-    const { databaseId, assetId, pipelineName, workflowId } = useParams();
+    const { databaseId } = useParams();
     const {
-        singularName,
         singularNameTitleCase,
         pluralName,
         pluralNameTitleCase,
@@ -44,10 +43,8 @@ export default function ListPage(props) {
             setLoading(true);
             let items;
             if (databaseId) {
-                console.log("ListPage fetch database elements", fetchElements);
                 items = await fetchElements({ databaseId: databaseId });
             } else {
-                console.log("ListPage fetch all elements", fetchAllElements);
                 items = await fetchAllElements();
             }
 
@@ -63,7 +60,7 @@ export default function ListPage(props) {
         if (reload) {
             getData();
         }
-    }, [reload]);
+    }, [reload, databaseId, fetchAllElements, fetchElements]);
 
     const handleOpenNewElement = () => {
         if (onCreateCallback) onCreateCallback();

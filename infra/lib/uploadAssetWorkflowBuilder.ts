@@ -10,7 +10,7 @@ import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import { Duration } from "aws-cdk-lib";
-import { JsonPath, State, TaskInput } from "aws-cdk-lib/aws-stepfunctions";
+import { JsonPath, TaskInput } from "aws-cdk-lib/aws-stepfunctions";
 
 export function buildUploadAssetWorkflow(
     scope: Construct,

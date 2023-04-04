@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from "react";
 import FormDefinition from "./types/FormDefinition";
 import ControlDefinition from "./types/ControlDefinition";
 import { Input, Select, Textarea } from "@cloudscape-design/components";
@@ -92,6 +91,7 @@ export const AssetFormDefinition = new FormDefinition({
      */
     formatForUpdate: (assetObject) => {
         /** @type {AssetEntity} */
+        // eslint-disable-next-line no-unused-vars
         const formValuesObject = Object.assign({}, assetObject);
     },
     controlDefinitions: [

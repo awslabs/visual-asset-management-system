@@ -56,6 +56,7 @@ export class Wafv2BasicConstruct extends Construct {
 
         props = { ...defaultProps, ...props };
 
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         const wafScopeString = props.wafScope!.toString();
 
         /*

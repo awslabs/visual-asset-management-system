@@ -3,19 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { fetchAllAssets, fetchDatabaseAssets } from "../../services/APIService";
 import { Select } from "@cloudscape-design/components";
 import { WorkflowContext } from "../../context/WorkflowContex";
 /**
  * No viewer yet for cad and archive file formats
  */
-import {
-    columnarFileFormats,
-    modelFileFormats,
-    cadFileFormats,
-    archiveFileFormats,
-} from "../../common/constants/fileFormats";
+import { columnarFileFormats, modelFileFormats } from "../../common/constants/fileFormats";
 
 const AssetSelector = (props) => {
     const { database, pathViewType } = props;
@@ -55,6 +50,7 @@ const AssetSelector = (props) => {
                             }
                             return false;
                         }
+                        return false;
                     });
                 }
                 setAllItems(items);
@@ -63,7 +59,7 @@ const AssetSelector = (props) => {
         if (reload) {
             getData();
         }
-    }, [reload]);
+    }, [database, pathViewType, reload]);
 
     return (
         <Select

@@ -1,3 +1,4 @@
+/* eslint-disable jsx-a11y/anchor-is-valid */
 /*
  * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -150,7 +151,7 @@ export default function ViewAsset() {
         if (reload) {
             getData();
         }
-    }, [reload]);
+    }, [reload, assetId, databaseId]);
 
     const changeViewerMode = (mode) => {
         if (mode === "fullscreen" && viewerMode === "fullscreen") {
@@ -160,16 +161,15 @@ export default function ViewAsset() {
         setViewerMode(mode);
     };
 
-    const fullscreenChangeHandler = (event) => {
-        if (!document.fullscreenElement) {
-            if (viewerMode === "fullscreen") {
-                setViewerMode("collapse");
-            }
-        }
-    };
-
     useEffect(() => {
         if (assetId) {
+            const fullscreenChangeHandler = (event) => {
+                if (!document.fullscreenElement) {
+                    if (viewerMode === "fullscreen") {
+                        setViewerMode("collapse");
+                    }
+                }
+            };
             const element = document.querySelector(
                 "#view-edit-asset-right-column .visualizer-container"
             );
@@ -202,6 +202,9 @@ export default function ViewAsset() {
                 }
             }
             element.addEventListener("fullscreenchange", fullscreenChangeHandler);
+            return () => {
+                element.removeEventListener("fullscreenchange", fullscreenChangeHandler);
+            };
         }
     }, [assetId, viewerMode]);
 
@@ -280,7 +283,7 @@ export default function ViewAsset() {
         if (reload && !pathViewType) {
             getData();
         }
-    }, [reload, assetId]);
+    }, [reload, assetId, databaseId, pathViewType]);
 
     return (
         <>
@@ -299,7 +302,7 @@ export default function ViewAsset() {
                                 ]}
                                 ariaLabel="Breadcrumbs"
                             />
-                            <Grid gridDefinition={[{ colspan: 4 }, { colspan: 8 }]}>
+                            <Grid gridDefinition={[{ colspan: 4 }]}>
                                 <h1>{asset?.assetName}</h1>
                             </Grid>
                             <Grid
