@@ -70,7 +70,11 @@ class DisplayFileMetaProps {
 }
 export function DisplayFileMeta({ file }: DisplayFileMetaProps) {
     return (
-        <Grid gridDefinition={[{ colspan: { default: 6 } }, { colspan: { default: 6 } }]}>
+        <Grid
+            gridDefinition={
+                (file && [{ colspan: { default: 6 } }, { colspan: { default: 6 } }]) || []
+            }
+        >
             {file && (
                 <>
                     <TextContent>
@@ -115,7 +119,7 @@ export function DisplayKV({ label, value }: DisplayKVProps): JSX.Element {
         );
     }
 
-    if (typeof(value) =="boolean") {
+    if (typeof value == "boolean") {
         return (
             <div>
                 <Box variant="awsui-key-label">{label}</Box>

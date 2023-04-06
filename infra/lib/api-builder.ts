@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 /*
  * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -10,7 +11,6 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import { ApiGatewayV2LambdaConstruct } from "./constructs/apigatewayv2-lambda-construct";
 import { ApiGatewayV2CloudFrontConstruct } from "./constructs/apigatewayv2-cloudfront-construct";
 import * as lambda from "aws-cdk-lib/aws-lambda";
-import * as path from "path";
 import { storageResources } from "./storage-builder";
 import { buildConfigService } from "./lambdaBuilder/configFunctions";
 import {
@@ -41,7 +41,6 @@ import {
 
 import { buildMetadataFunctions } from "./lambdaBuilder/metadataFunctions";
 import { buildUploadAssetWorkflow } from "./uploadAssetWorkflowBuilder";
-import { Policy, PolicyStatement } from "aws-cdk-lib/aws-iam";
 
 interface apiGatewayLambdaConfiguration {
     routePath: string;
@@ -341,17 +340,18 @@ export function apiBuilder(
             api: api.apiGatewayV2,
         });
     }
-    const uploadAssetWorkflowStateMachine = buildUploadAssetWorkflow(scope, 
-        uploadAssetFunction, 
+    const uploadAssetWorkflowStateMachine = buildUploadAssetWorkflow(
+        scope,
+        uploadAssetFunction,
         metadataCrudFunctions[2],
-        runWorkflowFunction, 
+        runWorkflowFunction,
         storageResources.s3.assetBucket,
         storageResources.s3.stagingBucket
     );
     uploadAssetFunction.grantInvoke(uploadAssetWorkflowStateMachine);
-    storageResources.s3.assetBucket.grantReadWrite(uploadAssetWorkflowStateMachine)
-    if(storageResources.s3.stagingBucket) {
-        storageResources.s3.stagingBucket.grantRead(uploadAssetWorkflowStateMachine)
+    storageResources.s3.assetBucket.grantReadWrite(uploadAssetWorkflowStateMachine);
+    if (storageResources.s3.stagingBucket) {
+        storageResources.s3.stagingBucket.grantRead(uploadAssetWorkflowStateMachine);
     }
 
     const uploadAssetWorkflowFunction = buildUploadAssetWorkflowFunction(

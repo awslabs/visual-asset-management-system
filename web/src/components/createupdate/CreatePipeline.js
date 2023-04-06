@@ -10,17 +10,17 @@ import CreateUpdateElement from "./CreateUpdateElement";
 import { actionTypes } from "./form-definitions/types/FormDefinition";
 
 export default function CreatePipeline(props) {
-  const { open, setOpen, setReload, databaseId } = props;
+    const { open, setOpen, setReload, databaseId } = props;
 
-  return (
-    <CreateUpdateElement
-      open={open}
-      setOpen={setOpen}
-      setReload={setReload}
-      formDefinition={PipelineFormDefinition}
-      formEntity={PipelineEntity}
-      actionType={actionTypes.CREATE}
-      databaseId={databaseId}
-    />
-  );
+    return (
+        <CreateUpdateElement
+            open={open}
+            setOpen={setOpen}
+            setReload={setReload}
+            formDefinition={PipelineFormDefinition}
+            formEntity={PipelineEntity}
+            actionType={actionTypes.CREATE}
+            databaseId={databaseId}
+        />
+    );
 }

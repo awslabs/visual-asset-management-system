@@ -10,16 +10,16 @@ import { PipelineListDefinition } from "../components/list/list-definitions/Pipe
 import ListPage from "./ListPage";
 
 export default function Pipelines() {
-  return (
-    <ListPage
-      singularName={"pipeline"}
-      singularNameTitleCase={"Pipeline"}
-      pluralName={"pipelines"}
-      pluralNameTitleCase={"Pipelines"}
-      listDefinition={PipelineListDefinition}
-      CreateNewElement={CreatePipeline}
-      fetchElements={fetchDatabasePipelines}
-      fetchAllElements={fetchAllPipelines}
-    />
-  );
+    return (
+        <ListPage
+            singularName={"pipeline"}
+            singularNameTitleCase={"Pipeline"}
+            pluralName={"pipelines"}
+            pluralNameTitleCase={"Pipelines"}
+            listDefinition={PipelineListDefinition}
+            CreateNewElement={CreatePipeline}
+            fetchElements={fetchDatabasePipelines}
+            fetchAllElements={fetchAllPipelines}
+        />
+    );
 }

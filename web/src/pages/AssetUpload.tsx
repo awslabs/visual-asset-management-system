@@ -45,6 +45,7 @@ import { DisplayKV, FileUpload } from "./AssetUpload/components";
 import ProgressScreen from "./AssetUpload/ProgressScreen";
 import onSubmit from "./AssetUpload/onSubmit";
 
+// eslint-disable-next-line @typescript-eslint/no-array-constructor
 const objectFileFormats = new Array().concat(cadFileFormats, modelFileFormats, columnarFileFormats);
 const objectFileFormatsStr = objectFileFormats.join(", ");
 const previewFileFormatsStr = previewFileFormats.join(", ");

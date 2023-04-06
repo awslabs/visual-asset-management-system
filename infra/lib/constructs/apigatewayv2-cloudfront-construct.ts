@@ -8,7 +8,7 @@ import * as apigwAuthorizers from "@aws-cdk/aws-apigatewayv2-authorizers-alpha";
 import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
 import * as cloudfrontOrigins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as cognito from "aws-cdk-lib/aws-cognito";
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
 
 export interface ApiGatewayV2CloudFrontProps extends cdk.StackProps {
@@ -52,16 +52,17 @@ export class ApiGatewayV2CloudFrontConstruct extends Construct {
     constructor(parent: Construct, name: string, props: ApiGatewayV2CloudFrontProps) {
         super(parent, name);
 
-        props = {...defaultProps, ...props};
+        props = { ...defaultProps, ...props };
 
         // init cognito authorizer
         const cognitoAuth = new apigwAuthorizers.HttpUserPoolAuthorizer(
             "DefaultCognitoAuthorizer",
-            props.userPool, 
+            props.userPool,
             {
                 userPoolClients: [props.userPoolClient],
-                identitySource: ['$request.header.Authorization']
-        });
+                identitySource: ["$request.header.Authorization"],
+            }
+        );
 
         // init api gateway
         const api = new apigw.HttpApi(this, "Api", {
@@ -82,7 +83,7 @@ export class ApiGatewayV2CloudFrontConstruct extends Construct {
                     apigw.CorsHttpMethod.PUT,
                     apigw.CorsHttpMethod.POST,
                     apigw.CorsHttpMethod.PATCH,
-                    apigw.CorsHttpMethod.DELETE
+                    apigw.CorsHttpMethod.DELETE,
                 ],
                 // allow origins for development.  no origin is needed for cloudfront
                 //allowOrigins: ["https://example.com:3000", "http://example.com:3000"],
@@ -112,10 +113,7 @@ export class ApiGatewayV2CloudFrontConstruct extends Construct {
      * @param cloudFrontDistribution
      * @param apiUrl
      */
-    public addBehaviorToCloudFrontDistribution(
-        cloudFrontDistribution: cloudfront.Distribution,
-    ) {
-
+    public addBehaviorToCloudFrontDistribution(cloudFrontDistribution: cloudfront.Distribution) {
         cloudFrontDistribution.addBehavior(
             "/api/*",
             new cloudfrontOrigins.HttpOrigin(this.apiUrl, {

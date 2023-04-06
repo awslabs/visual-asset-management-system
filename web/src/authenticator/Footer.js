@@ -4,5 +4,5 @@
  */
 
 export function Footer() {
-  return <></>;
+    return <></>;
 }

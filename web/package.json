@@ -1,83 +1,85 @@
 {
-  "name": "web",
-  "version": "0.1.0",
-  "private": true,
-  "license": "Apache-2.0",
-  "engines": {
-    "yarn": ">= 1.22.18"
-  },
-  "dependencies": {
-    "@aws-amplify/ui-react": "^2.1.5",
-    "@babylonjs/core": "^4.2.0",
-    "@cloudscape-design/collection-hooks": "^1.0.19",
-    "@cloudscape-design/components": "^3.0.196",
-    "@cloudscape-design/design-tokens": "^3.0.8",
-    "@types/styled-components": "^5.1.21",
-    "arraybuffer-to-buffer": "^0.0.7",
-    "aws-amplify": "4.3.39",
-    "aws-amplify-react": "^5.1.9",
-    "babylonjs": "^4.2.0",
-    "babylonjs-loaders": "^4.2.0",
-    "buffer": "^6.0.3",
-    "dompurify": "^2.3.6",
-    "fcs": "^0.1.2",
-    "loader-utils": "^3.2.0",
-    "patch-package": "^6.4.7",
-    "postinstall-postinstall": "^2.1.0",
-    "prop-types": "^15.8.1",
-    "react": "^17.0.2",
-    "react-data-grid": "7.0.0-beta.16",
-    "react-dom": "^17.0.2",
-    "react-flow-renderer": "^9.6.11",
-    "react-papaparse": "^3.18.1",
-    "react-router": "^6.0.0",
-    "react-router-dom": "^6.0.0",
-    "react-scripts": "5.0.1",
-    "styled-components": "^5.3.3",
-    "typescript": "4.4.4",
-    "web-vitals": "^1.1.2"
-  },
-  "resolutions": {
-    "d3-color": "^3.1.0",
-    "nth-check": "^2.0.1"
-  },
-  "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
-    "eject": "react-scripts eject",
-    "postinstall": "patch-package"
-  },
-  "eslintConfig": {
-    "extends": [
-      "react-app",
-      "react-app/jest"
-    ]
-  },
-  "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
-  },
-  "devDependencies": {
-    "@testing-library/jest-dom": "^5.14.1",
-    "@testing-library/react": "^11.2.7",
-    "@testing-library/react-hooks": "^8.0.1",
-    "@testing-library/user-event": "^12.8.3",
-    "@types/node": "^18.11.5",
-    "@types/react": "^17.0.2",
-    "@types/react-dom": "^17.0.2",
-    "assert": "^2.0.0",
-    "prettier": "^2.4.1",
-    "react-error-overlay": "^6.0.9",
-    "sass": "^1.43.4",
-    "sass-loader": "^12.3.0"
-  }
+    "name": "web",
+    "version": "0.1.0",
+    "private": true,
+    "license": "Apache-2.0",
+    "engines": {
+        "yarn": ">= 1.22.18"
+    },
+    "dependencies": {
+        "@aws-amplify/ui-react": "^2.1.5",
+        "@cloudscape-design/collection-hooks": "^1.0.19",
+        "@cloudscape-design/components": "^3.0.196",
+        "@cloudscape-design/design-tokens": "^3.0.8",
+        "@types/styled-components": "^5.1.21",
+        "arraybuffer-to-buffer": "^0.0.7",
+        "aws-amplify": "4.3.39",
+        "aws-amplify-react": "^5.1.9",
+        "babylonjs": "^4.2.0",
+        "babylonjs-loaders": "^4.2.0",
+        "buffer": "^6.0.3",
+        "del-cli": "^5.0.0",
+        "dompurify": "^2.3.6",
+        "fcs": "^0.1.2",
+        "loader-utils": "^3.2.0",
+        "online-3d-viewer": "^0.8.21",
+        "patch-package": "^6.4.7",
+        "postinstall-postinstall": "^2.1.0",
+        "prop-types": "^15.8.1",
+        "react": "^17.0.2",
+        "react-data-grid": "7.0.0-beta.16",
+        "react-dom": "^17.0.2",
+        "react-flow-renderer": "^9.6.11",
+        "react-papaparse": "^3.18.1",
+        "react-router": "^6.0.0",
+        "react-router-dom": "^6.0.0",
+        "react-scripts": "5.0.1",
+        "styled-components": "^5.3.3",
+        "typescript": "4.4.4",
+        "web-ifc": "^0.0.39",
+        "web-vitals": "^1.1.2"
+    },
+    "resolutions": {
+        "d3-color": "^3.1.0",
+        "nth-check": "^2.0.1"
+    },
+    "scripts": {
+        "start": "react-scripts start",
+        "build": "react-scripts build",
+        "test": "react-scripts test",
+        "eject": "react-scripts eject",
+        "postinstall": "patch-package && del ./node_modules/online-3d-viewer/libs/loaders/occt-import-js-worker.js &&  del ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.js &&  del ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.license.md && del ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.wasm"
+    },
+    "eslintConfig": {
+        "extends": [
+            "react-app",
+            "react-app/jest"
+        ]
+    },
+    "browserslist": {
+        "production": [
+            ">0.2%",
+            "not dead",
+            "not op_mini all"
+        ],
+        "development": [
+            "last 1 chrome version",
+            "last 1 firefox version",
+            "last 1 safari version"
+        ]
+    },
+    "devDependencies": {
+        "@testing-library/jest-dom": "^5.14.1",
+        "@testing-library/react": "^11.2.7",
+        "@testing-library/react-hooks": "^8.0.1",
+        "@testing-library/user-event": "^12.8.3",
+        "@types/node": "^18.11.5",
+        "@types/react": "^17.0.2",
+        "@types/react-dom": "^17.0.2",
+        "assert": "^2.0.0",
+        "prettier": "^2.4.1",
+        "react-error-overlay": "^6.0.9",
+        "sass": "^1.43.4",
+        "sass-loader": "^12.3.0"
+    }
 }

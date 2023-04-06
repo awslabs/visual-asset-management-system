@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {EntityPropTypes} from "./EntityPropTypes";
+import { EntityPropTypes } from "./EntityPropTypes";
 
 export default function DatabaseEntity(props) {
-    const {databaseId, description} = props;
+    const { databaseId, description } = props;
     this.databaseId = databaseId;
     this.description = description;
 }

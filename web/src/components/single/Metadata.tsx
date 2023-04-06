@@ -5,8 +5,7 @@
 
 import React, { useEffect, useState } from "react";
 import { API } from "aws-amplify";
-import { Box, Button, Header, Table, Input } from "@cloudscape-design/components";
-import { PunctuationSyntaxKind } from "typescript";
+import { Button, Header, Table, Input } from "@cloudscape-design/components";
 
 export class MetadataApi {
     version!: string;
@@ -24,7 +23,7 @@ class TableRow {
 }
 
 export const put = async (databaseId: string, assetId: string, record: Metadata) => {
-    if(Object.keys(record).length < 1) {
+    if (Object.keys(record).length < 1) {
         return;
     }
     return API.put("api", `metadata/${databaseId}/${assetId}`, {
@@ -42,7 +41,7 @@ class MetadataInputs {
     assetId!: string;
     databaseId!: string;
     initialState?: Metadata;
-    store?: ((databaseId: string, assetId: string, record: Metadata) => Promise<any>);
+    store?: (databaseId: string, assetId: string, record: Metadata) => Promise<any>;
 }
 
 const MetadataTable = ({ assetId, databaseId, store, initialState }: MetadataInputs) => {
@@ -77,7 +76,7 @@ const MetadataTable = ({ assetId, databaseId, store, initialState }: MetadataInp
             return;
         }
 
-        if(initialState !== undefined) {
+        if (initialState !== undefined) {
             setLoading(false);
             setItems(metaToTableRow(initialState));
             return;
@@ -97,7 +96,7 @@ const MetadataTable = ({ assetId, databaseId, store, initialState }: MetadataInp
                     setItems(metaToTableRow(meta.metadata));
                 }
             });
-    }, [loading, items]);
+    }, [loading, items, initialState, databaseId, assetId]);
 
     const HeaderControls = () => {
         return (
