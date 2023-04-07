@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from "react";
-import Amplify, { Auth, Cache } from "aws-amplify";
+import React, { useEffect } from "react";
+import { Amplify, Auth, Hub, Cache } from "aws-amplify";
+
 import { API } from "aws-amplify";
 /**
  * Checks environment and either uses the URL for the API to get the project
@@ -74,6 +75,12 @@ function renderApp(config) {
 }
 
 function ConfigLoader(props) {
+    useEffect(() => {
+        Hub.listen("auth", ({ payload: { event, data } }) => {
+            console.log("auth event", event, data);
+        });
+    });
+
     return <>{props.children}</>;
 }
 

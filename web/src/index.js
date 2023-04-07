@@ -11,18 +11,19 @@ import React, { Suspense } from "react";
 import ReactDOM from "react-dom";
 import "./styles/index.scss";
 import reportWebVitals from "./reportWebVitals";
-import ConfigLoader from "./ConfigLoader";
+// import ConfigLoader from "./ConfigLoader";
+import VAMSAuth from "./FedAuth/VAMSAuth";
 
 window.LOG_LEVEL = "INFO";
 
 const App = React.lazy(() => import("./App"));
 ReactDOM.render(
     <React.StrictMode>
-        <ConfigLoader>
+        <VAMSAuth>
             <Suspense fallback={<div />}>
                 <App />
             </Suspense>
-        </ConfigLoader>
+        </VAMSAuth>
     </React.StrictMode>,
     document.getElementById("root")
 );
