@@ -53,24 +53,24 @@ Please note, depending on what changes are in flight, VAMS may not be available 
 
 ### SAML Authentication
 
-SAML authentication enables you to provision access to your VAMS instance using your organization's federated identity provider such as Auth0, Active Directory, or Google Workspace. 
+SAML authentication enables you to provision access to your VAMS instance using your organization's federated identity provider such as Auth0, Active Directory, or Google Workspace.
 
-You need your SAML metadata url, and then you can fill out the required information in `infra/lib/saml-config.ts`. 
+You need your SAML metadata url, and then you can fill out the required information in `infra/lib/saml-config.ts`.
 
-The required information is as follows: 
+The required information is as follows:
 
-- `samlEnabled` must be set to `true`.
-- `name` identifies the name of your identity provider. 
-- `cognitoDomainPrefix` is a DNS compatible, globally unique string used as a subdomain of cognito's signon url. 
-- `metadataContent` is a url of your SAML metadata. This can also point to a local file if `metadataType` is changed to `cognito.UserPoolIdentityProviderSamlMetadataType.FILE`. 
+-   `samlEnabled` must be set to `true`.
+-   `name` identifies the name of your identity provider.
+-   `cognitoDomainPrefix` is a DNS compatible, globally unique string used as a subdomain of cognito's signon url.
+-   `metadataContent` is a url of your SAML metadata. This can also point to a local file if `metadataType` is changed to `cognito.UserPoolIdentityProviderSamlMetadataType.FILE`.
 
-Then you can deploy the infra stack by running `cdk deploy --all` if you have already deployed or using the same build and deploy steps as above. 
+Then you can deploy the infra stack by running `cdk deploy --all` if you have already deployed or using the same build and deploy steps as above.
 
-The following stack outputs are required by your identity provider to establish trust with your instance of VAMS: 
+The following stack outputs are required by your identity provider to establish trust with your instance of VAMS:
 
-- SAML IdP Response URL
-- SP urn / Audience URI / SP entity ID
-- CloudFrontDistributionUrl for the list of callback urls. Include this url with and without a single trailing slack (e.g., https://example.com and https://example.com/)
+-   SAML IdP Response URL
+-   SP urn / Audience URI / SP entity ID
+-   CloudFrontDistributionUrl for the list of callback urls. Include this url with and without a single trailing slack (e.g., https://example.com and https://example.com/)
 
 SAML may be disabled in your stack by setting `samlEnabled` to false and deploying the stack.
 
