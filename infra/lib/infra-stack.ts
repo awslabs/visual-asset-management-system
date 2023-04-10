@@ -111,6 +111,7 @@ export class VAMS extends cdk.Stack {
             "http://localhost:3000",
             "http://localhost:3000/",
             `https://${website.cloudFrontDistribution.domainName}/`,
+            `https://${website.cloudFrontDistribution.domainName}`,
         ];
         /**
          * Propagate Base CloudFront URL to Cognito User Pool Callback and Logout URLs
