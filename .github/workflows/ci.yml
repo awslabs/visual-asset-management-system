@@ -1,115 +1,114 @@
-   name: Build and Scan for Vulnerabilities
- 
-   on:
-        push:
-          branches: [main]
-        pull_request:
-          branches: [main]
+name: Build and Scan for Vulnerabilities
 
-   jobs:
-      build:
-          runs-on: ubuntu-latest
-          steps:
-          - name: Checkout repo
-            uses: actions/checkout@v3
-            with:
-                path: ./vams
+on:
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
 
-          - name: Setup Python Version
-            uses: actions/setup-python@v2
-            with:
-                python-version: 3.9
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repo
+              uses: actions/checkout@v3
+              with:
+                  path: ./vams
 
-          - name: Setup node for the whole package
-            uses: actions/setup-node@v3
-          
-          - name: Clone automated security helper
-            uses: actions/checkout@v2
-            with:
-                repository: aws-samples/automated-security-helper 
-                path: ./ash
-          
-          - name: Run automated security helper
-            run: |
-                cd ash
-                export PATH=$PATH:./
-                ash --source-dir ../vams || true
+            - name: Setup Python Version
+              uses: actions/setup-python@v2
+              with:
+                  python-version: 3.9
 
-          - name: Upload Report
-            uses: actions/upload-artifact@v3
-            with:
-                name: automated-security-helper-report
-                path: ash/aggregated_results.txt
-          
-          - name: Npm install root directory
-            working-directory: vams
-            run: npm install
-            
-          - name: Npm audit root directory
-            working-directory: vams
-            run:  npm audit
-         
-          - name: Prettier Check
-            working-directory: vams
-            run: npm run prettier-check
+            - name: Setup node for the whole package
+              uses: actions/setup-node@v3
 
-          - name: Install Poetry Action
-            uses: snok/install-poetry@v1
-            with:
-                version: 1.1.13
-                virtualenvs-create: true
-                virtualenvs-in-project: true
-                virtualenvs-path: backend/.venv
-                installer-parallel: true
-          
-          - name: Run yarn install web directory
-            uses: Borales/actions-yarn@v4.2.0
-            with:
-                dir: 'vams/web'
-                cmd: install
-          
-          - name: Run yarn audit web directory
-            uses: Borales/actions-yarn@v4.2.0
-            with:
-                dir: "vams/web"
-                cmd: audit
+            - name: Clone automated security helper
+              uses: actions/checkout@v2
+              with:
+                  repository: aws-samples/automated-security-helper
+                  path: ./ash
 
-          - name: Web build
-            working-directory: vams/web
-            env:
-                CI: ""
-            run: npm run build
-              
-          - name: Npm install infrastructure directory
-            working-directory: vams/infra
-            run: npm install
+            - name: Run automated security helper
+              run: |
+                  cd ash
+                  export PATH=$PATH:./
+                  ash --source-dir ../vams || true
+            - name: Upload Report
+              uses: actions/upload-artifact@v3
+              with:
+                  name: automated-security-helper-report
+                  path: ash/aggregated_results.txt
 
-          - name: Npm audit infrastructure directory
-            working-directory: vams/infra
-            run: npm audit
+            - name: Npm install root directory
+              working-directory: vams
+              run: npm install
 
-          - name: Synthesize Cloudformation templates
-            working-directory: vams/infra
-            run: |
-                CDK_NAG_ENABLED=true
-                export STACK_NAME=CfnNagTest
-                export REGION=us-east-1
-                npx cdk synth
+            - name: Npm audit root directory
+              working-directory: vams
+              run: npm audit
 
-          - name: eslint
-            working-directory: vams
-            run: npm run lint
-              
-          - name: Scan VAMS WAF Cloudformation template
-            uses: stelligent/cfn_nag@master
-            with:
-                input_path: vams/infra/cdk.out/vams-waf-CfnNagTest-us-east-1.template.json
-          
-          - name: Scan VAMS Cloudformation template
-            uses: stelligent/cfn_nag@master
-            with:
-                input_path: vams/infra/cdk.out/vams-CfnNagTest-us-east-1.template.json
+            - name: Prettier Check
+              working-directory: vams
+              run: npm run prettier-check
 
-          - name: run checks
-            working-directory: vams/backend
-            run: make all
+            - name: Install Poetry Action
+              uses: snok/install-poetry@v1
+              with:
+                  version: 1.1.13
+                  virtualenvs-create: true
+                  virtualenvs-in-project: true
+                  virtualenvs-path: backend/.venv
+                  installer-parallel: true
+
+            - name: Run yarn install web directory
+              uses: Borales/actions-yarn@v4.2.0
+              with:
+                  dir: "vams/web"
+                  cmd: install
+
+            - name: Run yarn audit web directory
+              uses: Borales/actions-yarn@v4.2.0
+              with:
+                  dir: "vams/web"
+                  cmd: audit
+
+            - name: Web build
+              working-directory: vams/web
+              env:
+                  CI: ""
+              run: npm run build
+
+            - name: Npm install infrastructure directory
+              working-directory: vams/infra
+              run: npm install
+
+            - name: Npm audit infrastructure directory
+              working-directory: vams/infra
+              run: npm audit
+
+            - name: Synthesize Cloudformation templates
+              working-directory: vams/infra
+              run: |
+                  CDK_NAG_ENABLED=true
+                  export STACK_NAME=CfnNagTest
+                  export REGION=us-east-1
+                  npx cdk synth
+                  
+            - name: eslint
+              working-directory: vams
+              run: npm run lint
+
+            - name: Scan VAMS WAF Cloudformation template
+              uses: stelligent/cfn_nag@master
+              with:
+                  input_path: vams/infra/cdk.out/vams-waf-CfnNagTest-us-east-1.template.json
+
+            - name: Scan VAMS Cloudformation template
+              uses: stelligent/cfn_nag@master
+              with:
+                  input_path: vams/infra/cdk.out/vams-CfnNagTest-us-east-1.template.json
+
+            - name: run checks
+              working-directory: vams/backend
+              run: make all
