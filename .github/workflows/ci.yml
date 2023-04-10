@@ -94,7 +94,7 @@ jobs:
                   export STACK_NAME=CfnNagTest
                   export REGION=us-east-1
                   npx cdk synth
-                  
+
             - name: eslint
               working-directory: vams
               run: npm run lint
