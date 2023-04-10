@@ -22,6 +22,7 @@ export interface CloudFrontS3WebSiteConstructProps extends cdk.StackProps {
     webAcl: string;
     apiUrl: string;
     assetBucketUrl: string;
+    cognitoDomain: string;
 }
 
 /**
@@ -120,8 +121,8 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
                     contentSecurityPolicy: {
                         contentSecurityPolicy:
                             `default-src 'none'; style-src 'self' 'unsafe-inline'; ` +
-                            `connect-src 'self' https://cognito-idp.${props.env?.region}.amazonaws.com/ https://cognito-identity.${props.env?.region}.amazonaws.com https://${props.apiUrl} https://${props.assetBucketUrl}; ` +
-                            `script-src 'self' https://cognito-idp.${props.env?.region}.amazonaws.com/ https://cognito-identity.${props.env?.region}.amazonaws.com https://${props.apiUrl} https://${props.assetBucketUrl}; ` +
+                            `connect-src 'self' ${props.cognitoDomain} https://cognito-idp.${props.env?.region}.amazonaws.com/ https://cognito-identity.${props.env?.region}.amazonaws.com https://${props.apiUrl} https://${props.assetBucketUrl}; ` +
+                            `script-src 'self' ${props.cognitoDomain} https://cognito-idp.${props.env?.region}.amazonaws.com/ https://cognito-identity.${props.env?.region}.amazonaws.com https://${props.apiUrl} https://${props.assetBucketUrl}; ` +
                             `img-src 'self' data: https://${props.assetBucketUrl}; ` +
                             `media-src 'self' data: https://${props.assetBucketUrl}; ` +
                             `object-src 'none'; ` +
@@ -180,6 +181,9 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
             value: cloudFrontDistribution.distributionDomainName,
         });
 
+        new cdk.CfnOutput(this, "CloudFrontDistributionUrl", {
+            value: `https://${cloudFrontDistribution.distributionDomainName}`,
+        });
         // assign public properties
         this.originAccessIdentity = originAccessIdentity;
         this.cloudFrontDistribution = cloudFrontDistribution;

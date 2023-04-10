@@ -11,6 +11,56 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { IHttpRouteAuthorizer } from "@aws-cdk/aws-apigatewayv2-alpha";
+
+/**
+ * Additional configuration needed to use federated identities
+ */
+export interface AmplifyConfigFederatedIdentityProps {
+    /**
+     * The name of the federated identity provider.
+     */
+    customFederatedIdentityProviderName: string;
+    /**
+     * The cognito auth domain
+     */
+    customCognitoAuthDomain: string;
+    /**
+     * redirect signin url
+     */
+    redirectSignIn?: string;
+    /**
+     * redirect signout url
+     */
+    redirectSignOut?: string;
+}
+
+interface InlineLambdaProps {
+    /**
+     * The Cognito UserPoolId to authenticate users in the front-end
+     */
+    userPoolId: string;
+    /**
+     * The Cognito AppClientId to authenticate users in the front-end
+     */
+    appClientId: string;
+    /**
+     * The Cognito IdentityPoolId to authenticate users in the front-end
+     */
+    identityPoolId: string;
+    /**
+     * The ApiGatewayV2 HttpApi to attach the lambda
+     */
+    api: string;
+    /**
+     * region
+     */
+    region: string;
+    /**
+     * Additional configuration needed for federated auth
+     */
+    federatedConfig?: AmplifyConfigFederatedIdentityProps;
+}
+
 export interface AmplifyConfigLambdaConstructProps extends cdk.StackProps {
     /**
      * The Cognito UserPoolId to authenticate users in the front-end
@@ -28,6 +78,14 @@ export interface AmplifyConfigLambdaConstructProps extends cdk.StackProps {
      * The ApiGatewayV2 HttpApi to attach the lambda
      */
     api: apigatewayv2.HttpApi;
+    /**
+     * region
+     */
+    region: string;
+    /**
+     * Additional configuration needed for federated auth
+     */
+    federatedConfig?: AmplifyConfigFederatedIdentityProps;
 }
 
 /**
@@ -42,17 +100,19 @@ export class AmplifyConfigLambdaConstruct extends Construct {
         props = { ...props };
 
         const lambdaFn = new lambda.Function(this, "Lambda", {
-            runtime: lambda.Runtime.PYTHON_3_9,
-            handler: "index.lambda_handler",
-            code: lambda.Code.fromInline(this.getPythonLambdaFunction()),
+            runtime: lambda.Runtime.NODEJS_18_X,
+            handler: "index.handler",
+            code: lambda.Code.fromInline(
+                this.getJavascriptInlineFunction({
+                    region: props.region,
+                    userPoolId: props.userPoolId,
+                    appClientId: props.appClientId,
+                    identityPoolId: props.identityPoolId,
+                    api: props.api.url || "us-east-1",
+                    federatedConfig: props.federatedConfig,
+                })
+            ),
             timeout: cdk.Duration.seconds(15),
-            environment: {
-                USER_POOL_ID: props.userPoolId,
-                APP_CLIENT_ID: props.appClientId,
-                IDENTITY_POOL_ID: props.identityPoolId,
-                REGION: props?.env?.region || "us-east-1",
-                API: props.api.url || "us-east-1",
-            },
         });
 
         // add lambda policies
@@ -75,9 +135,9 @@ export class AmplifyConfigLambdaConstruct extends Construct {
 
     private createNoOpAuthorizer(): IHttpRouteAuthorizer {
         const authorizerFn = new cdk.aws_lambda.Function(this, "AuthorizerLambda", {
-            runtime: cdk.aws_lambda.Runtime.PYTHON_3_9,
-            handler: "index.lambda_handler",
-            code: cdk.aws_lambda.Code.fromInline(this.getAuthorizerLambdaCode()),
+            runtime: lambda.Runtime.NODEJS_18_X,
+            handler: "index.handler",
+            code: lambda.Code.fromInline(this.getAuthorizerLambdaCode()),
             timeout: cdk.Duration.seconds(15),
         });
 
@@ -91,41 +151,26 @@ export class AmplifyConfigLambdaConstruct extends Construct {
         });
     }
 
-    private getPythonLambdaFunction(): string {
-        // string requires left justification so that the python code is correctly indented
-        return `
-import json
-import os
+    private getJavascriptInlineFunction(props: InlineLambdaProps) {
+        const resp = JSON.stringify(props);
 
-def lambda_handler(event, context):
-  region = os.getenv("REGION", None)
-  user_pool_id = os.getenv("USER_POOL_ID", None)
-  app_client_id = os.getenv("APP_CLIENT_ID", None)
-  identity_pool_id = os.getenv("IDENTITY_POOL_ID", None)
-  api = os.getenv("API", None)
-  response = {
-      "region": region,
-      "userPoolId": user_pool_id,
-      "appClientId": app_client_id,
-      "identityPoolId": identity_pool_id,
-      "api": api
-  }
-  return {
-      "statusCode": "200",
-      "body": json.dumps(response),
-      "headers": {
-          "Content-Type": "application/json",
-      },
-  }
-      `;
+        return `
+            exports.handler = async function(event, context) {
+                return {
+                    statusCode: 200,
+                    body: JSON.stringify(${resp}),
+                };
+            };
+        `;
     }
 
     private getAuthorizerLambdaCode(): string {
         return `
-def lambda_handler(event, context): 
-    return {
-        "isAuthorized": True
-    }
+            exports.handler = async function(event, context) {
+                return {
+                    isAuthorized: true
+                }
+            }
         `;
     }
 }

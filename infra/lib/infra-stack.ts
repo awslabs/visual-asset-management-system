@@ -9,16 +9,24 @@ import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as cloudTrail from "aws-cdk-lib/aws-cloudtrail";
 import { apiBuilder } from "./api-builder";
 import { storageResourcesBuilder } from "./storage-builder";
-import { AmplifyConfigLambdaConstruct } from "./constructs/amplify-config-lambda-construct";
+import {
+    AmplifyConfigLambdaConstruct,
+    AmplifyConfigLambdaConstructProps,
+} from "./constructs/amplify-config-lambda-construct";
 import { CloudFrontS3WebSiteConstruct } from "./constructs/cloudfront-s3-website-construct";
-import { CognitoWebNativeConstruct } from "./constructs/cognito-web-native-construct";
+import {
+    CognitoWebNativeConstruct,
+    CognitoWebNativeConstructProps,
+} from "./constructs/cognito-web-native-construct";
 import { ApiGatewayV2CloudFrontConstruct } from "./constructs/apigatewayv2-cloudfront-construct";
 import { Construct } from "constructs";
 import { NagSuppressions } from "cdk-nag";
+import { CustomCognitoConfigConstruct } from "./constructs/custom-cognito-config-construct";
+import { samlEnabled, samlSettings } from "./saml-config";
 
 interface EnvProps {
     prod: boolean; //ToDo: replace with env
-    env?: cdk.Environment;
+    env: cdk.Environment;
     stackName: string;
     ssmWafArnParameterName: string;
     ssmWafArnParameterRegion: string;
@@ -29,6 +37,8 @@ interface EnvProps {
 export class VAMS extends cdk.Stack {
     constructor(scope: Construct, id: string, props: EnvProps) {
         super(scope, id, { ...props, crossRegionReferences: true });
+
+        const region = props.env.region || "us-east-1";
 
         const providedAdminEmailAddress =
             process.env.VAMS_ADMIN_EMAIL || scope.node.tryGetContext("adminEmailAddress");
@@ -50,12 +60,17 @@ export class VAMS extends cdk.Stack {
         trail.logAllLambdaDataEvents();
         trail.logAllS3DataEvents();
 
-        const cognitoResources = new CognitoWebNativeConstruct(this, "Cognito", {
+        const cognitoProps: CognitoWebNativeConstructProps = {
             ...props,
             storageResources: storageResources,
-        });
+        };
+        if (samlEnabled) {
+            cognitoProps.samlSettings = samlSettings;
+        }
 
-        const congitoUser = new cognito.CfnUserPoolUser(this, "AdminUser", {
+        const cognitoResources = new CognitoWebNativeConstruct(this, "Cognito", cognitoProps);
+
+        const adminUser = new cognito.CfnUserPoolUser(this, "AdminUser", {
             username: providedAdminEmailAddress,
             userPoolId: cognitoResources.userPoolId,
             desiredDeliveryMediums: ["EMAIL"],
@@ -80,9 +95,43 @@ export class VAMS extends cdk.Stack {
             webAcl: props.ssmWafArn,
             apiUrl: api.apiUrl,
             assetBucketUrl: storageResources.s3.assetBucket.bucketRegionalDomainName,
+            cognitoDomain: samlEnabled
+                ? `https://${samlSettings.cognitoDomainPrefix}.auth.${region}.amazoncognito.com`
+                : "",
         });
 
         api.addBehaviorToCloudFrontDistribution(website.cloudFrontDistribution);
+
+        /**
+         * When using federated identities, this list of callback urls must include
+         * the set of names that VAMSAuth.tsx will resolve when it calls
+         * window.location.origin for the redirectSignIn and redirectSignout callback urls.
+         */
+        const callbackUrls = [
+            "http://localhost:3000",
+            "http://localhost:3000/",
+            `https://${website.cloudFrontDistribution.domainName}/`,
+            `https://${website.cloudFrontDistribution.domainName}`,
+        ];
+        /**
+         * Propagate Base CloudFront URL to Cognito User Pool Callback and Logout URLs
+         * if SAML is enabled.
+         */
+        if (samlEnabled) {
+            const customCognitoWebClientConfig = new CustomCognitoConfigConstruct(
+                this,
+                "CustomCognitoWebClientConfig",
+                {
+                    name: "Web",
+                    clientId: cognitoResources.webClientId,
+                    userPoolId: cognitoResources.userPoolId,
+                    callbackUrls: callbackUrls,
+                    logoutUrls: callbackUrls,
+                    identityProviders: ["COGNITO", samlSettings.name],
+                }
+            );
+            customCognitoWebClientConfig.node.addDependency(website);
+        }
 
         apiBuilder(this, api, storageResources);
 
@@ -92,13 +141,30 @@ export class VAMS extends cdk.Stack {
         //     wafScope: WAFScope.REGIONAL,
         // });
 
-        const amplifyConfigFn = new AmplifyConfigLambdaConstruct(this, "AmplifyConfig", {
+        const amplifyConfigProps: AmplifyConfigLambdaConstructProps = {
             ...props,
             api: api.apiGatewayV2,
             appClientId: cognitoResources.webClientId,
             identityPoolId: cognitoResources.identityPoolId,
             userPoolId: cognitoResources.userPoolId,
-        });
+            region,
+        };
+
+        if (samlEnabled) {
+            amplifyConfigProps.federatedConfig = {
+                customCognitoAuthDomain: `${samlSettings.cognitoDomainPrefix}.auth.${region}.amazoncognito.com`,
+                customFederatedIdentityProviderName: samlSettings.name,
+                // if necessary, the callback urls can be determined here and passed to the UI through the config endpoint
+                // redirectSignIn: callbackUrls[0],
+                // redirectSignOut: callbackUrls[0],
+            };
+        }
+
+        const amplifyConfigFn = new AmplifyConfigLambdaConstruct(
+            this,
+            "AmplifyConfig",
+            amplifyConfigProps
+        );
 
         const assetBucketOutput = new cdk.CfnOutput(this, "AssetBucketNameOutput", {
             value: storageResources.s3.assetBucket.bucketName,
@@ -108,6 +174,29 @@ export class VAMS extends cdk.Stack {
         const artefactsBucketOutput = new cdk.CfnOutput(this, "artefactsBucketOutput", {
             value: storageResources.s3.artefactsBucket.bucketName,
             description: "S3 bucket for template notebooks",
+        });
+
+        if (samlEnabled) {
+            const samlIdpResponseUrl = new cdk.CfnOutput(this, "SAML_IdpResponseUrl", {
+                value: `https://${samlSettings.cognitoDomainPrefix}.auth.${region}.amazoncognito.com/saml2/idpresponse`,
+                description: "SAML IdP Response URL",
+            });
+        }
+
+        this.node.findAll().forEach((item) => {
+            if (item instanceof cdk.aws_lambda.Function) {
+                const fn = item as cdk.aws_lambda.Function;
+                if (fn.runtime.name == "nodejs14.x") {
+                    NagSuppressions.addResourceSuppressions(fn, [
+                        {
+                            id: "AwsSolutions-L1",
+                            reason: "The lambda function is configured with the appropriate runtime version",
+                        },
+                    ]);
+                }
+                return;
+            }
+            return;
         });
 
         NagSuppressions.addResourceSuppressions(

@@ -6,7 +6,7 @@
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as s3deployment from "aws-cdk-lib/aws-s3-deployment";
-import { Duration } from "aws-cdk-lib";
+import { Duration, RemovalPolicy } from "aws-cdk-lib";
 import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 import { requireTLSAddToResourcePolicy } from "./security";
@@ -34,15 +34,36 @@ export function storageResourcesBuilder(
     scope: Construct,
     staging_bucket?: string
 ): storageResources {
-    const accessLogsBucket = new s3.Bucket(scope, "AccessLogsBucket", {
-        encryption: s3.BucketEncryption.S3_MANAGED,
-        versioned: true,
-        blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
-    });
+    // dynamodb contributorInsightsEnabled
+    const dynamodbDefaultProps: Partial<dynamodb.TableProps> = {
+        // there is a low quota on the number of tables that can use this setting
+        // https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Limits.html
+        // set to false to avoid this when creating lots of environments
+        contributorInsightsEnabled: true,
+        pointInTimeRecovery: true,
+        removalPolicy: RemovalPolicy.DESTROY,
+        billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+        encryption: dynamodb.TableEncryption.AWS_MANAGED,
+    };
 
-    accessLogsBucket.addLifecycleRule({
-        enabled: true,
-        expiration: Duration.days(3650),
+    const s3DefaultProps: Partial<s3.BucketProps> = {
+        // Uncomment the next two lines to enable auto deletion of objects for easier cleanup of test environments.
+        // autoDeleteObjects: true,
+        // removalPolicy: RemovalPolicy.DESTROY,
+        blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+        versioned: true,
+        encryption: s3.BucketEncryption.S3_MANAGED,
+    };
+
+    const accessLogsBucket = new s3.Bucket(scope, "AccessLogsBucket", {
+        ...s3DefaultProps,
+        lifecycleRules: [
+            {
+                enabled: true,
+                expiration: Duration.days(1),
+                noncurrentVersionExpiration: Duration.days(1),
+            },
+        ],
     });
 
     requireTLSAddToResourcePolicy(accessLogsBucket);
@@ -55,6 +76,7 @@ export function storageResourcesBuilder(
     ]);
 
     const assetBucket = new s3.Bucket(scope, "AssetBucket", {
+        ...s3DefaultProps,
         cors: [
             {
                 allowedOrigins: ["*"],
@@ -63,29 +85,22 @@ export function storageResourcesBuilder(
                 exposedHeaders: ["ETag"],
             },
         ],
-        versioned: true,
-        encryption: s3.BucketEncryption.S3_MANAGED,
         serverAccessLogsBucket: accessLogsBucket,
         serverAccessLogsPrefix: "asset-bucket-logs/",
-        blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
     });
     requireTLSAddToResourcePolicy(assetBucket);
 
     const artefactsBucket = new s3.Bucket(scope, "ArtefactsBucket", {
-        versioned: false,
-        encryption: s3.BucketEncryption.S3_MANAGED,
+        ...s3DefaultProps,
         serverAccessLogsBucket: accessLogsBucket,
         serverAccessLogsPrefix: "artefacts-bucket-logs/",
-        blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
     });
     requireTLSAddToResourcePolicy(artefactsBucket);
 
     const sagemakerBucket = new s3.Bucket(scope, "SagemakerBucket", {
-        versioned: false,
-        encryption: s3.BucketEncryption.S3_MANAGED,
+        ...s3DefaultProps,
         serverAccessLogsBucket: accessLogsBucket,
         serverAccessLogsPrefix: "sagemaker-bucket-logs/",
-        blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
     });
     requireTLSAddToResourcePolicy(sagemakerBucket);
 
@@ -99,8 +114,7 @@ export function storageResourcesBuilder(
     });
 
     const assetStorageTable = new dynamodb.Table(scope, "AssetStorageTable", {
-        billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-        pointInTimeRecovery: true,
+        ...dynamodbDefaultProps,
         partitionKey: {
             name: "databaseId",
             type: dynamodb.AttributeType.STRING,
@@ -109,24 +123,18 @@ export function storageResourcesBuilder(
             name: "assetId",
             type: dynamodb.AttributeType.STRING,
         },
-        contributorInsightsEnabled: true,
-        encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });
 
     const databaseStorageTable = new dynamodb.Table(scope, "DatabaseStorageTable", {
-        billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-        pointInTimeRecovery: true,
+        ...dynamodbDefaultProps,
         partitionKey: {
             name: "databaseId",
             type: dynamodb.AttributeType.STRING,
         },
-        contributorInsightsEnabled: true,
-        encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });
 
     const jobStorageTable = new dynamodb.Table(scope, "JobStorageTable", {
-        billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-        pointInTimeRecovery: true,
+        ...dynamodbDefaultProps,
         partitionKey: {
             name: "jobId",
             type: dynamodb.AttributeType.STRING,
@@ -135,13 +143,10 @@ export function storageResourcesBuilder(
             name: "databaseId",
             type: dynamodb.AttributeType.STRING,
         },
-        contributorInsightsEnabled: true,
-        encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });
 
     const pipelineStorageTable = new dynamodb.Table(scope, "PipelineStorageTable", {
-        billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-        pointInTimeRecovery: true,
+        ...dynamodbDefaultProps,
         partitionKey: {
             name: "databaseId",
             type: dynamodb.AttributeType.STRING,
@@ -150,13 +155,10 @@ export function storageResourcesBuilder(
             name: "pipelineId",
             type: dynamodb.AttributeType.STRING,
         },
-        contributorInsightsEnabled: true,
-        encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });
 
     const workflowStorageTable = new dynamodb.Table(scope, "WorkflowStorageTable", {
-        billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-        pointInTimeRecovery: true,
+        ...dynamodbDefaultProps,
         partitionKey: {
             name: "databaseId",
             type: dynamodb.AttributeType.STRING,
@@ -165,16 +167,13 @@ export function storageResourcesBuilder(
             name: "workflowId",
             type: dynamodb.AttributeType.STRING,
         },
-        contributorInsightsEnabled: true,
-        encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });
 
     const workflowExecutionStorageTable = new dynamodb.Table(
         scope,
         "WorkflowExecutionStorageTable",
         {
-            billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-            pointInTimeRecovery: true,
+            ...dynamodbDefaultProps,
             partitionKey: {
                 name: "pk",
                 type: dynamodb.AttributeType.STRING,
@@ -183,14 +182,11 @@ export function storageResourcesBuilder(
                 name: "sk",
                 type: dynamodb.AttributeType.STRING,
             },
-            contributorInsightsEnabled: true,
-            encryption: dynamodb.TableEncryption.AWS_MANAGED,
         }
     );
 
     const metadataStorageTable = new dynamodb.Table(scope, "MetadataStorageTable", {
-        billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-        pointInTimeRecovery: true,
+        ...dynamodbDefaultProps,
         partitionKey: {
             name: "databaseId",
             type: dynamodb.AttributeType.STRING,
@@ -199,8 +195,6 @@ export function storageResourcesBuilder(
             name: "assetId",
             type: dynamodb.AttributeType.STRING,
         },
-        contributorInsightsEnabled: true,
-        encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });
 
     return {

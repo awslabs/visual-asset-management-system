@@ -120,9 +120,11 @@ VAMS Frontend is a ReactJS application.
 
 ### Security
 
-VAMS API and frontend are authorized through AWS Cognito user accounts only.
+VAMS API and frontend are authorized through AWS Cognito user accounts by default.
 
 ![Security](./diagrams/security.jpeg)
+
+Federated authentication with SAML is available with additional configuration. See [SAML Authentication in the developer guide](./DeveloperGuide.md#saml-authentication) for instructions.
 
 ### Code Layout
 

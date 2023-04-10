@@ -13,8 +13,16 @@ import { storageResources } from "../storage-builder";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 
+export interface SamlSettings {
+    metadata: cognito.UserPoolIdentityProviderSamlMetadata;
+    name: string;
+    attributeMapping: cognito.AttributeMapping;
+    cognitoDomainPrefix: string;
+}
+
 export interface CognitoWebNativeConstructProps extends cdk.StackProps {
     storageResources: storageResources;
+    samlSettings?: SamlSettings;
 }
 
 /**
@@ -24,6 +32,7 @@ export class CognitoWebNativeConstruct extends Construct {
     public userPool: cognito.UserPool;
     public webClientUserPool: cognito.UserPoolClient;
     public nativeClientUserPool: cognito.UserPoolClient;
+    public samlIdentityProviderName: string;
     public userPoolId: string;
     public identityPoolId: string;
     public webClientId: string;
@@ -62,35 +71,37 @@ export class CognitoWebNativeConstruct extends Construct {
         };
         cfnUserPool.userPoolAddOns = userPoolAddOnsProperty;
 
+        const supportedIdentityProviders = [cognito.UserPoolClientIdentityProvider.COGNITO];
+
+        if (props.samlSettings) {
+            const userPoolIdentityProviderSaml = new cognito.UserPoolIdentityProviderSaml(
+                this,
+                "MyUserPoolIdentityProviderSaml",
+                {
+                    metadata: props.samlSettings.metadata,
+                    userPool: userPool,
+                    name: props.samlSettings.name,
+                    attributeMapping: props.samlSettings.attributeMapping,
+                }
+            );
+            supportedIdentityProviders.push(
+                cognito.UserPoolClientIdentityProvider.custom(
+                    userPoolIdentityProviderSaml.providerName
+                )
+            );
+
+            userPool.addDomain("UserPoolDomain", {
+                cognitoDomain: {
+                    domainPrefix: props.samlSettings.cognitoDomainPrefix,
+                },
+            });
+        }
+
         const userPoolWebClient = new cognito.UserPoolClient(this, "UserPoolWebClient", {
             generateSecret: false,
             userPool: userPool,
             userPoolClientName: "WebClient",
-        });
-
-        const userPoolNativeClient = new cognito.UserPoolClient(this, "UserPoolNativeClient", {
-            generateSecret: true,
-            userPool: userPool,
-            userPoolClientName: "NativeClient",
-        });
-
-        const userPoolAppClient = new cognito.UserPoolClient(this, "UserPoolAppClient", {
-            oAuth: {
-                callbackUrls: ["https://aws.amazon.com/cognito/"],
-                logoutUrls: ["https://aws.amazon.com/cognito/"],
-                scopes: [
-                    cognito.OAuthScope.PHONE,
-                    cognito.OAuthScope.EMAIL,
-                    cognito.OAuthScope.OPENID,
-                ],
-                flows: {
-                    authorizationCodeGrant: true,
-                },
-            },
-            supportedIdentityProviders: [cognito.UserPoolClientIdentityProvider.COGNITO],
-            userPool: userPool,
-            generateSecret: false,
-            userPoolClientName: `aws_appClient_cfn${cdk.Aws.STACK_NAME}`,
+            supportedIdentityProviders,
         });
 
         const identityPool = new cognito.CfnIdentityPool(this, "IdentityPool", {
@@ -98,10 +109,6 @@ export class CognitoWebNativeConstruct extends Construct {
             cognitoIdentityProviders: [
                 {
                     clientId: userPoolWebClient.userPoolClientId,
-                    providerName: userPool.userPoolProviderName,
-                },
-                {
-                    clientId: userPoolNativeClient.userPoolClientId,
                     providerName: userPool.userPoolProviderName,
                 },
             ],
@@ -216,9 +223,13 @@ export class CognitoWebNativeConstruct extends Construct {
         new cdk.CfnOutput(this, "WebClientId", {
             value: userPoolWebClient.userPoolClientId,
         });
-        new cdk.CfnOutput(this, "NativeClientId", {
-            value: userPoolNativeClient.userPoolClientId,
-        });
+
+        if (props.samlSettings) {
+            new cdk.CfnOutput(this, "SAML_urn", {
+                value: `urn:amazon:cognito:sp:${userPool.userPoolId}`,
+                description: "SP urn / Audience URI / SP entity ID",
+            });
+        }
 
         // Add SSM Parameters
         new ssm.StringParameter(this, "COGNITO_USER_POOL_ID", {
@@ -233,19 +244,13 @@ export class CognitoWebNativeConstruct extends Construct {
             stringValue: userPoolWebClient.userPoolClientId,
         });
 
-        new ssm.StringParameter(this, "COGNITO_NATIVE_CLIENT_ID", {
-            stringValue: userPoolNativeClient.userPoolClientId,
-        });
-
         // assign public properties
         this.userPool = userPool;
         this.webClientUserPool = userPoolWebClient;
-        this.nativeClientUserPool = userPoolNativeClient;
         this.authenticatedRole = authenticatedRole;
         this.unauthenticatedRole = unauthenticatedRole;
         this.userPoolId = userPool.userPoolId;
         this.identityPoolId = identityPool.ref;
         this.webClientId = userPoolWebClient.userPoolClientId;
-        this.nativeClientId = userPoolNativeClient.userPoolClientId;
     }
 }

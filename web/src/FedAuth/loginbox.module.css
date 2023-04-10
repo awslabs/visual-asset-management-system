@@ -1,0 +1,24 @@
+/* CenteredBox.module.css */
+.container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 50vh;
+}
+.centeredBox {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 2rem;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background-color: #ffffff;
+}
+.button {
+    margin-bottom: 1rem;
+}
+.link {
+    color: #007bff;
+    text-decoration: none;
+}

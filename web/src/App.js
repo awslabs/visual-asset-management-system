@@ -49,44 +49,49 @@ function App() {
 
     return (
         <Authenticator components={components} loginMechanisms={["email"]}>
-            {({ signOut, user }) => (
-                <>
-                    <HeaderPortal>
-                        <TopNavigation
-                            identity={{
-                                href: "/",
-                                logo: {
-                                    src: logoWhite,
-                                    alt: "Visual Asset Management System",
-                                },
-                            }}
-                            utilities={[
-                                {
-                                    type: "menu-dropdown",
-                                    text: user.username || user.email,
-                                    description: user.username,
-                                    iconName: "user-profile",
-                                    onItemClick: (e) => {
-                                        if (e?.detail?.id === "signout") signOut();
+            {({ signOut, user }) => {
+                console.info("user", user);
+                const menuText =
+                    user.signInUserSession?.idToken?.payload?.name || user.username || user.email;
+                return (
+                    <>
+                        <HeaderPortal>
+                            <TopNavigation
+                                identity={{
+                                    href: "/",
+                                    logo: {
+                                        src: logoWhite,
+                                        alt: "Visual Asset Management System",
                                     },
-                                    items: [{ id: "signout", text: "Sign out" }],
-                                },
-                            ]}
-                            i18nStrings={{
-                                searchIconAriaLabel: "Search",
-                                searchDismissIconAriaLabel: "Close search",
-                                overflowMenuTriggerText: "More",
-                            }}
-                        />
-                    </HeaderPortal>
-                    <BrowserRouter>
-                        <AppRoutes
-                            navigationOpen={navigationOpen}
-                            setNavigationOpen={setNavigationOpen}
-                        />
-                    </BrowserRouter>
-                </>
-            )}
+                                }}
+                                utilities={[
+                                    {
+                                        type: "menu-dropdown",
+                                        text: menuText,
+                                        description: menuText,
+                                        iconName: "user-profile",
+                                        onItemClick: (e) => {
+                                            if (e?.detail?.id === "signout") signOut();
+                                        },
+                                        items: [{ id: "signout", text: "Sign out" }],
+                                    },
+                                ]}
+                                i18nStrings={{
+                                    searchIconAriaLabel: "Search",
+                                    searchDismissIconAriaLabel: "Close search",
+                                    overflowMenuTriggerText: "More",
+                                }}
+                            />
+                        </HeaderPortal>
+                        <BrowserRouter>
+                            <AppRoutes
+                                navigationOpen={navigationOpen}
+                                setNavigationOpen={setNavigationOpen}
+                            />
+                        </BrowserRouter>
+                    </>
+                );
+            }}
         </Authenticator>
     );
 }
