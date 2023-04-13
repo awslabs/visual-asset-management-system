@@ -83,9 +83,7 @@ export default function ListPage(props) {
                         ariaLabel="Breadcrumbs"
                     />
                 )}
-                <Grid
-                    gridDefinition={[{ colspan: { default: "6" } }, { colspan: { default: "6" } }]}
-                >
+                <Grid gridDefinition={[{ colspan: { default: "6" } }]}>
                     <div>
                         <TextContent>
                             <h1>
@@ -94,15 +92,6 @@ export default function ListPage(props) {
                             </h1>
                         </TextContent>
                     </div>
-                    {(CreateNewElement || onCreateCallback) && (
-                        <div style={{ float: "right" }}>
-                            <SpaceBetween direction={"horizontal"} size={"m"}>
-                                <Button onClick={handleOpenNewElement} variant="primary">
-                                    Create {singularNameTitleCase}
-                                </Button>
-                            </SpaceBetween>
-                        </div>
-                    )}
                 </Grid>
                 <Grid gridDefinition={[{ colspan: { default: "12" } }]}>
                     {isRelatedTable && (
@@ -120,6 +109,18 @@ export default function ListPage(props) {
                         listDefinition={listDefinition}
                         databaseId={databaseId}
                         setReload={setReload}
+                        UpdateSelectedElement={CreateNewElement}
+                        createNewElement={
+                            (CreateNewElement || onCreateCallback) && (
+                                <div style={{ float: "right" }}>
+                                    <SpaceBetween direction={"horizontal"} size={"m"}>
+                                        <Button onClick={handleOpenNewElement} variant="primary">
+                                            Create {singularNameTitleCase}
+                                        </Button>
+                                    </SpaceBetween>
+                                </div>
+                            )
+                        }
                     />
                 </Grid>
             </Box>

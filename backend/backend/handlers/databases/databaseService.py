@@ -33,6 +33,7 @@ except:
     response['body'] = json.dumps(
         {"message": "Failed Loading Environment Variables"})
 
+
 def get_databases(queryParams, showDeleted=False):
     db = boto3.client('dynamodb')
 
@@ -41,8 +42,8 @@ def get_databases(queryParams, showDeleted=False):
     if showDeleted:
         operator = "CONTAINS"
     filter = {
-        "databaseId":{
-            "AttributeValueList":[ {"S":"#deleted"} ],
+        "databaseId": {
+            "AttributeValueList": [{"S": "#deleted"}],
             "ComparisonOperator": f"{operator}"
         }
     }
@@ -51,11 +52,11 @@ def get_databases(queryParams, showDeleted=False):
         ScanFilter=filter,
         PaginationConfig={
             'MaxItems': int(queryParams['maxItems']),
-            'PageSize': int(queryParams['pageSize']), 
+            'PageSize': int(queryParams['pageSize']),
             'StartingToken': queryParams['startingToken']
         }
     ).build_full_result()
-    
+
     print("Fetching results")
     result = {}
     items = []
@@ -68,19 +69,21 @@ def get_databases(queryParams, showDeleted=False):
         result['NextToken'] = pageIterator['NextToken']
     return result
 
-def get_database(databaseId, showDeleted = False):
+
+def get_database(databaseId, showDeleted=False):
     print("Getting database: ", databaseId)
     table = dynamodb.Table(db_database)
     if showDeleted:
         databaseId = databaseId + "#deleted"
     response = table.get_item(Key={'databaseId': databaseId})
-    return response.get('Item', {}) 
+    return response.get('Item', {})
+
 
 def delete_database(databaseId):
     response = {
         'statusCode': 404,
         'message': 'Record not found'
-    } 
+    }
 
     table = dynamodb.Table(db_database)
     if "#deleted" in databaseId:
@@ -113,6 +116,7 @@ def delete_database(databaseId):
 
     return response
 
+
 def check_workflows(databaseId):
     result = False
     table = dynamodb.Table(workflow_database)
@@ -124,6 +128,7 @@ def check_workflows(databaseId):
     if response['Count'] > 0:
         result = True
     return result
+
 
 def check_pipelines(databaseId):
     result = False
@@ -137,6 +142,7 @@ def check_pipelines(databaseId):
         result = True
     return result
 
+
 def check_assets(databaseId):
     result = False
     table = dynamodb.Table(asset_database)
@@ -148,6 +154,7 @@ def check_assets(databaseId):
     if response['Count'] > 0:
         result = True
     return result
+
 
 def lambda_handler(event, context):
     print(event)
@@ -180,7 +187,7 @@ def lambda_handler(event, context):
                     queryParameters['pageSize'] = 100
                 else:
                     queryParameters['pageSize'] = queryParameters['maxItems']
-                    
+
                 if 'startingToken' not in queryParameters:
                     queryParameters['startingToken'] = None
 
@@ -191,25 +198,25 @@ def lambda_handler(event, context):
                 print("Validating parameters")
                 (valid, message) = validate({
                     'databaseId': {
-                        'value': pathParameters['databaseId'], 
+                        'value': pathParameters['databaseId'],
                         'validator': 'ID'
                     },
                 })
-                
+
                 if not valid:
                     print(message)
-                    response['body']=json.dumps({"message": message})
+                    response['body'] = json.dumps({"message": message})
                     response['statusCode'] = 400
                     return response
 
                 print("Getting Database")
-                response['body'] = json.dumps({"message":get_database(pathParameters['databaseId'], showDeleted)})
+                response['body'] = json.dumps({"message": get_database(pathParameters['databaseId'], showDeleted)})
                 print(response)
                 return response
         if httpMethod == 'DELETE':
             if 'databaseId' not in pathParameters:
                 message = "No database ID in API Call"
-                response['body']=json.dumps({"message":message})
+                response['body'] = json.dumps({"message": message})
                 response['statusCode'] = 400
                 print(response)
                 return response
@@ -217,20 +224,20 @@ def lambda_handler(event, context):
                 print("Validating parameters")
                 (valid, message) = validate({
                     'databaseId': {
-                        'value': pathParameters['databaseId'], 
+                        'value': pathParameters['databaseId'],
                         'validator': 'ID'
                     },
                 })
-                
+
                 if not valid:
                     print(message)
-                    response['body']=json.dumps({"message": message})
+                    response['body'] = json.dumps({"message": message})
                     response['statusCode'] = 400
                     return response
-                               
+
                 print("Deleting Database")
                 result = delete_database(pathParameters['databaseId'])
-                response['body'] = json.dumps({"message":result['message']})
+                response['body'] = json.dumps({"message": result['message']})
                 response['statusCode'] = result['statusCode']
                 print(response)
                 return response

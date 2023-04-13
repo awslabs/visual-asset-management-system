@@ -12,6 +12,8 @@ import * as cdk from "aws-cdk-lib";
 import { storageResources } from "../storage-builder";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as path from "path";
 
 export interface SamlSettings {
     metadata: cognito.UserPoolIdentityProviderSamlMetadata;
@@ -43,6 +45,27 @@ export class CognitoWebNativeConstruct extends Construct {
     constructor(parent: Construct, name: string, props: CognitoWebNativeConstructProps) {
         super(parent, name);
 
+        const preTokenGeneration = new lambda.DockerImageFunction(
+            this,
+            "PreTokenGenerationLambda",
+            {
+                code: lambda.DockerImageCode.fromImageAsset(
+                    path.join(__dirname, "../../../backend/"),
+                    {
+                        cmd: ["backend.handlers.auth.pretokengen.lambda_handler"],
+                    }
+                ),
+                timeout: Duration.minutes(2),
+                memorySize: 1000,
+                environment: {
+                    TABLE_NAME: props.storageResources.dynamo.authEntitiesStorageTable.tableName,
+                },
+            }
+        );
+        props.storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(
+            preTokenGeneration
+        );
+
         const userPool = new cognito.UserPool(this, "UserPool", {
             selfSignUpEnabled: true,
             autoVerify: { email: true },
@@ -61,6 +84,14 @@ export class CognitoWebNativeConstruct extends Construct {
                 requireDigits: true,
                 requireSymbols: true,
                 tempPasswordValidity: Duration.days(3),
+            },
+            lambdaTriggers: {
+                preTokenGeneration,
+            },
+            customAttributes: {
+                "custom:groups": new cognito.StringAttribute({
+                    mutable: true,
+                }),
             },
         });
 

@@ -41,6 +41,7 @@ import {
 
 import { buildMetadataFunctions } from "./lambdaBuilder/metadataFunctions";
 import { buildUploadAssetWorkflow } from "./uploadAssetWorkflowBuilder";
+import { buildAuthFunctions } from "./lambdaBuilder/authFunctions";
 
 interface apiGatewayLambdaConfiguration {
     routePath: string;
@@ -363,6 +364,17 @@ export function apiBuilder(
         method: apigwv2.HttpMethod.POST,
         api: api.apiGatewayV2,
     });
+
+    const authFunctions = buildAuthFunctions(
+        scope,
+        storageResources.dynamo.authEntitiesStorageTable
+    );
+    attachFunctionToApi(scope, authFunctions.groups, {
+        routePath: "/auth/groups",
+        method: apigwv2.HttpMethod.GET,
+        api: api.apiGatewayV2,
+    });
+
     //Enabling API Gateway Access Logging: Currently the only way to do this is via V1 constructs
     //https://github.com/aws/aws-cdk/issues/11100#issuecomment-904627081
     const accessLogs = new logs.LogGroup(scope, "VAMS-API-AccessLogs");

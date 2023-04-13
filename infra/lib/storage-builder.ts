@@ -28,6 +28,7 @@ export interface storageResources {
         workflowStorageTable: dynamodb.Table;
         workflowExecutionStorageTable: dynamodb.Table;
         metadataStorageTable: dynamodb.Table;
+        authEntitiesStorageTable: dynamodb.Table;
     };
 }
 export function storageResourcesBuilder(
@@ -197,6 +198,17 @@ export function storageResourcesBuilder(
         },
     });
 
+    const authEntitiesTable = new dynamodb.Table(scope, "AuthEntitiesTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "entityType",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "sk",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
     return {
         s3: {
             assetBucket: assetBucket,
@@ -213,6 +225,7 @@ export function storageResourcesBuilder(
             workflowStorageTable: workflowStorageTable,
             workflowExecutionStorageTable: workflowExecutionStorageTable,
             metadataStorageTable: metadataStorageTable,
+            authEntitiesStorageTable: authEntitiesTable,
         },
     };
 }
