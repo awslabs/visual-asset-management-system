@@ -31,6 +31,7 @@ export default function TableList(props) {
         setReload,
         createNewElement,
         UpdateSelectedElement,
+        editEnabled,
     } = props;
     const {
         columnDefinitions,
@@ -195,17 +196,19 @@ export default function TableList(props) {
                         }
                         actions={
                             <SpaceBetween direction="horizontal" size="xs">
-                                <Button
-                                    disabled={
-                                        deleting || collectionProps.selectedItems?.length !== 1
-                                    }
-                                    onClick={() => {
-                                        console.log("Edit", collectionProps.selectedItems[0]);
-                                        setEditOpen(true);
-                                    }}
-                                >
-                                    Edit
-                                </Button>
+                                {editEnabled && (
+                                    <Button
+                                        disabled={
+                                            deleting || collectionProps.selectedItems?.length !== 1
+                                        }
+                                        onClick={() => {
+                                            console.log("Edit", collectionProps.selectedItems[0]);
+                                            setEditOpen(true);
+                                        }}
+                                    >
+                                        Edit
+                                    </Button>
+                                )}
 
                                 <Button
                                     disabled={
@@ -346,4 +349,5 @@ TableList.propTypes = {
     setReload: PropTypes.func.isRequired,
     listDefinition: PropTypes.instanceOf(ListDefinition).isRequired,
     databaseId: PropTypes.string,
+    editEnabled: PropTypes.bool,
 };

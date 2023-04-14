@@ -31,6 +31,7 @@ export default function ListPage(props) {
         fetchAllElements,
         onCreateCallback,
         isRelatedTable,
+        editEnabled,
     } = props;
     const [reload, setReload] = useState(true);
     const [loading, setLoading] = useState(true);
@@ -108,6 +109,7 @@ export default function ListPage(props) {
                         loading={loading}
                         listDefinition={listDefinition}
                         databaseId={databaseId}
+                        editEnabled={editEnabled}
                         setReload={setReload}
                         UpdateSelectedElement={CreateNewElement}
                         createNewElement={
@@ -146,4 +148,5 @@ ListPage.propTypes = {
     fetchElements: PropTypes.func.isRequired,
     onCreateCallback: PropTypes.func,
     isRelatedTable: PropTypes.bool,
+    editEnabled: PropTypes.bool,
 };
