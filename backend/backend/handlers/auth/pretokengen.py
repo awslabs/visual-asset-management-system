@@ -56,7 +56,7 @@ def lambda_handler(event, context):
             "claimsOverrideDetails": {
                 "claimsToAddOrOverride": {
                     "vams:roles": "super-admin,pipelines,workflows,assets",
-                    "vams:groups": json.dumps(claims_to_save)
+                    "vams:groups": json.dumps(list(claims_to_save))
                 }
             }
         }
