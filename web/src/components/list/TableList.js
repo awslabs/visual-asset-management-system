@@ -185,6 +185,7 @@ export default function TableList(props) {
                         {pluralNameTitleCase}
                     </Header>
                 }
+                wrapLines={true}
                 columnDefinitions={columnDefinitions.map(
                     ({ id, header, CellWrapper, sortingField }) => {
                         return {

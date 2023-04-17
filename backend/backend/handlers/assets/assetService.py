@@ -8,6 +8,7 @@ from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from backend.common.validators import validate
 from backend.handlers.assets.assetCount import update_asset_count
+from backend.handlers.metadata.read import get_metadata
 
 dynamodb = boto3.resource('dynamodb')
 dynamodb_client = boto3.client('dynamodb')
@@ -34,6 +35,7 @@ unitTest['body']=json.dumps(unitTest['body'])
 try:
     asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
     db_database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
+    metadata_database = os.environ['METADATA_STORAGE_TABLE_NAME']
 except:
     print("Failed Loading Environment Variables")
     response['body']['message'] = "Failed Loading Environment Variables"
@@ -66,6 +68,13 @@ def get_all_assets(queryParams, showDeleted=False):
     items = []
     for item in pageIterator['Items']:
         deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
+
+        databaseId = deserialized_document['databaseId']
+        assetId = deserialized_document['assetId']
+        metadata = get_metadata(databaseId, assetId)
+        if metadata and "metadata1" in metadata:
+            deserialized_document['metadata1'] = metadata['metadata1']
+
         items.append(deserialized_document)
     result['Items'] = items
     

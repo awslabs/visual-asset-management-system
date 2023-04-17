@@ -119,6 +119,7 @@ export function apiBuilder(
         scope,
         storageResources.dynamo.assetStorageTable,
         storageResources.dynamo.databaseStorageTable,
+        storageResources.dynamo.metadataStorageTable,
         storageResources.s3.assetBucket
     );
     attachFunctionToApi(scope, assetService, {

@@ -15,6 +15,7 @@ export function buildAssetService(
     scope: Construct,
     assetStorageTable: dynamodb.Table,
     databaseStorageTable: dynamodb.Table,
+    metadataStorageTable: dynamodb.Table,
     assetStorageBucket: s3.Bucket
 ): lambda.Function {
     const name = "assetService";
@@ -27,11 +28,13 @@ export function buildAssetService(
         environment: {
             DATABASE_STORAGE_TABLE_NAME: databaseStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
+            METADATA_STORAGE_TABLE_NAME: metadataStorageTable.tableName,
         },
     });
     assetStorageTable.grantReadWriteData(assetService);
     databaseStorageTable.grantReadWriteData(assetService);
     assetStorageBucket.grantReadWrite(assetService);
+    metadataStorageTable.grantReadWriteData(assetService);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
