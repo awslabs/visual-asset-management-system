@@ -75,6 +75,9 @@ def get_all_assets(queryParams, showDeleted=False):
         if metadata and "metadata1" in metadata:
             deserialized_document['metadata1'] = metadata['metadata1']
 
+        if metadata and "product-tags" in metadata:
+            deserialized_document['product-tags'] = metadata['product-tags']
+
         items.append(deserialized_document)
     result['Items'] = items
     

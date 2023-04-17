@@ -11,7 +11,7 @@ import ColumnDefinition from "./types/ColumnDefinition";
 export const AssetListDefinition = new ListDefinition({
     pluralName: "assets",
     pluralNameTitleCase: "Assets",
-    visibleColumns: ["assetName", "databaseId", "description", "assetType", "metadata1"],
+    visibleColumns: ["assetName", "databaseId", "description", "assetType", "metadata1", "product-tags"],
     filterColumns: [
         { name: "databaseId", placeholder: "Database" },
         { name: "assetType", placeholder: "Type" },
@@ -58,6 +58,12 @@ export const AssetListDefinition = new ListDefinition({
             header: "Metadata1",
             cellWrapper: (props) => <>{props.children}</>,
             sortingField: "metadata1",
+        }),
+        new ColumnDefinition({
+            id: "product-tags",
+            header: "Product Tags",
+            cellWrapper: (props) => <>{props.children}</>,
+            sortingField: "product-tags",
         }),
     ],
 });
