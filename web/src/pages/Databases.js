@@ -21,7 +21,6 @@ export default function Databases() {
             fetchAllElements={fetchAllDatabases}
             fetchElements={fetchAllDatabases}
             editEnabled={true}
-
         />
     );
 }
