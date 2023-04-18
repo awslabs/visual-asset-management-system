@@ -7,6 +7,7 @@ import json
 from boto3.dynamodb.types import TypeDeserializer
 from boto3.dynamodb.conditions import Key
 from backend.common.validators import validate
+from backend.handlers.auth import create_ddb_filter, get_database_set, request_to_claims, create_ddb_kwargs_for_token_filters
 
 dynamodb = boto3.resource('dynamodb')
 response = {
@@ -32,6 +33,35 @@ except:
     print("Failed Loading Environment Variables")
     response['body'] = json.dumps(
         {"message": "Failed Loading Environment Variables"})
+
+
+def get_databases_with_token_filter(queryParams, tokens):
+    db = boto3.client('dynamodb')
+
+    paginator = db.get_paginator('scan')
+
+    kwargs = create_ddb_kwargs_for_token_filters(tokens)
+    del kwargs['ProjectionExpression']
+    pageIterator = paginator.paginate(
+        PaginationConfig={
+            'MaxItems': int(queryParams['maxItems']),
+            'PageSize': int(queryParams['pageSize']),
+            'StartingToken': queryParams['startingToken']
+        },
+        **kwargs,
+    ).build_full_result()
+
+    print("Fetching results")
+    result = {}
+    items = []
+    for item in pageIterator['Items']:
+        deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
+        items.append(deserialized_document)
+    result['Items'] = items
+
+    if 'NextToken' in pageIterator:
+        result['NextToken'] = pageIterator['NextToken']
+    return result
 
 
 def get_databases(queryParams, showDeleted=False):
@@ -156,6 +186,156 @@ def check_assets(databaseId):
     return result
 
 
+def get_handler(event, pathParameters, queryParameters, showDeleted):
+    if 'databaseId' not in pathParameters:
+        print("Listing Databases")
+        if 'maxItems' not in queryParameters:
+            queryParameters['maxItems'] = 100
+            queryParameters['pageSize'] = 100
+        else:
+            queryParameters['pageSize'] = queryParameters['maxItems']
+
+        if 'startingToken' not in queryParameters:
+            queryParameters['startingToken'] = None
+
+        response['body'] = json.dumps({"message": get_databases(queryParameters, showDeleted)})
+        print(response)
+        return response
+    else:
+        print("Validating parameters")
+        (valid, message) = validate({
+            'databaseId': {
+                'value': pathParameters['databaseId'],
+                'validator': 'ID'
+            },
+        })
+
+        if not valid:
+            print(message)
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            return response
+
+        print("Getting Database")
+        response['body'] = json.dumps({"message": get_database(pathParameters['databaseId'], showDeleted)})
+        print(response)
+        return response
+
+
+def delete_handler(event, pathParameters, queryParameters):
+    if 'databaseId' not in pathParameters:
+        message = "No database ID in API Call"
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        print(response)
+        return response
+    else:
+        print("Validating parameters")
+        (valid, message) = validate({
+            'databaseId': {
+                'value': pathParameters['databaseId'],
+                'validator': 'ID'
+            },
+        })
+
+        if not valid:
+            print(message)
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            return response
+
+        print("Deleting Database")
+        result = delete_database(pathParameters['databaseId'])
+        response['body'] = json.dumps({"message": result['message']})
+        response['statusCode'] = result['statusCode']
+        print(response)
+        return response
+
+
+def delete_handler_with_tokens(event, pathParameters, queryParameters, tokens):
+    if 'databaseId' not in pathParameters:
+        message = "No database ID in API Call"
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        print(response)
+        return response
+    else:
+        print("Validating parameters")
+        (valid, message) = validate({
+            'databaseId': {
+                'value': pathParameters['databaseId'],
+                'validator': 'ID'
+            },
+        })
+
+        if not valid:
+            print(message)
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            return response
+
+        database = get_database(pathParameters['databaseId'])
+        if 'acl' in database and len(set(database['acl']) & set(tokens)) == 0:
+            response['body'] = json.dumps({
+                "message": "Unauthorized",
+            })
+            response['statusCode'] = 403
+            return response
+
+        print("Deleting Database")
+        result = delete_database(pathParameters['databaseId'])
+        response['body'] = json.dumps({"message": result['message']})
+        response['statusCode'] = result['statusCode']
+        print(response)
+        return response
+
+
+def get_handler_with_tokens(event, pathParameters, queryParameters, tokens):
+    if 'databaseId' not in pathParameters:
+        print("Listing Databases")
+        if 'maxItems' not in queryParameters:
+            queryParameters['maxItems'] = 100
+            queryParameters['pageSize'] = 100
+        else:
+            queryParameters['pageSize'] = queryParameters['maxItems']
+
+        if 'startingToken' not in queryParameters:
+            queryParameters['startingToken'] = None
+
+        response['body'] = json.dumps({
+            "message": get_databases_with_token_filter(queryParameters, tokens)
+        })
+        print(response)
+        return response
+    else:
+        print("Validating parameters")
+        (valid, message) = validate({
+            'databaseId': {
+                'value': pathParameters['databaseId'],
+                'validator': 'ID'
+            },
+        })
+
+        if not valid:
+            print(message)
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            return response
+
+        print("Getting Database")
+        database = get_database(pathParameters['databaseId'])
+        if 'acl' in database and len(set(database['acl']) & set(tokens)) == 0:
+            response['body'] = json.dumps({
+                "message": "Unauthorized",
+            })
+            response['statusCode'] = 403
+            return response
+
+        response['body'] = json.dumps({"message": database})
+        print(response)
+        return response
+
+
 def lambda_handler(event, context):
     print(event)
     response = {
@@ -179,68 +359,19 @@ def lambda_handler(event, context):
     try:
         httpMethod = event['requestContext']['http']['method']
         print(httpMethod)
-        if httpMethod == 'GET':
-            if 'databaseId' not in pathParameters:
-                print("Listing Databases")
-                if 'maxItems' not in queryParameters:
-                    queryParameters['maxItems'] = 100
-                    queryParameters['pageSize'] = 100
-                else:
-                    queryParameters['pageSize'] = queryParameters['maxItems']
 
-                if 'startingToken' not in queryParameters:
-                    queryParameters['startingToken'] = None
+        claims_and_roles = request_to_claims(event)
 
-                response['body'] = json.dumps({"message": get_databases(queryParameters, showDeleted)})
-                print(response)
-                return response
-            else:
-                print("Validating parameters")
-                (valid, message) = validate({
-                    'databaseId': {
-                        'value': pathParameters['databaseId'],
-                        'validator': 'ID'
-                    },
-                })
-
-                if not valid:
-                    print(message)
-                    response['body'] = json.dumps({"message": message})
-                    response['statusCode'] = 400
-                    return response
-
-                print("Getting Database")
-                response['body'] = json.dumps({"message": get_database(pathParameters['databaseId'], showDeleted)})
-                print(response)
-                return response
-        if httpMethod == 'DELETE':
-            if 'databaseId' not in pathParameters:
-                message = "No database ID in API Call"
-                response['body'] = json.dumps({"message": message})
-                response['statusCode'] = 400
-                print(response)
-                return response
-            else:
-                print("Validating parameters")
-                (valid, message) = validate({
-                    'databaseId': {
-                        'value': pathParameters['databaseId'],
-                        'validator': 'ID'
-                    },
-                })
-
-                if not valid:
-                    print(message)
-                    response['body'] = json.dumps({"message": message})
-                    response['statusCode'] = 400
-                    return response
-
-                print("Deleting Database")
-                result = delete_database(pathParameters['databaseId'])
-                response['body'] = json.dumps({"message": result['message']})
-                response['statusCode'] = result['statusCode']
-                print(response)
-                return response
+        if "super-admin" in claims_and_roles['roles']:
+            if httpMethod == 'GET':
+                return get_handler(event, pathParameters, queryParameters, showDeleted)
+            if httpMethod == 'DELETE':
+                return delete_handler(event, pathParameters, queryParameters)
+        else:
+            if httpMethod == 'GET':
+                return get_handler_with_tokens(event, pathParameters, queryParameters, claims_and_roles['tokens'])
+            if httpMethod == 'DELETE':
+                return delete_handler_with_tokens(event, pathParameters, queryParameters, claims_and_roles['tokens'])
 
     except Exception as e:
         response['statusCode'] = 500

@@ -59,6 +59,8 @@ export class CognitoWebNativeConstruct extends Construct {
                 memorySize: 1000,
                 environment: {
                     TABLE_NAME: props.storageResources.dynamo.authEntitiesStorageTable.tableName,
+                    ASSET_STORAGE_TABLE_NAME: props.storageResources.dynamo.assetStorageTable.tableName,
+                    DATABASE_STORAGE_TABLE_NAME: props.storageResources.dynamo.databaseStorageTable.tableName,
                 },
             }
         );

@@ -9,6 +9,9 @@ from boto3.dynamodb.types import TypeDeserializer
 from backend.common.validators import validate
 from botocore.exceptions import ClientError
 
+from backend.handlers.auth import create_ddb_filter, get_database_set, request_to_claims
+
+
 dynamodb = boto3.resource('dynamodb')
 response = {
     'statusCode': 200,
@@ -27,13 +30,47 @@ unitTest = {
         "databaseId": "Unit_Test"
     }
 }
-unitTest['body']=json.dumps(unitTest['body'])
+unitTest['body'] = json.dumps(unitTest['body'])
 
 try:
     pipeline_database = os.environ["PIPELINE_STORAGE_TABLE_NAME"]
 except:
     print("Failed Loading Environment Variables")
-    response['body'] =json.dumps({"message":"Failed Loading Environment Variables"}) 
+    response['body'] = json.dumps({"message": "Failed Loading Environment Variables"})
+
+
+def get_all_pipelines_with_database_filter(queryParams, databaseList):
+    dynamodb = boto3.client('dynamodb')
+    deserializer = TypeDeserializer()
+
+    paginator = dynamodb.get_paginator('scan')
+
+    kwargs = {
+        "TableName": pipeline_database,
+        "PaginationConfig": {
+            'MaxItems': int(queryParams['maxItems']),
+            'PageSize': int(queryParams['pageSize']),
+            'StartingToken': queryParams['startingToken']
+        }
+    }
+    kwargs.update(create_ddb_filter(databaseList))
+
+    pageIterator = paginator.paginate(
+        **kwargs,
+    ).build_full_result()
+
+    print("Fetching results")
+    result = {}
+    items = []
+    for item in pageIterator['Items']:
+        deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
+        items.append(deserialized_document)
+    result['Items'] = items
+
+    if 'NextToken' in pageIterator:
+        result['NextToken'] = pageIterator['NextToken']
+    return result
+
 
 def get_all_pipelines(queryParams, showDeleted=False):
     dynamodb = boto3.client('dynamodb')
@@ -44,8 +81,8 @@ def get_all_pipelines(queryParams, showDeleted=False):
     if showDeleted:
         operator = "CONTAINS"
     filter = {
-        "databaseId":{
-            "AttributeValueList":[ {"S":"#deleted"} ],
+        "databaseId": {
+            "AttributeValueList": [{"S": "#deleted"}],
             "ComparisonOperator": f"{operator}"
         }
     }
@@ -54,11 +91,11 @@ def get_all_pipelines(queryParams, showDeleted=False):
         ScanFilter=filter,
         PaginationConfig={
             'MaxItems': int(queryParams['maxItems']),
-            'PageSize': int(queryParams['pageSize']), 
+            'PageSize': int(queryParams['pageSize']),
             'StartingToken': queryParams['startingToken']
         }
     ).build_full_result()
-    
+
     print("Fetching results")
     result = {}
     items = []
@@ -66,10 +103,11 @@ def get_all_pipelines(queryParams, showDeleted=False):
         deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
         items.append(deserialized_document)
     result['Items'] = items
-    
+
     if 'NextToken' in pageIterator:
         result['NextToken'] = pageIterator['NextToken']
     return result
+
 
 def get_pipelines(databaseId, showDeleted):
     table = dynamodb.Table(pipeline_database)
@@ -81,23 +119,25 @@ def get_pipelines(databaseId, showDeleted):
     )
     return response['Items']
 
+
 def get_pipeline(databaseId, pipelineId, showDeleted=False):
     table = dynamodb.Table(pipeline_database)
     if showDeleted:
-        databaseId = databaseId + "#deleted"    
+        databaseId = databaseId + "#deleted"
     response = table.get_item(Key={'databaseId': databaseId, 'pipelineId': pipelineId})
-    return response.get('Item', {}) 
+    return response.get('Item', {})
+
 
 def delete_pipeline(databaseId, pipelineId):
     response = {
         'statusCode': 404,
         'message': 'Record not found'
-    } 
+    }
     table = dynamodb.Table(pipeline_database)
     if "#deleted" in databaseId:
         return response
     item = get_pipeline(databaseId, pipelineId)
-    
+
     if item:
         print("Deleting pipeline: ", item)
         try:
@@ -105,14 +145,14 @@ def delete_pipeline(databaseId, pipelineId):
             if userResource['isProvided'] == False:
                 if item['pipelineType'] == 'SageMaker':
                     delete_stack(item['pipelineId'])
-                else: #Lambda Pipeline
+                else:  # Lambda Pipeline
                     delete_lambda(item['pipelineId'])
-        except KeyError: #For pipelines created before user provided resources were implemented
+        except KeyError:  # For pipelines created before user provided resources were implemented
             if item['pipelineType'] == 'SageMaker':
                 delete_stack(item['pipelineId'])
-            else: #Lambda Pipeline
+            else:  # Lambda Pipeline
                 delete_lambda(item['pipelineId'])
-        
+
         item['databaseId'] = databaseId + "#deleted"
         table.put_item(
             Item=item
@@ -122,6 +162,7 @@ def delete_pipeline(databaseId, pipelineId):
         response['statusCode'] = 200
         response['message'] = "Pipeline deleted"
     return response
+
 
 def delete_lambda(pipelineId):
     lambda_client = boto3.client('lambda')
@@ -135,8 +176,8 @@ def delete_lambda(pipelineId):
 
 
 def delete_stack(pipelineId):
-    cf_client= boto3.client('cloudformation')
-    ecr_client= boto3.client('ecr')
+    cf_client = boto3.client('cloudformation')
+    ecr_client = boto3.client('ecr')
 
     try:
         print("Deleting ECR repo: ", pipelineId)
@@ -149,15 +190,228 @@ def delete_stack(pipelineId):
         print("ECR Repository not found: ", pipelineId)
         print(nfe)
 
-    try: 
+    try:
         print("Deleting CloudFormation stack: ", pipelineId)
-        response=cf_client.delete_stack(
+        response = cf_client.delete_stack(
             StackName=pipelineId,
         )
         print("CloudFormation response: ", response)
     except ClientError as client_error:
         print("Failed to delete stack")
         print(client_error)
+
+
+def get_handler(event, response, pathParameters, queryParameters, showDeleted):
+    if 'pipelineId' not in pathParameters:
+        if 'databaseId' in pathParameters:
+            print("Validating Parameters")
+            (valid, message) = validate({
+                'databaseId': {
+                    'value': pathParameters['databaseId'],
+                    'validator': 'ID'
+                },
+            })
+            if not valid:
+                print(message)
+                response['body'] = json.dumps({"message": message})
+                response['statusCode'] = 400
+                return response
+            print("Listing Pipelines for Database: ", pathParameters['databaseId'])
+            response['body'] = json.dumps({"message": get_pipelines(pathParameters['databaseId'], showDeleted)})
+            print(response)
+            return response
+        else:
+            print("Listing All Pipelines")
+            response['body'] = json.dumps({"message": get_all_pipelines(queryParameters, showDeleted)})
+            print(response)
+            return response
+    else:
+        if 'databaseId' not in pathParameters:
+            message = "No database ID in API Call"
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            print(response)
+            return response
+
+        print("Validating Parameters")
+        (valid, message) = validate({
+            'databaseId': {
+                'value': pathParameters['databaseId'],
+                'validator': 'ID'
+            },
+            'pipelineId': {
+                'value': pathParameters['pipelineId'],
+                'validator': 'ID'
+            }
+        })
+        if not valid:
+            print(message)
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            return response
+
+        print("Getting Pipeline: ", pathParameters['pipelineId'])
+        response['body'] = json.dumps({"message": get_pipeline(
+            pathParameters['databaseId'], pathParameters['pipelineId'], showDeleted)})
+        print(response)
+        return response
+
+
+def get_handler_with_tokens(event, response, pathParameters, queryParameters, tokens):
+    requestid = event['requestContext']['requestId']
+    if "pipelineId" in pathParameters and "databaseId" in pathParameters:
+        print("Validating Parameters")
+        (valid, message) = validate({
+            'databaseId': {
+                'value': pathParameters['databaseId'],
+                'validator': 'ID'
+            },
+            'pipelineId': {
+                'value': pathParameters['pipelineId'],
+                'validator': 'ID'
+            }
+        })
+        if not valid:
+            print(message)
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            return response
+
+        databases = get_database_set(tokens)
+        if pathParameters['databaseId'] not in databases:
+            response['body'] = json.dumps({
+                "message": "Not Authorized",
+                "requestid": requestid,
+            })
+            response['statusCode'] = 403
+            return response
+        print("Getting Pipeline: ", pathParameters['pipelineId'])
+        response['body'] = json.dumps({"message": get_pipeline(
+            pathParameters['databaseId'], pathParameters['pipelineId'])})
+        print(response)
+        return response
+
+    if "databaseId" in pathParameters:
+        print("Validating Parameters")
+        (valid, message) = validate({
+            'databaseId': {
+                'value': pathParameters['databaseId'],
+                'validator': 'ID'
+            },
+        })
+        if not valid:
+            print(message)
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            return response
+
+        databases = get_database_set(tokens)
+        if pathParameters['databaseId'] not in databases:
+            response['body'] = json.dumps({
+                "message": "Not Authorized",
+                "requestid": requestid,
+            })
+            response['statusCode'] = 403
+            return response
+
+        print("Listing Pipelines for Database: ", pathParameters['databaseId'])
+        response['body'] = json.dumps({"message": get_pipelines(pathParameters['databaseId'])})
+        print(response)
+        return response
+
+    if "pipelineId" in pathParameters and not "databaseId" in pathParameters:
+        message = "No database ID in API Call"
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        print(response)
+        return response
+
+    # otherwise, return all pipelines
+    databases = get_database_set(tokens)
+    print("Listing All Pipelines")
+    response['body'] = json.dumps({"message": get_all_pipelines_with_database_filter(queryParameters, databases)})
+    return response
+
+
+def delete_handler(event, response, pathParameters, queryParameters):
+    if 'databaseId' not in pathParameters:
+        message = "No database ID in API Call"
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        print(response)
+        return response
+    if 'pipelineId' not in pathParameters:
+        message = "No pipeline ID in API Call"
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        print(response)
+        return response
+
+    print("Validating Parameters")
+    (valid, message) = validate({
+        'databaseId': {
+            'value': pathParameters['databaseId'],
+            'validator': 'ID'
+        }
+    })
+    if not valid:
+        print(message)
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        return response
+
+    print("Deleting Pipeline: ", pathParameters['pipelineId'])
+    result = delete_pipeline(pathParameters['databaseId'], pathParameters['pipelineId'])
+    response['body'] = json.dumps({"message": result['message']})
+    response['statusCode'] = result['statusCode']
+    print(response)
+    return response
+
+
+def delete_handler_with_tokens(event, response, pathParameters, queryParameters, tokens):
+    requestid = event['requestContext']['requestId']
+    if 'databaseId' not in pathParameters:
+        message = "No database ID in API Call"
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        print(response)
+        return response
+    if 'pipelineId' not in pathParameters:
+        message = "No pipeline ID in API Call"
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        print(response)
+        return response
+
+    print("Validating Parameters")
+    (valid, message) = validate({
+        'databaseId': {
+            'value': pathParameters['databaseId'],
+            'validator': 'ID'
+        }
+    })
+    if not valid:
+        print(message)
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        return response
+
+    databases = get_database_set(tokens)
+    if pathParameters['databaseId'] not in databases:
+        response['body'] = json.dumps({
+            "message": "Not Authorized",
+            "requestid": requestid,
+        })
+        response['statusCode'] = 403
+        return response
+
+    print("Deleting Pipeline: ", pathParameters['pipelineId'])
+    result = delete_pipeline(pathParameters['databaseId'], pathParameters['pipelineId'])
+    response['body'] = json.dumps({"message": result['message']})
+    response['statusCode'] = result['statusCode']
+    print(response)
+    return response
+
 
 def lambda_handler(event, context):
     print(event)
@@ -181,99 +435,31 @@ def lambda_handler(event, context):
         queryParameters['maxItems'] = 100
         queryParameters['pageSize'] = 100
     else:
-        queryParameters['pageSize'] = queryParameters['maxItems']        
+        queryParameters['pageSize'] = queryParameters['maxItems']
     if 'startingToken' not in queryParameters:
         queryParameters['startingToken'] = None
 
     try:
         httpMethod = event['requestContext']['http']['method']
         print(httpMethod)
-        if httpMethod == 'GET':
-            if 'pipelineId' not in pathParameters:
-                if 'databaseId' in pathParameters:
-                    print("Validating Parameters")
-                    (valid, message) = validate({
-                        'databaseId': {
-                            'value': pathParameters['databaseId'], 
-                            'validator': 'ID'
-                        },
-                    })
-                    if not valid:
-                        print(message)
-                        response['body']=json.dumps({"message": message})
-                        response['statusCode'] = 400
-                        return response                    
-                    print("Listing Pipelines for Database: ", pathParameters['databaseId'])
-                    response['body'] = json.dumps({"message":get_pipelines(pathParameters['databaseId'], showDeleted)})
-                    print(response)
-                    return response
-                else:
-                    print("Listing All Pipelines")
-                    response['body'] = json.dumps({"message":get_all_pipelines(queryParameters, showDeleted)})
-                    print(response)
-                    return response
-            else:
-                if 'databaseId' not in pathParameters:
-                    message = "No database ID in API Call"
-                    response['body']=json.dumps({"message":message})
-                    response['statusCode'] = 400
-                    print(response)
-                    return response
-                
-                print("Validating Parameters")
-                (valid, message) = validate({
-                    'databaseId': {
-                        'value': pathParameters['databaseId'], 
-                        'validator': 'ID'
-                    },
-                    'pipelineId': {
-                        'value': pathParameters['pipelineId'], 
-                        'validator': 'ID'
-                    }
-                })
-                if not valid:
-                    print(message)
-                    response['body']=json.dumps({"message": message})
-                    response['statusCode'] = 400
-                    return response
 
-                print("Getting Pipeline: ", pathParameters['pipelineId'])
-                response['body'] = json.dumps({"message":get_pipeline(pathParameters['databaseId'], pathParameters['pipelineId'], showDeleted)})
-                print(response)
-                return response
-        if httpMethod == 'DELETE':
-            if 'databaseId' not in pathParameters:
-                message = "No database ID in API Call"
-                response['body']=json.dumps({"message":message})
-                response['statusCode'] = 400
-                print(response)
-                return response
-            if 'pipelineId' not in pathParameters:
-                message = "No pipeline ID in API Call"
-                response['body']=json.dumps({"message":message})
-                response['statusCode'] = 400
-                print(response)
-                return response
+        claims_and_roles = request_to_claims(event)
 
-            print("Validating Parameters")
-            (valid, message) = validate({
-                'databaseId': {
-                    'value': pathParameters['databaseId'], 
-                    'validator': 'ID'
-                }
-            })
-            if not valid:
-                print(message)
-                response['body']=json.dumps({"message": message})
-                response['statusCode'] = 400
-                return response
-            
-            print("Deleting Pipeline: ", pathParameters['pipelineId'])
-            result = delete_pipeline(pathParameters['databaseId'], pathParameters['pipelineId'])
-            response['body'] = json.dumps({"message":result['message']})
-            response['statusCode'] = result['statusCode']
-            print(response)
+        if "super-admin" in claims_and_roles['roles']:
+            if httpMethod == 'GET':
+                return get_handler(event, response, pathParameters, queryParameters, showDeleted)
+            if httpMethod == 'DELETE':
+                return delete_handler(event, response, pathParameters, queryParameters)
+        elif "pipelines" in claims_and_roles['roles']:
+            if httpMethod == 'GET':
+                return get_handler_with_tokens(event, response, pathParameters, queryParameters, claims_and_roles['tokens'])
+            if httpMethod == 'DELETE':
+                return delete_handler_with_tokens(event, response, pathParameters, queryParameters, claims_and_roles['tokens'])
+        else:
+            response['statusCode'] = 403
+            response['body'] = json.dumps({"message": "Not Authorized"})
             return response
+
     except Exception as e:
         response['statusCode'] = 500
         print("Error!", e.__class__, "occurred.")

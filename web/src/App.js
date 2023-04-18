@@ -86,6 +86,7 @@ function App() {
                         <BrowserRouter>
                             <AppRoutes
                                 navigationOpen={navigationOpen}
+                                user={user}
                                 setNavigationOpen={setNavigationOpen}
                             />
                         </BrowserRouter>

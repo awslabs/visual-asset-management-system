@@ -234,10 +234,7 @@ export function apiBuilder(
         api: api.apiGatewayV2,
     });
 
-    const pipelineService = buildPipelineService(
-        scope,
-        storageResources.dynamo.pipelineStorageTable
-    );
+    const pipelineService = buildPipelineService(scope, storageResources);
     attachFunctionToApi(scope, pipelineService, {
         routePath: "/database/{databaseId}/pipelines",
         method: apigwv2.HttpMethod.GET,
@@ -260,10 +257,7 @@ export function apiBuilder(
     });
 
     //Workflows
-    const workflowService = buildWorkflowService(
-        scope,
-        storageResources.dynamo.workflowStorageTable
-    );
+    const workflowService = buildWorkflowService(scope, storageResources);
     attachFunctionToApi(scope, workflowService, {
         routePath: "/database/{databaseId}/workflows",
         method: apigwv2.HttpMethod.GET,
@@ -365,10 +359,7 @@ export function apiBuilder(
         api: api.apiGatewayV2,
     });
 
-    const authFunctions = buildAuthFunctions(
-        scope,
-        storageResources.dynamo.authEntitiesStorageTable
-    );
+    const authFunctions = buildAuthFunctions(scope, storageResources);
     attachFunctionToApi(scope, authFunctions.groups, {
         routePath: "/auth/groups",
         method: apigwv2.HttpMethod.GET,

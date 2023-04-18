@@ -66,7 +66,7 @@ const routeTable = [
 ];
 
 export const AppRoutes = (props) => {
-    const { navigationOpen, setNavigationOpen } = props;
+    const { navigationOpen, setNavigationOpen, user } = props;
 
     const buildRoute = (routeOptions, i) => {
         const { path, active, Page } = routeOptions;
@@ -78,7 +78,7 @@ export const AppRoutes = (props) => {
                     <AppLayout
                         disableContentPaddings={navigationOpen}
                         content={<Page />}
-                        navigation={<Navigation activeHref={active} />}
+                        navigation={<Navigation activeHref={active} user={user} />}
                         navigationOpen={navigationOpen}
                         onNavigationChange={({ detail }) => setNavigationOpen(detail.open)}
                         toolsHide={true}

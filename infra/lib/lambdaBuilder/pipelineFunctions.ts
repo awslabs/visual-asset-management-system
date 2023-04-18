@@ -11,6 +11,7 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../security";
+import { storageResources } from "../storage-builder";
 
 export function buildCreatePipelineFunction(
     scope: Construct,
@@ -156,7 +157,7 @@ function createRoleToAttachToLambdaPipelines(scope: Construct, assetBucket: s3.B
 
 export function buildPipelineService(
     scope: Construct,
-    pipelineStorageTable: dynamodb.Table
+    storageResources: storageResources
 ): lambda.Function {
     const name = "pipelineService";
     const pipelineService = new lambda.DockerImageFunction(scope, name, {
@@ -166,10 +167,13 @@ export function buildPipelineService(
         timeout: Duration.minutes(15),
         memorySize: 3008,
         environment: {
-            PIPELINE_STORAGE_TABLE_NAME: pipelineStorageTable.tableName,
+            PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
         },
     });
-    pipelineStorageTable.grantReadWriteData(pipelineService);
+    storageResources.dynamo.databaseStorageTable.grantReadData(pipelineService);
+    storageResources.dynamo.pipelineStorageTable.grantReadWriteData(pipelineService);
     pipelineService.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,

@@ -18,6 +18,7 @@ if (config.CUSTOMER_LOGO) {
 let navItems = [
     {
         type: "section",
+        role: "assets",
         text: "Manage",
         items: [
             { type: "link", text: "Databases", href: "/databases" },
@@ -27,6 +28,7 @@ let navItems = [
     },
     {
         type: "section",
+        role: "assets",
         text: "Visualize",
         items: [
             { type: "link", text: "3D Model Viewer", href: "/visualizers/model" },
@@ -36,11 +38,13 @@ let navItems = [
     },
     {
         type: "section",
+        role: "pipelines",
         text: "Transform",
         items: [{ type: "link", text: "Pipelines", href: "/pipelines" }],
     },
     {
         type: "section",
+        role: "workflows",
         text: "Orchestrate & Automate",
         items: [{ type: "link", text: "Workflows", href: "/workflows" }],
     },
@@ -60,11 +64,19 @@ export function Navigation({
     header = navHeader,
     items = navItems,
     onFollowHandler = defaultOnFollowHandler,
+    user,
 }) {
+    const roles = JSON.parse(user.signInUserSession.idToken.payload["vams:roles"]);
     return (
         <SideNavigation
             header={config.CUSTOMER_LOGO ? navHeader : null}
-            items={items}
+            items={items.filter((item) => {
+                return (
+                    item.role === undefined ||
+                    roles.includes(item.role) ||
+                    roles.includes("super-admin")
+                );
+            })}
             activeHref={activeHref}
             onFollow={onFollowHandler}
         />

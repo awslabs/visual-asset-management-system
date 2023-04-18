@@ -5,34 +5,41 @@
 
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as path from "path";
-import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
+import { storageResources } from "../storage-builder";
 
 interface AuthFunctions {
     groups: lambda.Function;
 }
-export function buildAuthFunctions(scope: Construct, ddbtable: dynamodb.Table): AuthFunctions {
+export function buildAuthFunctions(
+    scope: Construct,
+    storageResources: storageResources
+): AuthFunctions {
     return {
-        groups: buildAuthFunction(scope, ddbtable, "groups"),
+        groups: buildAuthFunction(scope, storageResources, "groups"),
     };
 }
 
 export function buildAuthFunction(
     scope: Construct,
-    ddbtable: dynamodb.Table,
+    storageResources: storageResources,
     name: string
 ): lambda.Function {
-    const fun = new lambda.DockerImageFunction(scope, name + "-metadata", {
+    const fun = new lambda.DockerImageFunction(scope, name, {
         code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
             cmd: [`backend.handlers.auth.${name}.lambda_handler`],
         }),
         timeout: Duration.minutes(1),
         memorySize: 512,
         environment: {
-            TABLE_NAME: ddbtable.tableName,
+            TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
         },
     });
-    ddbtable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     return fun;
 }

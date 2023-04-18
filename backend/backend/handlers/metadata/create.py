@@ -5,6 +5,7 @@ import json
 import traceback
 
 from backend.handlers.metadata import logger, mask_sensitive_data, build_response, create_or_update, validate_event, validate_body, ValidationError
+from backend.handlers.auth import get_database_set, request_to_claims
 
 
 def lambda_handler(event, context):
@@ -12,14 +13,21 @@ def lambda_handler(event, context):
     try:
 
         validate_event(event)
-        
+
         body = validate_body(event)
         databaseId = event['pathParameters']['databaseId']
         assetId = event['pathParameters']['assetId']
+        claims_and_roles = request_to_claims(event)
+        databases = get_database_set(claims_and_roles['tokens'])
+        if databaseId in databases or "super-user" in claims_and_roles['roles']:
+            create_or_update(databaseId, assetId, body['metadata'])
+            return build_response(200, json.dumps({"status": "OK"}))
+        else:
+            return build_response(403, json.dumps({
+                "status": "Not Authorized",
+                "requestid": event['requestContext']['requestId']
+            }))
 
-        create_or_update(databaseId, assetId, body['metadata'])
-
-        return build_response(200, json.dumps({ "status": "OK" }))
     except ValidationError as ex:
         logger.info(traceback.format_exc())
         return build_response(ex.code, json.dumps(ex.resp))

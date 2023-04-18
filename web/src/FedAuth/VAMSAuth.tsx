@@ -158,7 +158,16 @@ const FedLoginBox: React.FC<LoginProps> = ({ onLogin, onLocal }) => {
                     </button>
                     <p>
                         <small>
-                            <a onClick={onLocal} href="#local" className={styles.link}>
+                            <a
+                                onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    console.log("click", e);
+                                    onLocal();
+                                }}
+                                href="#local"
+                                className={styles.link}
+                            >
                                 Login with local credentials
                             </a>
                         </small>
@@ -191,10 +200,12 @@ const VAMSAuth: React.FC<AuthProps> = (props) => {
 
     const [user, setUser] = useState(null);
     const [useLocal, setUseLocal] = useState(false);
+    const [userWantsLocal, setUserWantsLocal] = useState(false);
 
     const [config, setConfig] = useState<any>(Cache.getItem("config"));
     const [ampInit, setAmpInit] = useState(false);
 
+    console.log("useLocal", useLocal);
     useEffect(() => {
         if (config && !config.bucket && user) {
             API.get("api", `secure-config`, {}).then((value) => {
@@ -207,7 +218,7 @@ const VAMSAuth: React.FC<AuthProps> = (props) => {
 
     useEffect(() => {
         if (config) {
-            setUseLocal(!config.federatedConfig);
+            setUseLocal(!config.federatedConfig || userWantsLocal);
             configureAmplify(config, setAmpInit);
         } else {
             fetch(`${basePath}/api/amplify-config`).then(async (response) => {
@@ -216,7 +227,7 @@ const VAMSAuth: React.FC<AuthProps> = (props) => {
                 setConfig(config);
             });
         }
-    }, [ampInit, config, setConfig, useLocal]);
+    }, [ampInit, config, setConfig, useLocal, userWantsLocal]);
 
     useEffect(() => {
         if (!ampInit) return;
@@ -272,7 +283,7 @@ const VAMSAuth: React.FC<AuthProps> = (props) => {
 
     return (
         <FedLoginBox
-            onLocal={() => setUseLocal(true)}
+            onLocal={() => setUserWantsLocal(true)}
             onLogin={() =>
                 Auth.federatedSignIn({
                     customProvider: config.federatedConfig?.customFederatedIdentityProviderName,

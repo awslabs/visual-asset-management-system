@@ -40,14 +40,29 @@ def remember_observed_claims(claims: set):
 
 # https://docs.aws.amazon.com/cognito/latest/developerguide/role-based-access-control.html
 
+def parse_group_list(group_str: str):
+    """parse a group list from a Cognito user"""
+    return set(group_str.strip("[]").split(", "))
+
 
 def lambda_handler(event, context):
 
-    logger.info("event: {}".format(event))
-    groups = event['request']['userAttributes']['custom:groups']
-    claims_to_save = set(groups.strip("[]").split(", "))
+    logger.info("logger event: {}", event)
+    print("event", event)
+    claims_to_save = set()
+    if 'custom:groups' in event['request']['userAttributes']:
+        groups = event['request']['userAttributes']['custom:groups']
+        claims_to_save = parse_group_list(groups)
+        remember_observed_claims(claims_to_save)
 
-    remember_observed_claims(claims_to_save)
+    roles = ["pipelines", "workflows", "assets"]
+
+    try:
+        cognito_groups = event['request']['groupConfiguration']['groupsToOverride']
+        if "super-admin" in cognito_groups:
+            roles.append("super-admin")
+    except:
+        pass
 
     result = {}
     result.update(event)
@@ -55,10 +70,11 @@ def lambda_handler(event, context):
         "response": {
             "claimsOverrideDetails": {
                 "claimsToAddOrOverride": {
-                    "vams:roles": "super-admin,pipelines,workflows,assets",
-                    "vams:groups": json.dumps(list(claims_to_save))
+                    "vams:roles": json.dumps(roles),
+                    "vams:tokens": json.dumps(list(claims_to_save))
                 }
             }
         }
     })
+    print("result", result)
     return result
