@@ -367,11 +367,15 @@ def lambda_handler(event, context):
                 return get_handler(event, pathParameters, queryParameters, showDeleted)
             if httpMethod == 'DELETE':
                 return delete_handler(event, pathParameters, queryParameters)
-        else:
+        elif "assets" in claims_and_roles['roles']:
             if httpMethod == 'GET':
                 return get_handler_with_tokens(event, pathParameters, queryParameters, claims_and_roles['tokens'])
             if httpMethod == 'DELETE':
                 return delete_handler_with_tokens(event, pathParameters, queryParameters, claims_and_roles['tokens'])
+        else:
+            response['statusCode'] = 403
+            response['body'] = json.dumps({"message": "Not Authorized"})
+            return response
 
     except Exception as e:
         response['statusCode'] = 500
