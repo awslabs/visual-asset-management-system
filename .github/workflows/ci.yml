@@ -93,6 +93,7 @@ jobs:
                   CDK_NAG_ENABLED=true
                   export STACK_NAME=CfnNagTest
                   export REGION=us-east-1
+                  export VAMS_ADMIN_EMAIL=user@example.com
                   npx cdk synth
 
             - name: eslint
