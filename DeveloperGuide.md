@@ -74,6 +74,118 @@ The following stack outputs are required by your identity provider to establish 
 
 SAML may be disabled in your stack by setting `samlEnabled` to false and deploying the stack.
 
+### Role Based Authorization Policy
+
+VAMS comes with an initial set of roles with a permissive policy that provides broad access to users once they authenticate. The policy is implemented in python in a [pre token generation Lambda trigger](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-lambda-pre-token-generation.html). This implementation is in the file `backend/backend/handlers/auth/pretokengen.py`.
+
+You may customize the policy by changing `pretokengen.py` to suit your needs. Follow along to see how.
+
+Below are two examples of an `event` received by `pretokengen.py`. The first example shows user authentication event via the Cognito Identity Provider and the user belongs to the `super-admin` and `group1` groups.
+
+```
+{
+ "version": "1",
+ "triggerSource": "TokenGeneration_RefreshTokens",
+ "region": "us-east-1",
+ "userPoolId": "YOUR USER POOL ID",
+ "userName": "YOUR USER",
+ "callerContext": {
+  "awsSdkVersion": "aws-sdk-unknown-unknown",
+  "clientId": "YOUR CLIENT ID"
+ },
+ "request": {
+  "userAttributes": {
+   "sub": "YOUR SUB",
+   "cognito:user_status": "CONFIRMED",
+   "email_verified": "true",
+   "email": "YOUR EMAIL"
+  },
+  "groupConfiguration": {
+   "groupsToOverride": [
+    "super-admin",
+    "group1"
+   ],
+   "iamRolesToOverride": [],
+   "preferredRole": null
+  }
+ },
+ "response": {
+  "claimsOverrideDetails": null
+ }
+}
+```
+
+The next event shows a user authenticated via a Azure Active Directory via SAML.
+
+```
+{
+ "version": "1",
+ "triggerSource": "TokenGeneration_HostedAuth",
+ "region": "us-east-1",
+ "userPoolId": "USERPOOLID",
+ "userName": "AZUREUSERID",
+ "callerContext": {
+  "awsSdkVersion": "aws-sdk-unknown-unknown",
+  "clientId": "CLIENTID"
+ },
+ "request": {
+  "userAttributes": {
+   "sub": "3512c2ad-f902-44b2-903e-3ff8c9c27d5a",
+   "identities": "[{\"userId\":\"...\",\"providerName\":\"azuread1\",\"providerType\":\"SAML\",\"issuer\":\"https://sts.windows.net/UUID/\",\"primary\":true,\"dateCreated\":1111111111111}]",
+   "cognito:user_status": "EXTERNAL_PROVIDER",
+   "name": "USERNAME",
+   "custom:groups": "[GROUPID1, GROUPID2]"
+  },
+  "groupConfiguration": {
+   "groupsToOverride": [
+    "USERPOOLID_azuread1"
+   ],
+   "iamRolesToOverride": [],
+   "preferredRole": null
+  }
+ },
+ "response": {
+  "claimsOverrideDetails": null
+ }
+}
+```
+
+In this example you can see that the user belongs to the group `USERPOLID_azuread1` in the Cognito User Pool. You can also see that there is a `custom:groups` mapping that includes claims provided by the federated identity provider.
+
+Any data contained in these messages or additional claims that you can map from your federated identity provider can be used as input to a policy to map the four different VAMS roles to your users.
+
+In `pretokengen.py` you will find a function, `determine_vams_roles` that contains a permissive policy by default.
+
+As an example, let's create a policy that maps vams roles to different groups according to their roles and responsibilities. A creative department needs access to assets. The engineering department needs access to create pipelines and workflows. Both the creative and engineering department users belong to groups in the identity provider that designates their role in the organization. Finally, a group of administrators has access to all functions.
+
+The following `determine_vams_roles` function sets this policy:
+
+```
+def determine_vams_roles(event):
+    """determine the VAMS roles for a user based on their Cognito group list"""
+
+    # Default set of roles
+    roles = []
+    try:
+        cognito_groups = event['request']['groupConfiguration']['groupsToOverride']
+        if "super-admin" in cognito_groups:
+            roles.append("super-admin")
+
+        if "creative_dept" in cognito_groups:
+            roles.append("assets")
+
+        if "engineering_dept" in cognito_groups:
+            roles.append("pipelines", "workflows")
+
+        return roles
+
+    except Exception as ex:
+        logger.warn("groups were not assigned to user", traceback.format_exc(ex))
+        return roles
+```
+
+This new `determine_vams_roles` can replace the existing function in `pretokengen.py`. Once the file is saved, you can update the stack by running `cdk deploy` to deploy the new version of the function.
+
 # Uninstalling
 
 1. Run `cdk destroy` from infra folder

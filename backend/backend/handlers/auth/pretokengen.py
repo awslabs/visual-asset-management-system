@@ -17,6 +17,31 @@ dynamodb = boto3.resource('dynamodb', region_name=region)
 table = dynamodb.Table(os.environ['TABLE_NAME'])
 
 
+def determine_vams_roles(event):
+    """determine the VAMS roles for a user based on their Cognito group list"""
+
+    # Default set of roles
+    roles = ["pipelines", "workflows", "assets"]
+    try:
+        cognito_groups = event['request']['groupConfiguration']['groupsToOverride']
+        if "super-admin" in cognito_groups:
+            roles.append("super-admin")
+
+        # Example: grant access to pipelines and workflows when the user is in the group "pipelines-workflows".
+        #
+        # if "pipelines-workflows" in cognito_groups:
+        #     roles.append("pipelines")
+        #     roles.append("workflows")
+        #
+        # Note: remove "pipelines" and "workflows" from the initial list above.
+
+        return roles
+
+    except Exception as ex:
+        logger.warn("groups were not assigned to user", traceback.format_exc(ex))
+        return roles
+
+
 def remember_observed_claims(claims: set):
     """add claims to the claims record in dynamodb using ADD in the update expression"""
     values = {
@@ -55,14 +80,7 @@ def lambda_handler(event, context):
         claims_to_save = parse_group_list(groups)
         remember_observed_claims(claims_to_save)
 
-    roles = ["pipelines", "workflows", "assets"]
-
-    try:
-        cognito_groups = event['request']['groupConfiguration']['groupsToOverride']
-        if "super-admin" in cognito_groups:
-            roles.append("super-admin")
-    except:
-        pass
+    roles = determine_vams_roles(event)
 
     result = {}
     result.update(event)
