@@ -110,7 +110,7 @@ def get_all_assets(queryParams, showDeleted=False):
     return result
 
 
-def get_assets(databaseId, showDeleted):
+def get_assets(databaseId, showDeleted=False):
     table = dynamodb.Table(asset_database)
     # indexName = 'databaseId-assetId-index'
 
