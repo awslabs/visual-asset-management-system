@@ -66,7 +66,10 @@ export function Navigation({
     onFollowHandler = defaultOnFollowHandler,
     user,
 }) {
-    const roles = JSON.parse(user.signInUserSession.idToken.payload["vams:roles"]);
+    let roles = [];
+    try {
+        roles = JSON.parse(user.signInUserSession.idToken.payload["vams:roles"]);
+    } catch (e) {}
     return (
         <SideNavigation
             header={config.CUSTOMER_LOGO ? navHeader : null}
