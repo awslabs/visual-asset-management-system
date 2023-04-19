@@ -37,13 +37,20 @@ function App() {
 
     useEffect(() => {
         const cachedNavigationOpen = Cache.getItem("navigationOpen");
-        setNavigationOpen(cachedNavigationOpen);
+        if (cachedNavigationOpen !== undefined && cachedNavigationOpen !== null) {
+            setNavigationOpen(cachedNavigationOpen);
+        }
     }, []);
 
     useEffect(() => {
         const cachedNavigationOpen = Cache.getItem("navigationOpen");
-        if (navigationOpen !== cachedNavigationOpen) {
+        if (
+            navigationOpen !== cachedNavigationOpen &&
+            cachedNavigationOpen !== undefined &&
+            cachedNavigationOpen !== null
+        ) {
             Cache.setItem("navigationOpen", navigationOpen);
+            console.log("set navigation open in cache ", navigationOpen);
         }
     }, [navigationOpen]);
 
