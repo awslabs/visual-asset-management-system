@@ -25,13 +25,15 @@ def lambda_handler(event, context):
                 'sk': 'observed_claims',
             },
         )
-        claims = {"claims": list(response['Item']['claims'])}
+
+        claims = {"claims": list(response['Item']['claims']) + [event['requestContext']
+                                                                ['authorizer']['jwt']['claims']['cognito:username']]}
         return {
             'statusCode': 200,
             'body': json.dumps(claims)
         }
     except Exception as e:
-        logger.error(traceback.format_exc())
+        logger.error(traceback.format_exc(), event)
         return {
             'statusCode': 500,
             'body': json.dumps(e)

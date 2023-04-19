@@ -67,7 +67,7 @@ def remember_observed_claims(claims: set):
 
 def parse_group_list(group_str: str):
     """parse a group list from a Cognito user"""
-    return set(group_str.strip("[]").split(", "))
+    return set(group_str.strip("[]").split(", ") + ["vams:all_users"])
 
 
 def lambda_handler(event, context):
@@ -89,7 +89,7 @@ def lambda_handler(event, context):
             "claimsOverrideDetails": {
                 "claimsToAddOrOverride": {
                     "vams:roles": json.dumps(roles),
-                    "vams:tokens": json.dumps(list(claims_to_save))
+                    "vams:tokens": json.dumps(list(claims_to_save) + ["vams:all_users", event['userName']])
                 }
             }
         }
