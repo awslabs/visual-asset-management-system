@@ -31,12 +31,14 @@ def request_to_claims(request):
 
 def create_ddb_kwargs_for_token_filters(tokens):
     attrs = {":claim{}".format(n): {"S": v} for n, v in list(enumerate(tokens))}
+    attrs[":deleted"] = { "S": "#deleted" }
     kwargs = {
         "ExpressionAttributeNames": {
             "#acl":  "acl",
+            "#dbid": "databaseId",
         },
         "ExpressionAttributeValues": attrs,
-        "FilterExpression": " OR ".join("contains(#acl, {v})".format(v=claim) for claim in attrs.keys()),
+        "FilterExpression": "NOT contains(#dbid, :deleted) AND ({})".format(" OR ".join("contains(#acl, {v})".format(v=claim) for claim in attrs.keys())),
         "Limit": 1000,
         "TableName": db_database,
         "ProjectionExpression": "databaseId"

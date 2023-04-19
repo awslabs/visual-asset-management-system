@@ -279,7 +279,7 @@ def get_handler_with_tokens(event, response, pathParameters, queryParameters, to
             return response
 
         print("Listing Workflows for Database: ", pathParameters['databaseId'])
-        response['body'] = json.dumps({"message": get_workflows(pathParameters['databaseId'], tokens['showDeleted'])})
+        response['body'] = json.dumps({"message": get_workflows(pathParameters['databaseId'], tokens)})
         print(response)
         return response
 
