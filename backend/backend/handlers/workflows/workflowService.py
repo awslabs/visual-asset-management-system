@@ -283,10 +283,17 @@ def get_handler_with_tokens(event, response, pathParameters, queryParameters, to
         print(response)
         return response
 
-    print("Listing All Workflows")
+
     databases = get_database_set(tokens)
-    response['body'] = json.dumps({"message": get_all_workflows_with_database_filter(queryParameters, databases)})
-    print(response)
+    if len(databases) > 0:
+        print("Listing All Workflows")
+        response['body'] = json.dumps({"message": get_all_workflows_with_database_filter(queryParameters, databases)})
+        print(response)
+    else:
+        print("No databases, return empty list of workflows")
+        response['body'] = {
+            "message": [],
+        }
     return response
 
 

@@ -45,6 +45,11 @@ def get_all_assets_with_database_filter(queryParams, databaseList):
 
     paginator = dynamodb_client.get_paginator('scan')
 
+    if len(databaseList) < 1:
+        return {
+            'Items': [],
+        }
+
     kwargs = {
         "TableName": asset_database,
         "PaginationConfig": {
@@ -286,12 +291,20 @@ def get_handler_with_tokens(event, response, pathParameters, queryParameters, to
         print(response)
         return response
 
-    print("Listing All Assets with filter")
     databases = get_database_set(tokens)
-    response['body'] = json.dumps({
-        "message": get_all_assets_with_database_filter(queryParameters, databases),
-        "requestid": requestid,
-    })
+    if len(databases) > 0:
+        print("Listing All Assets with filter")
+        response['body'] = json.dumps({
+            "message": get_all_assets_with_database_filter(queryParameters, databases),
+            "requestid": requestid,
+        })
+    else:
+        print("database list was empty, returning empty")
+        response['body'] = json.dumps({
+            "message": [],
+            "requestid": requestid,
+        })
+
     print(response)
     return response
 
