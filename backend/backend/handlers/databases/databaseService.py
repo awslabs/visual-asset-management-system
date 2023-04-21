@@ -186,7 +186,7 @@ def check_assets(databaseId):
     return result
 
 
-def get_handler(event, pathParameters, queryParameters, showDeleted):
+def get_handler(event, response, pathParameters, queryParameters, showDeleted):
     if 'databaseId' not in pathParameters:
         print("Listing Databases")
         if 'maxItems' not in queryParameters:
@@ -222,7 +222,7 @@ def get_handler(event, pathParameters, queryParameters, showDeleted):
         return response
 
 
-def delete_handler(event, pathParameters, queryParameters):
+def delete_handler(event, response, pathParameters, queryParameters):
     if 'databaseId' not in pathParameters:
         message = "No database ID in API Call"
         response['body'] = json.dumps({"message": message})
@@ -252,7 +252,7 @@ def delete_handler(event, pathParameters, queryParameters):
         return response
 
 
-def delete_handler_with_tokens(event, pathParameters, queryParameters, tokens):
+def delete_handler_with_tokens(event, response, pathParameters, queryParameters, tokens):
     if 'databaseId' not in pathParameters:
         message = "No database ID in API Call"
         response['body'] = json.dumps({"message": message})
@@ -290,7 +290,7 @@ def delete_handler_with_tokens(event, pathParameters, queryParameters, tokens):
         return response
 
 
-def get_handler_with_tokens(event, pathParameters, queryParameters, tokens):
+def get_handler_with_tokens(event, response, pathParameters, queryParameters, tokens):
     if 'databaseId' not in pathParameters:
         print("Listing Databases")
         if 'maxItems' not in queryParameters:
@@ -364,14 +364,14 @@ def lambda_handler(event, context):
 
         if "super-admin" in claims_and_roles['roles']:
             if httpMethod == 'GET':
-                return get_handler(event, pathParameters, queryParameters, showDeleted)
+                return get_handler(event, response, pathParameters, queryParameters, showDeleted)
             if httpMethod == 'DELETE':
-                return delete_handler(event, pathParameters, queryParameters)
+                return delete_handler(event, response, pathParameters, queryParameters)
         elif "assets" in claims_and_roles['roles']:
             if httpMethod == 'GET':
-                return get_handler_with_tokens(event, pathParameters, queryParameters, claims_and_roles['tokens'])
+                return get_handler_with_tokens(event, response, pathParameters, queryParameters, claims_and_roles['tokens'])
             if httpMethod == 'DELETE':
-                return delete_handler_with_tokens(event, pathParameters, queryParameters, claims_and_roles['tokens'])
+                return delete_handler_with_tokens(event, response, pathParameters, queryParameters, claims_and_roles['tokens'])
         else:
             response['statusCode'] = 403
             response['body'] = json.dumps({"message": "Not Authorized"})

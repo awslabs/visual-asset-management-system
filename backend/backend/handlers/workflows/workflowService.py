@@ -104,7 +104,7 @@ def get_all_workflows(queryParams, showDeleted=False):
     return result
 
 
-def get_workflows(databaseId, showDeleted):
+def get_workflows(databaseId, showDeleted=False):
     table = dynamodb.Table(workflow_database)
     if showDeleted:
         databaseId = databaseId + "#deleted"
@@ -279,7 +279,7 @@ def get_handler_with_tokens(event, response, pathParameters, queryParameters, to
             return response
 
         print("Listing Workflows for Database: ", pathParameters['databaseId'])
-        response['body'] = json.dumps({"message": get_workflows(pathParameters['databaseId'], tokens)})
+        response['body'] = json.dumps({"message": get_workflows(pathParameters['databaseId'])})
         print(response)
         return response
 
@@ -290,7 +290,7 @@ def get_handler_with_tokens(event, response, pathParameters, queryParameters, to
     return response
 
 
-def delete_handler_with_tokens(event, response, pathParameters):
+def delete_handler_with_tokens(event, response, pathParameters, tokens):
     requestid = event['requestContext']['requestId']
 
     if 'databaseId' not in pathParameters:

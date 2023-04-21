@@ -109,7 +109,7 @@ def get_all_pipelines(queryParams, showDeleted=False):
     return result
 
 
-def get_pipelines(databaseId, showDeleted):
+def get_pipelines(databaseId, showDeleted=False):
     table = dynamodb.Table(pipeline_database)
     if showDeleted:
         databaseId = databaseId + "#deleted"
@@ -328,8 +328,13 @@ def get_handler_with_tokens(event, response, pathParameters, queryParameters, to
 
     # otherwise, return all pipelines
     databases = get_database_set(tokens)
-    print("Listing All Pipelines")
-    response['body'] = json.dumps({"message": get_all_pipelines_with_database_filter(queryParameters, databases)})
+    if len(databases) > 0:
+        print("Listing All Pipelines")
+        response['body'] = json.dumps({"message": get_all_pipelines_with_database_filter(queryParameters, databases)})
+    else:
+        print("No access to any databases")
+        response['body'] = json.dumps({"message": [] })
+
     return response
 
 
