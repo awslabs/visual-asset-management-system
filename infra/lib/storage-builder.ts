@@ -53,6 +53,7 @@ export function storageResourcesBuilder(
         blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
         versioned: true,
         encryption: s3.BucketEncryption.S3_MANAGED,
+        objectOwnership: s3.ObjectOwnership.OBJECT_WRITER,
     };
 
     const accessLogsBucket = new s3.Bucket(scope, "AccessLogsBucket", {

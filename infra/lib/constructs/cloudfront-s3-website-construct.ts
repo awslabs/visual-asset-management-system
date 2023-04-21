@@ -63,6 +63,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
             serverAccessLogsPrefix: "web-app-access-log-bucket-logs/",
             versioned: true,
             blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+            objectOwnership: s3.ObjectOwnership.OBJECT_WRITER,
         });
         requireTLSAddToResourcePolicy(accessLogsBucket);
 
@@ -83,6 +84,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
             serverAccessLogsBucket: accessLogsBucket,
             serverAccessLogsPrefix: "web-app-access-log-bucket-logs/",
             blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+            objectOwnership: s3.ObjectOwnership.OBJECT_WRITER,
         });
         requireTLSAddToResourcePolicy(siteBucket);
 
