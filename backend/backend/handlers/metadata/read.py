@@ -32,12 +32,13 @@ def lambda_handler(event, context):
 
         claims_and_roles = request_to_claims(event)
         databases = get_database_set(claims_and_roles['tokens'])
-        if databaseId in databases or "super-user" in claims_and_roles['roles']:
+        if databaseId in databases or "super-admin" in claims_and_roles['roles']:
             return build_response(200, json.dumps({
                 "version": "1",
                 "metadata": get_metadata(databaseId, assetId)
             }))
         else:
+            print("raising 403 databaseId not in claims and roles?", databaseId, claims_and_roles, databases)
             raise ValidationError(403, "Not Authorized")
 
     except ValidationError as ex:

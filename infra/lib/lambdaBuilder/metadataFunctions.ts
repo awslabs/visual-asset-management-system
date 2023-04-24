@@ -8,19 +8,20 @@ import * as path from "path";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
+import { storageResources } from "../storage-builder";
 
 export function buildMetadataFunctions(
     scope: Construct,
-    ddbtable: dynamodb.Table
+    storageResources: storageResources,
 ): lambda.Function[] {
     return ["create", "read", "update", "delete"].map((f) =>
-        buildMetadataFunction(scope, ddbtable, f)
+        buildMetadataFunction(scope, storageResources, f)
     );
 }
 
 export function buildMetadataFunction(
     scope: Construct,
-    ddbtable: dynamodb.Table,
+    storageResources: storageResources,
     name: string
 ): lambda.Function {
     const fun = new lambda.DockerImageFunction(scope, name + "-metadata", {
@@ -30,9 +31,13 @@ export function buildMetadataFunction(
         timeout: Duration.minutes(15),
         memorySize: 3008,
         environment: {
-            METADATA_STORAGE_TABLE_NAME: ddbtable.tableName,
+            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
         },
     });
-    ddbtable.grantReadWriteData(fun);
+    storageResources.dynamo.metadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     return fun;
 }

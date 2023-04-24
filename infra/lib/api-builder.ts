@@ -320,7 +320,7 @@ export function apiBuilder(
     // metdata
     const metadataCrudFunctions = buildMetadataFunctions(
         scope,
-        storageResources.dynamo.metadataStorageTable
+        storageResources,
     );
     const methods = [
         apigwv2.HttpMethod.PUT,

@@ -30,7 +30,7 @@ def lambda_handler(event, context):
         claims_and_roles = request_to_claims(event)
         databases = get_database_set(claims_and_roles['tokens'])
 
-        if databaseId in databases or "super-user" in claims_and_roles['roles']:
+        if databaseId in databases or "super-admin" in claims_and_roles['roles']:
             delete_item(databaseId, assetId)
             response = {"status": "OK", "message": "{assetId} deleted".format(assetId=assetId)}
             return build_response(200, json.dumps(response))
