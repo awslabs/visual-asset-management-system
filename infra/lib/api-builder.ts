@@ -318,10 +318,7 @@ export function apiBuilder(
     //https://github.com/aws/aws-cdk/issues/11100#issuecomment-904627081
 
     // metdata
-    const metadataCrudFunctions = buildMetadataFunctions(
-        scope,
-        storageResources,
-    );
+    const metadataCrudFunctions = buildMetadataFunctions(scope, storageResources);
     const methods = [
         apigwv2.HttpMethod.PUT,
         apigwv2.HttpMethod.GET,
