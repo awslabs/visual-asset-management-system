@@ -12,7 +12,7 @@ import { storageResources } from "../storage-builder";
 
 export function buildMetadataFunctions(
     scope: Construct,
-    storageResources: storageResources,
+    storageResources: storageResources
 ): lambda.Function[] {
     return ["create", "read", "update", "delete"].map((f) =>
         buildMetadataFunction(scope, storageResources, f)
