@@ -51,7 +51,7 @@ Sample use cases that have leveraged early iterations of VAMS include:
 
 VAMS Codebase is changing frequently and we recommend you checkout the stable released version from github.
 
-You can identify stable releases by their tag. Fetch the tags git fetch --all --tags and then git checkout tags/v1.0.1 or git checkout -b v1.0.1 tags/v1.0.1.
+You can identify stable releases by their tag. Fetch the tags `git fetch --all --tags` and then `git checkout tags/TAG` or `git checkout -b TAG tags/TAG` where TAG is the actual desired tag. A list of tags is found by running `git tag --list` or on the [releases page](https://github.com/awslabs/visual-asset-management-system/releases).
 
 1. `cd ./web && nvm use` - make sure you're node version matches the project. Make sure Docker daemon is running.
 
