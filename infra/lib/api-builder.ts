@@ -318,10 +318,7 @@ export function apiBuilder(
     //https://github.com/aws/aws-cdk/issues/11100#issuecomment-904627081
 
     // metdata
-    const metadataCrudFunctions = buildMetadataFunctions(
-        scope,
-        storageResources,
-    );
+    const metadataCrudFunctions = buildMetadataFunctions(scope, storageResources);
     const methods = [
         apigwv2.HttpMethod.PUT,
         apigwv2.HttpMethod.GET,
@@ -365,6 +362,19 @@ export function apiBuilder(
         method: apigwv2.HttpMethod.GET,
         api: api.apiGatewayV2,
     });
+
+    attachFunctionToApi(scope, authFunctions.constraints, {
+        routePath: "/auth/constraints",
+        method: apigwv2.HttpMethod.GET,
+        api: api.apiGatewayV2,
+    });
+    for (let i = 0; i < methods.length; i++) {
+        attachFunctionToApi(scope, authFunctions.constraints, {
+            routePath: "/auth/constraints/{constraintId}",
+            method: methods[i],
+            api: api.apiGatewayV2,
+        });
+    }
 
     //Enabling API Gateway Access Logging: Currently the only way to do this is via V1 constructs
     //https://github.com/aws/aws-cdk/issues/11100#issuecomment-904627081

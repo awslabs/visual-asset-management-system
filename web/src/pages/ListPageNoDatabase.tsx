@@ -3,27 +3,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from "react";
-
-import {
-    Box,
-    BreadcrumbGroup,
-    Button,
-    Grid,
-    SpaceBetween,
-    TextContent,
-} from "@cloudscape-design/components";
-import { useParams } from "react-router";
+import { useEffect, useState } from "react";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import Grid from "@cloudscape-design/components/grid";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import TextContent from "@cloudscape-design/components/text-content";
 import TableList from "../components/list/TableList";
 import PropTypes from "prop-types";
 import ListDefinition from "../components/list/list-definitions/types/ListDefinition";
 import RelatedTableList from "../components/list/RelatedTableList";
 
-export default function ListPage(props) {
-    const { databaseId } = useParams();
+export default function ListPageNoDatabase(props: any) {
     const {
         singularNameTitleCase,
-        pluralName,
         pluralNameTitleCase,
         listDefinition,
         CreateNewElement,
@@ -35,33 +28,25 @@ export default function ListPage(props) {
     } = props;
     const [reload, setReload] = useState(true);
     const [loading, setLoading] = useState(true);
-    const [allItems, setAllItems] = useState([]);
+    const [allItems, setAllItems] = useState<Array<any>>([]);
 
     const [openNewElement, setOpenNewElement] = useState(false);
 
     useEffect(() => {
         const getData = async () => {
             setLoading(true);
-            let items;
-            if (databaseId) {
-                items = await fetchElements({ databaseId: databaseId });
-            } else {
-                items = await fetchAllElements();
-            }
+            let items = await fetchAllElements();
 
             if (items !== false && Array.isArray(items)) {
                 setLoading(false);
                 setReload(false);
-                setAllItems(
-                    //@todo fix workflow delete return
-                    items.filter((item) => item.databaseId.indexOf("#deleted") === -1)
-                );
+                setAllItems(items);
             }
         };
         if (reload) {
             getData();
         }
-    }, [reload, databaseId, fetchAllElements, fetchElements]);
+    }, [reload, fetchAllElements, fetchElements]);
 
     const handleOpenNewElement = () => {
         if (onCreateCallback) onCreateCallback();
@@ -70,37 +55,20 @@ export default function ListPage(props) {
 
     return (
         <>
-            <Box padding={{ top: databaseId ? "s" : "m", horizontal: "l" }}>
-                {databaseId && (
-                    <BreadcrumbGroup
-                        items={[
-                            { text: "Databases", href: "/databases/" },
-                            {
-                                text: databaseId,
-                                href: `/databases/${databaseId}/${pluralName}/`,
-                            },
-                            { text: pluralNameTitleCase },
-                        ]}
-                        ariaLabel="Breadcrumbs"
-                    />
-                )}
-                <Grid gridDefinition={[{ colspan: { default: "6" } }]}>
+            <Box padding={{ top: "m", horizontal: "l" }}>
+                <Grid gridDefinition={[{ colspan: 6 }]}>
                     <div>
                         <TextContent>
-                            <h1>
-                                {pluralNameTitleCase}
-                                {databaseId && ` for ${databaseId}`}
-                            </h1>
+                            <h1>{pluralNameTitleCase}</h1>
                         </TextContent>
                     </div>
                 </Grid>
-                <Grid gridDefinition={[{ colspan: { default: "12" } }]}>
+                <Grid gridDefinition={[{ colspan: 12 }]}>
                     {isRelatedTable && (
                         <RelatedTableList
                             allItems={allItems}
                             loading={loading}
                             listDefinition={listDefinition}
-                            databaseId={databaseId}
                             setReload={setReload}
                         />
                     )}
@@ -108,7 +76,6 @@ export default function ListPage(props) {
                         allItems={allItems}
                         loading={loading}
                         listDefinition={listDefinition}
-                        databaseId={databaseId}
                         editEnabled={editEnabled}
                         setReload={setReload}
                         UpdateSelectedElement={CreateNewElement}
@@ -116,7 +83,11 @@ export default function ListPage(props) {
                             (CreateNewElement || onCreateCallback) && (
                                 <div style={{ float: "right" }}>
                                     <SpaceBetween direction={"horizontal"} size={"m"}>
-                                        <Button onClick={handleOpenNewElement} variant="primary">
+                                        <Button
+                                            onClick={handleOpenNewElement}
+                                            variant="primary"
+                                            data-testid="create-new-element-button"
+                                        >
                                             Create {singularNameTitleCase}
                                         </Button>
                                     </SpaceBetween>
@@ -131,14 +102,13 @@ export default function ListPage(props) {
                     open={openNewElement}
                     setOpen={setOpenNewElement}
                     setReload={setReload}
-                    databaseId={databaseId}
                 />
             )}
         </>
     );
 }
 
-ListPage.propTypes = {
+ListPageNoDatabase.propTypes = {
     singularName: PropTypes.string.isRequired,
     singularNameTitleCase: PropTypes.string.isRequired,
     pluralName: PropTypes.string.isRequired,

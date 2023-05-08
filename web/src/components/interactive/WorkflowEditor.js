@@ -102,7 +102,11 @@ const WorkflowEditor = (props) => {
                     position: { x: xPos.current, y: yPos.current },
                     data: {
                         label: (
-                            <WorkflowPipelineSelector database={databaseId} index={pipelineIndex} />
+                            <WorkflowPipelineSelector
+                                database={databaseId}
+                                index={pipelineIndex}
+                                data-testid="create-workflow-pipeline-selector"
+                            />
                         ),
                     },
                     sourcePosition: "bottom",

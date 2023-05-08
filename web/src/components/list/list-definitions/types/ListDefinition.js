@@ -6,6 +6,7 @@
 import PropTypes from "prop-types";
 import ColumnDefinition from "./ColumnDefinition";
 import FilterDefinition from "./FilterDefinition";
+import { deleteElement } from "../../../../services/APIService";
 
 export default function ListDefinition(props) {
     const {
@@ -25,6 +26,17 @@ export default function ListDefinition(props) {
     this.pluralNameTitleCase = pluralNameTitleCase;
     this.elementId = elementId;
     this.deleteRoute = deleteRoute;
+    if (props.deleteFunction !== null && props.deleteFunction !== undefined) {
+        this.deleteFunction = props.deleteFunction;
+    } else {
+        this.deleteFunction = async function (item) {
+            return deleteElement({
+                deleteRoute: deleteRoute,
+                elementId: elementId,
+                item: item,
+            });
+        };
+    }
 }
 
 ListDefinition.propTypes = {
@@ -35,4 +47,5 @@ ListDefinition.propTypes = {
     pluralNameTitleCase: PropTypes.string.isRequired,
     elementId: PropTypes.string.isRequired,
     deleteRoute: PropTypes.string.isRequired,
+    deleteFunction: PropTypes.func,
 };

@@ -5,7 +5,6 @@
 
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as path from "path";
-import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import { storageResources } from "../storage-builder";

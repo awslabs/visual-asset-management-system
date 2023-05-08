@@ -16,13 +16,14 @@ Werkzeug = "^2.2.3"
 certifi = "2022.12.07"
 
 [tool.poetry.dev-dependencies]
-pytest = "^5.2"
+pytest = "^7"
 boto3 = "^1.24.45"
 flake8 = "^6.0.0"
 coverage = "^7.1.0"
 mypy = "^1.0.0"
 pytest-mock = "^3.10.0"
 moto = "^4.1.2"
+pytest-watch = "^4.2.0"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

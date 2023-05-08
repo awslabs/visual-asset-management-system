@@ -73,6 +73,7 @@ const WorkflowPipelineSelector = (props) => {
             })}
             filteringType="auto"
             selectedAriaLabel="Selected"
+            data-testid={props["data-testid"] || "wfpipelinesel"}
         />
     );
 };

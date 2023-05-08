@@ -11,6 +11,7 @@ import { storageResources } from "../storage-builder";
 
 interface AuthFunctions {
     groups: lambda.Function;
+    constraints: lambda.Function;
 }
 export function buildAuthFunctions(
     scope: Construct,
@@ -18,6 +19,7 @@ export function buildAuthFunctions(
 ): AuthFunctions {
     return {
         groups: buildAuthFunction(scope, storageResources, "groups"),
+        constraints: buildAuthFunction(scope, storageResources, "finegrainedaccessconstraints"),
     };
 }
 
