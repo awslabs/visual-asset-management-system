@@ -76,6 +76,7 @@ export const PipelineFormDefinition = new FormDefinition({
                 formElement: Select,
                 elementProps: {
                     disabled: false,
+                    "data-testid": "pipelineType",
                 },
             }),
             required: true,
@@ -110,7 +111,7 @@ export const PipelineFormDefinition = new FormDefinition({
             constraintText: "Required. Max 256 characters.",
             elementDefinition: new ElementDefinition({
                 formElement: Textarea,
-                elementProps: { rows: 4 },
+                elementProps: { rows: 4, "data-testid": "description-textarea" },
             }),
             required: true,
         }),
@@ -121,7 +122,9 @@ export const PipelineFormDefinition = new FormDefinition({
             options: fileTypeOptions,
             elementDefinition: new ElementDefinition({
                 formElement: Select,
-                elementProps: {},
+                elementProps: {
+                    "data-testid": "inputFileType-select",
+                },
             }),
             required: true,
         }),
@@ -132,7 +135,9 @@ export const PipelineFormDefinition = new FormDefinition({
             options: fileTypeOptions,
             elementDefinition: new ElementDefinition({
                 formElement: Select,
-                elementProps: {},
+                elementProps: {
+                    "data-testid": "outputFileType-select",
+                },
             }),
             required: true,
         }),

@@ -153,7 +153,11 @@ const FedLoginBox: React.FC<LoginProps> = ({ onLogin, onLocal }) => {
                             alt="Visual Asset Management System Logo"
                         />
                     </Heading>
-                    <button className={styles.button} onClick={onLogin}>
+                    <button
+                        className={styles.button}
+                        onClick={onLogin}
+                        data-testid="federated-login-button"
+                    >
                         Login with Federated Identity Provider
                     </button>
                     <p>
@@ -167,6 +171,7 @@ const FedLoginBox: React.FC<LoginProps> = ({ onLogin, onLocal }) => {
                                 }}
                                 href="#local"
                                 className={styles.link}
+                                data-testid="local-creds-link"
                             >
                                 Login with local credentials
                             </a>

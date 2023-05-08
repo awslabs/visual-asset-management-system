@@ -192,6 +192,7 @@ const UploadForm = () => {
                                         >
                                             <Input
                                                 value={assetDetail.assetId || ""}
+                                                data-testid="assetid-input"
                                                 onChange={(e) => {
                                                     setAssetDetail((assetDetail) => ({
                                                         ...assetDetail,
@@ -224,6 +225,7 @@ const UploadForm = () => {
                                                 }}
                                                 filteringType="auto"
                                                 selectedAriaLabel="Selected"
+                                                data-testid="isDistributable-select"
                                             />
                                         </FormField>
 
@@ -242,6 +244,7 @@ const UploadForm = () => {
                                                     }));
                                                 }}
                                                 selectedOption={databaseId}
+                                                data-testid="database-selector"
                                             />
                                         </FormField>
 
@@ -260,6 +263,7 @@ const UploadForm = () => {
                                                         description: e.detail.value,
                                                     }));
                                                 }}
+                                                data-testid="asset-description-textarea"
                                             />
                                         </FormField>
 
@@ -278,6 +282,7 @@ const UploadForm = () => {
                                                         Comment: e.detail.value,
                                                     }));
                                                 }}
+                                                data-testid="asset-comment-input"
                                             />
                                         </FormField>
 
@@ -320,6 +325,7 @@ const UploadForm = () => {
                                                 }}
                                                 fileFormats={previewFileFormatsStr}
                                                 file={assetDetail.Preview}
+                                                data-testid="preview-file"
                                             />
                                         </Grid>
                                     </SpaceBetween>
@@ -342,6 +348,7 @@ const UploadForm = () => {
                                                     resolve(null);
                                                 });
                                             }}
+                                            data-testid="metadata-table"
                                         />
                                     </SpaceBetween>
                                 </Container>
@@ -380,6 +387,7 @@ const UploadForm = () => {
                                                     } selected`;
                                                 },
                                             }}
+                                            data-testid="workflow-table"
                                         />
                                     </SpaceBetween>
                                 </Container>

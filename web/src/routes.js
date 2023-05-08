@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import React from "react";
 import { Route, Routes } from "react-router-dom";
 import AppLayout from "@cloudscape-design/components/app-layout";
 import LandingPage from "./pages/LandingPage";
@@ -15,7 +16,7 @@ import Pipelines from "./pages/Pipelines";
 import ViewPipeline from "./components/single/ViewPipeline";
 import Workflows from "./pages/Workflows";
 import CreateUpdateWorkflow from "./components/createupdate/CreateUpdateWorkflow";
-import React from "react";
+import Constraints from "./pages/auth/Constraints";
 
 const routeTable = [
     { path: "/", Page: LandingPage, active: "/" },
@@ -62,6 +63,11 @@ const routeTable = [
         path: "/databases/:databaseId/workflows/create",
         Page: CreateUpdateWorkflow,
         active: "/workflows",
+    },
+    {
+        path: "/auth/constraints",
+        Page: Constraints,
+        active: "/auth/constraints",
     },
 ];
 

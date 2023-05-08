@@ -148,6 +148,7 @@ export default function CreateDatabase({
                                         null
                                 )
                             }
+                            data-testid={`${createOrUpdate}-database-button`}
                         >
                             {createOrUpdate} Database
                         </Button>
@@ -175,6 +176,7 @@ export default function CreateDatabase({
                                     setFormState({ ...formState, databaseId: detail.value })
                                 }
                                 placeholder="Database Name"
+                                data-testid="database-name"
                             />
                         </FormField>
                         <FormField
@@ -190,6 +192,7 @@ export default function CreateDatabase({
                                 }
                                 rows={4}
                                 placeholder="Database Description"
+                                data-testid="database-desc"
                             />
                         </FormField>
                         <FormField
@@ -210,8 +213,7 @@ export default function CreateDatabase({
                                 filteringType="auto"
                                 placeholder="Choose options"
                                 selectedAriaLabel="Selected"
-                                empty="asdf"
-                                noMatch="asdf"
+                                data-testid="database-acl-multiselect"
                             />
                         </FormField>
                     </SpaceBetween>
