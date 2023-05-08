@@ -194,6 +194,8 @@ export class VAMS extends cdk.Stack {
             });
         }
 
+        cdk.Tags.of(this).add("vams:stackname", props.stackName);
+
         this.node.findAll().forEach((item) => {
             if (item instanceof cdk.aws_lambda.Function) {
                 const fn = item as cdk.aws_lambda.Function;

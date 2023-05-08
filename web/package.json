@@ -46,7 +46,7 @@
     "scripts": {
         "start": "react-scripts start",
         "build": "react-scripts build",
-        "test": "react-scripts test",
+        "test": "react-scripts test --coverage",
         "eject": "react-scripts eject",
         "postinstall": "patch-package && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js-worker.js && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.js && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.license.md && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.wasm"
     },
@@ -69,6 +69,8 @@
         ]
     },
     "devDependencies": {
+        "@cloudscape-design/jest-preset": "^2.0.8",
+        "@jest/types": "^29.5.0",
         "@testing-library/jest-dom": "^5.14.1",
         "@testing-library/react": "^11.2.7",
         "@testing-library/react-hooks": "^8.0.1",
@@ -77,9 +79,38 @@
         "@types/react": "^17.0.2",
         "@types/react-dom": "^17.0.2",
         "assert": "^2.0.0",
+        "babel-jest": "^29.5.0",
         "prettier": "^2.4.1",
         "react-error-overlay": "^6.0.9",
+        "react-test-renderer": "^17.0.2",
         "sass": "^1.43.4",
-        "sass-loader": "^12.3.0"
+        "sass-loader": "^12.3.0",
+        "ts-node": "^10.9.1"
+    },
+    "jest": {
+        "collectCoverageFrom": [
+            "src/**/*.{js,jsx,ts,tsx}",
+            "!<rootDir>/node_modules/",
+            "!<rootDir>/path/to/dir/"
+        ],
+        "transform": {
+            "node_modules/@cloudscape-design/.+\\.js$": "./node_modules/@cloudscape-design/jest-preset/js-transformer",
+            "node_modules/@cloudscape-design/.+\\.css": "./node_modules/@cloudscape-design/jest-preset/css-transformer",
+            "node_modules/(d3-.*|internmap)/.+\\.js$": "./node_modules/@cloudscape-design/jest-preset/js-transformer"
+        },
+        "transformIgnorePatterns": [
+            "/node_modules/(?!(d3-.*|internmap|@cloudscape-design/)).+\\.js$"
+        ],
+        "coverageThreshold": {
+            "global": {
+                "branches": 6,
+                "functions": 11,
+                "lines": 11,
+                "statements": 10
+            }
+        },
+        "coverageReporters": [
+            "text"
+        ]
     }
 }

@@ -1,8 +1,15 @@
 #  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-def to_update_expr(record, op="SET"):
-
+from typing import Tuple
+from typing import Any
+from typing import Dict
+def to_update_expr(record, op="SET") -> Tuple[Dict[str, str], Dict[str, Any], str]:
+    """
+    :param record:
+    :param op:
+    :return:
+    """
     keys = record.keys()
     keys_attr_names = ["#f{n}".format(n=x) for x in range(len(keys))]
     values_attr_names = [":v{n}".format(n=x) for x in range(len(keys))]

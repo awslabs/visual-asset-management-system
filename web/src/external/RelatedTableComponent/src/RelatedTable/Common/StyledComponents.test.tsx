@@ -12,12 +12,12 @@ describe("StyledComponents", () => {
         it("renders correctly", () => {
             const { container } = render(<LeftPad length={1} />);
             expect(container).toMatchInlineSnapshot(`
-<div>
-  <div
-    class="sc-gsTEea byGSpt"
-  />
-</div>
-`);
+                <div>
+                  <div
+                    class="sc-gueYoa hfiXMU"
+                  />
+                </div>
+            `);
         });
     });
 
@@ -25,13 +25,13 @@ describe("StyledComponents", () => {
         it("renders correctly", () => {
             const { container } = render(<Wrapper height={1} />);
             expect(container).toMatchInlineSnapshot(`
-<div>
-  <div
-    class="sc-bdfBQB jKctqW"
-    height="1"
-  />
-</div>
-`);
+                <div>
+                  <div
+                    class="sc-beqWaB hZsRqR"
+                    height="1"
+                  />
+                </div>
+            `);
         });
     });
 });

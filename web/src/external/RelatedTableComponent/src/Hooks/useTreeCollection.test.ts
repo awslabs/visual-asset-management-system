@@ -63,11 +63,13 @@ describe("useTreeCollection", () => {
             })
         );
 
+        expect(result.current.items[0].isExpanded()).toEqual(true);
+
         act(() => {
             result.current.expandNode(result.current.items[0]);
         });
 
-        expect(result.current.items[0].isExpanded()).toEqual(true);
+        expect(result.current.items[0].isExpanded()).toEqual(false);
     });
     it("reset nodes", () => {
         const { result } = renderHook(() =>
@@ -82,6 +84,8 @@ describe("useTreeCollection", () => {
             })
         );
 
+        expect(result.current.items[0].isExpanded()).toEqual(true);
+
         act(() => {
             result.current.expandNode(result.current.items[0]);
         });
@@ -90,6 +94,6 @@ describe("useTreeCollection", () => {
             result.current.reset();
         });
 
-        expect(result.current.items[0].isExpanded()).toEqual(false);
+        expect(result.current.items[0].isExpanded()).toEqual(true);
     });
 });
