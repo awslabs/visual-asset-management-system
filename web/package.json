@@ -48,7 +48,7 @@
         "build": "react-scripts build",
         "test": "react-scripts test",
         "eject": "react-scripts eject",
-        "postinstall": "patch-package && del ./node_modules/online-3d-viewer/libs/loaders/occt-import-js-worker.js &&  del ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.js &&  del ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.license.md && del ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.wasm"
+        "postinstall": "patch-package && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js-worker.js && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.js && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.license.md && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.wasm"
     },
     "eslintConfig": {
         "extends": [
