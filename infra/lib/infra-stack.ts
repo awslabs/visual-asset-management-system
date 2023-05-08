@@ -82,6 +82,17 @@ export class VAMS extends cdk.Stack {
             ],
         });
 
+        new cognito.CfnUserPoolGroup(this, "AdminGroup", {
+            groupName: "super-admin",
+            userPoolId: cognitoResources.userPoolId,
+        });
+
+        new cognito.CfnUserPoolUserToGroupAttachment(this, "AdminUserToGroupAttachment", {
+            userPoolId: cognitoResources.userPoolId,
+            username: providedAdminEmailAddress,
+            groupName: "super-admin",
+        });
+
         // initialize api gateway and bind it to /api route of cloudfront
         const api = new ApiGatewayV2CloudFrontConstruct(this, "api", {
             ...props,

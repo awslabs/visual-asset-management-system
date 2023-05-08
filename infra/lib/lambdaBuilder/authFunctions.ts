@@ -5,38 +5,40 @@
 
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as path from "path";
-import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import { storageResources } from "../storage-builder";
 
-export function buildMetadataFunctions(
+interface AuthFunctions {
+    groups: lambda.Function;
+}
+export function buildAuthFunctions(
     scope: Construct,
     storageResources: storageResources
-): lambda.Function[] {
-    return ["create", "read", "update", "delete"].map((f) =>
-        buildMetadataFunction(scope, storageResources, f)
-    );
+): AuthFunctions {
+    return {
+        groups: buildAuthFunction(scope, storageResources, "groups"),
+    };
 }
 
-export function buildMetadataFunction(
+export function buildAuthFunction(
     scope: Construct,
     storageResources: storageResources,
     name: string
 ): lambda.Function {
-    const fun = new lambda.DockerImageFunction(scope, name + "-metadata", {
+    const fun = new lambda.DockerImageFunction(scope, name, {
         code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.metadata.${name}.lambda_handler`],
+            cmd: [`backend.handlers.auth.${name}.lambda_handler`],
         }),
-        timeout: Duration.minutes(15),
-        memorySize: 3008,
+        timeout: Duration.minutes(1),
+        memorySize: 512,
         environment: {
-            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
+            TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
         },
     });
-    storageResources.dynamo.metadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     return fun;

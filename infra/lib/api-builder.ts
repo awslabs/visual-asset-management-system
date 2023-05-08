@@ -41,6 +41,7 @@ import {
 
 import { buildMetadataFunctions } from "./lambdaBuilder/metadataFunctions";
 import { buildUploadAssetWorkflow } from "./uploadAssetWorkflowBuilder";
+import { buildAuthFunctions } from "./lambdaBuilder/authFunctions";
 
 interface apiGatewayLambdaConfiguration {
     routePath: string;
@@ -233,10 +234,7 @@ export function apiBuilder(
         api: api.apiGatewayV2,
     });
 
-    const pipelineService = buildPipelineService(
-        scope,
-        storageResources.dynamo.pipelineStorageTable
-    );
+    const pipelineService = buildPipelineService(scope, storageResources);
     attachFunctionToApi(scope, pipelineService, {
         routePath: "/database/{databaseId}/pipelines",
         method: apigwv2.HttpMethod.GET,
@@ -259,10 +257,7 @@ export function apiBuilder(
     });
 
     //Workflows
-    const workflowService = buildWorkflowService(
-        scope,
-        storageResources.dynamo.workflowStorageTable
-    );
+    const workflowService = buildWorkflowService(scope, storageResources);
     attachFunctionToApi(scope, workflowService, {
         routePath: "/database/{databaseId}/workflows",
         method: apigwv2.HttpMethod.GET,
@@ -323,10 +318,7 @@ export function apiBuilder(
     //https://github.com/aws/aws-cdk/issues/11100#issuecomment-904627081
 
     // metdata
-    const metadataCrudFunctions = buildMetadataFunctions(
-        scope,
-        storageResources.dynamo.metadataStorageTable
-    );
+    const metadataCrudFunctions = buildMetadataFunctions(scope, storageResources);
     const methods = [
         apigwv2.HttpMethod.PUT,
         apigwv2.HttpMethod.GET,
@@ -363,6 +355,14 @@ export function apiBuilder(
         method: apigwv2.HttpMethod.POST,
         api: api.apiGatewayV2,
     });
+
+    const authFunctions = buildAuthFunctions(scope, storageResources);
+    attachFunctionToApi(scope, authFunctions.groups, {
+        routePath: "/auth/groups",
+        method: apigwv2.HttpMethod.GET,
+        api: api.apiGatewayV2,
+    });
+
     //Enabling API Gateway Access Logging: Currently the only way to do this is via V1 constructs
     //https://github.com/aws/aws-cdk/issues/11100#issuecomment-904627081
     const accessLogs = new logs.LogGroup(scope, "VAMS-API-AccessLogs");

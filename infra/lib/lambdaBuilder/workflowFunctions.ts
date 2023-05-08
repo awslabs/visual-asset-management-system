@@ -11,9 +11,10 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../security";
+import { storageResources } from "../storage-builder";
 export function buildWorkflowService(
     scope: Construct,
-    workflowStorageTable: dynamodb.Table
+    storageResources: storageResources
 ): lambda.Function {
     const name = "workflowService";
     const workflowService = new lambda.DockerImageFunction(scope, name, {
@@ -23,10 +24,13 @@ export function buildWorkflowService(
         timeout: Duration.minutes(15),
         memorySize: 3008,
         environment: {
-            WORKFLOW_STORAGE_TABLE_NAME: workflowStorageTable.tableName,
+            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
         },
     });
-    workflowStorageTable.grantReadWriteData(workflowService);
+    storageResources.dynamo.databaseStorageTable.grantReadData(workflowService);
+    storageResources.dynamo.workflowStorageTable.grantReadWriteData(workflowService);
     workflowService.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,

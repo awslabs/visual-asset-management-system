@@ -8,6 +8,7 @@ from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from backend.common.validators import validate
 from backend.handlers.assets.assetCount import update_asset_count
+from backend.handlers.auth import create_ddb_filter, get_database_set, request_to_claims
 
 dynamodb = boto3.resource('dynamodb')
 dynamodb_client = boto3.client('dynamodb')
@@ -29,7 +30,7 @@ unitTest = {
         "databaseId": "Unit_Test"
     }
 }
-unitTest['body']=json.dumps(unitTest['body'])
+unitTest['body'] = json.dumps(unitTest['body'])
 
 try:
     asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
@@ -38,29 +39,32 @@ except:
     print("Failed Loading Environment Variables")
     response['body']['message'] = "Failed Loading Environment Variables"
 
-def get_all_assets(queryParams, showDeleted=False):
+
+def get_all_assets_with_database_filter(queryParams, databaseList):
     deserializer = TypeDeserializer()
-    
+
     paginator = dynamodb_client.get_paginator('scan')
-    operator = "NOT_CONTAINS"
-    if showDeleted:
-        operator = "CONTAINS"
-    filter = {
-        "databaseId":{
-            "AttributeValueList":[ {"S":"#deleted"} ],
-            "ComparisonOperator": f"{operator}"
+
+    if len(databaseList) < 1:
+        return {
+            'Items': [],
         }
-    }
-    pageIterator = paginator.paginate(
-        TableName=asset_database,
-        ScanFilter=filter,
-        PaginationConfig={
+
+    kwargs = {
+        "TableName": asset_database,
+        "PaginationConfig": {
             'MaxItems': int(queryParams['maxItems']),
-            'PageSize': int(queryParams['pageSize']), 
+            'PageSize': int(queryParams['pageSize']),
             'StartingToken': queryParams['startingToken']
         }
+    }
+    kwargs.update(create_ddb_filter(databaseList))
+
+    print(kwargs)
+    pageIterator = paginator.paginate(
+        **kwargs,
     ).build_full_result()
-    
+
     print("Fetching results")
     result = {}
     items = []
@@ -68,12 +72,50 @@ def get_all_assets(queryParams, showDeleted=False):
         deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
         items.append(deserialized_document)
     result['Items'] = items
-    
+
     if 'NextToken' in pageIterator:
         result['NextToken'] = pageIterator['NextToken']
     return result
 
-def get_assets(databaseId, showDeleted):
+
+def get_all_assets(queryParams, showDeleted=False):
+    deserializer = TypeDeserializer()
+
+    paginator = dynamodb_client.get_paginator('scan')
+    operator = "NOT_CONTAINS"
+    if showDeleted:
+        operator = "CONTAINS"
+    filter = {
+        "databaseId": {
+            "AttributeValueList": [{"S": "#deleted"}],
+            "ComparisonOperator": f"{operator}"
+        }
+    }
+
+    pageIterator = paginator.paginate(
+        TableName=asset_database,
+        ScanFilter=filter,
+        PaginationConfig={
+            'MaxItems': int(queryParams['maxItems']),
+            'PageSize': int(queryParams['pageSize']),
+            'StartingToken': queryParams['startingToken']
+        }
+    ).build_full_result()
+
+    print("Fetching results")
+    result = {}
+    items = []
+    for item in pageIterator['Items']:
+        deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
+        items.append(deserialized_document)
+    result['Items'] = items
+
+    if 'NextToken' in pageIterator:
+        result['NextToken'] = pageIterator['NextToken']
+    return result
+
+
+def get_assets(databaseId, showDeleted=False):
     table = dynamodb.Table(asset_database)
     # indexName = 'databaseId-assetId-index'
 
@@ -86,12 +128,14 @@ def get_assets(databaseId, showDeleted):
     )
     return response['Items']
 
-def get_asset(databaseId, assetId, showDeleted = False):
+
+def get_asset(databaseId, assetId, showDeleted=False):
     table = dynamodb.Table(asset_database)
     if showDeleted:
         databaseId = databaseId + "#deleted"
     response = table.get_item(Key={'databaseId': databaseId, 'assetId': assetId})
     return response.get('Item', {})
+
 
 def delete_asset(databaseId, assetId, queryParameters):
     response = {
@@ -120,6 +164,7 @@ def delete_asset(databaseId, assetId, queryParameters):
         response['message'] = "Asset deleted"
     return response
 
+
 def archive_file(location):
     s3 = boto3.client('s3')
 
@@ -130,7 +175,7 @@ def archive_file(location):
     if "Key" in location:
         key = location['Key']
 
-    if len(bucket)==0 or len(key)==0:
+    if len(bucket) == 0 or len(key) == 0:
         return
     print("Archiving item: ", bucket, ":", key)
 
@@ -142,7 +187,7 @@ def archive_file(location):
     try:
         response = s3.copy(
             source, bucket, key,
-            ExtraArgs = {
+            ExtraArgs={
                 'StorageClass': 'GLACIER',
                 'MetadataDirective': 'COPY'
             }
@@ -152,8 +197,269 @@ def archive_file(location):
     except s3.exceptions.InvalidObjectState as ios:
         print("S3 object already archived: ", key)
         print(ios)
-    
+
     return
+
+
+def set_pagination_info(queryParameters):
+    if 'maxItems' not in queryParameters:
+        queryParameters['maxItems'] = 100
+        queryParameters['pageSize'] = 100
+    else:
+        queryParameters['pageSize'] = queryParameters['maxItems']
+    if 'startingToken' not in queryParameters:
+        queryParameters['startingToken'] = None
+
+
+def get_handler_with_tokens(event, response, pathParameters, queryParameters, tokens):
+    requestid = event['requestContext']['requestId']
+    if "assetId" in pathParameters and "databaseId" in pathParameters:
+
+        print("Validating parameters")
+        (valid, message) = validate({
+            'databaseId': {
+                'value': pathParameters['databaseId'],
+                'validator': 'ID'
+            },
+            'assetId': {
+                'value': pathParameters['assetId'],
+                'validator': 'ID'
+            },
+        })
+        if not valid:
+            print(message)
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            return response
+
+        databases = get_database_set(tokens)
+        if pathParameters['databaseId'] not in databases:
+            response['body'] = json.dumps({
+                "message": "Not Authorized",
+                "requestid": requestid,
+            })
+            response['statusCode'] = 403
+            return response
+
+        print("Getting Asset: ", pathParameters['assetId'])
+        response['body'] = json.dumps({
+            "message": get_asset(pathParameters['databaseId'],
+                                 pathParameters['assetId'], ),
+            "requestid": requestid,
+        })
+        print(response)
+        return response
+
+    if "databaseId" in pathParameters:
+        print("Validating parameters")
+        (valid, message) = validate({
+            'databaseId': {
+                'value': pathParameters['databaseId'],
+                'validator': 'ID',
+            }
+        })
+        if not valid:
+            print(message)
+            response['body'] = json.dumps({
+                "message": message,
+                "requestid": requestid,
+            })
+            response['statusCode'] = 400
+            return response
+
+        databases = get_database_set(tokens)
+        if pathParameters['databaseId'] not in databases:
+            response['body'] = json.dumps({
+                "message": "Not Authorized",
+                "requestid": requestid,
+            })
+            response['statusCode'] = 403
+            return response
+
+        print("Listing Assets for Database: ", pathParameters['databaseId'])
+        response['body'] = json.dumps({
+            "message": get_assets(pathParameters['databaseId'], ),
+            "requestid": requestid,
+        })
+        print(response)
+        return response
+
+    if "assetId" in pathParameters and not "databaseId" in pathParameters:
+        message = "No database ID in API Call"
+        response['body'] = json.dumps({"message": message, "requestid": requestid})
+        response['statusCode'] = 400
+        print(response)
+        return response
+
+    databases = get_database_set(tokens)
+    if len(databases) > 0:
+        print("Listing All Assets with filter")
+        response['body'] = json.dumps({
+            "message": get_all_assets_with_database_filter(queryParameters, databases),
+            "requestid": requestid,
+        })
+    else:
+        print("database list was empty, returning empty")
+        response['body'] = json.dumps({
+            "message": [],
+            "requestid": requestid,
+        })
+
+    print(response)
+    return response
+
+
+def get_handler(response, pathParameters, queryParameters):
+
+    showDeleted = False
+
+    if 'showDeleted' in queryParameters:
+        showDeleted = queryParameters['showDeleted']
+
+    if 'assetId' not in pathParameters:
+        if 'databaseId' in pathParameters:
+            print("Validating parameters")
+            (valid, message) = validate({
+                'databaseId': {
+                    'value': pathParameters['databaseId'],
+                    'validator': 'ID'
+                }
+            })
+            if not valid:
+                print(message)
+                response['body'] = json.dumps({"message": message})
+                response['statusCode'] = 400
+                return response
+
+            print("Listing Assets for Database: ", pathParameters['databaseId'])
+            response['body'] = json.dumps({"message": get_assets(pathParameters['databaseId'], showDeleted)})
+            print(response)
+            return response
+        else:
+            print("Listing All Assets")
+            response['body'] = json.dumps({"message": get_all_assets(queryParameters, showDeleted)})
+            print(response)
+            return response
+    else:
+        if 'databaseId' not in pathParameters:
+            message = "No database ID in API Call"
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            print(response)
+            return response
+
+        print("Validating parameters")
+        (valid, message) = validate({
+            'databaseId': {
+                'value': pathParameters['databaseId'],
+                'validator': 'ID'
+            },
+            'assetId': {
+                'value': pathParameters['assetId'],
+                'validator': 'ID'
+            },
+        })
+        if not valid:
+            print(message)
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            return response
+
+        print("Getting Asset: ", pathParameters['assetId'])
+        response['body'] = json.dumps({"message": get_asset(
+            pathParameters['databaseId'], pathParameters['assetId'], showDeleted)})
+        print(response)
+        return response
+
+
+def delete_handler_with_tokens(event, response, pathParameters, queryParameters, tokens):
+    requestid = event['requestContext']['requestId']
+
+    if 'databaseId' not in pathParameters:
+        message = "No database ID in API Call"
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        print(response)
+        return response
+    if 'assetId' not in pathParameters:
+        message = "No asset ID in API Call"
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        print(response)
+        return response
+
+    print("Validating parameters")
+    (valid, message) = validate({
+        'databaseId': {
+            'value': pathParameters['databaseId'],
+            'validator': 'ID'
+        },
+        'assetId': {
+            'value': pathParameters['assetId'],
+            'validator': 'ID'
+        },
+    })
+    if not valid:
+        print(message)
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        return response
+
+    databases = get_database_set(tokens)
+    if pathParameters['databaseId'] not in databases:
+        response['body'] = json.dumps({
+            "message": "Not Authorized",
+            "requestid": requestid,
+        })
+        response['statusCode'] = 403
+        return response
+
+    print("Deleting Asset: ", pathParameters['assetId'])
+    result = delete_asset(pathParameters['databaseId'], pathParameters['assetId'], queryParameters)
+    response['body'] = json.dumps({"message": result['message']})
+    response['statusCode'] = result['statusCode']
+    print(response)
+    return response
+
+
+def delete_handler(response, pathParameters, queryParameters):
+
+    if 'databaseId' not in pathParameters:
+        message = "No database ID in API Call"
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        print(response)
+        return response
+    if 'assetId' not in pathParameters:
+        message = "No asset ID in API Call"
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        print(response)
+        return response
+
+    print("Validating parameters")
+    (valid, message) = validate({
+        'databaseId': {
+            'value': pathParameters['databaseId'],
+            'validator': 'ID'
+        },
+        'assetId': {
+            'value': pathParameters['assetId'],
+            'validator': 'ID'
+        },
+    })
+    if not valid:
+        print(message)
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        return response
+
+    print("Deleting Asset: ", pathParameters['assetId'])
+    result = delete_asset(pathParameters['databaseId'], pathParameters['assetId'], queryParameters)
+    response['body'] = json.dumps({"message": result['message']})
+    response['statusCode'] = result['statusCode']
+    print(response)
+    return response
 
 
 def lambda_handler(event, context):
@@ -171,111 +477,30 @@ def lambda_handler(event, context):
     }
     pathParameters = event.get('pathParameters', {})
     queryParameters = event.get('queryStringParameters', {})
-    showDeleted = False
-    if 'showDeleted' in queryParameters:
-        showDeleted = queryParameters['showDeleted']
-    if 'maxItems' not in queryParameters:
-        queryParameters['maxItems'] = 100
-        queryParameters['pageSize'] = 100
-    else:
-        queryParameters['pageSize'] = queryParameters['maxItems']        
-    if 'startingToken' not in queryParameters:
-        queryParameters['startingToken'] = None
-    
+
+    set_pagination_info(queryParameters)
+
     try:
         httpMethod = event['requestContext']['http']['method']
         print(httpMethod)
-        if httpMethod == 'GET':
-            if 'assetId' not in pathParameters:
-                if 'databaseId' in pathParameters:
-                    print("Validating parameters")
-                    (valid, message) = validate({
-                        'databaseId': {
-                            'value': pathParameters['databaseId'], 
-                            'validator': 'ID'
-                        }
-                    })
-                    if not valid:
-                        print(message)
-                        response['body']=json.dumps({"message": message})
-                        response['statusCode'] = 400
-                        return response
 
-                    print("Listing Assets for Database: ", pathParameters['databaseId'])
-                    response['body'] = json.dumps({"message":get_assets(pathParameters['databaseId'], showDeleted)})
-                    print(response)
-                    return response
-                else:
-                    print("Listing All Assets")
-                    response['body'] = json.dumps({"message":get_all_assets(queryParameters, showDeleted)})
-                    print(response)
-                    return response                    
-            else:
-                if 'databaseId' not in pathParameters:
-                    message = "No database ID in API Call"
-                    response['body']=json.dumps({"message":message})
-                    response['statusCode'] = 400
-                    print(response)
-                    return response
+        claims_and_roles = request_to_claims(event)
 
-                print("Validating parameters")
-                (valid, message) = validate({
-                    'databaseId': {
-                        'value': pathParameters['databaseId'], 
-                        'validator': 'ID'
-                    },
-                    'assetId': {
-                        'value': pathParameters['assetId'], 
-                        'validator': 'ID'
-                    },
-                })
-                if not valid:
-                    print(message)
-                    response['body']=json.dumps({"message": message})
-                    response['statusCode'] = 400
-                    return response
-
-                print("Getting Asset: ", pathParameters['assetId'])
-                response['body'] = json.dumps({"message":get_asset(pathParameters['databaseId'], pathParameters['assetId'], showDeleted)})
-                print(response)
-                return response
-        if httpMethod == 'DELETE':
-            if 'databaseId' not in pathParameters:
-                message = "No database ID in API Call"
-                response['body']=json.dumps({"message":message})
-                response['statusCode'] = 400
-                print(response)
-                return response
-            if 'assetId' not in pathParameters:
-                message = "No asset ID in API Call"
-                response['body']=json.dumps({"message":message})
-                response['statusCode'] = 400
-                print(response)
-                return response
-            
-            print("Validating parameters")
-            (valid, message) = validate({
-                'databaseId': {
-                    'value': pathParameters['databaseId'], 
-                    'validator': 'ID'
-                },
-                'assetId': {
-                    'value': pathParameters['assetId'], 
-                    'validator': 'ID'
-                },
-            })
-            if not valid:
-                print(message)
-                response['body']=json.dumps({"message": message})
-                response['statusCode'] = 400
-                return response
-
-            print("Deleting Asset: ", pathParameters['assetId'])
-            result = delete_asset(pathParameters['databaseId'], pathParameters['assetId'], queryParameters)
-            response['body'] = json.dumps({"message":result['message']})
-            response['statusCode'] = result['statusCode']
-            print(response)
+        if "super-admin" in claims_and_roles['roles']:
+            if httpMethod == 'GET':
+                return get_handler(response, pathParameters, queryParameters)
+            if httpMethod == 'DELETE':
+                return delete_handler(response, pathParameters, queryParameters)
+        elif "assets" in claims_and_roles['roles']:
+            if httpMethod == 'GET':
+                return get_handler_with_tokens(event, response, pathParameters, queryParameters, claims_and_roles['tokens'])
+            if httpMethod == 'DELETE':
+                return delete_handler_with_tokens(event, response, pathParameters, queryParameters, claims_and_roles['tokens'])
+        else:
+            response['statusCode'] = 403
+            response['body'] = json.dumps({"message": "Not Authorized"})
             return response
+
     except Exception as e:
         response['statusCode'] = 500
         print("Error!", e.__class__, "occurred.")
@@ -286,6 +511,7 @@ def lambda_handler(event, context):
             print("Can't Read Error")
             response['body'] = json.dumps({"message": "An unexpected error occurred while executing the request"})
         return response
+
 
 if __name__ == "__main__":
     test_response = lambda_handler(None, None)

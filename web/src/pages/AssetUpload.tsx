@@ -100,7 +100,10 @@ const UploadForm = () => {
     });
     const [activeStepIndex, setActiveStepIndex] = useState(0);
 
-    const [assetDetail, setAssetDetail] = useState<AssetDetail>({ isDistributable: false });
+    const [assetDetail, setAssetDetail] = useState<AssetDetail>({
+        isDistributable: false,
+        databaseId: urlParams.databaseId,
+    });
     const [metadata, setMetadata] = useState<Metadata>({});
 
     const [workflows, setWorkflows] = useState<any>([]);
@@ -287,7 +290,10 @@ const UploadForm = () => {
                                             <FileUpload
                                                 label="Asset"
                                                 disabled={false}
-                                                errorText={undefined}
+                                                errorText={
+                                                    (!assetDetail.Asset && "Asset is required") ||
+                                                    undefined
+                                                }
                                                 setFile={(file) => {
                                                     setAssetDetail((assetDetail) => ({
                                                         ...assetDetail,
@@ -296,11 +302,16 @@ const UploadForm = () => {
                                                 }}
                                                 fileFormats={objectFileFormatsStr}
                                                 file={assetDetail.Asset}
+                                                data-testid="asset-file"
                                             />
                                             <FileUpload
                                                 label="Preview"
                                                 disabled={false}
-                                                errorText={undefined}
+                                                errorText={
+                                                    (!assetDetail.Preview &&
+                                                        "Preview is required") ||
+                                                    undefined
+                                                }
                                                 setFile={(file) => {
                                                     setAssetDetail((assetDetail) => ({
                                                         ...assetDetail,

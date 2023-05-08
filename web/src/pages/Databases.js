@@ -20,6 +20,7 @@ export default function Databases() {
             CreateNewElement={CreateDatabase}
             fetchAllElements={fetchAllDatabases}
             fetchElements={fetchAllDatabases}
+            editEnabled={true}
         />
     );
 }

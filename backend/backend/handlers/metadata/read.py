@@ -8,6 +8,7 @@ from decimal import Decimal
 import traceback
 
 from backend.handlers.metadata import logger, mask_sensitive_data, build_response, table, validate_event, ValidationError
+from backend.handlers.auth import get_database_set, request_to_claims
 
 
 def get_metadata(databaseId, assetId):
@@ -29,10 +30,16 @@ def lambda_handler(event, context):
         databaseId = event['pathParameters']['databaseId']
         assetId = event['pathParameters']['assetId']
 
-        return build_response(200, json.dumps({
-            "version": "1", 
-            "metadata": get_metadata(databaseId, assetId)
-        }))
+        claims_and_roles = request_to_claims(event)
+        databases = get_database_set(claims_and_roles['tokens'])
+        if databaseId in databases or "super-admin" in claims_and_roles['roles']:
+            return build_response(200, json.dumps({
+                "version": "1",
+                "metadata": get_metadata(databaseId, assetId)
+            }))
+        else:
+            print("raising 403 databaseId not in claims and roles?", databaseId, claims_and_roles, databases)
+            raise ValidationError(403, "Not Authorized")
 
     except ValidationError as ex:
         logger.info(traceback.format_exc())

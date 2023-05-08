@@ -15,6 +15,7 @@ import {
     Table,
     TextFilter,
     Flashbar,
+    SpaceBetween,
 } from "@cloudscape-design/components";
 import { EmptyState } from "../../common/common-components";
 import ListDefinition from "./list-definitions/types/ListDefinition";
@@ -22,7 +23,16 @@ import { deleteElement } from "../../services/APIService";
 
 export default function TableList(props) {
     //props
-    const { allItems, loading, listDefinition, databaseId, setReload } = props;
+    const {
+        allItems,
+        loading,
+        listDefinition,
+        databaseId,
+        setReload,
+        createNewElement,
+        UpdateSelectedElement,
+        editEnabled,
+    } = props;
     const {
         columnDefinitions,
         visibleColumns,
@@ -43,6 +53,8 @@ export default function TableList(props) {
         return true;
     });
     //state
+    const [editOpen, setEditOpen] = useState(false);
+
     const [activeFilters, setActiveFilters] = useState(
         filteredFilterColumns.reduce((acc, cur) => {
             acc[cur.name] = null;
@@ -125,6 +137,7 @@ export default function TableList(props) {
             },
             pagination: { pageSize: 15 },
             sorting: {},
+
             selection: {},
         });
 
@@ -180,6 +193,35 @@ export default function TableList(props) {
                             items.length !== allItems.length
                                 ? `(${items.length}/${allItems.length})`
                                 : `(${allItems.length})`
+                        }
+                        actions={
+                            <SpaceBetween direction="horizontal" size="xs">
+                                {editEnabled && (
+                                    <Button
+                                        disabled={
+                                            deleting || collectionProps.selectedItems?.length !== 1
+                                        }
+                                        onClick={() => {
+                                            console.log("Edit", collectionProps.selectedItems[0]);
+                                            setEditOpen(true);
+                                        }}
+                                    >
+                                        Edit
+                                    </Button>
+                                )}
+
+                                <Button
+                                    disabled={
+                                        deleting || collectionProps.selectedItems.length === 0
+                                    }
+                                    onClick={() =>
+                                        handleDeleteElements(collectionProps.selectedItems)
+                                    }
+                                >
+                                    Delete Selected
+                                </Button>
+                                {createNewElement}
+                            </SpaceBetween>
                         }
                     >
                         {pluralNameTitleCase}
@@ -283,27 +325,20 @@ export default function TableList(props) {
                                         />
                                     );
                                 })}
-                                {collectionProps.selectedItems.length !== 0 && (
-                                    <div>
-                                        <Button
-                                            disabled={
-                                                deleting ||
-                                                collectionProps.selectedItems.length === 0
-                                            }
-                                            onClick={() =>
-                                                handleDeleteElements(collectionProps.selectedItems)
-                                            }
-                                            variant="primary"
-                                        >
-                                            Delete Selected
-                                        </Button>
-                                    </div>
-                                )}
                             </Grid>
                         </div>
                     </Grid>
                 }
             />
+
+            {UpdateSelectedElement && collectionProps.selectedItems.length === 1 && (
+                <UpdateSelectedElement
+                    open={editOpen}
+                    setOpen={setEditOpen}
+                    setReload={setReload}
+                    initState={collectionProps.selectedItems[0]}
+                />
+            )}
         </>
     );
 }
@@ -314,4 +349,5 @@ TableList.propTypes = {
     setReload: PropTypes.func.isRequired,
     listDefinition: PropTypes.instanceOf(ListDefinition).isRequired,
     databaseId: PropTypes.string,
+    editEnabled: PropTypes.bool,
 };
