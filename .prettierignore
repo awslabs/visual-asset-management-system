@@ -3,3 +3,5 @@ node_modules
 cdk.out
 .mypy_cache
 .pytest_cache
+ash_cf2cdk_output
+ash
