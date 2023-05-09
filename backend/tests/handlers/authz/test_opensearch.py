@@ -188,7 +188,7 @@ def test_contains_multiple_criteria(claims_fixture_contains_multiple_criteria):
 
 
 @pytest.fixture
-def claims_fixture_is_one_of_operator():
+def claims_fixture_is_one_of_operator_all_users():
     return [{'entityType': 'constraint',
              'constraintId': '0346b172-486a-421c-af57-387f33ce474c',
              'groupPermissions': [{'permission': 'Admin',
@@ -208,9 +208,9 @@ def claims_fixture_is_one_of_operator():
                           ]}]
 
 
-def test_is_one_of_operator(claims_fixture_is_one_of_operator):
+def test_is_one_of_operator(claims_fixture_is_one_of_operator_all_users):
     auth = AuthEntities(None)
-    result = auth.claims_to_opensearch_filters(claims_fixture_is_one_of_operator, {"vams:all_users"})
+    result = auth.claims_to_opensearch_filters(claims_fixture_is_one_of_operator_all_users, {"vams:all_users"})
     assert result['query']['query_string']['query'] == \
         '(labels:("top-secret" OR "private" OR "quiet") AND secondfield:("top-secret" OR "hidden"))'
 
@@ -305,8 +305,8 @@ def claims_fixture_2_claims_2_groups():
                                   {'permission': 'Admin',
                                    'id': 'f08d8687-4bb1-4548-8768-452c50cf8e5e',
                                    'groupId': 'team3'}
-                                   
-                                   ],
+
+                                  ],
              'description': 'This constraint requires groups. ',
              'name': 'groupsconstraint',
              'criteria': [
@@ -329,35 +329,34 @@ def test_2_claims_2_groups(claims_fixture_2_claims_2_groups):
         '(labels:(top-secret) AND level:(top-secret)) OR (f2:(private) AND f3:(secret))'
 
 
-
 def test_by_permission(claims_fixture_2_claims_2_groups):
     auth = AuthEntities(None)
     result = auth.claims_to_opensearch_agg(claims_fixture_2_claims_2_groups, {"team1"})
     assert result is not None
 
-    # the result should include a filters aggregation wiht 3 buckets (read, edit,admin) using query_string
-    # when the particular group does not have a permission, it should be omitted
-
-    example = {
-        "aggs": {
-            "permissions": {
-                "filters": {
-                    "filters": {
-                        "Read": {
-                            "query_string": {
-                                "query": "(labels:(top-secret) AND level:(top-secret))"
-                            }
-                        },
-                        "Edit": {
-                            "query_string": {
-                                "query": "(f2:(private) AND f3:(secret))"
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    # The result should include a filters aggregation with 3 buckets (read, edit,admin) using query_string.
+    # When the particular group does not have a permission, it should be omitted
+    #
+    # example = {
+    #     "aggs": {
+    #         "permissions": {
+    #             "filters": {
+    #                 "filters": {
+    #                     "Read": {
+    #                         "query_string": {
+    #                             "query": "(labels:(top-secret) AND level:(top-secret))"
+    #                         }
+    #                     },
+    #                     "Edit": {
+    #                         "query_string": {
+    #                             "query": "(f2:(private) AND f3:(secret))"
+    #                         }
+    #                     }
+    #                 }
+    #             }
+    #         }
+    #     }
+    # }
 
     # team1 only has Edit access to both claims, so the Read and Admin buckets should be omitted
     assert result['aggs']['permissions'] is not None
@@ -373,26 +372,23 @@ def test_by_permission(claims_fixture_2_claims_2_groups):
     assert "Read" in result['aggs']['permissions']['filters']['filters']
     assert "Edit" not in result['aggs']['permissions']['filters']['filters']
     assert "Admin" in result['aggs']['permissions']['filters']['filters']
-    assert  result['aggs']['permissions']['filters']['filters']['Read']['query_string']['query'] == \
-           "(labels:(top-secret) AND level:(top-secret))"
-    assert  result['aggs']['permissions']['filters']['filters']['Admin']['query_string']['query'] == \
+    assert result['aggs']['permissions']['filters']['filters']['Read']['query_string']['query'] == \
+        "(labels:(top-secret) AND level:(top-secret))"
+    assert result['aggs']['permissions']['filters']['filters']['Admin']['query_string']['query'] == \
         "(f2:(private) AND f3:(secret))"
-
 
     # what if someone is a member of all 3 teams?
     result = auth.claims_to_opensearch_agg(claims_fixture_2_claims_2_groups, {"team1", "team2", "team3"})
     assert "Read" in result['aggs']['permissions']['filters']['filters']
     assert "Edit" in result['aggs']['permissions']['filters']['filters']
     assert "Admin" in result['aggs']['permissions']['filters']['filters']
-    assert  result['aggs']['permissions']['filters']['filters']['Read']['query_string']['query'] == \
-           "(labels:(top-secret) AND level:(top-secret)) OR (f2:(private) AND f3:(secret))"
-    assert  result['aggs']['permissions']['filters']['filters']['Edit']['query_string']['query'] == \
-           "(labels:(top-secret) AND level:(top-secret)) OR (f2:(private) AND f3:(secret))"
-    assert  result['aggs']['permissions']['filters']['filters']['Admin']['query_string']['query'] == \
-           "(f2:(private) AND f3:(secret))"
+    assert result['aggs']['permissions']['filters']['filters']['Read']['query_string']['query'] == \
+        "(labels:(top-secret) AND level:(top-secret)) OR (f2:(private) AND f3:(secret))"
+    assert result['aggs']['permissions']['filters']['filters']['Edit']['query_string']['query'] == \
+        "(labels:(top-secret) AND level:(top-secret)) OR (f2:(private) AND f3:(secret))"
+    assert result['aggs']['permissions']['filters']['filters']['Admin']['query_string']['query'] == \
+        "(f2:(private) AND f3:(secret))"
 
     result = auth.claims_to_opensearch_agg(claims_fixture_2_claims_2_groups, {"team3"})
     assert result['aggs']['permissions']['filters']['filters']['Read']['query_string']['query'] == \
-           "(labels:(top-secret) AND level:(top-secret))"
-
-
+        "(labels:(top-secret) AND level:(top-secret))"
