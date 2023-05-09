@@ -32,7 +32,7 @@ export default function WorkflowSelectorWithModal(props) {
         const result = await runWorkflow({
             databaseId: databaseId,
             assetId: assetId,
-            workflowId: workflowId,
+            workflowId: newWorkflowId,
         });
         if (result !== false && Array.isArray(result)) {
             if (result[0] === false) {
