@@ -62,11 +62,9 @@ export default function CreateUpdateWorkflow(props) {
     useEffect(() => {
         const getData = async () => {
             const items = await fetchDatabaseWorkflows({ databaseId: databaseId });
-            console.log(items);
             if (items !== false && Array.isArray(items)) {
                 setReload(false);
                 const currentItem = items.find(({ workflowId }) => workflowId === workflowIdNew);
-
                 setWorkflowIDNew(currentItem.workflowId);
                 setWorkflowDescription(currentItem.description);
                 const loadedPipelines = currentItem?.specifiedPipelines?.functions.map((item) => {
@@ -77,7 +75,6 @@ export default function CreateUpdateWorkflow(props) {
                         userProvidedResource: item.userProvidedResource,
                     };
                 });
-                console.log(loadedPipelines);
                 setLoadedWorkflowPipelines(loadedPipelines);
                 setLoaded(true);
             }

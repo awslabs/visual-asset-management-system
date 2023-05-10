@@ -78,7 +78,6 @@ const AssetSelector = (props) => {
             }}
             placeholder={<>Select starting asset from {database} database.</>}
             options={allItems.map((item) => {
-                console.log("item:", item);
                 return {
                     label: `${item.assetName} (${item.assetType})`,
                     value: item.assetId,
