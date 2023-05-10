@@ -70,7 +70,7 @@ export class VAMS extends cdk.Stack {
 
         const cognitoResources = new CognitoWebNativeConstruct(this, "Cognito", cognitoProps);
 
-        const adminUser = new cognito.CfnUserPoolUser(this, "AdminUser", {
+        const congitoUser = new cognito.CfnUserPoolUser(this, "AdminUser", {
             username: providedAdminEmailAddress,
             userPoolId: cognitoResources.userPoolId,
             desiredDeliveryMediums: ["EMAIL"],
