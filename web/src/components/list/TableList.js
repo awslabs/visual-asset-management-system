@@ -19,7 +19,6 @@ import {
 } from "@cloudscape-design/components";
 import { EmptyState } from "../../common/common-components";
 import ListDefinition from "./list-definitions/types/ListDefinition";
-import { deleteElement } from "../../services/APIService";
 
 export default function TableList(props) {
     //props
@@ -39,8 +38,7 @@ export default function TableList(props) {
         filterColumns,
         pluralName,
         pluralNameTitleCase,
-        elementId,
-        deleteRoute,
+        deleteFunction,
     } = listDefinition;
     const filteredVisibleColumns = visibleColumns.filter((columnName) => {
         if (!databaseId) return true;
@@ -150,12 +148,7 @@ export default function TableList(props) {
     const handleDeleteElements = async (selected) => {
         setDeleting(true);
         for (let i = 0; i < selected.length; i++) {
-            const item = selected[i];
-            const result = await deleteElement({
-                deleteRoute: deleteRoute,
-                elementId: elementId,
-                item: item,
-            });
+            const result = await deleteFunction(selected[i]);
             if (result !== false && Array.isArray(result)) {
                 if (result[0] === false) {
                     setDeleteResult({
@@ -350,4 +343,6 @@ TableList.propTypes = {
     listDefinition: PropTypes.instanceOf(ListDefinition).isRequired,
     databaseId: PropTypes.string,
     editEnabled: PropTypes.bool,
+    UpdateSelectedElement: PropTypes.func,
+    createNewElement: PropTypes.element,
 };
