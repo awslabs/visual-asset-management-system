@@ -74,13 +74,14 @@ const WorkflowEditor = (props) => {
         setElements((els) => removeElements(elementsToRemove, els));
     const onConnect = (params) => setElements((els) => addEdge(params, els));
 
-    const handleAddPipeline = useCallback(async () => {
+    const handleAddPipeline = () => {
         setActiveTab("pipelines");
-
         const newPipelines = workflowPipelines.slice();
         newPipelines.push(null);
         setWorkflowPipelines(newPipelines);
-
+        updateElementsList();
+    };
+    const updateElementsList = useCallback(async () => {
         if (yPos.current === 0) yPos.current = 75;
         else if (columnCounter.current === 4) {
             xPos.current = 0;
@@ -145,9 +146,9 @@ const WorkflowEditor = (props) => {
 
     useEffect(() => {
         if (loaded && workflowPipelines.length === 0) {
-            handleAddPipeline();
+            // updateElementsList();
         }
-    }, [handleAddPipeline, loaded, workflowPipelines.length]);
+    });
 
     const handleRemovePipeline = useCallback(() => {
         setActiveTab("pipelines");
@@ -182,6 +183,7 @@ const WorkflowEditor = (props) => {
         setElements(newElements);
     });
 
+    // when elements changes, center and zoom the view so that the graph fills the center of the screen
     useEffect(() => {
         if (cacheInstance && cacheInstance.fitView) cacheInstance.fitView();
         setTimeout(() => cacheInstance.fitView(), 100);
@@ -191,13 +193,13 @@ const WorkflowEditor = (props) => {
         if (loaded && loadedWorkflowPipelines.length > 0) {
             setFirstLoad(true);
         }
-    }, [loaded, loadedWorkflowPipelines.length]);
+    }, [loaded]);
 
     useEffect(() => {
         if (firstload) {
             if (loadedWorkflowPipelines.length > 0) {
                 const shiftedPipeline = loadedWorkflowPipelines.shift();
-                handleAddPipeline();
+                updateElementsList();
                 const newPipelines = workflowPipelines.slice();
                 newPipelines.push(shiftedPipeline);
                 setWorkflowPipelines(newPipelines);
@@ -205,14 +207,7 @@ const WorkflowEditor = (props) => {
                 setFirstLoad(false);
             }
         }
-    }, [
-        firstload,
-        elements,
-        loadedWorkflowPipelines,
-        handleAddPipeline,
-        workflowPipelines,
-        setWorkflowPipelines,
-    ]);
+    }, [firstload, elements]);
 
     return (
         <>
