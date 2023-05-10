@@ -12,7 +12,7 @@ import {
     Textarea,
     TextContent,
 } from "@cloudscape-design/components";
-import { useParams } from "react-router";
+import { useNavigate, useParams } from "react-router";
 import Container from "@cloudscape-design/components/container";
 import Header from "@cloudscape-design/components/header";
 import SpaceBetween from "@cloudscape-design/components/space-between";
@@ -93,6 +93,7 @@ const isDistributableOptions: OptionDefinition[] = [
 ];
 
 const UploadForm = () => {
+    const navigate = useNavigate();
     const urlParams = useParams();
     const [databaseId, setDatabaseId] = useState({
         label: urlParams.databaseId,
@@ -123,6 +124,7 @@ const UploadForm = () => {
     });
 
     const [execStatus, setExecStatus] = useState<Record<string, StatusIndicatorProps.Type>>({});
+    const [canNavigateToAssetPage, setCanNavigateToAssetPage] = useState(false);
 
     useEffect(() => {
         if (!assetDetail?.databaseId) {
@@ -137,6 +139,9 @@ const UploadForm = () => {
 
     return (
         <Box padding={{ left: "l", right: "l" }}>
+            {canNavigateToAssetPage && (
+                navigate(`/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`)
+            )}
             {showUploadAndExecProgress && (
                 <ProgressScreen
                     execStatus={execStatus}
@@ -174,6 +179,7 @@ const UploadForm = () => {
                         setShowUploadAndExecProgress,
                         setAssetUploadProgress,
                         setPreviewUploadProgress,
+                        setCanNavigateToAssetPage,
                     })}
                     allowSkipTo
                     steps={[

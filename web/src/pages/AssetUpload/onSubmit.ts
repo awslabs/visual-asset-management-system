@@ -44,6 +44,7 @@ class OnSubmitProps {
     setExecStatus!: (x: ExecStatusType | ((x: ExecStatusType) => ExecStatusType)) => void;
     setAssetUploadProgress!: (x: ProgressBarProps) => void;
     setPreviewUploadProgress!: (x: ProgressBarProps) => void;
+    setCanNavigateToAssetPage!: (x: boolean) => void;
 }
 
 class ProgresCallbackArgs {
@@ -71,6 +72,7 @@ export default function onSubmit({
     setShowUploadAndExecProgress,
     setAssetUploadProgress,
     setPreviewUploadProgress,
+    setCanNavigateToAssetPage
 }: OnSubmitProps) {
     return async (detail: NonCancelableCustomEvent<{}>) => {
         setFreezeWizardButtons(true);
@@ -228,7 +230,7 @@ export default function onSubmit({
                         return Promise.reject(err);
                     });
             });
-
+            setCanNavigateToAssetPage(true);
             window.onbeforeunload = null;
         }
     };
