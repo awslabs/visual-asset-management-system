@@ -50,6 +50,16 @@ let navItems = [
     },
     {
         type: "divider",
+        role: "super-admin",
+    },
+    {
+        type: "section",
+        role: "super-admin",
+        text: "Admin",
+        items: [{ type: "link", text: "Fine Grained Access Controls", href: "/auth/constraints" }],
+    },
+    {
+        type: "divider",
     },
     {
         type: "link",

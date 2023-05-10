@@ -143,6 +143,24 @@ export const createUpdateElements = async ({ pluralName, config }, api = API) =>
 };
 
 /**
+ * Returns array of all constraints from the auth/constraints api
+ * @returns {Promise<boolean|{constraints}|any>}
+ */
+export const fetchConstraints: Promise<boolean | { constraints: any }> = async (api = API) => {
+    try {
+        const response = await api.get("api", "auth/constraints", {});
+        if (response.constraints) {
+            return response.constraints;
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return error?.message;
+    }
+};
+
+/**
  * Returns array of all databases the current user can access, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */
