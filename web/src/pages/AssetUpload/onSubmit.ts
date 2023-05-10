@@ -72,7 +72,7 @@ export default function onSubmit({
     setShowUploadAndExecProgress,
     setAssetUploadProgress,
     setPreviewUploadProgress,
-    setCanNavigateToAssetPage
+    setCanNavigateToAssetPage,
 }: OnSubmitProps) {
     return async (detail: NonCancelableCustomEvent<{}>) => {
         setFreezeWizardButtons(true);
