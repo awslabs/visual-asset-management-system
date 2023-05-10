@@ -139,9 +139,8 @@ const UploadForm = () => {
 
     return (
         <Box padding={{ left: "l", right: "l" }}>
-            {canNavigateToAssetPage && (
-                navigate(`/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`)
-            )}
+            {canNavigateToAssetPage &&
+                navigate(`/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`)}
             {showUploadAndExecProgress && (
                 <ProgressScreen
                     execStatus={execStatus}
