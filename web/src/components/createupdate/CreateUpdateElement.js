@@ -269,8 +269,9 @@ export default function CreateUpdateElement(props) {
                             //find the form field that isn't toggled based on pipeline type, then clear it.
                             const optionalFieldHidden =
                                 appearsWhen &&
-                                formValues[appearsWhen[0]] &&
-                                appearsWhen[1] !== formValues[appearsWhen[0]]["label"];
+                                ! ( formValues[appearsWhen[0]] &&
+                                appearsWhen[1] === formValues[appearsWhen[0]]["label"]);
+
                             if (formValues[id] && optionalFieldHidden) {
                                 console.log(id + ": " + formValues[id]);
                                 formValues[id] = "";

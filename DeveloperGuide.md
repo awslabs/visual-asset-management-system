@@ -4,10 +4,10 @@
 
 ### Requirements
 
--   Python 3.8
+-   Python 3.10
 -   Poetry (for managing python dependencies in the VAMS backend)
 -   Docker
--   Node >=16.x
+-   Node >=18.x
 -   Yarn >=1.22.19
 -   Node Version Manager (nvm)
 -   AWS CDK cli
@@ -185,6 +185,35 @@ def determine_vams_roles(event):
 ```
 
 This new `determine_vams_roles` can replace the existing function in `pretokengen.py`. Once the file is saved, you can update the stack by running `cdk deploy` to deploy the new version of the function.
+
+# Implementing pipelines outside of Lambda or Sagemeker
+
+To process an asset through VAMS using an external system or when a job can take longer than the Lambda timeout of 15 minutes, it is recommended that you use the _Wait for a Callback with the Task Token_ feature so that the Pipeline Lambda can initiate your job and then exit instead of waiting for the work to complete before it also finishes. This reduces your Lambda costs and helps you avoid failed jobs that fail simply because they take longer than the timeout to complete. 
+
+To use _Wait for a call back with the Task Token_, enable the option to use Task Tokens on the create pipeline screen. When using this option, you must explicitly make a callback to the Step Functions API with the Task Token in the event passed to your Lambda function. The Task Token is provided in the event with the key `TaskToken`. You can see this using the Step Functions execution viewer under the Input tab for an execution with the call back enabled. Pass the `TaskToken` to the system that can notify the Step Functions API that the work is complete with the `SendTaskSuccess` message.
+
+`SendTaskSuccess` is sent with the [aws cli](https://docs.aws.amazon.com/cli/latest/reference/stepfunctions/send-task-success.html#send-task-success) like this:
+
+```
+aws stepfunctions send-task-success --task-token 'YOUR_TASK_TOKEN' --task-output '{"status": "success"}'
+```
+
+Or, in python [using boto3, like this](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/stepfunctions/client/send_task_success.html):
+
+```
+response = client.send_task_success(
+    taskToken='string',
+    output='string'
+)
+```
+
+For other platforms, see the SDK documentation.
+
+For task failures, see the adjacent api calls for `SendTaskFailure`. 
+
+Two additional settings enable your job to end with a timeout error by defining a task timeout. This can reduce your time to detect a problem with your task. By default, the timeout is over a year when working with task tokens. To set a timeout, specify a Task Timeout on the create pipeline screen. 
+
+If you would like your job check in to show that it is still running and fail the step if it does not check in within some amount of time less than the task timeout, define the Task Heartbeat Timeout on the create pipeline screen also. If more time than the specified seconds elapses between heartbeats from the task, this state fails with a States.Timeout error name.
 
 # Uninstalling
 
