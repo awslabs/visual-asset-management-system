@@ -199,7 +199,7 @@ export class VAMS extends cdk.Stack {
         this.node.findAll().forEach((item) => {
             if (item instanceof cdk.aws_lambda.Function) {
                 const fn = item as cdk.aws_lambda.Function;
-                if (fn.runtime.name == "nodejs14.x") {
+                if (fn.runtime.name == "python3.9") {
                     NagSuppressions.addResourceSuppressions(fn, [
                         {
                             id: "AwsSolutions-L1",
