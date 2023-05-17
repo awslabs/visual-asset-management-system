@@ -42,6 +42,7 @@ export class VAMS extends cdk.Stack {
 
         const providedAdminEmailAddress =
             process.env.VAMS_ADMIN_EMAIL || scope.node.tryGetContext("adminEmailAddress");
+
         const adminEmailAddress = new cdk.CfnParameter(this, "adminEmailAddress", {
             type: "String",
             description:
@@ -70,7 +71,7 @@ export class VAMS extends cdk.Stack {
 
         const cognitoResources = new CognitoWebNativeConstruct(this, "Cognito", cognitoProps);
 
-        const congitoUser = new cognito.CfnUserPoolUser(this, "AdminUser", {
+        const cognitoUser = new cognito.CfnUserPoolUser(this, "AdminUser", {
             username: providedAdminEmailAddress,
             userPoolId: cognitoResources.userPoolId,
             desiredDeliveryMediums: ["EMAIL"],
@@ -87,12 +88,16 @@ export class VAMS extends cdk.Stack {
             userPoolId: cognitoResources.userPoolId,
         });
 
-        new cognito.CfnUserPoolUserToGroupAttachment(this, "AdminUserToGroupAttachment", {
-            userPoolId: cognitoResources.userPoolId,
-            username: providedAdminEmailAddress,
-            groupName: "super-admin",
-        });
-
+        const userGroupAttachment = new cognito.CfnUserPoolUserToGroupAttachment(
+            this,
+            "AdminUserToGroupAttachment",
+            {
+                userPoolId: cognitoResources.userPoolId,
+                username: providedAdminEmailAddress,
+                groupName: "super-admin",
+            }
+        );
+        userGroupAttachment.addDependency(cognitoUser);
         // initialize api gateway and bind it to /api route of cloudfront
         const api = new ApiGatewayV2CloudFrontConstruct(this, "api", {
             ...props,
