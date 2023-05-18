@@ -85,15 +85,14 @@ describe("Workflow Editor", () => {
 
     it("makes elements a function of workflow pipelines", () => {
         const result = workflowPipelineToElements([], "databaseid");
-        expect(result.find(x => x.id === "asset0")).toBeTruthy();
+        expect(result.find((x) => x.id === "asset0")).toBeTruthy();
         expect(result.length).toEqual(1);
     });
 
     it("makes elements a function of workflow pipelines with one pipeline", () => {
         const result = workflowPipelineToElements([null], "databaseid");
-        expect(result.find(x => x.id === "asset0")).toBeTruthy();
-        expect(result.find(x => x.id === "pipeline0")).toBeTruthy();
+        expect(result.find((x) => x.id === "asset0")).toBeTruthy();
+        expect(result.find((x) => x.id === "pipeline0")).toBeTruthy();
         expect(result.length).toEqual(5);
     });
-
 });

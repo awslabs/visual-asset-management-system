@@ -6,13 +6,7 @@
 
 import { useState, useEffect, useContext } from "react";
 
-import ReactFlow, {
-    MiniMap,
-    Controls,
-    Background,
-    Elements,
-    Position,
-} from "react-flow-renderer";
+import ReactFlow, { MiniMap, Controls, Background, Elements, Position } from "react-flow-renderer";
 import { Button, Icon } from "@cloudscape-design/components";
 import { useParams } from "react-router";
 import AssetSelector from "../selectors/AssetSelector";
@@ -44,8 +38,10 @@ const onLoad = (reactFlowInstance: any) => {
     reactFlowInstance.fitView();
 };
 
-export const workflowPipelineToElements = (workflowPipelines: any, databaseId: string | undefined): Elements =>  {
-
+export const workflowPipelineToElements = (
+    workflowPipelines: any,
+    databaseId: string | undefined
+): Elements => {
     let yPos = 0;
     let xPos = 0;
     let columnCounter = 0;
@@ -87,7 +83,7 @@ export const workflowPipelineToElements = (workflowPipelines: any, databaseId: s
                 type: "smoothstep",
             });
             arry.push({
-                id: `asset${idx+1}`,
+                id: `asset${idx + 1}`,
                 position: { x: xPos, y: yPos + yOffsetIncrement },
                 data: {
                     label: (
@@ -102,9 +98,9 @@ export const workflowPipelineToElements = (workflowPipelines: any, databaseId: s
                 targetPosition: Position.Top,
             });
             arry.push({
-                id: `pipeline${idx}-asset${idx+1}`,
+                id: `pipeline${idx}-asset${idx + 1}`,
                 source: `pipeline${idx}`,
-                target: `asset${idx+1}`,
+                target: `asset${idx + 1}`,
                 type: "smoothstep",
             });
 
@@ -127,7 +123,6 @@ export const workflowPipelineToElements = (workflowPipelines: any, databaseId: s
         ]
     );
 };
-
 
 const WorkflowEditor = (props: any) => {
     let { databaseId } = useParams();
@@ -157,9 +152,12 @@ const WorkflowEditor = (props: any) => {
                 {/*@todo implement undo redo*/}
                 {/*<Button variant="link"><Icon name="undo"/> Undo</Button>*/}
                 {/*<Button variant="link"><div style={{transform: "scaleX(-1)", display: "inline-block"}}><Icon name="undo"/></div> Redo</Button>*/}
-                <Button variant="link" onClick={() => {
-                    setWorkflowPipelines(workflowPipelines.slice(0, -1));
-                }}>
+                <Button
+                    variant="link"
+                    onClick={() => {
+                        setWorkflowPipelines(workflowPipelines.slice(0, -1));
+                    }}
+                >
                     <Icon name="close" /> Remove
                 </Button>
             </div>
