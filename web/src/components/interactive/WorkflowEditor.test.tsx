@@ -96,4 +96,14 @@ describe("Workflow Editor", () => {
         expect(result.find((x) => x.id === "pipeline0")).toBeTruthy();
         expect(result.length).toEqual(5);
     });
+
+    it("matches the snapshot for an empty workflow pipeline list", () => {
+        const result = workflowPipelineToElements([null], "databaseid");
+        expect(result).toMatchSnapshot();
+    });
+
+    it("matches the snapshot for zero length pipeline list", () => {
+        const result = workflowPipelineToElements([], "databaseid");
+        expect(result).toMatchSnapshot();
+    });
 });
