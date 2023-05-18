@@ -12,6 +12,7 @@ import { WorkflowContext } from "../../context/WorkflowContex";
 class ResizeObserver {
     observe() {}
     unobserve() {}
+    disconnect() {}
 }
 
 describe("Workflow Editor", () => {
