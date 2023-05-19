@@ -32,6 +32,36 @@ Sample use cases that have leveraged early iterations of VAMS include:
 
 ![VAMS Architecture](./VAMS_Architecture.jpg)
 
+## 3D Asset Types Supported for In-Browser Viewing
+
+VAMS currently integrates with [Online 3D Viewer](https://github.com/kovacsv/Online3DViewer) and supports the following formats for viewing 3D assets.
+
+| Name                              | Extension | Type   |
+| :-------------------------------- | :-------- | :----- |
+| Wavefront                         | obj       | text   |
+| 3D Studio                         | 3ds       | binary |
+| Stereolithography                 | stl       | text   |
+| Stereolithography                 | stl       | binary |
+| Polygon File Format               | ply       | text   |
+| Polygon File Format               | ply       | binary |
+| glTF                              | gltf      | text   |
+| glTF                              | glb       | binary |
+| Object File Format                | off       | text   |
+| Object File Format                | off       | binary |
+| Dotbim                            | bim       | text   |
+| Rhinoceros 3D                     | 3dm       | binary |
+| Filmbox                           | fbx       | text   |
+| Filmbox                           | fbx       | binary |
+| Collada                           | dae       | text   |
+| Virtual Reality Modeling Language | wrl       | text   |
+| 3D Manufacturing Format           | 3mf       | text   |
+| Industry Foundation Classes       | ifc       | text   |
+
+Please take note:
+
+-   While we are limited to these formats to view assets, any file format may be uploaded to VAMS.
+-   There are some limitations with formats that leverage multiple files such as glTF that uses json with references to other files.
+
 ## Install
 
 ### Requirements
