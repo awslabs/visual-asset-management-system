@@ -59,8 +59,8 @@ VAMS currently integrates with [Online 3D Viewer](https://github.com/kovacsv/Onl
 
 Please take note:
 
-* While we are limited to these formats to view assets, any file format may be uploaded to VAMS.
-* There are some limitations with formats that leverage multiple files such as glTF that uses json with references to other files.
+-   While we are limited to these formats to view assets, any file format may be uploaded to VAMS.
+-   There are some limitations with formats that leverage multiple files such as glTF that uses json with references to other files.
 
 ## Install
 
