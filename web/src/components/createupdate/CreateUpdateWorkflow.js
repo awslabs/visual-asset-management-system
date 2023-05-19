@@ -39,7 +39,7 @@ export default function CreateUpdateWorkflow(props) {
     const [openCreatePipeline, setOpenCreatePipeline] = useState(false);
     const [asset, setAsset] = useState(null);
     const [pipelines, setPipelines] = useState([]);
-    const [workflowPipelines, setWorkflowPipelines] = useState([]);
+    const [workflowPipelines, setWorkflowPipelines] = useState([null]);
     const [loadedWorkflowPipelines, setLoadedWorkflowPipelines] = useState([]);
     const [activeTab, setActiveTab] = useState("asset");
     const [workflowIdNew, setWorkflowIDNew] = useState(workflowId);
@@ -76,6 +76,7 @@ export default function CreateUpdateWorkflow(props) {
                     };
                 });
                 setLoadedWorkflowPipelines(loadedPipelines);
+                setWorkflowPipelines(loadedPipelines);
                 setLoaded(true);
             }
         };
