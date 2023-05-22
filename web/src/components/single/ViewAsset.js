@@ -50,10 +50,13 @@ const checkFileFormat = (asset) => {
     let filetype;
     if (asset?.generated_artifacts?.gltf?.Key) {
         filetype = asset?.generated_artifacts?.gltf?.Key.split(".").pop();
-    } else {
+    } else if (asset?.assetType) {
         filetype = asset.assetType;
+    } else {
+        filetype = asset.name.split(".").pop()
     }
 
+    console.log(asset)
     filetype = filetype.toLowerCase();
     if (modelFileFormats.includes(filetype) || modelFileFormats.includes("." + filetype)) {
         return "model";
@@ -151,7 +154,7 @@ export default function ViewAsset() {
         if (reload) {
             getData();
         }
-    }, [reload, assetId, databaseId]);
+    }, [reload, assetId, databaseId, asset]);
 
     const changeViewerMode = (mode) => {
         if (mode === "fullscreen" && viewerMode === "fullscreen") {
@@ -263,6 +266,7 @@ export default function ViewAsset() {
                     }
                     setViewerOptions(newViewerOptions);
                     if (!window.location.hash) setViewType(defaultViewType);
+                    
                     else {
                         if (window.location.hash === "#preview") {
                             setViewType("preview");
@@ -283,7 +287,7 @@ export default function ViewAsset() {
         if (reload && !pathViewType) {
             getData();
         }
-    }, [reload, assetId, databaseId, pathViewType]);
+    }, [reload, assetId, databaseId, pathViewType, asset]);
 
     return (
         <>
@@ -575,6 +579,10 @@ export default function ViewAsset() {
                         assetId={assetId}
                         actionType={actionTypes.UPDATE}
                         asset={asset}
+                        setAsset={(a) => {
+                            setAsset(a);
+                            setViewType('preview')
+                        }}
                     />
                     <WorkflowSelectorWithModal
                         assetId={assetId}

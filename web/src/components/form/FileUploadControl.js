@@ -31,19 +31,13 @@ const FileUploadControl = (props) => {
     const { formValues, setFormValues, formErrors } = useContext(AssetContext);
     const [file, setFile] = useState(null);
     const inputRef = useRef();
-    // useEffect(() => {   
-    //     console.log(formValues)
-    //     setFile(formValues[controlName])
-    // }, [props])
 
     useEffect(() => {
         if (file) {
             const newFormValues = Object.assign({}, formValues);
             newFormValues[controlName] = file;
             newFormValues.assetType = file.name.split(".").pop()
-            console.log(newFormValues)
             setFormValues(newFormValues);
-//            console.log(formValues)
         }
     }, [file, controlName, setFormValues]);
 

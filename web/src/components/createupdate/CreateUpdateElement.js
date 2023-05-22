@@ -70,6 +70,7 @@ export default function CreateUpdateElement(props) {
         elementId,
         actionType,
         asset,
+        setAsset
     } = props;
     const {
         entityType,
@@ -263,6 +264,7 @@ export default function CreateUpdateElement(props) {
             customSubmitResults = await customSubmitFunction(formValues, formErrors);
             setFormValues(customSubmitResults?.values);
             setFormErrors(customSubmitResults?.errors);
+            setAsset(formValues.Asset)
             if (customSubmitResults?.success === true) {
                 setReadySubmit(true);
             } else {
@@ -399,6 +401,7 @@ CreateUpdateElement.propTypes = {
     open: PropTypes.bool.isRequired,
     setOpen: PropTypes.func.isRequired,
     setReload: PropTypes.func.isRequired,
+    setAsset: PropTypes.func.isRequired,
     formDefinition: PropTypes.instanceOf(FormDefinition),
     formEntity: EntityPropTypes.ENTITY,
     databaseId: EntityPropTypes.ENTITY_ID,

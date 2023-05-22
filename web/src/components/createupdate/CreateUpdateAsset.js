@@ -17,6 +17,7 @@ export default function CreateUpdateAsset(props) {
         assetId,
         actionType = actionTypes.CREATE,
         asset,
+        setAsset,
     } = props;
 
     if (actionType === actionTypes.CREATE){
@@ -41,6 +42,7 @@ export default function CreateUpdateAsset(props) {
                 formDefinition={AssetFormDefinition}
                 formEntity={AssetEntity}
                 asset = {asset}
+                setAsset = {setAsset}
                 databaseId={databaseId}
                 elementId={assetId}
                 actionType={actionType}
