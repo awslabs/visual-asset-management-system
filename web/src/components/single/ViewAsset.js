@@ -50,13 +50,10 @@ const checkFileFormat = (asset) => {
     let filetype;
     if (asset?.generated_artifacts?.gltf?.Key) {
         filetype = asset?.generated_artifacts?.gltf?.Key.split(".").pop();
-    } else if (asset?.assetType) {
-        filetype = asset.assetType;
     } else {
-        filetype = asset.name.split(".").pop()
-    }
+        filetype = asset.assetType;
+    } 
 
-    console.log(asset)
     filetype = filetype.toLowerCase();
     if (modelFileFormats.includes(filetype) || modelFileFormats.includes("." + filetype)) {
         return "model";
