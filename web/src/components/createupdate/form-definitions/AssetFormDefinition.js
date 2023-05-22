@@ -37,10 +37,12 @@ export const AssetFormDefinition = new FormDefinition({
             return { success: false, values: newFormValues, errors: newFormErrors };
         }
         newFormErrors.databaseId = "";
-        let assetId = formValues?.assetId;
+        let assetId = formValues?.key.split(".")[0];
         let databaseId = formValues?.databaseId;
         if (assetId.value) assetId = assetId.value;
         if (databaseId.value) databaseId = databaseId.value;
+        console.log(formValues?.Asset)
+        console.log(" Just got uplaoded")
         const assetFile = formValues?.Asset;
         const previewFile = formValues?.Preview;
         if (assetFile === null) {
@@ -69,6 +71,8 @@ export const AssetFormDefinition = new FormDefinition({
             assetId: assetId,
             databaseId: databaseId,
         };
+
+        console.log(assetFileKey)
         const assetUploaded = await Storage.put(assetFileKey, assetFile, {
             metadata: metadata,
         });
@@ -97,7 +101,7 @@ export const AssetFormDefinition = new FormDefinition({
     controlDefinitions: [
         new ControlDefinition({
             label: "Asset Name",
-            id: "assetId",
+            id: "assetName",
             constraintText:
                 "Required. All lower case, no special chars or spaces except - and _ only letters for first character min 4 and max 64.",
             elementDefinition: new ElementDefinition({

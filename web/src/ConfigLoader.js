@@ -27,6 +27,7 @@ if (config) {
     fetch(`${basePath}/api/amplify-config`).then(async (response) => {
         const config = await response.json();
         Cache.setItem("config", config);
+        console.log(config)
         renderApp(config);
     });
 }

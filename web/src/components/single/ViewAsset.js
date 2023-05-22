@@ -574,6 +574,7 @@ export default function ViewAsset() {
                         databaseId={databaseId}
                         assetId={assetId}
                         actionType={actionTypes.UPDATE}
+                        asset={asset}
                     />
                     <WorkflowSelectorWithModal
                         assetId={assetId}

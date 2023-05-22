@@ -121,6 +121,8 @@ export const saveWorkflow = async ({ config }, api = API) => {
  * @returns {Promise<boolean|{message}|any>}
  */
 export const createUpdateElements = async ({ pluralName, config }, api = API) => {
+    console.log("updating " + pluralName + " with config: ");
+    console.log(config);
     try {
         const response = await api.put("api", pluralName, config || config.body);
         if (response.message) {
