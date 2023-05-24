@@ -41,8 +41,6 @@ export const AssetFormDefinition = new FormDefinition({
         let databaseId = formValues?.databaseId;
         if (assetId.value) assetId = assetId.value;
         if (databaseId.value) databaseId = databaseId.value;
-        console.log(formValues?.Asset)
-        console.log(" Just got uplaoded")
         const assetFile = formValues?.Asset;
         const previewFile = formValues?.Preview;
         if (assetFile === null) {
@@ -71,8 +69,6 @@ export const AssetFormDefinition = new FormDefinition({
             assetId: assetId,
             databaseId: databaseId,
         };
-
-        console.log(assetFileKey)
         const assetUploaded = await Storage.put(assetFileKey, assetFile, {
             metadata: metadata,
         });

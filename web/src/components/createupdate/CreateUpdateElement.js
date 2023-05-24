@@ -29,33 +29,34 @@ const actionStrings = {
     },
 };
 
-async function fillFormWithAssetMetadata(asset, formEntity) {
-    console.log(asset)
-    let values = {}
+async function fillFormWithAssetMetadata(asset) {
+    let values = {};
     // fill in form values based on formentitty proptypes
     const assetTransfer = new DataTransfer();
     const previewTransfer = new DataTransfer();
-    let assetS3 = await Storage.get(asset.assetLocation.Key, { download: true })
-    let previewS3 = await Storage.get(asset.previewLocation.Key, { download: true })
 
-    assetTransfer.items.add(new File([assetS3.Body], asset.assetLocation.Key.split("/").pop()))
-    previewTransfer.items.add(new File([previewS3.Body], asset.previewLocation.Key.split("/").pop()))
+    //Retrieve the files from S3 so we can prefill them 
+    let assetS3 = await Storage.get(asset.assetLocation.Key, { download: true });
+    let previewS3 = await Storage.get(asset.previewLocation.Key, { download: true });
 
-    values.Asset = assetTransfer.files[0] //File
-    values.Comment = asset.currentVersion?.Comment
-    values.Preview = previewTransfer.files[0] //File
-    values.assetName = asset.assetName
-    values.assetType = "." + asset.assetLocation.Key.split(".").pop()
-    values.bucket = asset.assetLocation?.Bucket
-    values.databaseId = { label: asset.databaseId, value: asset.databaseId }
-    values.description = asset.description
-    values.isDistributable = asset.isDistributable
-    values.key = asset.assetLocation?.Key
-    values.assetId = asset.assetLocation?.Key.split("/")[0]
-    values.previewLocation = asset.previewLocation
-    values.specifiedPipelines = asset.specifiedPipelines
+    assetTransfer.items.add(new File([assetS3.Body], asset.assetLocation.Key.split("/").pop()));
+    previewTransfer.items.add(new File([previewS3.Body], asset.previewLocation.Key.split("/").pop()));
 
-    return values
+    values.Asset = assetTransfer.files[0]; //File
+    values.Comment = asset.currentVersion?.Comment;
+    values.Preview = previewTransfer.files[0]; //File
+    values.assetName = asset.assetName;
+    values.assetType = "." + asset.assetLocation.Key.split(".").pop();
+    values.bucket = asset.assetLocation?.Bucket;
+    values.databaseId = { label: asset.databaseId, value: asset.databaseId };
+    values.description = asset.description;
+    values.isDistributable = asset.isDistributable;
+    values.key = asset.assetLocation?.Key;
+    values.assetId = asset.assetLocation?.Key.split("/")[0];
+    values.previewLocation = asset.previewLocation;
+    values.specifiedPipelines = asset.specifiedPipelines;
+
+    return values;
 }
 
 export default function CreateUpdateElement(props) {
@@ -84,7 +85,6 @@ export default function CreateUpdateElement(props) {
     const [readySubmit, setReadySubmit] = useState(false);
     const [loadingElement, setLoadingElement] = useState(actionType === ACTION_TYPES.UPDATE);
     const [submitUpdateError, setSubmitUpdateError] = useState("");
-
     //populate blank form values based on entity definition
     //TODO fields should be blank except the region!!
     //console.log(props.open)
@@ -94,8 +94,7 @@ export default function CreateUpdateElement(props) {
         const getStartingValues = async () => {
             if (entityType === ENTITY_TYPES_NAMES.ASSET && props.open === true) {
                 console.log("Filling in values with pre-populated data")
-                startingValues = await fillFormWithAssetMetadata(asset, formEntity)
-                //                console.log(startingValues)
+                startingValues = await fillFormWithAssetMetadata(asset)
                 setFormValues(startingValues)
             } else {
                 startingValues = Object.keys(formEntity.propTypes).reduce((acc, cur) => {
@@ -111,11 +110,8 @@ export default function CreateUpdateElement(props) {
                 }, {});
             }
         }
-
-        getStartingValues()
+        getStartingValues();
     }, [props.open])
-
-
 
     const [formValues, setFormValues] = useState(startingValues);
     //each validatable prop needs a corresponding error message
@@ -163,7 +159,6 @@ export default function CreateUpdateElement(props) {
         if (open) {
             const newFormErrors = Object.assign({}, formErrors);
             const formPropNames = Object.keys(formValues);
-            // TODO add bucket
             for (let i = 0; i < formPropNames.length; i++) {
                 const formPropName = formPropNames[i];
                 //ignore values without validation on entity
@@ -172,7 +167,6 @@ export default function CreateUpdateElement(props) {
                         formValues,
                         formPropName
                     );
-                    console.log(validateResults)
                     //if we find an error, return false and set error message for value
                     //otherwise, the value validates and we clear any previous
                     //error message.
@@ -220,9 +214,6 @@ export default function CreateUpdateElement(props) {
                         acc[cur] = null;
                     }
 
-                    console.log("updating " + cur)
-                    console.log(acc[cur])
-                    console.log(cur + " updated")
                     return acc;
                 }, {});
 
@@ -263,7 +254,7 @@ export default function CreateUpdateElement(props) {
             customSubmitResults = await customSubmitFunction(formValues, formErrors);
             setFormValues(customSubmitResults?.values);
             setFormErrors(customSubmitResults?.errors);
-            setAsset(formValues.Asset)
+            setAsset(formValues.Asset);
             if (customSubmitResults?.success === true) {
                 setReadySubmit(true);
             } else {
@@ -352,15 +343,15 @@ export default function CreateUpdateElement(props) {
                                                 value={formValues[id]}
                                                 selectedOption={
                                                     typeof formValues[id] === "object"
-                                                        ? formValues[id]
-                                                        : options
-                                                            ? options.find(
-                                                                (option) =>
-                                                                    option.value === formValues[id]
-                                                            )
-                                                            : {
-                                                                value: formValues[id],
-                                                            }
+                                                    ? formValues[id]
+                                                    : options
+                                                        ? options.find(
+                                                            (option) =>
+                                                                option.value === formValues[id]
+                                                        )
+                                                        : {
+                                                            value: formValues[id],
+                                                        }
                                                 }
                                                 selectedOptions={
                                                     Array.isArray(formValues[id]) &&
@@ -374,7 +365,6 @@ export default function CreateUpdateElement(props) {
                                                 }
                                                 options={options}
                                                 onChange={({ detail }) => {
-                                                    console.log(detail)
                                                     handleUpdateFormValues(
                                                         id,
                                                         detail.selectedOptions ||

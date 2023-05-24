@@ -7,7 +7,6 @@ import AssetEntity from "./entity-types/AssetEntity";
 import CreateUpdateElement from "./CreateUpdateElement";
 import { actionTypes } from "./form-definitions/types/FormDefinition";
 
-
 export default function CreateUpdateAsset(props) {
     const {
         open,

@@ -41,7 +41,7 @@ export class VAMS extends cdk.Stack {
         const region = props.env.region || "us-east-1";
 
         const providedAdminEmailAddress =
-            process.env.VAMS_ADMIN_EMAIL || scope.node.tryGetContext("adminEmailAddress") || 'dummyEmail';
+            process.env.VAMS_ADMIN_EMAIL || scope.node.tryGetContext("adminEmailAddress");
             
         const adminEmailAddress = new cdk.CfnParameter(this, "adminEmailAddress", {
             type: "String",

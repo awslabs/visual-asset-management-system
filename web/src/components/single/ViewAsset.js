@@ -52,7 +52,7 @@ const checkFileFormat = (asset) => {
         filetype = asset?.generated_artifacts?.gltf?.Key.split(".").pop();
     } else {
         filetype = asset.assetType;
-    } 
+    }
 
     filetype = filetype.toLowerCase();
     if (modelFileFormats.includes(filetype) || modelFileFormats.includes("." + filetype)) {
@@ -263,7 +263,6 @@ export default function ViewAsset() {
                     }
                     setViewerOptions(newViewerOptions);
                     if (!window.location.hash) setViewType(defaultViewType);
-                    
                     else {
                         if (window.location.hash === "#preview") {
                             setViewType("preview");
@@ -577,7 +576,7 @@ export default function ViewAsset() {
                         actionType={actionTypes.UPDATE}
                         asset={asset}
                         setAsset={(a) => {
-                            setViewType('preview')
+                            setViewType('preview');
                         }}
                     />
                     <WorkflowSelectorWithModal

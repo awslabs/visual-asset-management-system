@@ -200,7 +200,6 @@ const MetadataTable = ({ assetId, databaseId, store, initialState }: MetadataInp
                             editingCell: (item, { currentValue, setValue }) => {
                                 return (
                                     <Input
-                                        
                                         autoFocus={true}
                                         placeholder="Name"
                                         value={currentValue ?? item.name}
