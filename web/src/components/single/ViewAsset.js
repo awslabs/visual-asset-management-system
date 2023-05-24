@@ -577,7 +577,6 @@ export default function ViewAsset() {
                         actionType={actionTypes.UPDATE}
                         asset={asset}
                         setAsset={(a) => {
-                            setAsset(a);
                             setViewType('preview')
                         }}
                     />

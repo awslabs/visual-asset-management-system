@@ -13,7 +13,8 @@ import { EntityPropTypes } from "./entity-types/EntityPropTypes";
 import { AssetContext } from "../../context/AssetContex";
 import { ACTION_TYPES } from "../../common/constants/actions";
 import { ACTIONS, createUpdateElements } from "../../services/APIService";
-import { Cache, Storage } from "aws-amplify";
+import { ENTITY_TYPES_NAMES } from "./entity-types/EntitieTypes";
+import { Storage } from "aws-amplify";
 
 const actionStrings = {
     CREATE: {
@@ -34,10 +35,8 @@ async function fillFormWithAssetMetadata(asset, formEntity) {
     // fill in form values based on formentitty proptypes
     const assetTransfer = new DataTransfer();
     const previewTransfer = new DataTransfer();
-    let assetS3 = await Storage.get(asset.assetLocation.Key, {download: true})
-    let previewS3 = await Storage.get(asset.previewLocation.Key,  {download: true})
-
-    
+    let assetS3 = await Storage.get(asset.assetLocation.Key, { download: true })
+    let previewS3 = await Storage.get(asset.previewLocation.Key, { download: true })
 
     assetTransfer.items.add(new File([assetS3.Body], asset.assetLocation.Key.split("/").pop()))
     previewTransfer.items.add(new File([previewS3.Body], asset.previewLocation.Key.split("/").pop()))
@@ -46,7 +45,7 @@ async function fillFormWithAssetMetadata(asset, formEntity) {
     values.Comment = asset.currentVersion?.Comment
     values.Preview = previewTransfer.files[0] //File
     values.assetName = asset.assetName
-    values.assetType = "."+ asset.assetLocation.Key.split(".").pop()
+    values.assetType = "." + asset.assetLocation.Key.split(".").pop()
     values.bucket = asset.assetLocation?.Bucket
     values.databaseId = { label: asset.databaseId, value: asset.databaseId }
     values.description = asset.description
@@ -89,21 +88,21 @@ export default function CreateUpdateElement(props) {
     //populate blank form values based on entity definition
     //TODO fields should be blank except the region!!
     //console.log(props.open)
-    let startingValues = {}; 
+    let startingValues = {};
 
     useEffect(() => {
-        const getStartingValues = async () =>{
-            if (asset && props.open == true){
+        const getStartingValues = async () => {
+            if (entityType === ENTITY_TYPES_NAMES.ASSET && props.open === true) {
                 console.log("Filling in values with pre-populated data")
                 startingValues = await fillFormWithAssetMetadata(asset, formEntity)
-//                console.log(startingValues)
+                //                console.log(startingValues)
                 setFormValues(startingValues)
             } else {
                 startingValues = Object.keys(formEntity.propTypes).reduce((acc, cur) => {
                     if (formEntity.propTypes[cur] === EntityPropTypes.ENTITY_ID_ARRAY) {
                         acc[cur] = [];
                     } else {
-                        acc[cur] = null; 
+                        acc[cur] = null;
                     }
                     if (databaseId && cur === "databaseId") {
                         acc[cur] = { label: databaseId, value: databaseId };
@@ -114,10 +113,10 @@ export default function CreateUpdateElement(props) {
         }
 
         getStartingValues()
-    }, [props.open])  
-    
-    
-    
+    }, [props.open])
+
+
+
     const [formValues, setFormValues] = useState(startingValues);
     //each validatable prop needs a corresponding error message
     const startingErrors = Object.keys(formEntity.propTypes).reduce((acc, cur) => {
@@ -355,13 +354,13 @@ export default function CreateUpdateElement(props) {
                                                     typeof formValues[id] === "object"
                                                         ? formValues[id]
                                                         : options
-                                                        ? options.find(
-                                                              (option) =>
-                                                                  option.value === formValues[id]
-                                                          )
-                                                        : {
-                                                              value: formValues[id],
-                                                          }
+                                                            ? options.find(
+                                                                (option) =>
+                                                                    option.value === formValues[id]
+                                                            )
+                                                            : {
+                                                                value: formValues[id],
+                                                            }
                                                 }
                                                 selectedOptions={
                                                     Array.isArray(formValues[id]) &&
@@ -379,8 +378,8 @@ export default function CreateUpdateElement(props) {
                                                     handleUpdateFormValues(
                                                         id,
                                                         detail.selectedOptions ||
-                                                            detail.selectedOption ||
-                                                            detail.value
+                                                        detail.selectedOption ||
+                                                        detail.value
                                                     );
                                                 }}
                                                 {...elementProps}
@@ -401,7 +400,7 @@ CreateUpdateElement.propTypes = {
     open: PropTypes.bool.isRequired,
     setOpen: PropTypes.func.isRequired,
     setReload: PropTypes.func.isRequired,
-    setAsset: PropTypes.func.isRequired,
+    setAsset: PropTypes.func,
     formDefinition: PropTypes.instanceOf(FormDefinition),
     formEntity: EntityPropTypes.ENTITY,
     databaseId: EntityPropTypes.ENTITY_ID,
