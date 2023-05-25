@@ -34,7 +34,7 @@ const FileUploadControl = (props) => {
 
     useEffect(() => {
         setFile(formValues[controlName]);
-    }, [formValues[controlName]])
+    }, [formValues[controlName]]);
 
     useEffect(() => {
         if (file) {

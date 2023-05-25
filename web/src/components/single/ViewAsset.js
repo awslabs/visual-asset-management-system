@@ -576,7 +576,7 @@ export default function ViewAsset() {
                         actionType={actionTypes.UPDATE}
                         asset={asset}
                         setAsset={(a) => {
-                            setViewType('preview');
+                            setViewType("preview");
                         }}
                     />
                     <WorkflowSelectorWithModal

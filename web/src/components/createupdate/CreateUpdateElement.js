@@ -35,12 +35,14 @@ async function fillFormWithAssetMetadata(asset) {
     const assetTransfer = new DataTransfer();
     const previewTransfer = new DataTransfer();
 
-    //Retrieve the files from S3 so we can prefill them 
+    //Retrieve the files from S3 so we can prefill them
     let assetS3 = await Storage.get(asset.assetLocation.Key, { download: true });
     let previewS3 = await Storage.get(asset.previewLocation.Key, { download: true });
 
     assetTransfer.items.add(new File([assetS3.Body], asset.assetLocation.Key.split("/").pop()));
-    previewTransfer.items.add(new File([previewS3.Body], asset.previewLocation.Key.split("/").pop()));
+    previewTransfer.items.add(
+        new File([previewS3.Body], asset.previewLocation.Key.split("/").pop())
+    );
 
     values.Asset = assetTransfer.files[0]; //File
     values.Comment = asset.currentVersion?.Comment;
@@ -70,7 +72,7 @@ export default function CreateUpdateElement(props) {
         elementId,
         actionType,
         asset,
-        setAsset
+        setAsset,
     } = props;
     const {
         entityType,
@@ -93,9 +95,9 @@ export default function CreateUpdateElement(props) {
     useEffect(() => {
         const getStartingValues = async () => {
             if (entityType === ENTITY_TYPES_NAMES.ASSET && props.open === true) {
-                console.log("Filling in values with pre-populated data")
-                startingValues = await fillFormWithAssetMetadata(asset)
-                setFormValues(startingValues)
+                console.log("Filling in values with pre-populated data");
+                startingValues = await fillFormWithAssetMetadata(asset);
+                setFormValues(startingValues);
             } else {
                 startingValues = Object.keys(formEntity.propTypes).reduce((acc, cur) => {
                     if (formEntity.propTypes[cur] === EntityPropTypes.ENTITY_ID_ARRAY) {
@@ -109,9 +111,9 @@ export default function CreateUpdateElement(props) {
                     return acc;
                 }, {});
             }
-        }
+        };
         getStartingValues();
-    }, [props.open])
+    }, [props.open]);
 
     const [formValues, setFormValues] = useState(startingValues);
     //each validatable prop needs a corresponding error message
@@ -343,15 +345,15 @@ export default function CreateUpdateElement(props) {
                                                 value={formValues[id]}
                                                 selectedOption={
                                                     typeof formValues[id] === "object"
-                                                    ? formValues[id]
-                                                    : options
+                                                        ? formValues[id]
+                                                        : options
                                                         ? options.find(
-                                                            (option) =>
-                                                                option.value === formValues[id]
-                                                        )
+                                                              (option) =>
+                                                                  option.value === formValues[id]
+                                                          )
                                                         : {
-                                                            value: formValues[id],
-                                                        }
+                                                              value: formValues[id],
+                                                          }
                                                 }
                                                 selectedOptions={
                                                     Array.isArray(formValues[id]) &&
@@ -368,8 +370,8 @@ export default function CreateUpdateElement(props) {
                                                     handleUpdateFormValues(
                                                         id,
                                                         detail.selectedOptions ||
-                                                        detail.selectedOption ||
-                                                        detail.value
+                                                            detail.selectedOption ||
+                                                            detail.value
                                                     );
                                                 }}
                                                 {...elementProps}

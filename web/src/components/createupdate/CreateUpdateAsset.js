@@ -19,7 +19,7 @@ export default function CreateUpdateAsset(props) {
         setAsset,
     } = props;
 
-    if (actionType === actionTypes.CREATE){
+    if (actionType === actionTypes.CREATE) {
         return (
             <CreateUpdateElement
                 open={open}
@@ -32,7 +32,7 @@ export default function CreateUpdateAsset(props) {
                 actionType={actionType}
             />
         );
-    } else if (actionType === actionTypes.UPDATE){
+    } else if (actionType === actionTypes.UPDATE) {
         return (
             <CreateUpdateElement
                 open={open}
@@ -40,13 +40,12 @@ export default function CreateUpdateAsset(props) {
                 setReload={setReload}
                 formDefinition={AssetFormDefinition}
                 formEntity={AssetEntity}
-                asset = {asset}
-                setAsset = {setAsset}
+                asset={asset}
+                setAsset={setAsset}
                 databaseId={databaseId}
                 elementId={assetId}
                 actionType={actionType}
             />
         );
     }
-    
 }
