@@ -11,6 +11,7 @@ from decimal import Decimal
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from backend.common.validators import validate
 from backend.handlers.assets.assetCount import update_asset_count
+from collections import defaultdict
 
 dynamodb = boto3.resource('dynamodb')
 
@@ -19,69 +20,15 @@ response = {
     'statusCode': 200,
     'body': '',
     'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Credentials': True,
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type',
-            'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Credentials': True,
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
     }
 }
-newObject = {
-    "databaseId": "",
-    "assetId": "",
-    "description": "No Description",
-    "assetType": "We will put the extension here",
-    "assetLocation": {
-        "Bucket": "bucket",
-        "Key": "key"
-    },
-    "previewLocation": {
-        "Bucket": "bucket",
-        "Key": "key"
-    },
-    "authEdit": [],
-    "isDistributable": False,
-    "currentVersion": {
-        "Comment": "",
-        "Description": "",
-        "Version": "",
-        "S3Version": "",
-        "DateModified": "",
-        "FileSize": "",
-        "objectFamily": {
-            "Parent": "",
-            "Children": [
-            ]
-        },
-        "specifiedPipelines": []
-    },
-    "versions": [
-    ],
-}
-
-unitTest = {
-    "body": {
-        "databaseId": "Unit_Test",
-        "assetId": "Unit_Test",  # // Editable
-        "bucket": "",  # // Editable
-        "key": "",
-        "assetType": "",
-        "description": "Testing as Usual",  # // Editable
-        # // will develop a query to list pipelines that can act as tags.
-        "specifiedPipelines": [],
-        "isDistributable": False,  # // Editable
-        "Comment": "Unit Test",  # // Editable
-        "previewLocation": {
-            "Bucket": "",
-            "Key": ""
-        }
-    }
-}
-unitTest['body'] = json.dumps(unitTest['body'])
-
 asset_database = None
 db_database = None
-
 
 try:
     asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
@@ -105,60 +52,64 @@ def _deserialize(raw_data):
     return result
 
 
-def getS3MetaData(bucket, key, asset):
-    #VersionId and ContentLength (bytes)
-    resp = s3c.head_object(Bucket=bucket, Key=key)
-    asset['currentVersion']['S3Version'] = resp['VersionId']
-    asset['currentVersion']['FileSize'] = str(
-        resp['ContentLength']/1000000)+'MB'
+def getS3MetaData(bucket: str, key: str, asset):
+    if asset['isMultiFile']:
+        return asset
+    # VersionId and ContentLength (bytes)
+    else:
+        resp = s3c.head_object(Bucket=bucket, Key=key)
+        asset['currentVersion']['S3Version'] = resp['VersionId']
+        asset['currentVersion']['FileSize'] = str(
+            resp['ContentLength'] / 1000000) + 'MB'
     return asset
 
 
-def updateParent(asset,parent):
-    table=dynamodb.Table(asset_database)
+def updateParent(asset, parent):
+    table = dynamodb.Table(asset_database)
     try:
-        databaseId=asset['databaseId']
-        assetId=asset['assetId']
-        assetS3Version=asset['currentVersion']['S3Version']
-        assetVersion=asset['currentVersion']['Version']
-        parentId=parent['assetId']
-        parentdbId=parent['databaseId']
-        pipeline=parent['specifiedPipeline']
+        databaseId = asset['databaseId']
+        assetId = asset['assetId']
+        assetS3Version = asset['currentVersion']['S3Version']
+        assetVersion = asset['currentVersion']['Version']
+        parentId = parent['assetId']
+        parentdbId = parent['databaseId']
+        pipeline = parent['specifiedPipeline']
         resp = table.query(
             KeyConditionExpression=Key('databaseId').eq(
                 parentdbId) & Key('assetId').eq(parentId),
             ScanIndexForward=False,
         )
-        item=''
+        item = ''
         if len(resp['Items']) == 0:
-            raise ValueError('No Parent of that AssetId') 
+            raise ValueError('No Parent of that AssetId')
         else:
-            item= resp['Items'][0]
-            child={
-                'databaseId':databaseId,
-                'assetId':assetId,
-                'S3Version':assetS3Version,
-                'Version':assetVersion,
-                'specifiedPipeline':pipeline
+            item = resp['Items'][0]
+            child = {
+                'databaseId': databaseId,
+                'assetId': assetId,
+                'S3Version': assetS3Version,
+                'Version': assetVersion,
+                'specifiedPipeline': pipeline
             }
             item['currentVersion']['objectFamily']['Children'].append(child)
-            if isinstance(item['currentVersion']['objectFamily']['Parent'],dict):
-                _parent=item['currentVersion']['objectFamily']['Parent']
-                updateParent(item,_parent)
+            if isinstance(item['currentVersion']['objectFamily']['Parent'], dict):
+                _parent = item['currentVersion']['objectFamily']['Parent']
+                updateParent(item, _parent)
         table.put_item(
             Item=item
         )
         return json.dumps({"message": "Succeeded"})
     except Exception as e:
         print(str(e))
-        raise ValueError('Updating Parent Error '+str(e))
+        raise ValueError('Updating Parent Error ' + str(e))
+
 
 def iter_Asset(body, item=None):
     asset = item
     version = 1
     dtNow = datetime.datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
     if asset == None:
-        asset = newObject
+        asset = defaultdict(dict)
         asset['databaseId'] = body['databaseId']
         asset['assetId'] = body['assetId']
         asset['assetType'] = body['assetType']
@@ -166,9 +117,9 @@ def iter_Asset(body, item=None):
         asset['assetLocation']['Bucket'] = body['bucket']
     else:
         prevVersions = asset['versions']
-        asset['currentVersion']['previewLocation']=asset['previewLocation']
+        asset['currentVersion']['previewLocation'] = asset['previewLocation']
         prevVersions.append(asset['currentVersion'])
-        version = int(asset['currentVersion']['Version'])+1
+        version = int(asset['currentVersion']['Version']) + 1
         asset['versions'] = prevVersions
     asset['previewLocation'] = {
         "Bucket": body['previewLocation']['Bucket'],
@@ -179,23 +130,23 @@ def iter_Asset(body, item=None):
         'Version': str(version),
         'S3Version': "",
         'DateModified': dtNow,
-        'description':body['description'],
-        'specifiedPipelines':body['specifiedPipelines']
+        'description': body['description'],
+        'specifiedPipelines': body['specifiedPipelines']
     }
-    asset['specifiedPipelines']=body['specifiedPipelines']
+    asset['isMultiFile'] = body.get('isMultiFile', False)
+    asset['specifiedPipelines'] = body['specifiedPipelines']
     asset['description'] = body['description']
     asset['isDistributable'] = body['isDistributable']
     asset = getS3MetaData(body['bucket'], body['key'], asset)
-    
-    #attributes for generated assets
+
+    # attributes for generated assets
     asset['assetName'] = body.get('assetName', body['assetId'])
     asset['pipelineId'] = body.get('pipelineId', "")
     asset['executionId'] = body.get('executionId', "")
-
     if 'Parent' in asset:
-        asset['objectFamily']['Parent']=asset['Parent']
-        _parent=asset['Parent']
-        updateParent(asset,_parent)
+        asset['objectFamily']['Parent'] = asset['Parent']
+        _parent = asset['Parent']
+        updateParent(asset, _parent)
     return asset
 
 
@@ -221,17 +172,17 @@ def upload_Asset(body, queryParameters, returnAsset=False):
             table.put_item(Item=up)
             print(up)
         if returnAsset:
-            return json.dumps({"message": "Succeeded", "asset":up})
+            return json.dumps({"message": "Succeeded", "asset": up})
         else:
             return json.dumps({"message": "Succeeded"})
     except Exception as e:
         print(e)
-        raise(e)
+        raise (e)
 
 
 def lambda_handler(event, context):
     print(event)
-    
+
     if isinstance(event['body'], str):
         event['body'] = json.loads(event['body'])
     response = {
@@ -239,50 +190,46 @@ def lambda_handler(event, context):
         'body': '',
         'headers': {
             'Content-Type': 'application/json',
-                'Access-Control-Allow-Credentials': True,
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type',
-                'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
+            'Access-Control-Allow-Credentials': True,
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Content-Type',
+            'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
         }
     }
     try:
         if 'databaseId' not in event['body']:
             message = "No databaseId in API Call"
             print(message)
-            response['body']=json.dumps({"message": message})
+            response['body'] = json.dumps({"message": message})
             return response
-        
+
         if 'assetId' not in event['body']:
             message = "No assetId in API Call"
             print(message)
-            response['body']=json.dumps({"message": message})
+            response['body'] = json.dumps({"message": message})
             return response
-        
+
         print("Validating parameters")
         (valid, message) = validate({
             'databaseId': {
-                'value': event['body']['databaseId'], 
+                'value': event['body']['databaseId'],
                 'validator': 'ID'
             },
             'assetId': {
-                'value': event['body']['assetId'], 
+                'value': event['body']['assetId'],
                 'validator': 'ID'
             },
-            'assetType': {
-                'value':  event['body']['assetType'], 
-                'validator': 'FILE_EXTENSION'
-            }, 
             'description': {
-                'value':  event['body']['description'], 
+                'value': event['body']['description'],
                 'validator': 'STRING_256'
             }
         })
         if not valid:
             print(message)
-            response['body']=json.dumps({"message": message})
+            response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
             return response
-        
+
         returnAsset = False
         if 'returnAsset' in event:
             returnAsset = True

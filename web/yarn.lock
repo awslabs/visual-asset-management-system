@@ -11491,10 +11491,24 @@ react-focus-lock@~2.8.1:
     use-callback-ref "^1.2.5"
     use-sidecar "^1.0.5"
 
+react-folder-tree@^5.1.1:
+  version "5.1.1"
+  resolved "https://registry.yarnpkg.com/react-folder-tree/-/react-folder-tree-5.1.1.tgz#ac578c4b769bee462e2011812636b935eadf5b3a"
+  integrity sha512-lqXSXxaf4KD3abV9W9DXSrGI1YtFxQSGm73jSBU25G7IK0BKfRv8FB+WHm2tTMK637mSnWVBirwt6LsE/Pmq8g==
+  dependencies:
+    prop-types "^15.7.2"
+    react-icons "^4.1.0"
+    use-tree-state "1.0.0"
+
 react-generate-context@1.0.1:
   version "1.0.1"
   resolved "https://registry.npmjs.org/react-generate-context/-/react-generate-context-1.0.1.tgz"
   integrity sha512-rOFGh3KgC2Ot66DmVCcT1p8lVJCmmCjzGE5WK/KsyDFi43wpIbW1PYcr04cQ3mbF4LaIkY6SpK7k1DOgwtpUXA==
+
+react-icons@^4.1.0:
+  version "4.8.0"
+  resolved "https://registry.yarnpkg.com/react-icons/-/react-icons-4.8.0.tgz#621e900caa23b912f737e41be57f27f6b2bff445"
+  integrity sha512-N6+kOLcihDiAnj5Czu637waJqSnwlMNROzVZMhfX68V/9bu9qHaMIJC4UdozWoOk57gahFCNHwVvWzm0MTzRjg==
 
 "react-is@^16.12.0 || ^17.0.0 || ^18.0.0", react-is@^18.0.0:
   version "18.2.0"
@@ -13212,6 +13226,11 @@ use-sync-external-store@^1.0.0:
   version "1.2.0"
   resolved "https://registry.npmjs.org/use-sync-external-store/-/use-sync-external-store-1.2.0.tgz"
   integrity sha512-eEgnFxGQ1Ife9bzYs6VLi8/4X6CObHMw9Qr9tPY43iKwsPw8xE8+EFsf/2cFZ5S3esXgpWgtSCtLNS41F+sKPA==
+
+use-tree-state@1.0.0:
+  version "1.0.0"
+  resolved "https://registry.yarnpkg.com/use-tree-state/-/use-tree-state-1.0.0.tgz#78e1e629b55faa33e9fef9ee409b383612ff429c"
+  integrity sha512-MEHuUbZWGhekkFCboH0HKOhSHe5zm/l0C+GJdg0+vAuBr42VYmCTO9P2NfQMPU3Gkj7Zys93vtpl/fGReuOi5w==
 
 util-deprecate@^1.0.1, util-deprecate@^1.0.2, util-deprecate@~1.0.1:
   version "1.0.2"

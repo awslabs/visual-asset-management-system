@@ -9,13 +9,21 @@ import StatusIndicator, {
     StatusIndicatorProps,
 } from "@cloudscape-design/components/status-indicator";
 
+export class AllUploadProgressBarProps {
+    numberOfFilesToBeUploaded!: number;
+    doneUploading!: number;
+    currentFileName!: string;
+}
+
 class ProgressScreenProps {
+    allAssetProgress!: AllUploadProgressBarProps
     assetUploadProgress!: ProgressBarProps;
     previewUploadProgress!: ProgressBarProps;
     execStatus!: Record<string, StatusIndicatorProps.Type>;
 }
 
 export default function ProgressScreen({
+    allAssetProgress,
     assetUploadProgress,
     previewUploadProgress,
     execStatus,
@@ -26,9 +34,14 @@ export default function ProgressScreen({
                 <div>
                     <Box variant="awsui-key-label">Upload Progress</Box>
                     <ProgressBar
+                        status={allAssetProgress.doneUploading === allAssetProgress.numberOfFilesToBeUploaded ? 'success' : 'in-progress'}
+                        value={(allAssetProgress.doneUploading / allAssetProgress.numberOfFilesToBeUploaded) * 100}
+                        label={`Uploading ${allAssetProgress.doneUploading + 1} of ${allAssetProgress.numberOfFilesToBeUploaded}`}
+                    />
+                    <ProgressBar
                         status={assetUploadProgress.status}
                         value={assetUploadProgress.value}
-                        label="Asset Upload Progress"
+                        label={` Uploading ${allAssetProgress.currentFileName}`}
                     />
                     <ProgressBar
                         status={previewUploadProgress.status}

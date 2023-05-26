@@ -46,8 +46,12 @@ const ThreeDimensionalPlotter = React.lazy(() => import("../viewers/ThreeDimensi
 const ColumnarViewer = React.lazy(() => import("../viewers/ColumnarViewer"));
 const HTMLViewer = React.lazy(() => import("../viewers/HTMLViewer"));
 const ModelViewer = React.lazy(() => import("../viewers/ModelViewer"));
+const FolderViewer = React.lazy(() => import("../viewers/FolderViewer"));
 const checkFileFormat = (asset) => {
     let filetype;
+    if(asset?.isMultiFile) {
+        return "folder"
+    }
     if (asset?.generated_artifacts?.gltf?.Key) {
         filetype = asset?.generated_artifacts?.gltf?.Key.split(".").pop();
     } else {
@@ -260,6 +264,8 @@ export default function ViewAsset() {
                         newViewerOptions.push({ text: "Model", id: "model" });
                     } else if (defaultViewType === "html") {
                         newViewerOptions.push({ text: "HTML", id: "html" });
+                    } else if (defaultViewType === "folder") {
+                        newViewerOptions.push({text: "Folder", id: "folder"});
                     }
                     setViewerOptions(newViewerOptions);
                     if (!window.location.hash) setViewType(defaultViewType);
@@ -275,6 +281,8 @@ export default function ViewAsset() {
                             setViewType("column");
                         } else if (window.location.hash === "#html") {
                             setViewType("html");
+                        } else if(window.location.hash === "#html") {
+                            setViewType("folder");
                         }
                     }
                 }
@@ -454,6 +462,13 @@ export default function ViewAsset() {
                                                                 assetKey={asset?.assetLocation?.Key}
                                                             />
                                                         )}
+                                                        {viewType === "folder" && (
+                                                            <FolderViewer
+                                                                assetId={asset?.assetId}
+                                                                databaseId={asset?.databaseId}
+                                                            />
+                                                        )}
+
                                                     </div>
 
                                                     <div className="visualizer-footer">

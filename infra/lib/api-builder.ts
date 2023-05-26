@@ -31,7 +31,7 @@ import {
     buildUploadAssetFunction,
     buildDownloadAssetFunction,
     buildRevertAssetFunction,
-    buildUploadAssetWorkflowFunction,
+    buildUploadAssetWorkflowFunction, buildAssetFiles,
 } from "./lambdaBuilder/assetFunctions";
 import {
     buildCreatePipelineFunction,
@@ -139,6 +139,18 @@ export function apiBuilder(
     });
     attachFunctionToApi(scope, assetService, {
         routePath: "/assets",
+        method: apigwv2.HttpMethod.GET,
+        api: api.apiGatewayV2,
+    });
+
+    const listAssetFiles = buildAssetFiles(
+        scope,
+        storageResources.dynamo.assetStorageTable,
+        storageResources.dynamo.databaseStorageTable,
+        storageResources.s3.assetBucket
+    )
+    attachFunctionToApi(scope, listAssetFiles, {
+        routePath: "/database/{databaseId}/assets/{assetId}/listFiles",
         method: apigwv2.HttpMethod.GET,
         api: api.apiGatewayV2,
     });
