@@ -8,14 +8,12 @@ import json
 
 dynamodb = boto3.resource('dynamodb')
 dynamodb_client = boto3.client('dynamodb')
-asset_database = None
 db_database = None
 
 
 # TODO maybe this should be part of a class constructor instead
 
 try:
-    asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
     db_database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
 except:
     print("Failed Loading Environment Variables")

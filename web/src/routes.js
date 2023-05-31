@@ -17,6 +17,7 @@ import ViewPipeline from "./components/single/ViewPipeline";
 import Workflows from "./pages/Workflows";
 import CreateUpdateWorkflow from "./components/createupdate/CreateUpdateWorkflow";
 import Constraints from "./pages/auth/Constraints";
+import MetadataSchema from "./pages/MetadataSchema";
 
 const routeTable = [
     { path: "/", Page: LandingPage, active: "/" },
@@ -68,6 +69,16 @@ const routeTable = [
         path: "/auth/constraints",
         Page: Constraints,
         active: "/auth/constraints",
+    },
+    {
+        path: "/metadataschema/create",
+        Page: MetadataSchema,
+        active: "/metadataschema",
+    },
+    {
+        path: "/metadataschema/:databaseId/create",
+        Page: MetadataSchema,
+        active: "/metadataschema",
     },
 ];
 

@@ -44,6 +44,7 @@ import {
 import { DisplayKV, FileUpload } from "./AssetUpload/components";
 import ProgressScreen from "./AssetUpload/ProgressScreen";
 import onSubmit from "./AssetUpload/onSubmit";
+import ControlledMetadata from "../components/single/ControlledMetadata";
 
 // eslint-disable-next-line @typescript-eslint/no-array-constructor
 const objectFileFormats = new Array().concat(cadFileFormats, modelFileFormats, columnarFileFormats);
@@ -342,8 +343,7 @@ const UploadForm = () => {
                             content: (
                                 <Container header={<Header variant="h2">Asset Metadata</Header>}>
                                     <SpaceBetween direction="vertical" size="l">
-                                        <MetadataTable
-                                            assetId={assetDetail.assetId || ""}
+                                        <ControlledMetadata assetId={assetDetail.assetId || ""} 
                                             databaseId={assetDetail.databaseId || ""}
                                             initialState={metadata}
                                             store={(databaseId, assetId, record) => {
