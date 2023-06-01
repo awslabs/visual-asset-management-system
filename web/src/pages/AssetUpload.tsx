@@ -354,7 +354,7 @@ const UploadForm = () => {
                                                     resolve(null);
                                                 });
                                             }}
-                                            data-testid="metadata-table"
+                                            data-testid="controlled-metadata-grid"
                                         />
                                     </SpaceBetween>
                                 </Container>
