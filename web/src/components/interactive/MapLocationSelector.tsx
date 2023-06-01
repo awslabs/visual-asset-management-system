@@ -53,12 +53,14 @@ interface MapLocationSelectorModalProps {
     location: [number, number] | null;
     setLocation: (loc: [number, number], zoom: number) => void;
     initialZoom: number;
+    disabled: boolean;
 }
 
 export default function MapLocationSelectorModal({
     location,
     setLocation,
     initialZoom,
+    disabled,
 }: MapLocationSelectorModalProps) {
     const [open, setOpen] = useState(false);
 
@@ -94,7 +96,9 @@ export default function MapLocationSelectorModal({
         )) || (
             <>
                 {ll && `${ll.lng}, ${ll.lat}`}
-                <Button onClick={() => setOpen(true)}>Open Map</Button>
+                <Button disabled={disabled} onClick={() => setOpen(true)}>
+                    Open Map
+                </Button>
             </>
         )
     );

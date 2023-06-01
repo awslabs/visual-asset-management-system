@@ -52,10 +52,18 @@ interface CreateMetadataFieldProps {
     initState: any;
 }
 
+type DataTypes =
+    | "string"
+    | "textarea"
+    | "number"
+    | "boolean"
+    | "date"
+    | "location"
+    | "controlled-list";
 export interface MetadataSchemaFields {
     id: string;
     field: string;
-    dataType: string;
+    dataType: DataTypes;
     required: boolean;
     databaseId: string;
     sequenceNumber: number;
@@ -75,6 +83,7 @@ interface DatatypeSelectProps {
 function DatatypeSelect({ value, onChange, disabled }: DatatypeSelectProps) {
     const options: SelectProps.Option[] = [
         { value: "string", label: "Text" },
+        { value: "textarea", label: "Multiline Text Area" },
         { value: "number", label: "Number" },
         { value: "boolean", label: "Boolean" },
         { value: "date", label: "Date" },
@@ -326,7 +335,7 @@ function CreateMetadataField({ open, setOpen, setReload, initState }: CreateMeta
                             if (detail.selectedOption.value) {
                                 setFormState({
                                     ...formState,
-                                    dataType: detail.selectedOption.value,
+                                    dataType: detail.selectedOption.value as DataTypes,
                                 });
                             }
                         }}

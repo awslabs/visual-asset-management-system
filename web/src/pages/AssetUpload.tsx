@@ -343,7 +343,8 @@ const UploadForm = () => {
                             content: (
                                 <Container header={<Header variant="h2">Asset Metadata</Header>}>
                                     <SpaceBetween direction="vertical" size="l">
-                                        <ControlledMetadata assetId={assetDetail.assetId || ""} 
+                                        <ControlledMetadata
+                                            assetId={assetDetail.assetId || ""}
                                             databaseId={assetDetail.databaseId || ""}
                                             initialState={metadata}
                                             store={(databaseId, assetId, record) => {
