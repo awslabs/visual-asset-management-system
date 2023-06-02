@@ -1,10 +1,11 @@
 import { SchemaContextData } from "../../pages/MetadataSchema";
 import { Checkbox, DatePicker, Input, Select, Textarea } from "@cloudscape-design/components";
-import MapLocationSelectorModal from "../interactive/MapLocationSelector";
+import MapLocationSelectorModal, { MapLocationSelectorModal2 } from "./MapLocationSelector";
 import React from "react";
 import { TableRow, Metadata } from "./ControlledMetadata";
+import { FeatureCollection } from "geojson";
 
-interface EditCompProps {
+export interface EditCompProps {
     item: TableRow;
     schema: SchemaContextData;
     controlledLists: any;
@@ -14,7 +15,13 @@ interface EditCompProps {
     metadata: Metadata;
 }
 export function EditComp({
-    item, setValue, controlledLists, currentValue, metadata, schema, controlData,
+    item,
+    setValue,
+    controlledLists,
+    currentValue,
+    metadata,
+    schema,
+    controlData,
 }: EditCompProps) {
     const disabled = !item.dependsOn.every((x: string) => metadata[x] && metadata[x] !== "");
 
@@ -25,7 +32,8 @@ export function EditComp({
                 disabled={disabled}
                 onChange={(event) => {
                     setValue(event.detail.value);
-                }} />
+                }}
+            />
         );
     }
 
@@ -34,25 +42,32 @@ export function EditComp({
             <Textarea
                 disabled={disabled}
                 onChange={({ detail }) => setValue(detail.value)}
-                value={item.value} />
+                value={item.value}
+            />
         );
     }
 
     if (item.type === "controlled-list" && item.dependsOn.length === 0) {
+        const options = controlledLists[item.name].data.map((x: any) => ({
+            label: x[item.name],
+            value: x[item.name],
+        }));
+        let selectedOption = {
+            label: currentValue,
+            value: currentValue,
+        };
+        if (options.length === 1) {
+            selectedOption = options[0];
+        }
         return (
             <Select
-                options={controlledLists[item.name].data.map((x: any) => ({
-                    label: x[item.name],
-                    value: x[item.name],
-                }))}
-                selectedOption={{
-                    label: currentValue,
-                    value: currentValue,
-                }}
+                options={options}
+                selectedOption={selectedOption}
                 expandToViewport
                 disabled={disabled}
                 filteringType="auto"
-                onChange={(e) => setValue(e.detail.selectedOption.value)} />
+                onChange={(e) => setValue(e.detail.selectedOption.value)}
+            />
         );
     }
     if (item.type === "controlled-list" && item.dependsOn.length > 0) {
@@ -66,64 +81,59 @@ export function EditComp({
                 label: x[item.name],
                 value: x[item.name],
             }));
+        let selectedOption = {
+            label: currentValue,
+            value: currentValue,
+        };
+        if (options.length === 1) {
+            selectedOption = options[0];
+        }
+
         return (
             <Select
                 options={options}
-                selectedOption={{
-                    label: currentValue,
-                    value: currentValue,
-                }}
-                disabled={disabled}
+                selectedOption={selectedOption}
+                disabled={disabled || options.length === 1}
                 expandToViewport
                 filteringType="auto"
-                onChange={(e) => setValue(e.detail.selectedOption.value)} />
+                onChange={(e) => setValue(e.detail.selectedOption.value)}
+            />
         );
     }
     if (item.type === "location") {
         console.log("location current value", currentValue);
 
-        let loc: [number, number] | null;
-        let zoom = 5;
+        let currentValueInit = {
+            loc: [-95.37019986475366, 29.767650706163337], // Houston
+            zoom: 5,
+        };
 
         if (!currentValue) {
             const schemaItem = schema.schemas.find((x) => x.field === item.name);
             if (schemaItem) {
-                const controlDataItem = controlData.find((x: any) => schemaItem.dependsOn.every((y: string) => x[y] === metadata[y])
+                const controlDataItem = controlData.find((x: any) =>
+                    schemaItem.dependsOn.every((y: string) => x[y] === metadata[y])
                 );
                 if (controlDataItem) {
-                    loc = [
-                        controlDataItem[schemaItem.longitudeField],
-                        controlDataItem[schemaItem.latitudeField],
-                    ];
-                    zoom = controlDataItem[schemaItem.zoomLevelField];
-                } else {
-                    loc = null;
+                    currentValueInit = {
+                        loc: [
+                            controlDataItem[schemaItem.longitudeField],
+                            controlDataItem[schemaItem.latitudeField],
+                        ],
+                        zoom: controlDataItem[schemaItem.zoomLevelField],
+                    };
                 }
-                // schemaItem.latitudeField
-                // schemaItem.longitudeField
-                // schemaItem.zoomLevelField
-            } else {
-                loc = null;
-            }
-        } else {
-            try {
-                const parsed: any = JSON.parse(currentValue);
-                loc = parsed.loc;
-                zoom = parsed.zoom;
-            } catch {
-                loc = null;
             }
         }
 
-        console.log("location parsed value", loc, zoom, schema);
         return (
-            <MapLocationSelectorModal
-                location={loc}
+            <MapLocationSelectorModal2
+                json={currentValue ? currentValue : JSON.stringify(currentValueInit)}
+                setJson={(json) => {
+                    setValue(json);
+                }}
                 disabled={disabled}
-                initialZoom={zoom}
-                setLocation={(loc: number[], zoom: number) => {
-                    setValue(JSON.stringify({ loc, zoom }));
-                }} />
+            />
         );
     }
 
@@ -135,7 +145,8 @@ export function EditComp({
                 disabled={disabled}
                 onChange={(event) => {
                     setValue(event.detail.value);
-                }} />
+                }}
+            />
         );
     }
 
@@ -147,7 +158,8 @@ export function EditComp({
                 disabled={disabled}
                 onChange={(e) => {
                     setValue(e.detail.checked ? "true" : "false");
-                }} />
+                }}
+            />
         );
     }
 
@@ -157,11 +169,14 @@ export function EditComp({
                 onChange={({ detail }) => setValue(detail.value)}
                 value={item.value}
                 disabled={disabled}
-                openCalendarAriaLabel={(selectedDate) => "Choose date" + (selectedDate ? `, selected date is ${selectedDate}` : "")}
+                openCalendarAriaLabel={(selectedDate) =>
+                    "Choose date" + (selectedDate ? `, selected date is ${selectedDate}` : "")
+                }
                 nextMonthAriaLabel="Next month"
                 placeholder="YYYY/MM/DD"
                 previousMonthAriaLabel="Previous month"
-                todayAriaLabel="Today" />
+                todayAriaLabel="Today"
+            />
         );
     }
 

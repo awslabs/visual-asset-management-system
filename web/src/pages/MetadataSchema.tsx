@@ -11,7 +11,6 @@ import {
     Form,
     FormField,
     Grid,
-    Header,
     Input,
     Modal,
     Multiselect,
@@ -19,22 +18,17 @@ import {
     Select,
     SelectProps,
     SpaceBetween,
-    Table,
     TextContent,
-    Textarea,
 } from "@cloudscape-design/components";
-import { Optional } from "@cloudscape-design/components/internal/types";
 import { createContext, useContext, useEffect, useState } from "react";
 import { generateUUID } from "../common/utils/utils";
 
-import Amplify, { API, Storage, APIClass, Auth } from "aws-amplify";
-import { PutObjectCommand, HeadObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { API, Storage, Auth } from "aws-amplify";
 
 import ListDefinition from "../components/list/list-definitions/types/ListDefinition";
 import ColumnDefinition from "../components/list/list-definitions/types/ColumnDefinition";
 import ListPageNoDatabase from "./ListPageNoDatabase";
 import { NonCancelableEventHandler } from "@cloudscape-design/components/internal/events";
-import DatabaseSelector from "../components/selectors/DatabaseSelector";
 import { useNavigate, useParams } from "react-router";
 import DatabaseSelectorWithModal from "../components/selectors/DatabaseSelectorWithModal";
 
@@ -429,7 +423,7 @@ function CreateMetadataField({ open, setOpen, setReload, initState }: CreateMeta
 export const MetadataSchemaListDefinition = new ListDefinition({
     pluralName: "fields",
     pluralNameTitleCase: "Fields",
-    visibleColumns: ["field", "dataType", "required"],
+    visibleColumns: ["field", "dataType", "required", "sequenceNumber"],
     filterColumns: [{ name: "field", placeholder: "Field" }],
     elementId: "id",
     deleteFunction: async (item: any): Promise<[boolean, string]> => {
@@ -497,28 +491,6 @@ function ControlledListFileUpload() {
     const [file, setFile] = useState<File[]>([]);
 
     const schemaKey = `metadataschema/${databaseId}/controlledlist.csv`;
-
-    useEffect(() => {
-        Storage.get(schemaKey).then((x) => {
-            console.log("x", x);
-        });
-        Auth.currentCredentials().then((x) => {
-            const client = new S3Client({
-                credentials: {
-                    accessKeyId: x.accessKeyId,
-                    secretAccessKey: x.secretAccessKey,
-                },
-                region: "us-east-1",
-            });
-            const cmd = new HeadObjectCommand({
-                Bucket: "vams-dev-us-east-1-assetbucket1d025086-1jo3lq4rgcv4x",
-                Key: schemaKey,
-            });
-            client.send(cmd).then((resp) => {
-                console.log(resp);
-            });
-        });
-    }, [schemaKey]);
 
     // form that takes a single file upload and places the file in s3 using Storage.put.
     // the file is then uploaded to the database's s3 bucket.
