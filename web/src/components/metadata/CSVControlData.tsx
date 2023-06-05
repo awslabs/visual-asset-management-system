@@ -1,25 +1,25 @@
 import { SchemaContextData } from "../../pages/MetadataSchema";
-import Papa, { ParseRemoteConfig } from "papaparse";
+import Papa, { ParseRemoteConfig, ParseResult } from "papaparse";
 import React from "react";
+
+export const hashCode = (x: string) => {
+    let hash = 0;
+    for (let i = 0; i < x.length; i++) {
+        hash = (hash << 5) - hash + x.charCodeAt(i);
+        hash |= 0; // Convert to 32bit integer
+    }
+    return hash;
+};
 
 export function createPapaParseConfig(
     schema: SchemaContextData,
     setControlledLists: React.Dispatch<any>,
     setRawControlData: React.Dispatch<any>
 ) {
-    const hashCode = (x: string) => {
-        let hash = 0;
-        for (let i = 0; i < x.length; i++) {
-            hash = (hash << 5) - hash + x.charCodeAt(i);
-            hash |= 0; // Convert to 32bit integer
-        }
-        return hash;
-    };
-
     const config: ParseRemoteConfig = {
         download: true,
         header: true,
-        complete: (results: any) => {
+        complete: (results: ParseResult<any>) => {
             const lists = schema.schemas
                 .filter((field) => field.dataType === "controlled-list")
                 .map((field) => {
@@ -53,7 +53,6 @@ export function createPapaParseConfig(
                 };
             });
             const byField: { [k: string]: any } = {};
-            console.log("listsSorted", listsSorted);
             setControlledLists(
                 listsSorted.reduce((acc, x) => {
                     acc[x.field] = x;
@@ -66,7 +65,14 @@ export function createPapaParseConfig(
     return config;
 }
 
-export function handleCSVControlData(
+export type HandleControlData = (
+    url: string,
+    schema: SchemaContextData,
+    setControlledLists: React.Dispatch<any>,
+    setRawControlData: React.Dispatch<any>
+) => void;
+
+export const handleCSVControlData: HandleControlData = function handleCSVControlData(
     url: string,
     schema: SchemaContextData,
     setControlledLists: React.Dispatch<any>,
@@ -79,4 +85,4 @@ export function handleCSVControlData(
         setRawControlData
     );
     Papa.parse(url, config);
-}
+};

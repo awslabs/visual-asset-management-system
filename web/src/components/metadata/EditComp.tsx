@@ -1,9 +1,7 @@
 import { SchemaContextData } from "../../pages/MetadataSchema";
 import { Checkbox, DatePicker, Input, Select, Textarea } from "@cloudscape-design/components";
-import MapLocationSelectorModal, { MapLocationSelectorModal2 } from "./MapLocationSelector";
-import React from "react";
+import { MapLocationSelectorModal2 } from "./MapLocationSelector";
 import { TableRow, Metadata } from "./ControlledMetadata";
-import { FeatureCollection } from "geojson";
 
 export interface EditCompProps {
     item: TableRow;
@@ -47,6 +45,31 @@ export function EditComp({
         );
     }
 
+    if (item.type === "inline-controlled-list") {
+        const options = item.inlineValues.map((label: string) => ({
+            label,
+            value: label,
+        }));
+        let selectedOption = {
+            label: currentValue,
+            value: currentValue,
+        };
+        if (options.length === 1 && currentValue !== options[0].value) {
+            selectedOption = options[0];
+            setValue(selectedOption.value);
+        }
+        return (
+            <Select
+                options={options}
+                selectedOption={selectedOption}
+                disabled={disabled || options.length === 1}
+                expandToViewport
+                filteringType="auto"
+                onChange={(e) => setValue(e.detail.selectedOption.value)}
+            />
+        );
+    }
+
     if (item.type === "controlled-list" && item.dependsOn.length === 0) {
         const options = controlledLists[item.name].data.map((x: any) => ({
             label: x[item.name],
@@ -56,8 +79,9 @@ export function EditComp({
             label: currentValue,
             value: currentValue,
         };
-        if (options.length === 1) {
+        if (options.length === 1 && currentValue !== options[0].value) {
             selectedOption = options[0];
+            setValue(selectedOption.value);
         }
         return (
             <Select
@@ -85,8 +109,9 @@ export function EditComp({
             label: currentValue,
             value: currentValue,
         };
-        if (options.length === 1) {
+        if (options.length === 1 && currentValue !== options[0].value) {
             selectedOption = options[0];
+            setValue(selectedOption.value);
         }
 
         return (
@@ -117,10 +142,10 @@ export function EditComp({
                 if (controlDataItem) {
                     currentValueInit = {
                         loc: [
-                            controlDataItem[schemaItem.longitudeField],
-                            controlDataItem[schemaItem.latitudeField],
+                            controlDataItem[schemaItem.longitudeField!],
+                            controlDataItem[schemaItem.latitudeField!],
                         ],
-                        zoom: controlDataItem[schemaItem.zoomLevelField],
+                        zoom: controlDataItem[schemaItem.zoomLevelField!],
                     };
                 }
             }

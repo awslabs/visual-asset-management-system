@@ -53,7 +53,8 @@ type DataTypes =
     | "boolean"
     | "date"
     | "location"
-    | "controlled-list";
+    | "controlled-list"
+    | "inline-controlled-list";
 export interface MetadataSchemaFields {
     id: string;
     field: string;
@@ -63,10 +64,13 @@ export interface MetadataSchemaFields {
     sequenceNumber: number;
     dependsOn: string[];
     // location fields
-    useCenterPosition: boolean;
-    latitudeField: string;
-    longitudeField: string;
-    zoomLevelField: string;
+    useCenterPosition?: boolean;
+    latitudeField?: string;
+    longitudeField?: string;
+    zoomLevelField?: string;
+
+    // inline controlled list fields
+    inlineControlledListValues?: string;
 }
 
 interface DatatypeSelectProps {
@@ -83,6 +87,7 @@ function DatatypeSelect({ value, onChange, disabled }: DatatypeSelectProps) {
         { value: "date", label: "Date" },
         { value: "location", label: "Location" },
         { value: "controlled-list", label: "Controlled List" },
+        { value: "inline-controlled-list", label: "Inline Controlled List" },
     ];
     return (
         <Select
@@ -121,7 +126,7 @@ function DependencyMultiselect({
     );
 }
 
-function validateField(field: string) {
+function validateField(field: string | null | undefined) {
     let response = null;
     if (!field) {
         response = "Field is required";
@@ -144,6 +149,33 @@ interface LocationSpecificFieldsProps {
     formState: MetadataSchemaFields;
     setFormState: (formState: MetadataSchemaFields) => void;
 }
+
+function InlineControlledListSpecificFields({ formState, setFormState }: LocationSpecificFieldsProps) {
+    if (formState.dataType !== "inline-controlled-list") {
+        return null;
+    }
+
+    return (
+        <>
+            <FormField
+                label="Inline Controlled List Values"
+                constraintText="Define a list of values that can be selected from a dropdown."
+                errorText={validateField(formState.inlineControlledListValues)}
+            >
+                <Input
+                    value={formState.inlineControlledListValues!}
+                    onChange={({ detail }) => {
+                        setFormState({
+                            ...formState,
+                            inlineControlledListValues: detail.value,
+                        });
+                    }}
+                />
+            </FormField>
+        </>
+    );
+}
+
 function LocationSpecificFields({ formState, setFormState }: LocationSpecificFieldsProps) {
     if (formState.dataType !== "location") {
         return null;
@@ -156,7 +188,7 @@ function LocationSpecificFields({ formState, setFormState }: LocationSpecificFie
                 constraintText="Use the center point of the map as the initial position."
             >
                 <Checkbox
-                    checked={formState.useCenterPosition}
+                    checked={formState.useCenterPosition || false}
                     onChange={({ detail }) => {
                         setFormState({
                             ...formState,
@@ -190,7 +222,7 @@ function LocationSpecificFields({ formState, setFormState }: LocationSpecificFie
                 errorText={validateField(formState.latitudeField)}
             >
                 <Input
-                    value={formState.latitudeField}
+                    value={formState.latitudeField || ""}
                     onChange={({ detail }) => {
                         setFormState({
                             ...formState,
@@ -205,7 +237,7 @@ function LocationSpecificFields({ formState, setFormState }: LocationSpecificFie
                 errorText={validateField(formState.longitudeField)}
             >
                 <Input
-                    value={formState.longitudeField}
+                    value={formState.longitudeField || ""}
                     onChange={({ detail }) => {
                         setFormState({
                             ...formState,
@@ -220,7 +252,7 @@ function LocationSpecificFields({ formState, setFormState }: LocationSpecificFie
                 errorText={validateField(formState.zoomLevelField)}
             >
                 <Input
-                    value={formState.zoomLevelField}
+                    value={formState.zoomLevelField || ""}
                     onChange={({ detail }) => {
                         setFormState({
                             ...formState,
@@ -336,6 +368,7 @@ function CreateMetadataField({ open, setOpen, setReload, initState }: CreateMeta
                     />
                 </FormField>
                 <LocationSpecificFields formState={formState} setFormState={setFormState} />
+                <InlineControlledListSpecificFields formState={formState} setFormState={setFormState} />
                 <FormField label="Required" constraintText="Whether the field is required.">
                     <Select
                         selectedOption={

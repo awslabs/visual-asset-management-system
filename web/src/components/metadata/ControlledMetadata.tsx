@@ -4,7 +4,7 @@ import { API, Storage } from "aws-amplify";
 import { Grid } from "@cloudscape-design/components";
 import React from "react";
 import { EditComp } from "./EditComp";
-import { handleCSVControlData } from "./CSVControlData";
+import { HandleControlData, handleCSVControlData as originHandler } from "./CSVControlData";
 
 export interface Metadata {
     [k: string]: string;
@@ -15,26 +15,38 @@ interface ControlledMetadataProps {
     databaseId: string;
     initialState?: Metadata;
     store?: (databaseId: string, assetId: string, record: Metadata) => Promise<any>;
+    apiget?: (apiName: string, path: string, init: any) => Promise<any>;
+    storageget?: (key: string) => Promise<any>;
+    handleCSVControlData?: HandleControlData;
 }
 
 export interface TableRow {
     idx: number;
     name: string;
     value: string;
+    inlineValues: string[];
     type: string;
     dependsOn: string[];
 }
 
-export default function ControlledMetadata({ databaseId, assetId }: ControlledMetadataProps) {
+export default function ControlledMetadata({
+    databaseId,
+    assetId,
+    initialState,
+    apiget = API.get.bind(API),
+    storageget = Storage.get.bind(Storage),
+    handleCSVControlData = originHandler,
+    store,
+}: ControlledMetadataProps) {
     const [schema, setSchema] = useState<SchemaContextData | null>(null);
     const [controlledLists, setControlledLists] = useState<any | null>(null);
     const [rawControlData, setRawControlData] = useState<any>([]);
     const [metadata, setMetadata] = useState<Metadata | null>();
     const [items, setItems] = useState<TableRow[]>([]);
 
-    console.log("schema", schema);
-    console.log("items", items);
-    console.log("controlledLists", controlledLists);
+    // console.log("schema", schema);
+    // console.log("items", items);
+    // console.log("controlledLists", controlledLists);
 
     const metaToTableRow = (meta: Metadata, schema: SchemaContextData) => {
         schema.schemas.sort((a, b) => {
@@ -55,6 +67,11 @@ export default function ControlledMetadata({ databaseId, assetId }: ControlledMe
                     name: key,
                     value: meta[key],
                     dependsOn: schema.schemas.find((x) => x.field === key)?.dependsOn || [],
+                    inlineValues:
+                        schema.schemas
+                            .find((x) => x.field === key)
+                            ?.inlineControlledListValues?.split(",")
+                            .map((x) => x.trim()) || [],
                     type: schema.schemas.find((x) => x.field === key)?.dataType || "string",
                 };
             });
@@ -76,26 +93,26 @@ export default function ControlledMetadata({ databaseId, assetId }: ControlledMe
         if (schema !== null) {
             return;
         }
-        API.get("api", `metadataschema/${databaseId}`, {}).then((data: SchemaContextData) => {
+        apiget("api", `metadataschema/${databaseId}`, {}).then((data: SchemaContextData) => {
             setSchema(data);
-            const start: Metadata = {};
+            const start: Metadata = initialState || {};
             const meta = data.schemas.reduce((acc, x) => {
-                acc[x.field] = "";
+                acc[x.field] = start[x.field] || "";
                 return acc;
             }, start);
             setMetadata(meta);
             setItems(metaToTableRow(meta, data));
         });
-    }, [setSchema, schema, databaseId]);
+    }, [setSchema, schema, databaseId, apiget, initialState]);
 
     useEffect(() => {
         if (schema === null) return;
         if (controlledLists !== null) return;
 
-        Storage.get(`metadataschema/${databaseId}/controlledlist.csv`).then((url: string) => {
+        storageget(`metadataschema/${databaseId}/controlledlist.csv`).then((url: string) => {
             handleCSVControlData(url, schema, setControlledLists, setRawControlData);
         });
-    }, [controlledLists, databaseId, schema]);
+    }, [controlledLists, databaseId, handleCSVControlData, schema, storageget]);
 
     if (!metadata || !controlledLists || !schema) {
         return <p>Loading...</p>;
@@ -134,6 +151,7 @@ export default function ControlledMetadata({ databaseId, assetId }: ControlledMe
 
                                         setItems(next);
                                         setMetadata(tableRowToMeta(next));
+                                        if (store) store(databaseId, assetId, tableRowToMeta(next));
                                     } else {
                                         console.log("undefined value", row);
                                     }
