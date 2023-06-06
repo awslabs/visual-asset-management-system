@@ -8,14 +8,12 @@ import json
 
 dynamodb = boto3.resource('dynamodb')
 dynamodb_client = boto3.client('dynamodb')
-asset_database = None
 db_database = None
 
 
 # TODO maybe this should be part of a class constructor instead
 
 try:
-    asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
     db_database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
 except:
     print("Failed Loading Environment Variables")
@@ -23,6 +21,12 @@ except:
 
 
 def request_to_claims(request):
+    if 'requestContext' not in request:
+        return {
+            "tokens": [],
+            "roles": ["super-admin"],
+        }
+
     return {
         "tokens": json.loads(request['requestContext']['authorizer']['jwt']['claims']['vams:tokens']),
         "roles": json.loads(request['requestContext']['authorizer']['jwt']['claims']['vams:roles']),
