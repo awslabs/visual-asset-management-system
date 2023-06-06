@@ -25,9 +25,15 @@ def lambda_handler(event, context):
                 'sk': 'observed_claims',
             },
         )
+        username_as_group = event['requestContext']['authorizer']['jwt']['claims']['cognito:username']
+        addl_groups = [username_as_group, "vams:all_users"]
+        if 'Item' not in response or 'claims' not in response['Item']:
+            claims = {"claims": addl_groups}
+        else:
+            claims = {"claims": list(response['Item']['claims']) + addl_groups}
 
-        claims = {"claims": list(response['Item']['claims']) + [event['requestContext']
-                                                                ['authorizer']['jwt']['claims']['cognito:username']]}
+        claims['claims'] = sorted(list(set(claims['claims'])))
+
         return {
             'statusCode': 200,
             'body': json.dumps(claims)
