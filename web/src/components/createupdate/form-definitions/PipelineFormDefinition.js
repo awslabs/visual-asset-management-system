@@ -82,6 +82,65 @@ export const PipelineFormDefinition = new FormDefinition({
             required: true,
         }),
         new ControlDefinition({
+            label: "Wait for a Callback with the Task Token",
+            id: "waitForCallback",
+            constraintText:
+                "Applies to Lambda pipelines only. More information available in the Step Functions documentation https://docs.aws.amazon.com/step-functions/latest/dg/connect-to-resource.html.",
+            elementDefinition: new ElementDefinition({
+                formElement: Select,
+                elementProps: {
+                    "data-testid": "waitForCallback-select",
+                },
+            }),
+            options: [
+                {
+                    label: "Yes",
+                    value: "Enabled",
+                },
+                {
+                    label: "No",
+                    value: "Disabled",
+                },
+            ],
+            appearsWhen: ["pipelineType", "Lambda"],
+            defaultOption: {
+                label: "No",
+                value: "Disabled",
+            },
+        }),
+        new ControlDefinition({
+            label: "Task Timeout",
+            id: "taskTimeout",
+            constraintText:
+                "If the task runs longer than the specified seconds, this state fails with a States.Timeout error name. Must be a positive, non-zero integer.",
+            elementDefinition: new ElementDefinition({
+                formElement: Input,
+                elementProps: {
+                    autoFocus: false,
+                    type: "number",
+                    inputMode: "numeric",
+                    placeholder: "99999999",
+                },
+            }),
+            appearsWhen: ["waitForCallback", "Yes"],
+        }),
+        new ControlDefinition({
+            label: "Task Heartbeat Timeout",
+            id: "taskHeartbeatTimeout",
+            constraintText:
+                "If more time than the specified seconds elapses between heartbeats from the task, this state fails with a States.Timeout error name. Must be a positive, non-zero integer less than the number of seconds specified in the TimeoutSeconds field.",
+            elementDefinition: new ElementDefinition({
+                formElement: Input,
+                elementProps: {
+                    autoFocus: false,
+                    type: "number",
+                    inputMode: "numeric",
+                    placeholder: "99999999",
+                },
+            }),
+            appearsWhen: ["waitForCallback", "Yes"],
+        }),
+        new ControlDefinition({
             label: "Container Uri (Optional)",
             id: "containerUri",
             constraintText:
