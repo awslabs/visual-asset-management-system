@@ -225,7 +225,7 @@ export class TreeUtility {
         columnsDefinitions: ReadonlyArray<TableProps.ColumnDefinition<T>>
     ) => {
         const { sortingColumn } = sortState;
-        if (sortingColumn && sortingColumn.sortingField) {
+        if (sortingColumn && sortingColumn.sortingField && columnsDefinitions) {
             const columnDefinition = columnsDefinitions.find(
                 (column) => column.sortingField === sortingColumn.sortingField
             )!;
