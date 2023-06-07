@@ -1,3 +1,7 @@
+/*
+ * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 import { SchemaContextData } from "../../pages/MetadataSchema";
 import { Checkbox, DatePicker, Input, Select, Textarea } from "@cloudscape-design/components";
 import { MapLocationSelectorModal2 } from "./MapLocationSelector";

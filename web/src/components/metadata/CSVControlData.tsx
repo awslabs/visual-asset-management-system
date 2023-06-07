@@ -1,3 +1,7 @@
+/*
+ * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 import { SchemaContextData } from "../../pages/MetadataSchema";
 import Papa, { ParseRemoteConfig, ParseResult } from "papaparse";
 import React from "react";
