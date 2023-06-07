@@ -9,6 +9,7 @@ import { fetchAllAssets, fetchDatabaseAssets } from "../services/APIService";
 import { AssetListDefinition } from "../components/list/list-definitions/AssetListDefinition";
 import ListPage from "./ListPage";
 import { useParams } from "react-router";
+import Synonyms from "../synonyms";
 
 export default function Assets() {
     const navigate = useNavigate();
@@ -16,10 +17,10 @@ export default function Assets() {
     const urlParams = useParams();
     return (
         <ListPage
-            singularName={"asset"}
-            singularNameTitleCase={"Asset"}
-            pluralName={"assets"}
-            pluralNameTitleCase={"Assets"}
+            singularName={Synonyms.Asset}
+            singularNameTitleCase={Synonyms.Asset}
+            pluralName={Synonyms.assets}
+            pluralNameTitleCase={Synonyms.Assets}
             onCreateCallback={() => {
                 if (urlParams.databaseId) {
                     navigate(`/upload/${urlParams.databaseId}`);

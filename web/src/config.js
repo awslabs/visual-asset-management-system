@@ -5,6 +5,7 @@
 
 const config = {
     APP_TITLE: "Amazon VAMS",
+    // CUSTOMER_LOGO // defines a alternate logo
 };
 
 export default config;

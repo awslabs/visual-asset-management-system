@@ -44,6 +44,7 @@ import {
 import { DisplayKV, FileUpload } from "./AssetUpload/components";
 import ProgressScreen from "./AssetUpload/ProgressScreen";
 import onSubmit from "./AssetUpload/onSubmit";
+import Synonyms from "../synonyms";
 
 // eslint-disable-next-line @typescript-eslint/no-array-constructor
 const objectFileFormats = new Array().concat(cadFileFormats, modelFileFormats, columnarFileFormats);
@@ -183,13 +184,15 @@ const UploadForm = () => {
                     allowSkipTo
                     steps={[
                         {
-                            title: "Asset Details",
+                            title: `${Synonyms.Asset} Details`,
                             isOptional: false,
                             content: (
-                                <Container header={<Header variant="h2">Asset Details</Header>}>
+                                <Container
+                                    header={<Header variant="h2">{Synonyms.Asset} Details</Header>}
+                                >
                                     <SpaceBetween direction="vertical" size="l">
                                         <FormField
-                                            label="Asset Name"
+                                            label={`${Synonyms.Asset} Name`}
                                             constraintText="All lower case, no special chars or spaces except - and _ only letters for first character min 4 and max 64."
                                             errorText={validateEntityIdAsYouType(
                                                 assetDetail.assetId
@@ -235,7 +238,7 @@ const UploadForm = () => {
                                         </FormField>
 
                                         <FormField
-                                            label="Database"
+                                            label={Synonyms.Database}
                                             errorText={validateNonZeroLengthTextAsYouType(
                                                 assetDetail.databaseId
                                             )}
@@ -338,9 +341,11 @@ const UploadForm = () => {
                             ),
                         },
                         {
-                            title: "Asset Metadata",
+                            title: `${Synonyms.Asset} Metadata`,
                             content: (
-                                <Container header={<Header variant="h2">Asset Metadata</Header>}>
+                                <Container
+                                    header={<Header variant="h2">{Synonyms.Asset} Metadata</Header>}
+                                >
                                     <SpaceBetween direction="vertical" size="l">
                                         <MetadataTable
                                             assetId={assetDetail.assetId || ""}
@@ -413,7 +418,11 @@ const UploadForm = () => {
                                     >
                                         Review
                                     </Header>
-                                    <Container header={<Header variant="h2">Asset Detail</Header>}>
+                                    <Container
+                                        header={
+                                            <Header variant="h2">{Synonyms.Asset} Detail</Header>
+                                        }
+                                    >
                                         <ColumnLayout columns={2} variant="text-grid">
                                             {Object.keys(assetDetail).map((k) => (
                                                 <DisplayKV
@@ -425,7 +434,9 @@ const UploadForm = () => {
                                         </ColumnLayout>
                                     </Container>
                                     <Container
-                                        header={<Header variant="h2">Asset Metadata</Header>}
+                                        header={
+                                            <Header variant="h2">{Synonyms.Asset} Metadata</Header>
+                                        }
                                     >
                                         <ColumnLayout columns={2} variant="text-grid">
                                             {Object.keys(metadata).map((k) => (
@@ -461,7 +472,7 @@ export default function AssetUploadPage() {
             <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
                 <div>
                     <TextContent>
-                        <Header variant="h1">Create Asset</Header>
+                        <Header variant="h1">Create {Synonyms.Asset}</Header>
                     </TextContent>
 
                     <UploadForm />

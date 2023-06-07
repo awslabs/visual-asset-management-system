@@ -6,6 +6,7 @@
 import { Modal } from "@cloudscape-design/components";
 import React from "react";
 import DatabaseSelector from "./DatabaseSelector";
+import Synonyms from "../../synonyms";
 
 export default function DatabaseSelectorWithModal(props) {
     const { open, setOpen, onSelectorChange } = props;
@@ -20,7 +21,7 @@ export default function DatabaseSelectorWithModal(props) {
             visible={open}
             closeAriaLabel="Close modal"
             size="medium"
-            header="Select Database"
+            header={`Select ${Synonyms.Database}`}
         >
             <DatabaseSelector onChange={onSelectorChange} />
         </Modal>

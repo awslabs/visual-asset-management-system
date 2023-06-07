@@ -7,6 +7,7 @@ import React from "react";
 import ListDefinition from "./types/ListDefinition";
 import { Badge, Link, StatusIndicator } from "@cloudscape-design/components";
 import ColumnDefinition from "./types/ColumnDefinition";
+import Synonyms from "../../../synonyms";
 
 export const WorkflowExecutionListDefinition = new ListDefinition({
     pluralName: "workflows",
@@ -20,7 +21,7 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
         "stopDate",
         "executionStatus",
     ],
-    filterColumns: [{ name: "databaseId", placeholder: "Database" }],
+    filterColumns: [{ name: "databaseId", placeholder: Synonyms.Database }],
     elementId: "workflowId",
     deleteRoute: "database/{databaseId}/workflows/{workflowId}",
     columnDefinitions: [
@@ -54,7 +55,7 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
         }),
         new ColumnDefinition({
             id: "databaseId",
-            header: "Database",
+            header: Synonyms.Database,
             cellWrapper: (props) => {
                 const { item } = props;
                 return (

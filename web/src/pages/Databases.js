@@ -8,14 +8,15 @@ import { fetchAllDatabases } from "../services/APIService";
 import CreateDatabase from "../components/createupdate/CreateDatabase";
 import { DatabaseListDefinition } from "../components/list/list-definitions/DatabaseListDefinition";
 import ListPage from "./ListPage";
+import Synonyms from "../synonyms";
 
 export default function Databases() {
     return (
         <ListPage
-            singularName={"database"}
-            singularNameTitleCase={"Database"}
-            pluralName={"databases"}
-            pluralNameTitleCase={"Databases"}
+            singularName={Synonyms.Database}
+            singularNameTitleCase={Synonyms.Database}
+            pluralName={Synonyms.databases}
+            pluralNameTitleCase={Synonyms.Databases}
             listDefinition={DatabaseListDefinition}
             CreateNewElement={CreateDatabase}
             fetchAllElements={fetchAllDatabases}

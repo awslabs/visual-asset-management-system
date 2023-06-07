@@ -18,6 +18,7 @@ import TableList from "../components/list/TableList";
 import PropTypes from "prop-types";
 import ListDefinition from "../components/list/list-definitions/types/ListDefinition";
 import RelatedTableList from "../components/list/RelatedTableList";
+import Synonyms from "../synonyms";
 
 export default function ListPage(props) {
     const { databaseId } = useParams();
@@ -74,7 +75,7 @@ export default function ListPage(props) {
                 {databaseId && (
                     <BreadcrumbGroup
                         items={[
-                            { text: "Databases", href: "/databases/" },
+                            { text: Synonyms.Databases, href: "/databases/" },
                             {
                                 text: databaseId,
                                 href: `/databases/${databaseId}/${pluralName}/`,

@@ -14,6 +14,7 @@ import {
 import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { fetchAllPipelines } from "../../services/APIService";
+import Synonyms from "../../synonyms";
 
 export default function ViewPipeline() {
     const { pipelineName } = useParams();
@@ -47,7 +48,7 @@ export default function ViewPipeline() {
             <SpaceBetween direction="vertical" size="xs">
                 <BreadcrumbGroup
                     items={[
-                        { text: "Databases", href: "/databases/" },
+                        { text: Synonyms.Databases, href: "/databases/" },
                         { text: databaseId, href: "/databases/" + databaseId },
                         { text: "Pipelines", href: "/pipelines/" },
                         { text: pipelineName, href: "/pipelines/" + pipelineName },
@@ -63,9 +64,9 @@ export default function ViewPipeline() {
                         value={pipelineName}
                         disabled
                     />
-                    <TextContent>Database Name</TextContent>
+                    <TextContent>{Synonyms.Database} Name</TextContent>
                     <Input
-                        placeholder="Database Name"
+                        placeholder={`${Synonyms.Database} Name`}
                         name="databaseId"
                         value={databaseId}
                         disabled
@@ -80,7 +81,7 @@ export default function ViewPipeline() {
                         value={pipelineDescription}
                         onChange={({ detail }) => setPipelineDescription(detail.value)}
                     />
-                    <TextContent>Asset Type</TextContent>
+                    <TextContent>{Synonyms.Asset} Type</TextContent>
                     <Input
                         placeholder=".csv, .glb, etc."
                         name="assetType"
