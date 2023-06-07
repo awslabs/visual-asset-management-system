@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { SchemaContextData } from "../../pages/MetadataSchema";
 import { API, Storage } from "aws-amplify";
-import { Grid } from "@cloudscape-design/components";
+import { Container, Grid, Header } from "@cloudscape-design/components";
 import React from "react";
 import { EditComp } from "./EditComp";
 import { HandleControlData, handleCSVControlData as originHandler } from "./CSVControlData";
+import MetadataTable, { MetadataApi, put } from "../single/Metadata";
 
 export interface Metadata {
     [k: string]: string;
@@ -36,7 +37,7 @@ export default function ControlledMetadata({
     apiget = API.get.bind(API),
     storageget = Storage.get.bind(Storage),
     handleCSVControlData = originHandler,
-    store,
+    store = put,
 }: ControlledMetadataProps) {
     const [schema, setSchema] = useState<SchemaContextData | null>(null);
     const [controlledLists, setControlledLists] = useState<any | null>(null);
@@ -93,74 +94,119 @@ export default function ControlledMetadata({
         if (schema !== null) {
             return;
         }
-        apiget("api", `metadataschema/${databaseId}`, {}).then((data: SchemaContextData) => {
-            setSchema(data);
-            const start: Metadata = initialState || {};
-            const meta = data.schemas.reduce((acc, x) => {
-                acc[x.field] = start[x.field] || "";
-                return acc;
-            }, start);
-            setMetadata(meta);
-            setItems(metaToTableRow(meta, data));
-        });
-    }, [setSchema, schema, databaseId, apiget, initialState]);
+
+        if (initialState === undefined) {
+            apiget("api", `metadata/${databaseId}/${assetId}`, {}).then(
+                ({ metadata: start }: MetadataApi) => {
+                    apiget("api", `metadataschema/${databaseId}`, {}).then(
+                        (data: SchemaContextData) => {
+                            setSchema(data);
+                            if (data.schemas.length > 0) {
+                                const meta = data.schemas.reduce((acc, x) => {
+                                    acc[x.field] = start[x.field] || "";
+                                    return acc;
+                                }, start);
+                                console.log("metadata in init", meta);
+                                setMetadata(meta);
+                                setItems(metaToTableRow(meta, data));
+                            }
+                        }
+                    );
+                }
+            );
+        } else {
+            apiget("api", `metadataschema/${databaseId}`, {}).then((data: SchemaContextData) => {
+                setSchema(data);
+                if (data.schemas.length > 0) {
+                    const start: Metadata = initialState || {};
+                    const meta = data.schemas.reduce((acc, x) => {
+                        acc[x.field] = start[x.field] || "";
+                        return acc;
+                    }, start);
+                    setMetadata(meta);
+                    setItems(metaToTableRow(meta, data));
+                }
+            });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [databaseId, assetId, initialState]);
 
     useEffect(() => {
-        if (schema === null) return;
+        if (schema === null || schema.schemas.length === 0) return;
         if (controlledLists !== null) return;
-
         storageget(`metadataschema/${databaseId}/controlledlist.csv`).then((url: string) => {
             handleCSVControlData(url, schema, setControlledLists, setRawControlData);
         });
-    }, [controlledLists, databaseId, handleCSVControlData, schema, storageget]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [databaseId, schema]);
 
+    if (schema && schema.schemas.length === 0) {
+        return (
+            <MetadataTable
+                assetId={assetId || ""}
+                databaseId={databaseId || ""}
+                initialState={initialState}
+                store={store}
+                data-testid="metadata-table"
+            />
+        );
+    }
     if (!metadata || !controlledLists || !schema) {
         return <p>Loading...</p>;
     }
 
     return (
         <React.Fragment>
-            {items.map((row) => {
-                return (
-                    <Grid gridDefinition={[{ colspan: 3 }, { colspan: 6 }]} key={row.idx}>
-                        <div>{row.name}</div>
-                        <div>
-                            <EditComp
-                                controlledLists={controlledLists}
-                                metadata={metadata}
-                                item={row}
-                                currentValue={row.value}
-                                schema={schema}
-                                controlData={rawControlData}
-                                setValue={(value) => {
-                                    if (value !== undefined) {
-                                        console.log("items", items);
-                                        const next: TableRow[] = [...items];
-                                        next[row.idx].value = value;
+            <Container
+                header={
+                    <Header variant="h2" description="Metadata">
+                        Metadata
+                    </Header>
+                }
+            >
+                {items.map((row) => {
+                    return (
+                        <Grid gridDefinition={[{ colspan: 3 }, { colspan: 6 }]} key={row.idx}>
+                            <div>{row.name}</div>
+                            <div>
+                                <EditComp
+                                    controlledLists={controlledLists}
+                                    metadata={metadata}
+                                    item={row}
+                                    currentValue={row.value}
+                                    schema={schema}
+                                    controlData={rawControlData}
+                                    setValue={(value) => {
+                                        if (value !== undefined) {
+                                            console.log("items", items);
+                                            const next: TableRow[] = [...items];
+                                            next[row.idx].value = value;
 
-                                        const resetDeps = (name: string) => {
-                                            for (const item of next) {
-                                                if (item.dependsOn.includes(name)) {
-                                                    item.value = "";
-                                                    resetDeps(item.name);
+                                            const resetDeps = (name: string) => {
+                                                for (const item of next) {
+                                                    if (item.dependsOn.includes(name)) {
+                                                        item.value = "";
+                                                        resetDeps(item.name);
+                                                    }
                                                 }
-                                            }
-                                        };
+                                            };
 
-                                        resetDeps(row.name);
+                                            resetDeps(row.name);
 
-                                        setItems(next);
-                                        setMetadata(tableRowToMeta(next));
-                                        if (store) store(databaseId, assetId, tableRowToMeta(next));
-                                    } else {
-                                        console.log("undefined value", row);
-                                    }
-                                }}
-                            />
-                        </div>
-                    </Grid>
-                );
-            })}
+                                            setItems(next);
+                                            setMetadata(tableRowToMeta(next));
+                                            if (store)
+                                                store(databaseId, assetId, tableRowToMeta(next));
+                                        } else {
+                                            console.log("undefined value", row);
+                                        }
+                                    }}
+                                />
+                            </div>
+                        </Grid>
+                    );
+                })}
+            </Container>
         </React.Fragment>
     );
 }

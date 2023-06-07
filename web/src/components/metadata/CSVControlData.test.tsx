@@ -53,9 +53,9 @@ describe("CSVControlData", () => {
         );
         const config2: ParseWorkerConfig = {
             worker: true,
-            complete: (results: ParseResult<any>, ) => {
+            complete: (results: ParseResult<any>) => {
                 config.complete(results, "");
-            }
+            },
         };
 
         // read contents of cities.metadata.test.csv into a string
@@ -64,7 +64,7 @@ describe("CSVControlData", () => {
             "utf8"
         );
 
-        Papa.parse(citiesMetadataTestCSV, config2 );
+        Papa.parse(citiesMetadataTestCSV, config2);
 
         expect(setControlledLists).toHaveBeenCalledTimes(1);
         expect(setRawControlData).toHaveBeenCalledTimes(1);

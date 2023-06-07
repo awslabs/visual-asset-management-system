@@ -29,8 +29,20 @@ def test_get_schema_not_found():
 
     metadataSchema = MetadataSchema(table_name="tablename", dynamodb=mock_ddb)
 
-    metadataSchema.get_schema("databaseId123",  "schemaId123")
+    result = metadataSchema.get_schema("databaseId123",  "schemaId123")
     assert mock_ddb.get_item.call_args == call(Key={'databaseId': 'databaseId123', 'field': 'schemaId123'})
+    assert None == result
+
+def test_get_schema_not_found2():
+    mock_ddb = Mock()
+    mock_ddb.Table = Mock(return_value=mock_ddb)
+    mock_ddb.get_item = Mock(return_value={})
+
+    metadataSchema = MetadataSchema(table_name="tablename", dynamodb=mock_ddb)
+
+    result = metadataSchema.get_schema("databaseId123",  "schemaId123")
+    assert mock_ddb.get_item.call_args == call(Key={'databaseId': 'databaseId123', 'field': 'schemaId123'})
+    assert None == result
 
 
 def test_get_schema_error():

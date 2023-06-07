@@ -20,10 +20,10 @@ import {
     SpaceBetween,
     TextContent,
 } from "@cloudscape-design/components";
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useState } from "react";
 import { generateUUID } from "../common/utils/utils";
 
-import { API, Storage, Auth } from "aws-amplify";
+import { API, Storage } from "aws-amplify";
 
 import ListDefinition from "../components/list/list-definitions/types/ListDefinition";
 import ColumnDefinition from "../components/list/list-definitions/types/ColumnDefinition";
@@ -150,7 +150,10 @@ interface LocationSpecificFieldsProps {
     setFormState: (formState: MetadataSchemaFields) => void;
 }
 
-function InlineControlledListSpecificFields({ formState, setFormState }: LocationSpecificFieldsProps) {
+function InlineControlledListSpecificFields({
+    formState,
+    setFormState,
+}: LocationSpecificFieldsProps) {
     if (formState.dataType !== "inline-controlled-list") {
         return null;
     }
@@ -368,7 +371,10 @@ function CreateMetadataField({ open, setOpen, setReload, initState }: CreateMeta
                     />
                 </FormField>
                 <LocationSpecificFields formState={formState} setFormState={setFormState} />
-                <InlineControlledListSpecificFields formState={formState} setFormState={setFormState} />
+                <InlineControlledListSpecificFields
+                    formState={formState}
+                    setFormState={setFormState}
+                />
                 <FormField label="Required" constraintText="Whether the field is required.">
                     <Select
                         selectedOption={

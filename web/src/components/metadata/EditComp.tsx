@@ -126,8 +126,6 @@ export function EditComp({
         );
     }
     if (item.type === "location") {
-        console.log("location current value", currentValue);
-
         let currentValueInit = {
             loc: [-95.37019986475366, 29.767650706163337], // Houston
             zoom: 5,
@@ -135,7 +133,7 @@ export function EditComp({
 
         if (!currentValue) {
             const schemaItem = schema.schemas.find((x) => x.field === item.name);
-            if (schemaItem) {
+            if (schemaItem && schemaItem.dependsOn) {
                 const controlDataItem = controlData.find((x: any) =>
                     schemaItem.dependsOn.every((y: string) => x[y] === metadata[y])
                 );

@@ -31,7 +31,7 @@ import {
     previewFileFormats,
 } from "../common/constants/fileFormats";
 
-import MetadataTable, { Metadata } from "../components/single/Metadata";
+import { Metadata } from "../components/single/Metadata";
 import { fetchDatabaseWorkflows } from "../services/APIService";
 import Table from "@cloudscape-design/components/table";
 import { ProgressBarProps } from "@cloudscape-design/components/progress-bar";

@@ -1,4 +1,4 @@
-import { act, render } from "@testing-library/react";
+import { render } from "@testing-library/react";
 import { SchemaContextData } from "../../pages/MetadataSchema";
 import { EditComp } from "./EditComp";
 import { Metadata, TableRow } from "./ControlledMetadata";
@@ -16,8 +16,7 @@ describe("EditComp", () => {
         };
         const schema: SchemaContextData = {
             databaseId: "dbId",
-            schemas: [
-            ],
+            schemas: [],
         };
 
         const metadata: Metadata = {};
@@ -221,6 +220,5 @@ describe("EditComp", () => {
 
         const wrapper = createWrapper(view.container);
         expect(wrapper.findDatePicker()).toBeTruthy();
-
     });
 });
