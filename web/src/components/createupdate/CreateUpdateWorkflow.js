@@ -73,6 +73,9 @@ export default function CreateUpdateWorkflow(props) {
                         value: item.name,
                         type: item.pipelineType,
                         outputType: item.outputType,
+                        waitForCallback: item.waitForCallback,
+                        taskTimeout: item.taskTimeout,
+                        taskHeartbeatTimeout: item.taskHeartbeatTimeout,
                         userProvidedResource: item.userProvidedResource,
                     };
                 });
@@ -139,6 +142,9 @@ export default function CreateUpdateWorkflow(props) {
                     name: item.value,
                     pipelineType: item.type,
                     outputType: item.outputType,
+                    waitForCallback: item.waitForCallback,
+                    taskTimeout: item.taskTimeout,
+                    taskHeartbeatTimeout: item.taskHeartbeatTimeout,
                     userProvidedResource: item.userProvidedResource,
                 };
             });

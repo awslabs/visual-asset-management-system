@@ -84,9 +84,17 @@ def upload_Pipeline(body):
         'description': body['description'],
         'dateCreated': json.dumps(dtNow),
         'pipelineType':body['pipelineType'],
+        'waitForCallback': body['waitForCallback'],
         'userProvidedResource': json.dumps(userResource),
         'enabled':False #Not doing anything with this yet
     }
+
+    if 'taskTimeout' in body:
+        item['taskTimeout'] = body['taskTimeout']
+
+    if 'taskHeartbeatTimeout' in body:
+        item['taskHeartbeatTimeout'] = body['taskHeartbeatTimeout']
+
     table.put_item(
         Item=item,
         ConditionExpression='attribute_not_exists(databaseId) and attribute_not_exists(pipelineId)'
