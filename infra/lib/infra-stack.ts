@@ -204,7 +204,6 @@ export class VAMS extends cdk.Stack {
             });
         }
 
-
         cdk.Tags.of(this).add("vams:stackname", props.stackName);
 
         this.node.findAll().forEach((item) => {
