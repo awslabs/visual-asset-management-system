@@ -330,12 +330,27 @@ def create_lambda_step(pipeline, input_s3_uri, output_s3_uri):
         "body": {
             "inputPath.$": input_s3_uri,
             "outputPath.$": output_s3_uri,
+            "TaskToken.$": "$$.Task.Token",
         }
     }
+
+    callback_args = {}
+    if 'waitForCallback' in pipeline and pipeline['waitForCallback'] == 'Enabled':
+        callback_args['wait_for_callback'] = True
+        f = 'taskTimeout'
+        if f in pipeline and pipeline[f].isdigit() and int(pipeline[f]) > 0:
+            callback_args['timeout_seconds'] = int(pipeline[f])
+
+        f = 'taskHeartbeatTimeout'
+        if f in pipeline and pipeline[f].isdigit() and int(pipeline[f]) > 0:
+            callback_args['heartbeat_seconds'] = int(pipeline[f])
+
     return LambdaStep(
         state_id="{}-{}".format(pipeline['name'], uuid.uuid1().hex),
         parameters={
             # replace with the name of your function
             "FunctionName": functionName,
             "Payload": lambda_payload
-        })
+        },
+        **callback_args,
+    )
