@@ -156,7 +156,7 @@ const UploadForm = () => {
 
             fileUploadTableItems.push({
                 //@ts-ignore
-                file: file,
+                handle: fileHandles[i].handle,
                 index: i,
                 name: fileHandles[i].handle.name,
                 size: file.size,
@@ -169,10 +169,20 @@ const UploadForm = () => {
         return fileUploadTableItems
     }
 
-    const updateProgressForFileUploadItem = (index: number, progress: number) => {
+    const getUpdatedItemAfterProgress = (item: FileUploadTableItem, loaded: number, total: number): FileUploadTableItem =>  {
+        const progress = Math.round((loaded / total) * 100)
+        const status = item.status
+        if (status === 'Queued') {
+            return {...item, loaded: loaded, total: total, progress: progress, status: "In Progress", startedAt: Math.floor((new Date()).getTime() / 1000)}
+        } else {
+            return {...item, loaded: loaded, total: total, status: "In Progress", progress: progress}
+        }
+    }
+    const updateProgressForFileUploadItem = (index: number, loaded: number, total: number) => {
+        const progress = Math.round((loaded / total) * 100)
         console.log("Updating progress for file upload item", index, "with progress", progress)
         setFileUploadTableItems((prevState) => {
-                return prevState.map((item) => item.index === index ? {...item, status: 'In Progress', progress: progress} : item);
+                return prevState.map((item) => item.index === index ? getUpdatedItemAfterProgress(item, loaded, total) : item);
         })
     }
 
@@ -429,12 +439,12 @@ const UploadForm = () => {
                                                     ...assetDetail,
                                                     Asset: [{
                                                         index: 0,
-                                                        file: file
+                                                        name: file.name,
                                                     }],
                                                 }));
                                             }}
                                             fileFormats={objectFileFormatsStr}
-                                            file={assetDetail.Asset ? assetDetail.Asset[0].file : undefined}
+                                            file={assetDetail.Asset ? assetDetail.Asset[0].handle.getFile() as File : undefined}
                                             data-testid="asset-file"
                                         />
                                         }

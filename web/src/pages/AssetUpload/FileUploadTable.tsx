@@ -12,6 +12,7 @@ import {
     TextFilter,
 } from '@cloudscape-design/components';
 import ProgressBar from "@cloudscape-design/components/progress-bar";
+import StatusIndicator from "@cloudscape-design/components/status-indicator";
 interface FileUploadTableProps {
     allItems: FileUploadTableItem[];
     onRetry?: () => void;
@@ -30,15 +31,74 @@ function shortenBytes(n: number) {
 }
 
 export interface FileUploadTableItem {
-    file: File;
+    name: string;
+    handle?: any;
     index? : number;
-    name?: string;
     size?: number;
     relativePath?: string;
     status?: "Queued" | "In Progress" | "Completed" | "Failed";
     progress?: number;
+    startedAt?: number;
+    loaded?: number;
+    total?: number;
+}
+
+const getStatusIndicator = (status?: string) => {
+    switch (status) {
+        case "Queued":
+            return "pending"
+        case "In Progress":
+            return  "info";
+        case "Completed":
+            return "success";
+        case "Failed":
+            return "error";
+        default:
+            return "info";
+    }
+}
+
+function formatTime(remainingTime: number) {
+    const days = Math.floor(remainingTime / (24 * 60 * 60));
+    const hours = Math.floor((remainingTime % (24 * 60 * 60)) / (60 * 60));
+    const minutes = Math.floor((remainingTime % (60 * 60)) / 60);
+    const seconds = Math.floor(remainingTime % 60);
+
+    const daysStr = days > 0 ? `${days}d` : '';
+    const hoursStr = hours > 0 ? `${hours}h` : '';
+    const minutesStr = minutes > 0 ? `${minutes}m` : '';
+    const secondsStr = seconds > 0 ? `${seconds}s` : '';
+
+    // Join the non-empty parts with commas and "and"
+    const timeParts = [daysStr, hoursStr, minutesStr, secondsStr].filter(part => part !== '');
+    const formattedTime = timeParts.join(':');
+
+    return formattedTime;
+}
+
+
+
+const getTimeRemaining = (item: FileUploadTableItem) => {
+    if (item.status === "In Progress" && item.startedAt && item.total && item.loaded && item.progress) {
+        const timeElapsed = Math.floor((new Date()).getTime() / 1000) - item.startedAt;
+        const decimalProgress = item.loaded / item.total;
+        const totalTime = timeElapsed / decimalProgress;
+        const remainingTime = totalTime - timeElapsed;
+        return formatTime(remainingTime)
+        //return <StatusIndicator type={"stopped"}> {formatTime(remainingTime)} </StatusIndicator>
+    }
+    return 'Unknown'
+    //return <StatusIndicator type={"stopped"}>  Unknown </StatusIndicator>;
 }
 const FileUploadTableColumnDefinitions = [
+
+    {
+        id: 'progress',
+        header: 'Upload Progress',
+        cell: (item: FileUploadTableItem) => <ProgressBar label={item.relativePath} value={item.progress} additionalInfo={" Time Remaining: " +getTimeRemaining(item)}/>,
+        sortingField: 'progress',
+        isRowHeader: true,
+    },
     {
         id: 'filepath',
         header: 'Path',
@@ -49,22 +109,15 @@ const FileUploadTableColumnDefinitions = [
     {
         id: 'filesize',
         header: 'Size',
-        cell: (item: FileUploadTableItem) => shortenBytes(item.file.size),
+        cell: (item: FileUploadTableItem) => item.total ? shortenBytes(item.total) : '0b',
         sortingField: 'filesize',
         isRowHeader: true,
     },
     {
         id: 'status',
         header: 'Upload Status',
-        cell: (item: FileUploadTableItem) => item.status,
+        cell: (item: FileUploadTableItem) => <StatusIndicator type={getStatusIndicator(item.status)}> {item.status} </StatusIndicator>,
         sortingField: 'status',
-        isRowHeader: true,
-    },
-    {
-        id: 'progress',
-        header: 'Upload Progress',
-        cell: (item: FileUploadTableItem) => <ProgressBar value={item.progress} />,
-        sortingField: 'progress',
         isRowHeader: true,
     },
 
@@ -125,9 +178,21 @@ function getFailedItemsCount(allItems: FileUploadTableItem[]) {
 function getCompletedItemsCount(allItems: FileUploadTableItem[]) {
     return allItems.filter(item => item.status === 'Completed').length;
 }
+function getActions(allItems: FileUploadTableItem[], onRetry?: () => void) {
+    const failed = allItems.filter(item => item.status === 'Failed').length;
+    if (failed > 0) {
+        return (
+            <Button variant={"link"} onClick={onRetry}>
+                Reupload {getFailedItemsCount(allItems)} failed
+            </Button>
+        );
+    } else {
+        return <></>
+    }
+}
 
 export const FileUploadTable = ( { allItems, onRetry }: FileUploadTableProps) => {
-    const [preferences, setPreferences] = useState({ pageSize: 10, visibleContent: [ 'filepath', 'filesize', 'status', 'progress', ] });
+    const [preferences, setPreferences] = useState({ pageSize: 10, visibleContent: [ 'filesize', 'status', 'progress' ] });
     const { items, filterProps, filteredItemsCount, paginationProps } = useCollection(
         allItems,
         {
@@ -156,10 +221,7 @@ export const FileUploadTable = ( { allItems, onRetry }: FileUploadTableProps) =>
                 <Header
                     counter={`${getCompletedItemsCount(allItems)}/${allItems.length}`}
                     actions={
-
-                        <Button onClick={onRetry}>
-                            <Link href="/">Reupload {getFailedItemsCount(allItems)} failed</Link>
-                        </Button>
+                        getActions(allItems, onRetry)
                     }
                 >
                     Files to upload
@@ -179,7 +241,8 @@ export const FileUploadTable = ( { allItems, onRetry }: FileUploadTableProps) =>
                 <CollectionPreferences
                     {...collectionPreferencesProps}
                     preferences={preferences}
-                    // onConfirm={({ detail }) => setPreferences(detail)}
+                    //@ts-ignore
+                    onConfirm={({ detail }) => setPreferences(detail)}
                 />
             }
         />

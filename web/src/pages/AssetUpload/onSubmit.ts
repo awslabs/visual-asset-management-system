@@ -46,7 +46,7 @@ class OnSubmitProps {
     execStatus!: ExecStatusType;
     setExecStatus!: (x: ExecStatusType | ((x: ExecStatusType) => ExecStatusType)) => void;
     setAssetUploadProgress!: (x: ProgressBarProps) => void;
-    updateProgressForFileUploadItem!: (index: number, progress: number) => void;
+    updateProgressForFileUploadItem!: (index: number, loaded: number, total: number) => void;
     fileUploadComplete!: (index: number, event: any) => void;
     fileUploadError!: (index: number, event: any) => void;
     setPreviewUploadProgress!: (x: ProgressBarProps) => void;
@@ -76,70 +76,82 @@ function createAssetUploadPromises(
     if (!resumable) {
         console.log("Resumabel is false")
         if (files.length === 1) {
-            uploads.push(async () => await Storage.put(keyPrefix, files[0].file, {
-                metadata,
-                progressCallback: (progress: ProgressCallbackArgs) => {
-                    progressCallback(0, {
-                        loaded: progress.loaded,
-                        total: progress.total
-                    })
-                }
-            }).then(() => completeCallback(0, null)).catch(err => errorCallback(0, err)));
+            uploads.push(async () => await files[0].handle.getFile().then((f: File) => {
+                Storage.put(keyPrefix, f, {
+                    metadata,
+                    progressCallback: (progress: ProgressCallbackArgs) => {
+                        progressCallback(0, {
+                            loaded: progress.loaded,
+                            total: progress.total
+                        })
+                    }
+                })
+                    .then(() => completeCallback(0, null))
+                    .catch(err => errorCallback(0, err))
+            }));
         } else {
             for (let i = 0; i < files.length; i++) {
                 if (files[i].status !== 'Completed') {
                     files[i].status = 'Queued';
-                    uploads.push(async () => await Storage.put(keyPrefix + files[i].relativePath, files[i].file, {
-                        metadata,
-                        progressCallback: (progress: ProgressCallbackArgs) => {
-                            progressCallback(i, {
-                                loaded: progress.loaded,
-                                total: progress.total
-                            })
-                        }
-                    }).then(() => completeCallback(i, null)).catch(err => errorCallback(i, err)));
+                    uploads.push(async () => await files[i].handle.getFile().then((f: File) => {
+                        Storage.put(keyPrefix, f, {
+                            metadata,
+                            progressCallback: (progress: ProgressCallbackArgs) => {
+                                progressCallback(0, {
+                                    loaded: progress.loaded,
+                                    total: progress.total
+                                })
+                            }
+                        })
+                            .then(() => completeCallback(0, null))
+                            .catch(err => errorCallback(0, err))
+                    }));
                 }
             }
         }
     } else {
         console.log("Resumabel is true")
         if (files.length === 1) {
-            uploads.push(async () => await Storage.put(keyPrefix, files[0].file, {
-                resumable: true,
-                level: 'private',
-                metadata,
-                progressCallback: (progress: ProgressCallbackArgs) => {
-                    progressCallback(0, {
-                        loaded: progress.loaded,
-                        total: progress.total
-                    })
-                },
-                completeCallback: (event: any) => {
-                    completeCallback(0, null)
-                },
-                errorCallback: (event: any) => {
-                    errorCallback(0, event)
-                }
+            uploads.push(async () => await files[0].handle.getFile().then((f: File) => {
+                Storage.put(keyPrefix, f, {
+                    resumable: true,
+                    level: 'private',
+                    metadata,
+                    progressCallback: (progress: ProgressCallbackArgs) => {
+                        progressCallback(0, {
+                            loaded: progress.loaded,
+                            total: progress.total
+                        })
+                    },
+                    completeCallback: (event: any) => {
+                        completeCallback(0, null)
+                    },
+                    errorCallback: (event: any) => {
+                        errorCallback(0, event)
+                    }
+                })
             }));
         } else {
             for (let i = 0; i < files.length; i++) {
                 if (files[i].status !== 'Completed') {
-                    uploads.push(async () => await Storage.put(keyPrefix + files[i].relativePath, files[i].file, {
-                        metadata,
-                        resumable: true,
-                        level: 'private',
-                        progressCallback: (progress: ProgressCallbackArgs) => {
-                            progressCallback(i, {
-                                loaded: progress.loaded,
-                                total: progress.total
-                            })
-                        },
-                        completeCallback: (event: any) => {
-                            completeCallback(0, null)
-                        },
-                        errorCallback: (event: any) => {
-                            errorCallback(0, event)
-                        }
+                    uploads.push(async () => await files[0].handle.getFile().then((f: File) => {
+                        Storage.put(keyPrefix + files[i].relativePath, f, {
+                            metadata,
+                            resumable: true,
+                            level: 'private',
+                            progressCallback: (progress: ProgressCallbackArgs) => {
+                                progressCallback(i, {
+                                    loaded: progress.loaded,
+                                    total: progress.total
+                                })
+                            },
+                            completeCallback: (event: any) => {
+                                completeCallback(i, null)
+                            },
+                            errorCallback: (event: any) => {
+                                errorCallback(i, event)
+                            }
+                        })
                     }));
                 }
             }
@@ -168,7 +180,7 @@ async function uploadAssetToS3(
 
 const getAssetType = (assetDetail: AssetDetail) => {
     if (assetDetail.Asset?.length === 1) {
-        return "." + assetDetail.Asset[0].file.name.split(".").pop()
+        return "." + assetDetail.Asset[0].name.split(".").pop()
     } else {
         return 'folder'
     }
@@ -178,13 +190,13 @@ const getKeyPrefix = (uuid: string, assetDetail: AssetDetail) => {
     if (assetDetail.Asset?.length === 1) {
         return uuid + "/" + assetDetail.assetId + assetDetail.assetType;
     } else {
-        return uuid + "/" + assetDetail.assetId + "/";
+        return uuid + "/";
     }
 }
 
 export interface UploadExecutionProps {
     assetDetail: AssetDetail,
-    updateProgressForFileUploadItem: (index: number, progress: number) => void,
+    updateProgressForFileUploadItem: (index: number, loaded: number, total:number) => void,
     setAssetUploadProgress: (x: ProgressBarProps) => void,
     fileUploadComplete: (index: number, event: any) => void,
     fileUploadError: (index: number, event: any) => void,
@@ -225,7 +237,7 @@ async function performUploads({
             },
             (index, progress) => {
                 console.log("Invoking progress call back")
-                updateProgressForFileUploadItem(index, (progress.loaded / progress.total) * 100)
+                updateProgressForFileUploadItem(index, progress.loaded, progress.total)
                 setAssetUploadProgress({
                     value: (progress.loaded / progress.total) * 100,
                 });
@@ -437,4 +449,5 @@ export async function onUploadRetry(uploadExecutionProps: UploadExecutionProps) 
         return "";
     };
     await performUploads(uploadExecutionProps);
+
 }
