@@ -10,6 +10,7 @@ import {API, Storage, Cache} from "aws-amplify";
 import {Metadata, MetadataApi} from "../../components/single/Metadata";
 import {AssetDetail} from "../AssetUpload";
 import {generateUUID} from "../../common/utils/utils";
+import {FileUploadTableItem} from "./FileUploadTable";
 
 export type ExecStatusType = Record<string, StatusIndicatorProps.Type>;
 
@@ -45,9 +46,12 @@ class OnSubmitProps {
     execStatus!: ExecStatusType;
     setExecStatus!: (x: ExecStatusType | ((x: ExecStatusType) => ExecStatusType)) => void;
     setAssetUploadProgress!: (x: ProgressBarProps) => void;
-    doneUploadingCallBack!: (x: number) => void;
+    updateProgressForFileUploadItem!: (index: number, progress: number) => void;
+    fileUploadComplete!: (index: number, event: any) => void;
+    fileUploadError!: (index: number, event: any) => void;
     setPreviewUploadProgress!: (x: ProgressBarProps) => void;
     setCanNavigateToAssetPage!: (x: boolean) => void;
+    setUploadExecutionProps!: (x: UploadExecutionProps) => void;
 }
 
 class ProgressCallbackArgs {
@@ -57,38 +61,97 @@ class ProgressCallbackArgs {
 
 
 function createAssetUploadPromises(
-    files: File[],
+    files: FileUploadTableItem[],
     keyPrefix: string,
     metadata: { [k: string]: string },
-    progressCallback: (progress: ProgressCallbackArgs) => void
+    progressCallback: (index: number, progress: ProgressCallbackArgs) => void,
+    completeCallback: (index: number, event: any) => void,
+    errorCallback: (index: number, event: any) => void,
+    resumable: boolean
 ) {
     const uploads = []
     // KeyPrefix captures the entire path when a single file is selected as an asset
     // A promise begins executing right after creation, hence I am returning a function that returns a promise
     // so these promises can then be executed sequentially to track progress
-    if (files.length === 1) {
-        uploads.push(() => Storage.put(keyPrefix, files[0], {
-            metadata,
-            progressCallback
-        }));
-    }
-    else {
-        for (let i = 0; i < files.length; i++) {
-            uploads.push(() => Storage.put(keyPrefix + files[i].webkitRelativePath, files[i], {
+    if (!resumable) {
+        console.log("Resumabel is false")
+        if (files.length === 1) {
+            uploads.push(async () => await Storage.put(keyPrefix, files[0].file, {
                 metadata,
-                progressCallback
+                progressCallback: (progress: ProgressCallbackArgs) => {
+                    progressCallback(0, {
+                        loaded: progress.loaded,
+                        total: progress.total
+                    })
+                }
+            }).then(() => completeCallback(0, null)).catch(err => errorCallback(0, err)));
+        } else {
+            for (let i = 0; i < files.length; i++) {
+                if (files[i].status !== 'Completed') {
+                    files[i].status = 'Queued';
+                    uploads.push(async () => await Storage.put(keyPrefix + files[i].relativePath, files[i].file, {
+                        metadata,
+                        progressCallback: (progress: ProgressCallbackArgs) => {
+                            progressCallback(i, {
+                                loaded: progress.loaded,
+                                total: progress.total
+                            })
+                        }
+                    }).then(() => completeCallback(i, null)).catch(err => errorCallback(i, err)));
+                }
+            }
+        }
+    } else {
+        console.log("Resumabel is true")
+        if (files.length === 1) {
+            uploads.push(async () => await Storage.put(keyPrefix, files[0].file, {
+                resumable: true,
+                level: 'private',
+                metadata,
+                progressCallback: (progress: ProgressCallbackArgs) => {
+                    progressCallback(0, {
+                        loaded: progress.loaded,
+                        total: progress.total
+                    })
+                },
+                completeCallback: (event: any) => {
+                    completeCallback(0, null)
+                },
+                errorCallback: (event: any) => {
+                    errorCallback(0, event)
+                }
             }));
+        } else {
+            for (let i = 0; i < files.length; i++) {
+                if (files[i].status !== 'Completed') {
+                    uploads.push(async () => await Storage.put(keyPrefix + files[i].relativePath, files[i].file, {
+                        metadata,
+                        resumable: true,
+                        level: 'private',
+                        progressCallback: (progress: ProgressCallbackArgs) => {
+                            progressCallback(i, {
+                                loaded: progress.loaded,
+                                total: progress.total
+                            })
+                        },
+                        completeCallback: (event: any) => {
+                            completeCallback(0, null)
+                        },
+                        errorCallback: (event: any) => {
+                            errorCallback(0, event)
+                        }
+                    }));
+                }
+            }
         }
     }
     return uploads;
 }
 
-async function executeUploads(uploadPromises: any, doneUploading: (x: number) => void) {
+async function executeUploads(uploadPromises: any) {
     let result = Promise.resolve();
     for (let i = 0; i < uploadPromises.length; i++) {
-        result = result.then(uploadPromises[i]).then(() => {
-            doneUploading(i)
-        })
+        result = result.then(uploadPromises[i])
     }
     return result;
 }
@@ -105,7 +168,7 @@ async function uploadAssetToS3(
 
 const getAssetType = (assetDetail: AssetDetail) => {
     if (assetDetail.Asset?.length === 1) {
-        return "." + assetDetail.Asset[0].name.split(".").pop()
+        return "." + assetDetail.Asset[0].file.name.split(".").pop()
     } else {
         return 'folder'
     }
@@ -115,8 +178,201 @@ const getKeyPrefix = (uuid: string, assetDetail: AssetDetail) => {
     if (assetDetail.Asset?.length === 1) {
         return uuid + "/" + assetDetail.assetId + assetDetail.assetType;
     } else {
-        return uuid + "/" + assetDetail.assetId +  "/";
+        return uuid + "/" + assetDetail.assetId + "/";
     }
+}
+
+export interface UploadExecutionProps {
+    assetDetail: AssetDetail,
+    updateProgressForFileUploadItem: (index: number, progress: number) => void,
+    setAssetUploadProgress: (x: ProgressBarProps) => void,
+    fileUploadComplete: (index: number, event: any) => void,
+    fileUploadError: (index: number, event: any) => void,
+    setPreviewUploadProgress: (x: ProgressBarProps) => void,
+    uuid: string,
+    prevAssetId?: string,
+    selectedWorkflows: any,
+    metadata: Metadata,
+    setExecStatus: (x: (ExecStatusType | ((x: ExecStatusType) => ExecStatusType))) => void,
+    execStatus: ExecStatusType,
+    setCanNavigateToAssetPage: (x: boolean) => void
+}
+
+async function performUploads({
+                                  assetDetail,
+                                  updateProgressForFileUploadItem,
+                                  setAssetUploadProgress,
+                                  fileUploadComplete,
+                                  fileUploadError,
+                                  setPreviewUploadProgress,
+                                  uuid,
+                                  prevAssetId,
+                                  selectedWorkflows,
+                                  metadata,
+                                  setExecStatus,
+                                  execStatus,
+                                  setCanNavigateToAssetPage
+                              }: UploadExecutionProps) {
+    if (
+        assetDetail.Asset &&
+        assetDetail.assetId &&
+        assetDetail.databaseId &&
+        assetDetail.key
+    ) {
+        const uploads = createAssetUploadPromises(assetDetail.Asset, assetDetail.key, {
+                assetId: assetDetail.assetId,
+                databaseId: assetDetail.databaseId,
+            },
+            (index, progress) => {
+                console.log("Invoking progress call back")
+                updateProgressForFileUploadItem(index, (progress.loaded / progress.total) * 100)
+                setAssetUploadProgress({
+                    value: (progress.loaded / progress.total) * 100,
+                });
+            },
+            (index, event) => {
+                fileUploadComplete(index, event)
+            }, (index, event) => {
+                console.log("Error Uploading", event);
+                fileUploadError(index, event)
+            },
+            true,
+        )
+        const uploadComplete = executeUploads(uploads)
+            .then(() => {
+                setAssetUploadProgress({
+                    status: 'success',
+                    value: 100
+                })
+            })
+            .catch((err) => {
+                setAssetUploadProgress({
+                    status: "error",
+                    value: 100,
+                });
+                return Promise.reject(err)
+            })
+        const up2 =
+            (assetDetail.Preview && assetDetail?.previewLocation?.Key &&
+                uploadAssetToS3(
+                    assetDetail.Preview,
+                    assetDetail.previewLocation?.Key,
+                    {
+                        assetId: assetDetail.assetId,
+                        databaseId: assetDetail.databaseId,
+                    },
+                    (progress) => {
+                        setPreviewUploadProgress({
+                            value: (progress.loaded / progress.total) * 100,
+                        });
+                    }
+                )
+                    .then((res) => {
+                        setPreviewUploadProgress({
+                            status: "success",
+                            value: 100,
+                        });
+                    })
+                    .catch((err) => {
+                        setPreviewUploadProgress({
+                            status: "error",
+                            value: 100,
+                        });
+                        return Promise.reject(err);
+                    })) ||
+            Promise.resolve();
+
+        await Promise.all([uploadComplete, up2]).then((uploads) => {
+            const body: UploadAssetWorkflowApi = {
+                assetPreprocessingBody: {
+                    assetId: assetDetail.assetId,
+                    databaseId: assetDetail.databaseId,
+                    gltf: {
+                        Bucket: assetDetail.bucket,
+                        Key: uuid + "/" + prevAssetId + ".gltf",
+                    },
+                    original_asset: {
+                        Bucket: assetDetail.bucket,
+                        Key: assetDetail.key,
+                    },
+                    preview: {
+                        Bucket: assetDetail.bucket,
+                        Key: uuid + "/" + prevAssetId + ".png",
+                    },
+                    isMultiFile: assetDetail.isMultiFile
+                },
+                executeWorkflowBody: {
+                    workflowIds: selectedWorkflows.map(
+                        (wf: { workflowId: string }) => wf.workflowId
+                    ),
+                },
+                updateMetadataBody: {
+                    version: "1",
+                    metadata,
+                },
+                uploadAssetBody: assetDetail,
+            };
+
+            if (assetDetail.assetType === ".gltf") {
+                delete body.assetPreprocessingBody;
+            }
+
+            setExecStatus({
+                ...execStatus,
+                "Asset Detail": "in-progress",
+            });
+            return API.post("api", "assets/uploadAssetWorkflow", {
+                "Content-type": "application/json",
+                body,
+            })
+                .then((res) => {
+                    setExecStatus((p) => ({
+                        ...p,
+                        "Asset Detail": "success",
+                    }));
+                })
+                .catch((err) => {
+                    console.log("err asset detail", err);
+                    setExecStatus((p) => ({
+                        ...p,
+                        "Asset Detail": "error",
+                    }));
+                    return Promise.reject(err);
+                });
+        });
+        setCanNavigateToAssetPage(true);
+        window.onbeforeunload = null;
+    }
+
+}
+
+function updateAssetDetail(assetDetail: AssetDetail) {
+    // prefix with x so that we pass the assetId validation that requires this regex ^[a-z]([-_a-z0-9]){3,63}$
+    const uuid = "x" + generateUUID();
+
+    const prevAssetId = assetDetail.assetId;
+    // TODO duplicate logic with AssetFormDefinition and uploadAssetToS3
+    // duplicate except that the uuids are unique to this version
+    const config = Cache.getItem("config");
+    assetDetail.bucket = config.bucket;
+    assetDetail.assetType = getAssetType(assetDetail)
+    assetDetail.key = getKeyPrefix(uuid, assetDetail);
+    assetDetail.specifiedPipelines = [];
+    assetDetail.previewLocation = {
+        Bucket: config.bucket,
+        Key:
+            "previews" +
+            "/" +
+            uuid +
+            "/" +
+            assetDetail.assetId +
+            "." +
+            assetDetail.Preview?.name.split(".").pop(),
+    };
+
+    assetDetail.assetName = assetDetail.assetId;
+    assetDetail.assetId = uuid;
+    return {uuid, prevAssetId};
 }
 
 export default function onSubmit({
@@ -128,168 +384,57 @@ export default function onSubmit({
                                      setExecStatus,
                                      setShowUploadAndExecProgress,
                                      setAssetUploadProgress,
-                                     doneUploadingCallBack,
+                                     updateProgressForFileUploadItem,
+                                     fileUploadComplete,
+                                     fileUploadError,
                                      setPreviewUploadProgress,
                                      setCanNavigateToAssetPage,
+                                     setUploadExecutionProps
                                  }: OnSubmitProps) {
     return async (detail: NonCancelableCustomEvent<{}>) => {
         setFreezeWizardButtons(true);
         if (
             assetDetail.Asset &&
-            assetDetail.Preview &&
             assetDetail.assetId &&
             assetDetail.databaseId
         ) {
-            // prefix with x so that we pass the assetId validation that requires this regex ^[a-z]([-_a-z0-9]){3,63}$
-            const uuid = "x" + generateUUID();
-
-            const prevAssetId = assetDetail.assetId;
-            // TODO duplicate logic with AssetFormDefinition and uploadAssetToS3
-            // duplicate except that the uuids are unique to this version
-            const config = Cache.getItem("config");
-            assetDetail.bucket = config.bucket;
-            assetDetail.assetType = getAssetType(assetDetail)
-            assetDetail.key = getKeyPrefix(uuid, assetDetail);
-            assetDetail.specifiedPipelines = [];
-            assetDetail.previewLocation = {
-                Bucket: config.bucket,
-                Key:
-                    "previews"+
-                    "/" +
-                    uuid +
-                    "/" +
-                    assetDetail.assetId +
-                    "." +
-                    assetDetail.Preview.name.split(".").pop(),
-            };
-
-            assetDetail.assetName = assetDetail.assetId;
-            assetDetail.assetId = uuid;
-
+            const {uuid, prevAssetId} = updateAssetDetail(assetDetail);
             const execStatusNew: Record<string, StatusIndicatorProps.Type> = {
                 "Asset Details": "pending",
             };
-
             setExecStatus(execStatusNew);
-
             window.onbeforeunload = function () {
                 return "";
             };
             setShowUploadAndExecProgress(true);
-            const uploads = createAssetUploadPromises(assetDetail.Asset, assetDetail.key, {
-                    assetId: assetDetail.assetId,
-                    databaseId: assetDetail.databaseId,
-                },
-                (progress) => {
-                    setAssetUploadProgress({
-                        value: (progress.loaded / progress.total) * 100,
-                    });
-                }
-            )
-            const uploadComplete = executeUploads(uploads, doneUploadingCallBack)
-                .then(() => {
-                    setAssetUploadProgress({
-                        status: 'success',
-                        value: 100
-                    })
-                })
-                .catch((err) => {
-                setAssetUploadProgress({
-                    status: "error",
-                    value: 100,
-                });
-                return Promise.reject(err)
-            })
-            const up2 =
-                (assetDetail?.previewLocation?.Key &&
-                    uploadAssetToS3(
-                        assetDetail.Preview,
-                        assetDetail.previewLocation?.Key,
-                        {
-                            assetId: assetDetail.assetId,
-                            databaseId: assetDetail.databaseId,
-                        },
-                        (progress) => {
-                            setPreviewUploadProgress({
-                                value: (progress.loaded / progress.total) * 100,
-                            });
-                        }
-                    )
-                        .then((res) => {
-                            setPreviewUploadProgress({
-                                status: "success",
-                                value: 100,
-                            });
-                        })
-                        .catch((err) => {
-                            setPreviewUploadProgress({
-                                status: "error",
-                                value: 100,
-                            });
-                            return Promise.reject(err);
-                        })) ||
-                Promise.resolve();
-
-            await Promise.all([uploadComplete, up2]).then((uploads) => {
-                const body: UploadAssetWorkflowApi = {
-                    assetPreprocessingBody: {
-                        assetId: assetDetail.assetId,
-                        databaseId: assetDetail.databaseId,
-                        gltf: {
-                            Bucket: assetDetail.bucket,
-                            Key: uuid + "/" + prevAssetId + ".gltf",
-                        },
-                        original_asset: {
-                            Bucket: assetDetail.bucket,
-                            Key: assetDetail.key,
-                        },
-                        preview: {
-                            Bucket: assetDetail.bucket,
-                            Key: uuid + "/" + prevAssetId + ".png",
-                        },
-                        isMultiFile: assetDetail.isMultiFile
-                    },
-                    executeWorkflowBody: {
-                        workflowIds: selectedWorkflows.map(
-                            (wf: { workflowId: string }) => wf.workflowId
-                        ),
-                    },
-                    updateMetadataBody: {
-                        version: "1",
-                        metadata,
-                    },
-                    uploadAssetBody: assetDetail,
-                };
-
-                if (assetDetail.assetType === ".gltf") {
-                    delete body.assetPreprocessingBody;
-                }
-
-                setExecStatus({
-                    ...execStatus,
-                    "Asset Detail": "in-progress",
-                });
-                return API.post("api", "assets/uploadAssetWorkflow", {
-                    "Content-type": "application/json",
-                    body,
-                })
-                    .then((res) => {
-                        setExecStatus((p) => ({
-                            ...p,
-                            "Asset Detail": "success",
-                        }));
-                    })
-                    .catch((err) => {
-                        console.log("err asset detail", err);
-                        setExecStatus((p) => ({
-                            ...p,
-                            "Asset Detail": "error",
-                        }));
-                        return Promise.reject(err);
-                    });
-            });
-            setCanNavigateToAssetPage(true);
-            window.onbeforeunload = null;
+            const uploadExecutionProps: UploadExecutionProps = {
+                assetDetail,
+                updateProgressForFileUploadItem,
+                setAssetUploadProgress,
+                fileUploadComplete,
+                fileUploadError,
+                setPreviewUploadProgress,
+                uuid,
+                prevAssetId,
+                selectedWorkflows,
+                metadata,
+                setExecStatus,
+                execStatus,
+                setCanNavigateToAssetPage
+            }
+            setUploadExecutionProps(uploadExecutionProps)
+            await performUploads(uploadExecutionProps);
+        } else {
+            console.log("Asset detail not right")
+            console.log(assetDetail)
         }
     };
+}
+
+export async function onUploadRetry(uploadExecutionProps: UploadExecutionProps) {
+    console.log("Retrying uploads")
+    window.onbeforeunload = function () {
+        return "";
+    };
+    await performUploads(uploadExecutionProps);
 }
