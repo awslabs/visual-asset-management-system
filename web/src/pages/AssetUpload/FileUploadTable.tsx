@@ -16,6 +16,7 @@ import StatusIndicator from "@cloudscape-design/components/status-indicator";
 interface FileUploadTableProps {
     allItems: FileUploadTableItem[];
     onRetry?: () => void;
+    resume: boolean;
 }
 
 /**
@@ -96,7 +97,6 @@ const FileUploadTableColumnDefinitions = [
         id: 'progress',
         header: 'Upload Progress',
         cell: (item: FileUploadTableItem) => <ProgressBar label={item.relativePath} value={item.progress} additionalInfo={" Time Remaining: " +getTimeRemaining(item)}/>,
-        sortingField: 'progress',
         isRowHeader: true,
     },
     {
@@ -117,7 +117,6 @@ const FileUploadTableColumnDefinitions = [
         id: 'status',
         header: 'Upload Status',
         cell: (item: FileUploadTableItem) => <StatusIndicator type={getStatusIndicator(item.status)}> {item.status} </StatusIndicator>,
-        sortingField: 'status',
         isRowHeader: true,
     },
 
@@ -178,20 +177,26 @@ function getFailedItemsCount(allItems: FileUploadTableItem[]) {
 function getCompletedItemsCount(allItems: FileUploadTableItem[]) {
     return allItems.filter(item => item.status === 'Completed').length;
 }
-function getActions(allItems: FileUploadTableItem[], onRetry?: () => void) {
+function getActions(allItems: FileUploadTableItem[], resume: boolean, onRetry?: () => void) {
     const failed = allItems.filter(item => item.status === 'Failed').length;
-    if (failed > 0) {
+    const notCompleted = allItems.filter(item => item.status !== 'Completed').length;
+    if (!resume && failed > 0) {
         return (
-            <Button variant={"link"} onClick={onRetry}>
-                Reupload {getFailedItemsCount(allItems)} failed
+            <Button variant={"primary"} onClick={onRetry}>
+                Reupload { failed } Items
             </Button>
         );
+    } else if (resume) {
+        return <Button variant={"primary"} onClick={onRetry}>
+            Reupload { notCompleted } Items
+        </Button>
     } else {
         return <></>
     }
 }
 
-export const FileUploadTable = ( { allItems, onRetry }: FileUploadTableProps) => {
+export const FileUploadTable = ( { allItems, onRetry, resume }: FileUploadTableProps) => {
+
     const [preferences, setPreferences] = useState({ pageSize: 10, visibleContent: [ 'filesize', 'status', 'progress' ] });
     const { items, filterProps, filteredItemsCount, paginationProps } = useCollection(
         allItems,
@@ -221,7 +226,7 @@ export const FileUploadTable = ( { allItems, onRetry }: FileUploadTableProps) =>
                 <Header
                     counter={`${getCompletedItemsCount(allItems)}/${allItems.length}`}
                     actions={
-                        getActions(allItems, onRetry)
+                        getActions(allItems, resume, onRetry)
                     }
                 >
                     Files to upload

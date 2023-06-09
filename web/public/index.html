@@ -21,6 +21,17 @@
         <meta name="HandheldFriendly" content="true" />
         <meta name="theme-color" content="#000000" />
         <meta name="description" content="Visual Asset Management System" />
+        <script type="application/javascript">
+            window.addEventListener("error", function (e) {
+                // prevent React's listener from firing
+                if (e.message.startsWith("ResizeObserver loop completed with undelivered")) {
+                    e.stopImmediatePropagation();
+                    console.log("error caught", e);
+                    // prevent the browser's console error message
+                    e.preventDefault();
+                }
+            });
+        </script>
         <!--
       Notice the use of %PUBLIC_URL% in the tags above.
       It will be replaced with the URL of the `public` folder during the build.

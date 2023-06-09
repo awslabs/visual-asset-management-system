@@ -35,13 +35,14 @@ import {
     modelFileFormats,
     presentationFileFormats,
 } from "../../common/constants/fileFormats";
+import { Link } from "@cloudscape-design/components";
 import AssetSelectorWithModal from "../selectors/AssetSelectorWithModal";
 import RelatedTableList from "../list/RelatedTableList";
 import { WorkflowExecutionListDefinition } from "../list/list-definitions/WorkflowExecutionListDefinition";
 import CreateUpdateAsset from "../createupdate/CreateUpdateAsset";
 import { actionTypes } from "../createupdate/form-definitions/types/FormDefinition";
 import WorkflowSelectorWithModal from "../selectors/WorkflowSelectorWithModal";
-
+import localforage from "localforage"
 const ThreeDimensionalPlotter = React.lazy(() => import("../viewers/ThreeDimensionalPlotter"));
 const ColumnarViewer = React.lazy(() => import("../viewers/ColumnarViewer"));
 const HTMLViewer = React.lazy(() => import("../viewers/HTMLViewer"));
@@ -90,6 +91,7 @@ export default function ViewAsset() {
     const [loading, setLoading] = useState(true);
     const [allItems, setAllItems] = useState([]);
     const [workflowOpen, setWorkflowOpen] = useState(false);
+    const [containsIncompleteUploads, setContainsIncompleteUploads] = useState(false);
 
     // error state
     const [assetDownloadError, setAssetDownloadError] = useState("");
@@ -120,7 +122,6 @@ export default function ViewAsset() {
         const getData = async () => {
             setLoading(true);
             const items = await fetchDatabaseWorkflows({ databaseId: databaseId });
-            console.log("items:", items);
             if (items !== false && Array.isArray(items)) {
                 const newRows = [];
                 for (let i = 0; i < items.length; i++) {
@@ -151,6 +152,16 @@ export default function ViewAsset() {
                 setLoading(false);
                 setReload(false);
             }
+            localforage.getItem(assetId).then((value) => {
+                console.log("Reading from localforage:", value);
+
+                for(let i=0; i<value.Asset.length; i++) {
+                    if(value.Asset[i].status !== 'Completed' && (value.Asset[i].loaded !== value.Asset[i].total)) {
+                        setContainsIncompleteUploads(true)
+                        break;
+                    }
+                }
+            });
         };
         if (reload) {
             getData();
@@ -334,7 +345,7 @@ export default function ViewAsset() {
                                                             Edit
                                                         </Button>
                                                     </div>
-                                                    <Header variant="h2">Asset Details</Header>
+                                                    <Header variant="h2">Project Details</Header>
                                                 </div>
                                             }
                                         >
@@ -385,6 +396,14 @@ export default function ViewAsset() {
                                                     </SpaceBetween>
                                                 </div>
                                             )}
+                                            {
+                                                containsIncompleteUploads &&
+                                                <>
+                                                    <h5>Finish Incomplete uploads</h5>
+                                                    <Link href={`/databases/${databaseId}/assets/${assetId}/uploads`}> Finish Incomplete uploads </Link>
+                                                </>
+
+                                            }
                                             <FormField errorText={assetDownloadError}></FormField>
                                         </Container>
                                     </div>
@@ -567,17 +586,17 @@ export default function ViewAsset() {
                                     width: "100%",
                                 }}
                             >
-                                <div style={{ width: "100%" }}>
-                                    <RelatedTableList
-                                        allItems={allItems}
-                                        loading={loading}
-                                        listDefinition={WorkflowExecutionListDefinition}
-                                        databaseId={databaseId}
-                                        setReload={setReload}
-                                        parentId={"workflowId"}
-                                        HeaderControls={WorkflowHeaderControls}
-                                    />
-                                </div>
+                                {/*<div style={{ width: "100%" }}>*/}
+                                {/*    <RelatedTableList*/}
+                                {/*        allItems={allItems}*/}
+                                {/*        loading={loading}*/}
+                                {/*        listDefinition={WorkflowExecutionListDefinition}*/}
+                                {/*        databaseId={databaseId}*/}
+                                {/*        setReload={setReload}*/}
+                                {/*        parentId={"workflowId"}*/}
+                                {/*        HeaderControls={WorkflowHeaderControls}*/}
+                                {/*    />*/}
+                                {/*</div>*/}
                                 <Metadata databaseId={databaseId} assetId={assetId} />
                             </div>
                         </SpaceBetween>

@@ -19,6 +19,7 @@ import FormField from "@cloudscape-design/components/form-field";
 function FolderUpload(props) {
 
     const [files, setFileHandles] = useState([]);
+    const [directoryHandle, setDirectoryHandle] = useState();
     const [description, setDescription] = useState("");
 
     /**
@@ -33,11 +34,12 @@ function FolderUpload(props) {
         return count + rank;
     }
 
-    const handleFileListChange = (fileHandles) => {
+    const handleFileListChange = (directoryHandle, fileHandles) => {
         console.log(fileHandles);
         setFileHandles(fileHandles)
+        setDirectoryHandle(directoryHandle)
         if (props.onSelect) {
-            props.onSelect(fileHandles);
+            props.onSelect(directoryHandle, fileHandles);
         }
     }
 
@@ -64,7 +66,7 @@ function FolderUpload(props) {
         const directoryHandle = await window.showDirectoryPicker();
         const fileHandles = await getFilesFromFileHandle(directoryHandle, directoryHandle.name)
         console.log(fileHandles)
-        return fileHandles;
+        return {directoryHandle, fileHandles};
     };
 
     return (
@@ -84,9 +86,11 @@ function FolderUpload(props) {
                         onClick={(e) => {
                             //directoryRef?.current?.click();
                             handleFileSelection()
-                                .then((fileList) => {
-                                    setDescription(`Total Files to Upload: ${fileList.length}`)
-                                    handleFileListChange(fileList)})
+                                .then((fileSelectionResult) => {
+                                    console.log(fileSelectionResult)
+                                    const {directoryHandle, fileHandles} = fileSelectionResult;
+                                    setDescription(`Total Files to Upload: ${fileHandles.length}`)
+                                    handleFileListChange(directoryHandle, fileHandles)})
                         }}
                     >
                         Choose Folder

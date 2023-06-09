@@ -106,6 +106,21 @@
     universal-cookie "^4.0.4"
     zen-observable-ts "0.8.19"
 
+"@aws-amplify/core@5.4.0":
+  version "5.4.0"
+  resolved "https://registry.yarnpkg.com/@aws-amplify/core/-/core-5.4.0.tgz#0589b768d944009923d2bc305ea9f43e9483f113"
+  integrity sha512-J794EH7x/fvKmgCm7hedhNjYPcGpJ7qFz33q33FVVUJ151NMrotsQdkK6pSqJHDgtYJZB1On9c6p3W4z33gD3w==
+  dependencies:
+    "@aws-crypto/sha256-js" "1.2.2"
+    "@aws-sdk/client-cloudwatch-logs" "3.6.1"
+    "@aws-sdk/types" "3.6.1"
+    "@aws-sdk/util-hex-encoding" "3.6.1"
+    isomorphic-unfetch "^3.0.0"
+    react-native-url-polyfill "^1.3.0"
+    tslib "^1.8.0"
+    universal-cookie "^4.0.4"
+    zen-observable-ts "0.8.19"
+
 "@aws-amplify/datastore@4.4.1":
   version "4.4.1"
   resolved "https://registry.yarnpkg.com/@aws-amplify/datastore/-/datastore-4.4.1.tgz#bc06c2f06736eb53021e770aeeec95f2909ccd65"
@@ -201,6 +216,20 @@
   integrity sha512-cmuMQydGI0cox3ECVKsWVFjFUui3yuVAgL4zsGBbmk9vkPTHMtOfQfChBvGxgcsAR7FhXi3b360n7eCBPKX3Tg==
   dependencies:
     "@aws-amplify/core" "5.3.1"
+    "@aws-sdk/client-s3" "3.6.2"
+    "@aws-sdk/s3-request-presigner" "3.6.1"
+    "@aws-sdk/util-create-request" "3.6.1"
+    "@aws-sdk/util-format-url" "3.6.1"
+    axios "0.26.0"
+    events "^3.1.0"
+    tslib "^1.8.0"
+
+"@aws-amplify/storage@^5.4.0":
+  version "5.4.0"
+  resolved "https://registry.yarnpkg.com/@aws-amplify/storage/-/storage-5.4.0.tgz#2147126eb87d6f8cbb268ac2a3452e721e102d43"
+  integrity sha512-wXGxVhzNgvQJVO1nScJe6xdPUfZuu9//Uqm3WYjrkbZ/oFgS3uZOqYUJkoc4KNOiReB82resyxunJvrUj0L96Q==
+  dependencies:
+    "@aws-amplify/core" "5.4.0"
     "@aws-sdk/client-s3" "3.6.2"
     "@aws-sdk/s3-request-presigner" "3.6.1"
     "@aws-sdk/util-create-request" "3.6.1"
@@ -8523,6 +8552,11 @@ ignore@^5.2.0:
   resolved "https://registry.npmjs.org/ignore/-/ignore-5.2.4.tgz"
   integrity sha512-MAb38BcSbH0eHNBxn7ql2NH/kX33OkB3lZ1BNdh7ENeRChHTYsTvWrMubiIAMNS2llXEEgZ1MUOBtXChP3kaFQ==
 
+immediate@~3.0.5:
+  version "3.0.6"
+  resolved "https://registry.yarnpkg.com/immediate/-/immediate-3.0.6.tgz#9db1dbd0faf8de6fbe0f5dd5e56bb606280de69b"
+  integrity sha512-XXOFtyqDjNDAQxVfYxuF7g9Il/IbWmmlQg2MYKOH8ExIT1qg6xc4zyS3HaEEATgs1btfzxq15ciUiY7gjSXRGQ==
+
 immer@9.0.6:
   version "9.0.6"
   resolved "https://registry.yarnpkg.com/immer/-/immer-9.0.6.tgz#7a96bf2674d06c8143e327cbf73539388ddf1a73"
@@ -9747,6 +9781,13 @@ levn@~0.3.0:
     prelude-ls "~1.1.2"
     type-check "~0.3.2"
 
+lie@3.1.1:
+  version "3.1.1"
+  resolved "https://registry.yarnpkg.com/lie/-/lie-3.1.1.tgz#9a436b2cc7746ca59de7a41fa469b3efb76bd87e"
+  integrity sha512-RiNhHysUjhrDQntfYSfY4MU24coXXdEOgw9WGcKHNeEwffDYbF//u87M1EWaMGzuFoSbqW0C9C6lEEhDOAswfw==
+  dependencies:
+    immediate "~3.0.5"
+
 lilconfig@^2.0.3, lilconfig@^2.0.5, lilconfig@^2.0.6:
   version "2.1.0"
   resolved "https://registry.npmjs.org/lilconfig/-/lilconfig-2.1.0.tgz"
@@ -9775,6 +9816,13 @@ loader-utils@^3.2.0:
   version "3.2.1"
   resolved "https://registry.npmjs.org/loader-utils/-/loader-utils-3.2.1.tgz"
   integrity sha512-ZvFw1KWS3GVyYBYb7qkmRM/WwL2TQQBxgCK62rlvm4WpVQ23Nb4tYjApUlfjrEGvOs7KHEsmyUn75OHZrJMWPw==
+
+localforage@^1.10.0:
+  version "1.10.0"
+  resolved "https://registry.yarnpkg.com/localforage/-/localforage-1.10.0.tgz#5c465dc5f62b2807c3a84c0c6a1b1b3212781dd4"
+  integrity sha512-14/H1aX7hzBBmmh7sGPd+AOMkkIrHM3Z1PAyGgZigA1H1p5O5ANnMyWzvpAETtG68/dC4pC0ncy3+PPGzXZHPg==
+  dependencies:
+    lie "3.1.1"
 
 locate-path@^3.0.0:
   version "3.0.0"

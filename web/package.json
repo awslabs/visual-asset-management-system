@@ -8,6 +8,7 @@
     },
     "dependencies": {
         "@aws-amplify/ui-react": "^2.1.5",
+        "@aws-amplify/storage": "^5.4.0",
         "@cloudscape-design/collection-hooks": "^1.0.19",
         "@cloudscape-design/components": "^3.0.196",
         "@cloudscape-design/design-tokens": "^3.0.8",
@@ -22,6 +23,7 @@
         "dompurify": "^2.3.6",
         "fcs": "^0.1.2",
         "loader-utils": "^3.2.0",
+        "localforage": "^1.10.0",
         "online-3d-viewer": "^0.8.21",
         "patch-package": "^6.4.7",
         "postinstall-postinstall": "^2.1.0",

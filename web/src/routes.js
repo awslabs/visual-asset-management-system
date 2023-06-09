@@ -17,6 +17,7 @@ import ViewPipeline from "./components/single/ViewPipeline";
 import Workflows from "./pages/Workflows";
 import CreateUpdateWorkflow from "./components/createupdate/CreateUpdateWorkflow";
 import Constraints from "./pages/auth/Constraints";
+import FinishUploadsPage from "./pages/FinishUploads";
 
 const routeTable = [
     { path: "/", Page: LandingPage, active: "/" },
@@ -25,6 +26,11 @@ const routeTable = [
     {
         path: "/databases/:databaseId/assets/:assetId",
         Page: ViewAsset,
+        active: "/assets",
+    },
+    {
+        path: "/databases/:databaseId/assets/:assetId/uploads",
+        Page: FinishUploadsPage,
         active: "/assets",
     },
     { path: "/assets/:assetId", Page: ViewAsset, active: "/assets" },

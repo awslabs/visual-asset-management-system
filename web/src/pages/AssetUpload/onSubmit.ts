@@ -59,8 +59,7 @@ class ProgressCallbackArgs {
     total!: number;
 }
 
-
-function createAssetUploadPromises(
+export function createAssetUploadPromises(
     files: FileUploadTableItem[],
     keyPrefix: string,
     metadata: { [k: string]: string },
@@ -115,7 +114,9 @@ function createAssetUploadPromises(
             uploads.push(async () => await files[0].handle.getFile().then((f: File) => {
                 Storage.put(keyPrefix, f, {
                     resumable: true,
-                    level: 'private',
+                    customPrefix: {
+                        'public': ''
+                    },
                     metadata,
                     progressCallback: (progress: ProgressCallbackArgs) => {
                         progressCallback(0, {
@@ -134,11 +135,13 @@ function createAssetUploadPromises(
         } else {
             for (let i = 0; i < files.length; i++) {
                 if (files[i].status !== 'Completed') {
-                    uploads.push(async () => await files[0].handle.getFile().then((f: File) => {
+                    uploads.push(async () => await files[i].handle.getFile().then((f: File) => {
                         Storage.put(keyPrefix + files[i].relativePath, f, {
                             metadata,
                             resumable: true,
-                            level: 'private',
+                            customPrefix: {
+                                'public': ''
+                            },
                             progressCallback: (progress: ProgressCallbackArgs) => {
                                 progressCallback(i, {
                                     loaded: progress.loaded,
@@ -160,7 +163,7 @@ function createAssetUploadPromises(
     return uploads;
 }
 
-async function executeUploads(uploadPromises: any) {
+export async function executeUploads(uploadPromises: any) {
     let result = Promise.resolve();
     for (let i = 0; i < uploadPromises.length; i++) {
         result = result.then(uploadPromises[i])
@@ -236,7 +239,6 @@ async function performUploads({
                 databaseId: assetDetail.databaseId,
             },
             (index, progress) => {
-                console.log("Invoking progress call back")
                 updateProgressForFileUploadItem(index, progress.loaded, progress.total)
                 setAssetUploadProgress({
                     value: (progress.loaded / progress.total) * 100,

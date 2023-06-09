@@ -11,6 +11,10 @@ import StatusIndicator, {
 import {FileUploadTable, FileUploadTableItem} from "./FileUploadTable";
 import {AssetDetail} from "../AssetUpload";
 
+class ProgressReport {
+    loaded!: number;
+    total!: number;
+}
 
 class ProgressScreenProps {
     assetDetail!: AssetDetail
@@ -32,9 +36,9 @@ export default function ProgressScreen({
             <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
                 <div>
                     <SpaceBetween size="l" direction={"vertical"} >
-                        <Box variant="awsui-key-label">Upload Progress</Box>
+                        <Box variant="awsui-key-label">Upload Progress for project {assetDetail.assetName}</Box>
 
-                        <FileUploadTable allItems={allFileUploadItems} onRetry={onRetry}/>
+                        <FileUploadTable allItems={allFileUploadItems} onRetry={onRetry} resume={false}/>
                         {
                             assetDetail.Preview &&  previewUploadProgress &&
                             <ProgressBar

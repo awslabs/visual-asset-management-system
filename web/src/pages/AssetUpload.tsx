@@ -48,6 +48,7 @@ import ProgressScreen, {
 import onSubmit, {onUploadRetry, UploadExecutionProps} from "./AssetUpload/onSubmit";
 import FolderUpload from "../components/form/FolderUpload";
 import {FileUploadTable, FileUploadTableItem} from "./AssetUpload/FileUploadTable";
+import localforage from "localforage"
 
 // eslint-disable-next-line @typescript-eslint/no-array-constructor
 const objectFileFormats = new Array().concat(cadFileFormats, modelFileFormats, columnarFileFormats);
@@ -71,6 +72,7 @@ export class AssetDetail {
         Key?: string;
     };
     Asset?: FileUploadTableItem[];
+    DirectoryHandle?: any;
     Preview?: File;
 }
 
@@ -125,6 +127,7 @@ const UploadForm = () => {
     const [counter, setCounter] = useState(1)
     const [isMultiFile, setMultiFile] = useState(false);
     const [fileHandles, setFileHandles] = useState<any>([]);
+    const [directoryHandle, setDirectoryHandle] = useState<any>();
     const [metadata, setMetadata] = useState<Metadata>({});
 
     const [workflows, setWorkflows] = useState<any>([]);
@@ -145,6 +148,16 @@ const UploadForm = () => {
         value: 0,
         status: "in-progress",
     });
+
+    useEffect(() => {
+        if (assetDetail.assetId && fileUploadTableItems.length > 0) {
+            setAssetDetail((assetDetail) => {
+                return {...assetDetail, Asset: fileUploadTableItems}
+            });
+            localforage.setItem(assetDetail.assetId, {...assetDetail, Asset: fileUploadTableItems}).then(() => {});
+        }
+    }, [fileUploadTableItems])
+
 
     const [execStatus, setExecStatus] = useState<Record<string, StatusIndicatorProps.Type>>({});
     const [canNavigateToAssetPage, setCanNavigateToAssetPage] = useState(false);
@@ -172,6 +185,9 @@ const UploadForm = () => {
     const getUpdatedItemAfterProgress = (item: FileUploadTableItem, loaded: number, total: number): FileUploadTableItem =>  {
         const progress = Math.round((loaded / total) * 100)
         const status = item.status
+        if(loaded === total) {
+            return {...item, loaded: loaded, total: total, progress: progress, status: "Completed"}
+        }
         if (status === 'Queued') {
             return {...item, loaded: loaded, total: total, progress: progress, status: "In Progress", startedAt: Math.floor((new Date()).getTime() / 1000)}
         } else {
@@ -180,7 +196,6 @@ const UploadForm = () => {
     }
     const updateProgressForFileUploadItem = (index: number, loaded: number, total: number) => {
         const progress = Math.round((loaded / total) * 100)
-        console.log("Updating progress for file upload item", index, "with progress", progress)
         setFileUploadTableItems((prevState) => {
                 return prevState.map((item) => item.index === index ? getUpdatedItemAfterProgress(item, loaded, total) : item);
         })
@@ -450,12 +465,14 @@ const UploadForm = () => {
                                         }
                                         {
                                             isMultiFile &&
-                                            <FolderUpload label="Choose Folder" onSelect={async (fileHandles: any[]) => {
+                                            <FolderUpload label="Choose Folder" onSelect={async (directoryHandle: any, fileHandles: any[]) => {
+                                                setDirectoryHandle(directoryHandle)
                                                 setFileHandles(fileHandles)
                                                 const files = await getFilesFromFileHandles(fileHandles)
                                                 setFileUploadTableItems(files)
                                                 setAssetDetail((assetDetail) =>({
                                                     ...assetDetail,
+                                                    DirectoryHandle: directoryHandle,
                                                     Asset: files
                                                 }))
                                             } }></FolderUpload>
@@ -520,7 +537,7 @@ const UploadForm = () => {
                                     </Header>
                                     <Container header={<Header variant="h2">Asset Detail</Header>}>
                                         <ColumnLayout columns={2} variant="text-grid">
-                                            {Object.keys(assetDetail).filter((k) => k !== 'Asset').map((k) => (
+                                            {Object.keys(assetDetail).filter((k) => k !== 'Asset' && k !== 'DirectoryHandle').sort().map((k) => (
                                                 <DisplayKV
                                                     key={k}
                                                     label={k}
@@ -566,7 +583,7 @@ export default function AssetUploadPage() {
             <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
                 <div>
                     <TextContent>
-                        <Header variant="h1">Create Asset</Header>
+                        <Header variant="h1">Create Project</Header>
                     </TextContent>
 
                     <UploadForm />

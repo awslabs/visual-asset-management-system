@@ -40,9 +40,6 @@ export default function FolderActionViewer({name, urlKey, ...props}: FolderActio
                             <Button variant="primary" onClick={() => generateDownloadLink(urlKey)}>
                                 Generate download link
                             </Button>
-                            <Button>
-                                Upload a new version
-                            </Button>
                         </ColumnLayout>
                         <p>
                             {
