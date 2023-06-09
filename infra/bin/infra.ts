@@ -11,6 +11,7 @@ import { VAMS } from "../lib/infra-stack";
 import { CfWafStack } from "../lib/cf-waf-stack";
 import { AwsSolutionsChecks } from "cdk-nag";
 import { Aspects } from "aws-cdk-lib";
+import { AossStack } from "../lib/aoss-stack";
 
 const app = new cdk.App();
 
@@ -57,5 +58,14 @@ const vamsStack = new VAMS(app, `vams-${stackName || process.env.DEMO_LABEL || "
 
 vamsStack.addDependency(cfWafStack);
 //new VAMS(app, 'prod', {prod: true, stackName: 'vams--prod'});
+
+const aossStack = new AossStack(app, `aoss-${stackName || process.env.DEMO_LABEL || "dev"}`, {
+    stackName: `aoss-${stackName || process.env.DEPLOYMENT_ENV || "dev"}`,
+    env: {
+        account: process.env.CDK_DEFAULT_ACCOUNT,
+        region: region,
+    },
+}
+);
 
 app.synth();
