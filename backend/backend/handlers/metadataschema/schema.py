@@ -124,9 +124,6 @@ def lambda_handler(event: APIGatewayProxyEvent, context: LambdaContext,
 
         claims_and_roles = claims_fn(event)
 
-        if "super-admin" not in claims_and_roles['roles']:
-            raise ValidationError(403, "Not Authorized")
-
         if "databaseId" not in event["pathParameters"]:
             raise ValidationError(400, "Missing databaseId in path")
 
@@ -139,6 +136,11 @@ def lambda_handler(event: APIGatewayProxyEvent, context: LambdaContext,
             resp = schema.get_all_schemas(databaseId)
             print("resp", resp)
             response['body']['schemas'] = resp
+            response['body'] = json.dumps(response['body'], cls=DecimalEncoder)
+            return response
+
+        if "super-admin" not in claims_and_roles['roles']:
+            raise ValidationError(403, "Not Authorized")
 
         # create/update
         if method == "POST" or method == "PUT":
