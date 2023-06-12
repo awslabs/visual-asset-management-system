@@ -17,7 +17,6 @@ import ViewPipeline from "./components/single/ViewPipeline";
 import Workflows from "./pages/Workflows";
 import CreateUpdateWorkflow from "./components/createupdate/CreateUpdateWorkflow";
 import Constraints from "./pages/auth/Constraints";
-import MetadataSchema from "./pages/MetadataSchema";
 
 interface RouteOption {
     path: string;
@@ -88,18 +87,6 @@ const routeTable: RouteOption[] = [
         path: "/auth/constraints",
         Page: Constraints,
         active: "/auth/constraints",
-        roles: ["super-admin"],
-    },
-    {
-        path: "/metadataschema/create",
-        Page: MetadataSchema,
-        active: "/metadataschema",
-        roles: ["super-admin"],
-    },
-    {
-        path: "/metadataschema/:databaseId/create",
-        Page: MetadataSchema,
-        active: "/metadataschema",
         roles: ["super-admin"],
     },
     {
