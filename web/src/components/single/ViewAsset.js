@@ -150,7 +150,7 @@ export default function ViewAsset() {
         if (reload) {
             getData();
         }
-    }, [reload, assetId, databaseId]);
+    }, [reload, assetId, databaseId, asset]);
 
     const changeViewerMode = (mode) => {
         if (mode === "fullscreen" && viewerMode === "fullscreen") {
@@ -282,7 +282,7 @@ export default function ViewAsset() {
         if (reload && !pathViewType) {
             getData();
         }
-    }, [reload, assetId, databaseId, pathViewType]);
+    }, [reload, assetId, databaseId, pathViewType, asset]);
 
     return (
         <>
@@ -572,6 +572,10 @@ export default function ViewAsset() {
                         databaseId={databaseId}
                         assetId={assetId}
                         actionType={actionTypes.UPDATE}
+                        asset={asset}
+                        setAsset={(a) => {
+                            setViewType("preview");
+                        }}
                     />
                     <WorkflowSelectorWithModal
                         assetId={assetId}
