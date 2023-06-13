@@ -18,7 +18,7 @@ def lambda_handler(event, context):
         databaseId = event['pathParameters']['databaseId']
         assetId = event['pathParameters']['assetId']
         claims_and_roles = request_to_claims(event)
-    
+
         if "super-admin" in claims_and_roles['roles']:
             create_or_update(databaseId, assetId, body['metadata'])
             return build_response(200, json.dumps({"status": "OK"}))
