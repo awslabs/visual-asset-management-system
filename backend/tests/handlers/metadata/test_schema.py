@@ -158,10 +158,17 @@ def test_delete_schema_error():
 
 
 def test_lambda_handler_not_super_admin():
+    """All users can get schemas"""
     from backend.handlers.metadataschema.schema import lambda_handler
     from backend.handlers.metadataschema.schema import APIGatewayProxyEvent
     mock_claims = Mock(return_value={'roles': []})
     mock_metadata_schema = Mock()
+    metadata_schema_factory = Mock(return_value=mock_metadata_schema)
+    values = [
+        {"field": "schemaId123", "datatype": "string", "required": True, "dependsOn": ["schemaId122"]},
+        {"field": "schemaId122", "datatype": "string", "required": True, },
+    ]
+    mock_metadata_schema.get_all_schemas = Mock(return_value=values)
 
     event = APIGatewayProxyEvent({
         "httpMethod": "GET",
@@ -172,15 +179,17 @@ def test_lambda_handler_not_super_admin():
         },
         "requestContext": {
             "requestId": "woohoo!=",
+            "http": {
+                "method": "GET",
+            }
         }
     })
     context = {}
 
-    response = lambda_handler(event, context, claims_fn=mock_claims, metadata_schema_fn=mock_metadata_schema)
+    response = lambda_handler(event, context, claims_fn=mock_claims, metadata_schema_fn=metadata_schema_factory)
 
-    assert response['statusCode'] == 403
+    assert response['statusCode'] == 200
     response_body = json.loads(response['body'])
-    assert response_body['error'] == 'Not Authorized'
     assert response_body['requestid'] == 'woohoo!='
 
 
