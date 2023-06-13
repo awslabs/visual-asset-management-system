@@ -77,6 +77,7 @@ export default function RelatedTableList(props) {
         expanded: true,
         keyPropertyName: "name",
         parentKeyPropertyName: "parentId",
+        columnDefinitions,
         filtering: {
             empty: (
                 <EmptyState
