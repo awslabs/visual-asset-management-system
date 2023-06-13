@@ -1,0 +1,30 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`CSVControlData handleCSVControlData 1`] = `
+Object {
+  "country_name": Object {
+    "columns": Array [
+      "country_name",
+    ],
+    "data": Array [
+      Object {
+        "country_name": undefined,
+      },
+    ],
+    "field": "country_name",
+  },
+  "state_name": Object {
+    "columns": Array [
+      "state_name",
+      "country_name",
+    ],
+    "data": Array [
+      Object {
+        "country_name": undefined,
+        "state_name": undefined,
+      },
+    ],
+    "field": "state_name",
+  },
+}
+`;

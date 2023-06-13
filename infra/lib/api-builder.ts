@@ -39,6 +39,8 @@ import {
     buildPipelineService,
 } from "./lambdaBuilder/pipelineFunctions";
 
+import { buildMetadataSchemaService } from "./lambdaBuilder/metadataSchemaFunctions";
+
 import { buildMetadataFunctions } from "./lambdaBuilder/metadataFunctions";
 import { buildUploadAssetWorkflow } from "./uploadAssetWorkflowBuilder";
 import { buildAuthFunctions } from "./lambdaBuilder/authFunctions";
@@ -332,6 +334,27 @@ export function apiBuilder(
             api: api.apiGatewayV2,
         });
     }
+
+    const metadataSchemaFunctions = buildMetadataSchemaService(scope, storageResources);
+
+    const metadataSchemaMethods = [
+        apigwv2.HttpMethod.GET,
+        apigwv2.HttpMethod.POST,
+        apigwv2.HttpMethod.PUT,
+    ];
+    for (let i = 0; i < metadataSchemaMethods.length; i++) {
+        attachFunctionToApi(scope, metadataSchemaFunctions, {
+            routePath: "/metadataschema/{databaseId}",
+            method: methods[i],
+            api: api.apiGatewayV2,
+        });
+    }
+    attachFunctionToApi(scope, metadataSchemaFunctions, {
+        routePath: "/metadataschema/{databaseId}/{field}",
+        method: apigwv2.HttpMethod.DELETE,
+        api: api.apiGatewayV2,
+    });
+
     const uploadAssetWorkflowStateMachine = buildUploadAssetWorkflow(
         scope,
         uploadAssetFunction,

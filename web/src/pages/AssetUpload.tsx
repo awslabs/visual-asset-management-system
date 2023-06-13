@@ -31,7 +31,7 @@ import {
     previewFileFormats,
 } from "../common/constants/fileFormats";
 
-import MetadataTable, { Metadata } from "../components/single/Metadata";
+import { Metadata } from "../components/single/Metadata";
 import { fetchDatabaseWorkflows } from "../services/APIService";
 import Table from "@cloudscape-design/components/table";
 import { ProgressBarProps } from "@cloudscape-design/components/progress-bar";
@@ -44,6 +44,7 @@ import {
 import { DisplayKV, FileUpload } from "./AssetUpload/components";
 import ProgressScreen from "./AssetUpload/ProgressScreen";
 import onSubmit from "./AssetUpload/onSubmit";
+import ControlledMetadata from "../components/metadata/ControlledMetadata";
 
 // eslint-disable-next-line @typescript-eslint/no-array-constructor
 const objectFileFormats = new Array().concat(cadFileFormats, modelFileFormats, columnarFileFormats);
@@ -342,7 +343,7 @@ const UploadForm = () => {
                             content: (
                                 <Container header={<Header variant="h2">Asset Metadata</Header>}>
                                     <SpaceBetween direction="vertical" size="l">
-                                        <MetadataTable
+                                        <ControlledMetadata
                                             assetId={assetDetail.assetId || ""}
                                             databaseId={assetDetail.databaseId || ""}
                                             initialState={metadata}
@@ -353,7 +354,7 @@ const UploadForm = () => {
                                                     resolve(null);
                                                 });
                                             }}
-                                            data-testid="metadata-table"
+                                            data-testid="controlled-metadata-grid"
                                         />
                                     </SpaceBetween>
                                 </Container>

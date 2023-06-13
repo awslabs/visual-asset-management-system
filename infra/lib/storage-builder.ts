@@ -29,6 +29,7 @@ export interface storageResources {
         workflowExecutionStorageTable: dynamodb.Table;
         metadataStorageTable: dynamodb.Table;
         authEntitiesStorageTable: dynamodb.Table;
+        metadataSchemaStorageTable: dynamodb.Table;
     };
 }
 export function storageResourcesBuilder(
@@ -83,7 +84,12 @@ export function storageResourcesBuilder(
             {
                 allowedOrigins: ["*"],
                 allowedHeaders: ["*"],
-                allowedMethods: [s3.HttpMethods.GET, s3.HttpMethods.PUT, s3.HttpMethods.POST],
+                allowedMethods: [
+                    s3.HttpMethods.GET,
+                    s3.HttpMethods.PUT,
+                    s3.HttpMethods.POST,
+                    s3.HttpMethods.HEAD,
+                ],
                 exposedHeaders: ["ETag"],
             },
         ],
@@ -199,6 +205,19 @@ export function storageResourcesBuilder(
         },
     });
 
+    const metadataSchemaStorageTable = new dynamodb.Table(scope, "MetadataSchemaStorageTable", {
+        ...dynamodbDefaultProps,
+
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "field",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
     const authEntitiesTable = new dynamodb.Table(scope, "AuthEntitiesTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
@@ -210,6 +229,7 @@ export function storageResourcesBuilder(
             type: dynamodb.AttributeType.STRING,
         },
     });
+
     return {
         s3: {
             assetBucket: assetBucket,
@@ -227,6 +247,7 @@ export function storageResourcesBuilder(
             workflowExecutionStorageTable: workflowExecutionStorageTable,
             metadataStorageTable: metadataStorageTable,
             authEntitiesStorageTable: authEntitiesTable,
+            metadataSchemaStorageTable: metadataSchemaStorageTable,
         },
     };
 }
