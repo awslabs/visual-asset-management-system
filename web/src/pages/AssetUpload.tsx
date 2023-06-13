@@ -133,7 +133,7 @@ const UploadForm = () => {
 
         fetchDatabaseWorkflows({ databaseId: assetDetail.databaseId }).then((w) => {
             console.log("received workflows", w);
-            setWorkflows(w);
+            if (w instanceof Array) setWorkflows(w);
         });
     }, [assetDetail.databaseId]);
 
