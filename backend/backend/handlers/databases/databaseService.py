@@ -367,7 +367,7 @@ def lambda_handler(event, context):
                 return get_handler(event, response, pathParameters, queryParameters, showDeleted)
             if httpMethod == 'DELETE':
                 return delete_handler(event, response, pathParameters, queryParameters)
-        elif "assets" in claims_and_roles['roles']:
+        elif "assets" in claims_and_roles['roles'] or "upload" in claims_and_roles['roles']:
             if httpMethod == 'GET':
                 return get_handler_with_tokens(event, response, pathParameters, queryParameters, claims_and_roles['tokens'])
             if httpMethod == 'DELETE':

@@ -3,13 +3,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { fetchAllPipelines, fetchDatabasePipelines } from "../services/APIService";
 import CreatePipeline from "../components/createupdate/CreatePipeline";
 import { PipelineListDefinition } from "../components/list/list-definitions/PipelineListDefinition";
 import ListPage from "./ListPage";
+import { anyRoleOf } from "../FedAuth/roles";
 
 export default function Pipelines() {
+    const [create, setCreate] = useState(false);
+    useEffect(() => {
+        anyRoleOf(["create-pipeline", "super-admin"]).then((result) => {
+            setCreate(result);
+        });
+    }, []);
     return (
         <ListPage
             singularName={"pipeline"}
@@ -17,7 +24,7 @@ export default function Pipelines() {
             pluralName={"pipelines"}
             pluralNameTitleCase={"Pipelines"}
             listDefinition={PipelineListDefinition}
-            CreateNewElement={CreatePipeline}
+            CreateNewElement={(create && CreatePipeline) || undefined}
             fetchElements={fetchDatabasePipelines}
             fetchAllElements={fetchAllPipelines}
         />

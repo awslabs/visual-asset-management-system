@@ -2,6 +2,9 @@
 lint:
 	poetry run flake8
 
+test:
+	poetry run ptw --runner 'py.test -vv'
+
 typecheck:
 	poetry run mypy .
 

@@ -57,7 +57,14 @@ let navItems = [
         type: "section",
         role: "super-admin",
         text: "Admin",
-        items: [{ type: "link", text: "Fine Grained Access Controls", href: "/auth/constraints" }],
+        items: [
+            { type: "link", text: "Fine Grained Access Controls", href: "/auth/constraints" },
+            {
+                type: "link",
+                text: "Metadata Schema",
+                href: "/metadataschema/create",
+            },
+        ],
     },
     {
         type: "divider",

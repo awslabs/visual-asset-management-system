@@ -17,7 +17,7 @@ import {
     Spinner,
 } from "@cloudscape-design/components";
 
-import Metadata from "./Metadata";
+import ControlledMetadata from "../metadata/ControlledMetadata";
 import ImgViewer from "../viewers/ImgViewer";
 import React, { useEffect, useState, Suspense } from "react";
 import { useParams } from "react-router";
@@ -41,6 +41,7 @@ import { WorkflowExecutionListDefinition } from "../list/list-definitions/Workfl
 import CreateUpdateAsset from "../createupdate/CreateUpdateAsset";
 import { actionTypes } from "../createupdate/form-definitions/types/FormDefinition";
 import WorkflowSelectorWithModal from "../selectors/WorkflowSelectorWithModal";
+import { ErrorBoundary } from "react-error-boundary";
 import Synonyms from "../../synonyms";
 
 const ThreeDimensionalPlotter = React.lazy(() => import("../viewers/ThreeDimensionalPlotter"));
@@ -117,7 +118,6 @@ export default function ViewAsset() {
         const getData = async () => {
             setLoading(true);
             const items = await fetchDatabaseWorkflows({ databaseId: databaseId });
-            console.log("items:", items);
             if (items !== false && Array.isArray(items)) {
                 const newRows = [];
                 for (let i = 0; i < items.length; i++) {
@@ -144,7 +144,6 @@ export default function ViewAsset() {
                     }
                 }
                 setAllItems(newRows);
-                console.log("newRows", newRows);
                 setLoading(false);
                 setReload(false);
             }
@@ -152,7 +151,7 @@ export default function ViewAsset() {
         if (reload) {
             getData();
         }
-    }, [reload, assetId, databaseId]);
+    }, [reload, assetId, databaseId, asset]);
 
     const changeViewerMode = (mode) => {
         if (mode === "fullscreen" && viewerMode === "fullscreen") {
@@ -284,14 +283,14 @@ export default function ViewAsset() {
         if (reload && !pathViewType) {
             getData();
         }
-    }, [reload, assetId, databaseId, pathViewType]);
+    }, [reload, assetId, databaseId, pathViewType, asset]);
 
     return (
         <>
             {assetId && (
                 <>
                     <Box padding={{ top: "s", horizontal: "l" }}>
-                        <SpaceBetween direction="vertical" size="xs">
+                        <SpaceBetween direction="vertical" size="l">
                             <BreadcrumbGroup
                                 items={[
                                     { text: Synonyms.Databases, href: "/databases/" },
@@ -548,26 +547,25 @@ export default function ViewAsset() {
                                     </SpaceBetween>
                                 </div>
                             </Grid>
-                            <div
-                                style={{
-                                    position: "relative",
-                                    minHeight: "650px",
-                                    width: "100%",
-                                }}
+                            <RelatedTableList
+                                allItems={allItems}
+                                loading={loading}
+                                listDefinition={WorkflowExecutionListDefinition}
+                                databaseId={databaseId}
+                                setReload={setReload}
+                                parentId={"workflowId"}
+                                HeaderControls={WorkflowHeaderControls}
+                            />
+                            <ErrorBoundary
+                                fallback={
+                                    <div>
+                                        Metadata failed to load due to an error. Contact your VAMS
+                                        administrator for help.
+                                    </div>
+                                }
                             >
-                                <div style={{ width: "100%" }}>
-                                    <RelatedTableList
-                                        allItems={allItems}
-                                        loading={loading}
-                                        listDefinition={WorkflowExecutionListDefinition}
-                                        databaseId={databaseId}
-                                        setReload={setReload}
-                                        parentId={"workflowId"}
-                                        HeaderControls={WorkflowHeaderControls}
-                                    />
-                                </div>
-                                <Metadata databaseId={databaseId} assetId={assetId} />
-                            </div>
+                                <ControlledMetadata databaseId={databaseId} assetId={assetId} />
+                            </ErrorBoundary>
                         </SpaceBetween>
                     </Box>
                     <CreateUpdateAsset
@@ -577,6 +575,10 @@ export default function ViewAsset() {
                         databaseId={databaseId}
                         assetId={assetId}
                         actionType={actionTypes.UPDATE}
+                        asset={asset}
+                        setAsset={(a) => {
+                            setViewType("preview");
+                        }}
                     />
                     <WorkflowSelectorWithModal
                         assetId={assetId}

@@ -174,6 +174,11 @@ def iter_Asset(body, item=None):
         "Bucket": body['previewLocation']['Bucket'],
         "Key": body['previewLocation']['Key']
     }
+    asset['assetLocation'] = {
+        "Bucket": body['bucket'],
+        "Key": body['key']
+    }
+    asset['assetType'] = body['assetType']
     asset['currentVersion'] = {
         "Comment": body['Comment'],
         'Version': str(version),

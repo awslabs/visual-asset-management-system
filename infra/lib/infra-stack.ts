@@ -23,6 +23,7 @@ import { Construct } from "constructs";
 import { NagSuppressions } from "cdk-nag";
 import { CustomCognitoConfigConstruct } from "./constructs/custom-cognito-config-construct";
 import { samlEnabled, samlSettings } from "./saml-config";
+import { LocationServiceConstruct } from "./constructs/location-service-construct";
 
 interface EnvProps {
     prod: boolean; //ToDo: replace with env
@@ -156,6 +157,10 @@ export class VAMS extends cdk.Stack {
         //     ...props,
         //     wafScope: WAFScope.REGIONAL,
         // });
+
+        const location = new LocationServiceConstruct(this, "LocationService", {
+            role: cognitoResources.authenticatedRole,
+        });
 
         const amplifyConfigProps: AmplifyConfigLambdaConstructProps = {
             ...props,
