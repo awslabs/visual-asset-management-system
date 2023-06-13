@@ -21,33 +21,33 @@ let navItems = [
         role: "assets",
         text: "Manage",
         items: [
-            // { type: "link", text: "Databases", href: "/databases" },
-            { type: "link", text: "Projects", href: "/assets" },
-            { type: "link", text: "Create Project", href: "/upload" },
+            { type: "link", text: "Databases", href: "/databases" },
+            { type: "link", text: "Assets", href: "/assets" },
+            { type: "link", text: "Upload Asset", href: "/upload" },
         ],
     },
-    // {
-    //     type: "section",
-    //     role: "assets",
-    //     text: "Visualize",
-    //     items: [
-    //         { type: "link", text: "3D Model Viewer", href: "/visualizers/model" },
-    //         { type: "link", text: "3D Plotter", href: "/visualizers/plot" },
-    //         { type: "link", text: "Columnar Viewer", href: "/visualizers/column" },
-    //     ],
-    // },
-    // {
-    //     type: "section",
-    //     role: "pipelines",
-    //     text: "Transform",
-    //     items: [{ type: "link", text: "Pipelines", href: "/pipelines" }],
-    // },
-    // {
-    //     type: "section",
-    //     role: "workflows",
-    //     text: "Orchestrate & Automate",
-    //     items: [{ type: "link", text: "Workflows", href: "/workflows" }],
-    // },
+    {
+        type: "section",
+        role: "assets",
+        text: "Visualize",
+        items: [
+            { type: "link", text: "3D Model Viewer", href: "/visualizers/model" },
+            { type: "link", text: "3D Plotter", href: "/visualizers/plot" },
+            { type: "link", text: "Columnar Viewer", href: "/visualizers/column" },
+        ],
+    },
+    {
+        type: "section",
+        role: "pipelines",
+        text: "Transform",
+        items: [{ type: "link", text: "Pipelines", href: "/pipelines" }],
+    },
+    {
+        type: "section",
+        role: "workflows",
+        text: "Orchestrate & Automate",
+        items: [{ type: "link", text: "Workflows", href: "/workflows" }],
+    },
     {
         type: "divider",
         role: "super-admin",

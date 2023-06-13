@@ -6,7 +6,7 @@ import {
     Box,
     Button,
     CollectionPreferences,
-    Header, Link,
+    Header,
     Pagination,
     Table,
     TextFilter,
@@ -34,14 +34,14 @@ function shortenBytes(n: number) {
 export interface FileUploadTableItem {
     name: string;
     handle?: any;
-    index? : number;
-    size?: number;
-    relativePath?: string;
-    status?: "Queued" | "In Progress" | "Completed" | "Failed";
-    progress?: number;
+    index : number;
+    size: number;
+    relativePath: string;
+    status: "Queued" | "In Progress" | "Completed" | "Failed";
+    progress: number;
     startedAt?: number;
-    loaded?: number;
-    total?: number;
+    loaded: number;
+    total: number;
 }
 
 const getStatusIndicator = (status?: string) => {
@@ -170,10 +170,6 @@ function EmptyState({ title, subtitle}: EmptyStateProps) {
     );
 }
 
-function getFailedItemsCount(allItems: FileUploadTableItem[]) {
-    return allItems.filter(item => item.status === 'Failed').length;
-}
-
 function getCompletedItemsCount(allItems: FileUploadTableItem[]) {
     return allItems.filter(item => item.status === 'Completed').length;
 }
@@ -198,7 +194,7 @@ function getActions(allItems: FileUploadTableItem[], resume: boolean, onRetry?: 
 export const FileUploadTable = ( { allItems, onRetry, resume }: FileUploadTableProps) => {
 
     const [preferences, setPreferences] = useState({ pageSize: 10, visibleContent: [ 'filesize', 'status', 'progress' ] });
-    const { items, filterProps, filteredItemsCount, paginationProps } = useCollection(
+    const { items, filterProps, paginationProps } = useCollection(
         allItems,
         {
             filtering: {

@@ -154,7 +154,6 @@ export default function ViewAsset() {
             }
             localforage.getItem(assetId).then((value) => {
                 console.log("Reading from localforage:", value);
-
                 for(let i=0; i<value.Asset.length; i++) {
                     if(value.Asset[i].status !== 'Completed' && (value.Asset[i].loaded !== value.Asset[i].total)) {
                         setContainsIncompleteUploads(true)
@@ -292,7 +291,7 @@ export default function ViewAsset() {
                             setViewType("column");
                         } else if (window.location.hash === "#html") {
                             setViewType("html");
-                        } else if(window.location.hash === "#html") {
+                        } else if(window.location.hash === "#folder") {
                             setViewType("folder");
                         }
                     }
@@ -345,7 +344,7 @@ export default function ViewAsset() {
                                                             Edit
                                                         </Button>
                                                     </div>
-                                                    <Header variant="h2">Project Details</Header>
+                                                    <Header variant="h2">Asset Details</Header>
                                                 </div>
                                             }
                                         >
@@ -586,17 +585,17 @@ export default function ViewAsset() {
                                     width: "100%",
                                 }}
                             >
-                                {/*<div style={{ width: "100%" }}>*/}
-                                {/*    <RelatedTableList*/}
-                                {/*        allItems={allItems}*/}
-                                {/*        loading={loading}*/}
-                                {/*        listDefinition={WorkflowExecutionListDefinition}*/}
-                                {/*        databaseId={databaseId}*/}
-                                {/*        setReload={setReload}*/}
-                                {/*        parentId={"workflowId"}*/}
-                                {/*        HeaderControls={WorkflowHeaderControls}*/}
-                                {/*    />*/}
-                                {/*</div>*/}
+                                <div style={{ width: "100%" }}>
+                                    <RelatedTableList
+                                        allItems={allItems}
+                                        loading={loading}
+                                        listDefinition={WorkflowExecutionListDefinition}
+                                        databaseId={databaseId}
+                                        setReload={setReload}
+                                        parentId={"workflowId"}
+                                        HeaderControls={WorkflowHeaderControls}
+                                    />
+                                </div>
                                 <Metadata databaseId={databaseId} assetId={assetId} />
                             </div>
                         </SpaceBetween>

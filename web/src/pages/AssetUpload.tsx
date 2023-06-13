@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { SetStateAction, useEffect, useState} from "react";
+import {  useEffect, useState} from "react";
 import {
     Box,
     ColumnLayout,
@@ -13,7 +13,7 @@ import {
     TextContent,
     Toggle,
 } from "@cloudscape-design/components";
-import {useNavigate, useParams} from "react-router";
+import {useParams} from "react-router";
 import Container from "@cloudscape-design/components/container";
 import Header from "@cloudscape-design/components/header";
 import SpaceBetween from "@cloudscape-design/components/space-between";
@@ -26,9 +26,6 @@ import Input from "@cloudscape-design/components/input";
 
 import DatabaseSelector from "../components/selectors/DatabaseSelector";
 import {
-    cadFileFormats,
-    modelFileFormats,
-    columnarFileFormats,
     previewFileFormats,
 } from "../common/constants/fileFormats";
 
@@ -47,12 +44,12 @@ import ProgressScreen, {
 } from "./AssetUpload/ProgressScreen";
 import onSubmit, {onUploadRetry, UploadExecutionProps} from "./AssetUpload/onSubmit";
 import FolderUpload from "../components/form/FolderUpload";
-import {FileUploadTable, FileUploadTableItem} from "./AssetUpload/FileUploadTable";
+import {FileUploadTableItem} from "./AssetUpload/FileUploadTable";
 import localforage from "localforage"
 
 // eslint-disable-next-line @typescript-eslint/no-array-constructor
-const objectFileFormats = new Array().concat(cadFileFormats, modelFileFormats, columnarFileFormats);
-const objectFileFormatsStr = objectFileFormats.join(", ");
+// const objectFileFormats = new Array().concat(cadFileFormats, modelFileFormats, columnarFileFormats);
+// const objectFileFormatsStr = objectFileFormats.join(", ");
 const previewFileFormatsStr = previewFileFormats.join(", ");
 
 export class AssetDetail {
@@ -99,19 +96,8 @@ const isDistributableOptions: OptionDefinition[] = [
     {label: "No", value: "false"},
 ];
 
-function nthIndex(str: string, pat: string, n: number){
-    var L= str.length, i= -1;
-    while(n-- && i++<L){
-        i= str.indexOf(pat, i);
-        if (i < 0) break;
-    }
-    return i;
-}
-
-
 
 const UploadForm = () => {
-    const navigate = useNavigate();
     const urlParams = useParams();
     const [databaseId, setDatabaseId] = useState({
         label: urlParams.databaseId,
@@ -124,10 +110,7 @@ const UploadForm = () => {
         isDistributable: false,
         databaseId: urlParams.databaseId,
     });
-    const [counter, setCounter] = useState(1)
     const [isMultiFile, setMultiFile] = useState(false);
-    const [fileHandles, setFileHandles] = useState<any>([]);
-    const [directoryHandle, setDirectoryHandle] = useState<any>();
     const [metadata, setMetadata] = useState<Metadata>({});
 
     const [workflows, setWorkflows] = useState<any>([]);
@@ -138,10 +121,6 @@ const UploadForm = () => {
 
     const [showUploadAndExecProgress, setShowUploadAndExecProgress] = useState(false);
 
-    const [assetUploadProgress, setAssetUploadProgress] = useState<ProgressBarProps>({
-        value: 0,
-        status: "in-progress",
-    });
     const [uploadExecutionProps, setUploadExecutionProps] = useState<UploadExecutionProps>()
 
     const [previewUploadProgress, setPreviewUploadProgress] = useState<ProgressBarProps>({
@@ -154,21 +133,21 @@ const UploadForm = () => {
             setAssetDetail((assetDetail) => {
                 return {...assetDetail, Asset: fileUploadTableItems}
             });
-            localforage.setItem(assetDetail.assetId, {...assetDetail, Asset: fileUploadTableItems}).then(() => {});
+            localforage.setItem(assetDetail.assetId, {...assetDetail, Asset: fileUploadTableItems}).then(() => {
+            }).catch(() => {
+                console.log("Error setting item in localforage")
+            });
         }
     }, [fileUploadTableItems])
 
 
     const [execStatus, setExecStatus] = useState<Record<string, StatusIndicatorProps.Type>>({});
-    const [canNavigateToAssetPage, setCanNavigateToAssetPage] = useState(false);
 
     const getFilesFromFileHandles = async (fileHandles: any[]) => {
         const fileUploadTableItems: FileUploadTableItem[] = []
         for (let i = 0; i < fileHandles.length; i++) {
             const file = await fileHandles[i].handle.getFile() as File
-
             fileUploadTableItems.push({
-                //@ts-ignore
                 handle: fileHandles[i].handle,
                 index: i,
                 name: fileHandles[i].handle.name,
@@ -176,6 +155,8 @@ const UploadForm = () => {
                 relativePath: fileHandles[i].path,
                 progress: 0,
                 status: "Queued",
+                loaded: 0,
+                total: file.size
             })
         }
         console.log(fileUploadTableItems)
@@ -195,7 +176,6 @@ const UploadForm = () => {
         }
     }
     const updateProgressForFileUploadItem = (index: number, loaded: number, total: number) => {
-        const progress = Math.round((loaded / total) * 100)
         setFileUploadTableItems((prevState) => {
                 return prevState.map((item) => item.index === index ? getUpdatedItemAfterProgress(item, loaded, total) : item);
         })
@@ -212,6 +192,11 @@ const UploadForm = () => {
             return prevState.map((item) => item.index === index ? {...item, status: 'Failed'} : item);
         })
     }
+    const moveToQueued = (index: number) => {
+        setFileUploadTableItems((prevState) => {
+            return prevState.map((item) => item.index === index ? {...item, status: 'Queued'} : item);
+        })
+    }
 
     useEffect(() => {
 
@@ -225,10 +210,9 @@ const UploadForm = () => {
         });
     }, [assetDetail.databaseId]);
 
+    // @ts-ignore
     return (
         <Box padding={{left: "l", right: "l"}}>
-            {/*{canNavigateToAssetPage &&*/}
-            {/*    navigate(`/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`)}*/}
             {showUploadAndExecProgress && uploadExecutionProps && (
                 <>
                     <ProgressScreen
@@ -269,28 +253,23 @@ const UploadForm = () => {
                         execStatus,
                         setExecStatus,
                         setShowUploadAndExecProgress,
-                        setAssetUploadProgress,
+                        moveToQueued,
                         updateProgressForFileUploadItem,
                         fileUploadComplete,
                         fileUploadError,
                         setPreviewUploadProgress,
-                        setCanNavigateToAssetPage,
                         setUploadExecutionProps
                     })}
                     allowSkipTo
                     steps={[
                         {
-                            title: "Project Details",
+                            title: "Asset Details",
                             isOptional: false,
                             content: (
-                                <Container header={<Header variant="h2">Project Details</Header>}>
+                                <Container header={<Header variant="h2">Asset Details</Header>}>
                                     <SpaceBetween direction="vertical" size="l">
                                         <FormField
-                                            label="Project Name"
-                                            constraintText="All lower case, no special chars or spaces except - and _ only letters for first character min 4 and max 64."
-                                            errorText={validateEntityIdAsYouType(
-                                                assetDetail.assetId
-                                            )}
+                                            label="Asset Name"
                                         >
                                             <Input
                                                 value={assetDetail.assetId || ""}
@@ -395,7 +374,7 @@ const UploadForm = () => {
                             ),
                         },
                         {
-                            title: "Project Metadata",
+                            title: "Asset Metadata",
                             content: (
                                 <Container header={<Header variant="h2">Asset Metadata</Header>}>
                                     <SpaceBetween direction="vertical" size="l">
@@ -421,7 +400,7 @@ const UploadForm = () => {
                             title: "Select Files to upload",
                             content: (
                                 <Container header={<Header variant="h2">Select Files to Upload</Header>}>
-                                    { [...Array(counter)].map((e, i) =><>
+                                    <>
                                     <FormField>
                                         <Toggle
                                             onChange={({detail}) => {
@@ -442,81 +421,74 @@ const UploadForm = () => {
                                             {colspan: {default: 6}},
                                         ]}
                                     >
-                                        {!isMultiFile && <FileUpload
-                                            label="Asset"
+                                        <FolderUpload label={isMultiFile ? "Choose Folder" : "Choose File"} multiFile={isMultiFile} errorText={
+                                            (!assetDetail.Asset && "Asset is required") ||
+                                            undefined
+                                        } onSelect={async (directoryHandle: any, fileHandles: any[]) => {
+                                            const files = await getFilesFromFileHandles(fileHandles)
+                                            setFileUploadTableItems(files)
+                                            setAssetDetail((assetDetail) =>({
+                                                ...assetDetail,
+                                                DirectoryHandle: directoryHandle,
+                                                Asset: files
+                                            }))
+                                        } }></FolderUpload>
+
+                                        <FileUpload
+                                            label="Preview (Optional)"
                                             disabled={false}
-                                            errorText={
-                                                (!assetDetail.Asset && "Asset is required") ||
-                                                undefined
-                                            }
                                             setFile={(file) => {
                                                 setAssetDetail((assetDetail) => ({
                                                     ...assetDetail,
-                                                    Asset: [{
-                                                        index: 0,
-                                                        name: file.name,
-                                                    }],
+                                                    Preview: file,
                                                 }));
                                             }}
-                                            fileFormats={objectFileFormatsStr}
-                                            file={assetDetail.Asset ? assetDetail.Asset[0].handle.getFile() as File : undefined}
-                                            data-testid="asset-file"
+                                            fileFormats={previewFileFormatsStr}
+                                            file={assetDetail.Preview}
+                                            data-testid="preview-file"
                                         />
-                                        }
-                                        {
-                                            isMultiFile &&
-                                            <FolderUpload label="Choose Folder" onSelect={async (directoryHandle: any, fileHandles: any[]) => {
-                                                setDirectoryHandle(directoryHandle)
-                                                setFileHandles(fileHandles)
-                                                const files = await getFilesFromFileHandles(fileHandles)
-                                                setFileUploadTableItems(files)
-                                                setAssetDetail((assetDetail) =>({
-                                                    ...assetDetail,
-                                                    DirectoryHandle: directoryHandle,
-                                                    Asset: files
-                                                }))
-                                            } }></FolderUpload>
-
-                                        }
-
                                     </Grid>
                                     </>
+                                </Container>
+                            ),
+                            isOptional: false,
+                        },
 
-                                    )}
-                                    {/*<SpaceBetween direction="vertical" size="l">*/}
-                                    {/*    <Button onClick={()=>setCounter(counter+1)}> Add more </Button>*/}
-                                    {/*</SpaceBetween>*/}
-                                    {/*<SpaceBetween direction="vertical" size="l">*/}
-                                    {/*    <Table*/}
-                                    {/*        columnDefinitions={workflowColumnDefns}*/}
-                                    {/*        items={workflows}*/}
-                                    {/*        onSelectionChange={({ detail }) => {*/}
-                                    {/*            console.log("detail selection change", detail);*/}
-                                    {/*            setSelectedWorkflows(detail.selectedItems);*/}
-                                    {/*        }}*/}
-                                    {/*        selectedItems={selectedWorkflows}*/}
-                                    {/*        trackBy="workflowId"*/}
-                                    {/*        selectionType="multi"*/}
-                                    {/*        ariaLabels={{*/}
-                                    {/*            selectionGroupLabel: "Items selection",*/}
-                                    {/*            allItemsSelectionLabel: ({ selectedItems }) =>*/}
-                                    {/*                `${selectedItems.length} ${*/}
-                                    {/*                    selectedItems.length === 1*/}
-                                    {/*                        ? "item"*/}
-                                    {/*                        : "items"*/}
-                                    {/*                } selected`,*/}
-                                    {/*            itemSelectionLabel: ({ selectedItems }, item) => {*/}
-                                    {/*                const isItemSelected = selectedItems.filter(*/}
-                                    {/*                    (i) => i.name === item.name*/}
-                                    {/*                ).length;*/}
-                                    {/*                return `${item.name} is ${*/}
-                                    {/*                    isItemSelected ? "" : "not"*/}
-                                    {/*                } selected`;*/}
-                                    {/*            },*/}
-                                    {/*        }}*/}
-                                    {/*        data-testid="workflow-table"*/}
-                                    {/*    />*/}
-                                    {/*</SpaceBetween>*/}
+                        {
+                            title: "Workflow Actions",
+                            content: (
+                                <Container header={<Header variant="h2">Workflow Actions</Header>}>
+                                    <SpaceBetween direction="vertical" size="l">
+                                        <Table
+                                            columnDefinitions={workflowColumnDefns}
+                                            items={workflows}
+                                            onSelectionChange={({ detail }) => {
+                                                console.log("detail selection change", detail);
+                                                setSelectedWorkflows(detail.selectedItems);
+                                            }}
+                                            selectedItems={selectedWorkflows}
+                                            trackBy="workflowId"
+                                            selectionType="multi"
+                                            ariaLabels={{
+                                                selectionGroupLabel: "Items selection",
+                                                allItemsSelectionLabel: ({ selectedItems }) =>
+                                                    `${selectedItems.length} ${
+                                                        selectedItems.length === 1
+                                                            ? "item"
+                                                            : "items"
+                                                    } selected`,
+                                                itemSelectionLabel: ({ selectedItems }, item) => {
+                                                    const isItemSelected = selectedItems.filter(
+                                                        (i) => i.name === item.name
+                                                    ).length;
+                                                    return `${item.name} is ${
+                                                        isItemSelected ? "" : "not"
+                                                    } selected`;
+                                                },
+                                            }}
+                                            data-testid="workflow-table"
+                                        />
+                                    </SpaceBetween>
                                 </Container>
                             ),
                             isOptional: true,
@@ -583,7 +555,7 @@ export default function AssetUploadPage() {
             <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
                 <div>
                     <TextContent>
-                        <Header variant="h1">Create Project</Header>
+                        <Header variant="h1">Create Asset</Header>
                     </TextContent>
 
                     <UploadForm />

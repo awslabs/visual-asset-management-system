@@ -8,8 +8,7 @@
  * Once selected, this component will show in total how many files are in the folder and return the path for each of the files
  *
  */
-import {useState, useRef, useEffect} from 'react'
-import SpaceBetween from "@cloudscape-design/components/space-between";
+import { useState } from 'react'
 import Button from "@cloudscape-design/components/button";
 import { Grid } from "@cloudscape-design/components";
 
@@ -18,26 +17,9 @@ import FormField from "@cloudscape-design/components/form-field";
 
 function FolderUpload(props) {
 
-    const [files, setFileHandles] = useState([]);
-    const [directoryHandle, setDirectoryHandle] = useState();
     const [description, setDescription] = useState("");
 
-    /**
-     * Borrowed from : https://stackoverflow.com/a/42408230
-     * @param {*} n : Number of Bytes to shorten
-     * @returns : Readable Bytes count
-     */
-    function shortenBytes(n) {
-        const k = n > 0 ? Math.floor((Math.log2(n) / 10)) : 0;
-        const rank = (k > 0 ? 'KMGT'[k - 1] : '') + 'b';
-        const count = Math.floor(n / Math.pow(1024, k));
-        return count + rank;
-    }
-
     const handleFileListChange = (directoryHandle, fileHandles) => {
-        console.log(fileHandles);
-        setFileHandles(fileHandles)
-        setDirectoryHandle(directoryHandle)
         if (props.onSelect) {
             props.onSelect(directoryHandle, fileHandles);
         }
@@ -55,18 +37,22 @@ function FolderUpload(props) {
     }
     const getFilesFromFileHandle = async (directoryHandle) => {
         const fileHandles = [];
-        // console.log("Handle is ")
-        // console.log(directoryHandle)
         for await (const handle of getFilesRecursively(directoryHandle)) {
             fileHandles.push(handle)
         }
         return fileHandles
     }
-    const handleFileSelection = async () => {
+    const handleDirectorySelection = async () => {
         const directoryHandle = await window.showDirectoryPicker();
         const fileHandles = await getFilesFromFileHandle(directoryHandle, directoryHandle.name)
         console.log(fileHandles)
         return {directoryHandle, fileHandles};
+    };
+
+    const handleFileSelection = async () => {
+        const handles = await window.showOpenFilePicker();
+        const fileHandles = [{'path': handles[0].name, 'handle': handles[0]}]
+        return {handles, fileHandles};
     };
 
     return (
@@ -74,27 +60,45 @@ function FolderUpload(props) {
          * For some reason the guide mentioned at the MDN docs doesn't work.
          * I found this from the stackoverflow answer mentioned at https://stackoverflow.com/a/5849341
          */
-        <FormField label={props.label} description={description}>
+        <FormField label={props.label} description={description} errorText={props.errorText}>
 
                 <Grid gridDefinition={[
                     {colspan: {default: 6}},
                     {colspan: {default: 6}},
                 ]}>
-                    <Button
-                        variant="normal"
-                        iconName="upload"
-                        onClick={(e) => {
-                            //directoryRef?.current?.click();
-                            handleFileSelection()
-                                .then((fileSelectionResult) => {
-                                    console.log(fileSelectionResult)
-                                    const {directoryHandle, fileHandles} = fileSelectionResult;
-                                    setDescription(`Total Files to Upload: ${fileHandles.length}`)
-                                    handleFileListChange(directoryHandle, fileHandles)})
-                        }}
-                    >
-                        Choose Folder
-                    </Button>
+                    {
+                        props.multiFile ?
+                        <Button
+                            variant="normal"
+                            iconName="upload"
+                            onClick={(e) => {
+                                handleDirectorySelection()
+                                    .then((fileSelectionResult) => {
+                                        console.log(fileSelectionResult)
+                                        const {directoryHandle, fileHandles} = fileSelectionResult;
+                                        setDescription(`Total Files to Upload: ${fileHandles.length}`)
+                                        handleFileListChange(directoryHandle, fileHandles)})
+                            }}
+                        >
+                            Choose Folder
+                        </Button>  :
+                            <>
+                                <Button
+                                    variant="normal"
+                                    iconName="upload"
+                                    onClick={(e) => {
+                                        handleFileSelection()
+                                            .then((fileSelectionResult) => {
+                                                console.log(fileSelectionResult)
+                                                const {directoryHandle, fileHandles} = fileSelectionResult;
+                                                setDescription(`Total Files to Upload: ${fileHandles.length}`)
+                                                handleFileListChange(directoryHandle, fileHandles)})
+                                    }}
+                                >
+                                    Choose File
+                                </Button>
+                            </>
+                    }
                 </Grid>
         </FormField>
     );

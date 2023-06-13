@@ -137,7 +137,10 @@ def iter_Asset(body, item=None):
     asset['specifiedPipelines'] = body['specifiedPipelines']
     asset['description'] = body['description']
     asset['isDistributable'] = body['isDistributable']
-    asset = getS3MetaData(body['bucket'], body['key'], asset)
+    # Since we started supporting folders / multiple files as a single asset
+    # We will have no idea if the asset upload is complete at this point
+    # TODO: Temporarily disabled revisioning information till we complete implementation for it.
+    # asset = getS3MetaData(body['bucket'], body['key'], asset)
 
     # attributes for generated assets
     asset['assetName'] = body.get('assetName', body['assetId'])

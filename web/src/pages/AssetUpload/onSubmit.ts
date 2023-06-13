@@ -45,12 +45,11 @@ class OnSubmitProps {
     setShowUploadAndExecProgress!: (x: boolean) => void;
     execStatus!: ExecStatusType;
     setExecStatus!: (x: ExecStatusType | ((x: ExecStatusType) => ExecStatusType)) => void;
-    setAssetUploadProgress!: (x: ProgressBarProps) => void;
+    moveToQueued!: (index: number) => void;
     updateProgressForFileUploadItem!: (index: number, loaded: number, total: number) => void;
     fileUploadComplete!: (index: number, event: any) => void;
     fileUploadError!: (index: number, event: any) => void;
     setPreviewUploadProgress!: (x: ProgressBarProps) => void;
-    setCanNavigateToAssetPage!: (x: boolean) => void;
     setUploadExecutionProps!: (x: UploadExecutionProps) => void;
 }
 
@@ -59,104 +58,58 @@ class ProgressCallbackArgs {
     total!: number;
 }
 
+function getUploadTaskPromise(index: number, key: string, f: File, metadata: { [p: string]: string }, progressCallback: (index: number, progress: ProgressCallbackArgs) => void, completeCallback: (index: number, event: any) => void, errorCallback: (index: number, event: any) => void) {
+    return new Promise((resolve, reject) => {
+        return Storage.put(key, f, {
+            metadata,
+            resumable: true,
+            customPrefix: {
+                'public': ''
+            },
+            progressCallback: (progress: ProgressCallbackArgs) => {
+                progressCallback(index, {
+                    loaded: progress.loaded,
+                    total: progress.total
+                })
+            },
+            completeCallback: (event: any) => {
+                completeCallback(index, null)
+                resolve(true);
+            },
+            errorCallback: (event: any) => {
+                errorCallback(index, event)
+                resolve(true);
+            }
+        });
+    })
+}
+
 export function createAssetUploadPromises(
     files: FileUploadTableItem[],
     keyPrefix: string,
     metadata: { [k: string]: string },
+    moveToQueued: (index: number) => void,
     progressCallback: (index: number, progress: ProgressCallbackArgs) => void,
     completeCallback: (index: number, event: any) => void,
     errorCallback: (index: number, event: any) => void,
-    resumable: boolean
 ) {
     const uploads = []
     // KeyPrefix captures the entire path when a single file is selected as an asset
     // A promise begins executing right after creation, hence I am returning a function that returns a promise
     // so these promises can then be executed sequentially to track progress
-    if (!resumable) {
-        console.log("Resumabel is false")
-        if (files.length === 1) {
-            uploads.push(async () => await files[0].handle.getFile().then((f: File) => {
-                Storage.put(keyPrefix, f, {
-                    metadata,
-                    progressCallback: (progress: ProgressCallbackArgs) => {
-                        progressCallback(0, {
-                            loaded: progress.loaded,
-                            total: progress.total
-                        })
-                    }
-                })
-                    .then(() => completeCallback(0, null))
-                    .catch(err => errorCallback(0, err))
-            }));
-        } else {
-            for (let i = 0; i < files.length; i++) {
-                if (files[i].status !== 'Completed') {
-                    files[i].status = 'Queued';
-                    uploads.push(async () => await files[i].handle.getFile().then((f: File) => {
-                        Storage.put(keyPrefix, f, {
-                            metadata,
-                            progressCallback: (progress: ProgressCallbackArgs) => {
-                                progressCallback(0, {
-                                    loaded: progress.loaded,
-                                    total: progress.total
-                                })
-                            }
-                        })
-                            .then(() => completeCallback(0, null))
-                            .catch(err => errorCallback(0, err))
-                    }));
-                }
-            }
-        }
+
+    if (files.length === 1) {
+        uploads.push(async () => await files[0].handle.getFile().then((f: File) => {
+            return getUploadTaskPromise(0, keyPrefix, f, metadata, progressCallback, completeCallback, errorCallback);
+        }));
     } else {
-        console.log("Resumabel is true")
-        if (files.length === 1) {
-            uploads.push(async () => await files[0].handle.getFile().then((f: File) => {
-                Storage.put(keyPrefix, f, {
-                    resumable: true,
-                    customPrefix: {
-                        'public': ''
-                    },
-                    metadata,
-                    progressCallback: (progress: ProgressCallbackArgs) => {
-                        progressCallback(0, {
-                            loaded: progress.loaded,
-                            total: progress.total
-                        })
-                    },
-                    completeCallback: (event: any) => {
-                        completeCallback(0, null)
-                    },
-                    errorCallback: (event: any) => {
-                        errorCallback(0, event)
-                    }
-                })
-            }));
-        } else {
-            for (let i = 0; i < files.length; i++) {
-                if (files[i].status !== 'Completed') {
-                    uploads.push(async () => await files[i].handle.getFile().then((f: File) => {
-                        Storage.put(keyPrefix + files[i].relativePath, f, {
-                            metadata,
-                            resumable: true,
-                            customPrefix: {
-                                'public': ''
-                            },
-                            progressCallback: (progress: ProgressCallbackArgs) => {
-                                progressCallback(i, {
-                                    loaded: progress.loaded,
-                                    total: progress.total
-                                })
-                            },
-                            completeCallback: (event: any) => {
-                                completeCallback(i, null)
-                            },
-                            errorCallback: (event: any) => {
-                                errorCallback(i, event)
-                            }
-                        })
-                    }));
-                }
+        for (let i = 0; i < files.length; i++) {
+            if (files[i].status !== 'Completed') {
+                moveToQueued(i)
+                uploads.push(async () => await files[i].handle.getFile().then((f: File) => {
+                    let key = keyPrefix + files[i].relativePath
+                    return getUploadTaskPromise(i, key, f, metadata, progressCallback, completeCallback, errorCallback);
+                }));
             }
         }
     }
@@ -200,7 +153,7 @@ const getKeyPrefix = (uuid: string, assetDetail: AssetDetail) => {
 export interface UploadExecutionProps {
     assetDetail: AssetDetail,
     updateProgressForFileUploadItem: (index: number, loaded: number, total:number) => void,
-    setAssetUploadProgress: (x: ProgressBarProps) => void,
+    moveToQueued: (index: number) => void,
     fileUploadComplete: (index: number, event: any) => void,
     fileUploadError: (index: number, event: any) => void,
     setPreviewUploadProgress: (x: ProgressBarProps) => void,
@@ -209,14 +162,13 @@ export interface UploadExecutionProps {
     selectedWorkflows: any,
     metadata: Metadata,
     setExecStatus: (x: (ExecStatusType | ((x: ExecStatusType) => ExecStatusType))) => void,
-    execStatus: ExecStatusType,
-    setCanNavigateToAssetPage: (x: boolean) => void
+    execStatus: ExecStatusType
 }
 
 async function performUploads({
                                   assetDetail,
                                   updateProgressForFileUploadItem,
-                                  setAssetUploadProgress,
+                                  moveToQueued,
                                   fileUploadComplete,
                                   fileUploadError,
                                   setPreviewUploadProgress,
@@ -226,7 +178,6 @@ async function performUploads({
                                   metadata,
                                   setExecStatus,
                                   execStatus,
-                                  setCanNavigateToAssetPage
                               }: UploadExecutionProps) {
     if (
         assetDetail.Asset &&
@@ -238,34 +189,24 @@ async function performUploads({
                 assetId: assetDetail.assetId,
                 databaseId: assetDetail.databaseId,
             },
+            moveToQueued,
             (index, progress) => {
                 updateProgressForFileUploadItem(index, progress.loaded, progress.total)
-                setAssetUploadProgress({
-                    value: (progress.loaded / progress.total) * 100,
-                });
             },
             (index, event) => {
                 fileUploadComplete(index, event)
             }, (index, event) => {
                 console.log("Error Uploading", event);
                 fileUploadError(index, event)
-            },
-            true,
+            }
         )
-        const uploadComplete = executeUploads(uploads)
+        executeUploads(uploads)
             .then(() => {
-                setAssetUploadProgress({
-                    status: 'success',
-                    value: 100
-                })
             })
             .catch((err) => {
-                setAssetUploadProgress({
-                    status: "error",
-                    value: 100,
-                });
                 return Promise.reject(err)
             })
+
         const up2 =
             (assetDetail.Preview && assetDetail?.previewLocation?.Key &&
                 uploadAssetToS3(
@@ -296,7 +237,7 @@ async function performUploads({
                     })) ||
             Promise.resolve();
 
-        await Promise.all([uploadComplete, up2]).then((uploads) => {
+        await Promise.all([up2]).then((uploads) => {
             const body: UploadAssetWorkflowApi = {
                 assetPreprocessingBody: {
                     assetId: assetDetail.assetId,
@@ -354,7 +295,6 @@ async function performUploads({
                     return Promise.reject(err);
                 });
         });
-        setCanNavigateToAssetPage(true);
         window.onbeforeunload = null;
     }
 
@@ -397,12 +337,11 @@ export default function onSubmit({
                                      execStatus,
                                      setExecStatus,
                                      setShowUploadAndExecProgress,
-                                     setAssetUploadProgress,
+                                     moveToQueued,
                                      updateProgressForFileUploadItem,
                                      fileUploadComplete,
                                      fileUploadError,
                                      setPreviewUploadProgress,
-                                     setCanNavigateToAssetPage,
                                      setUploadExecutionProps
                                  }: OnSubmitProps) {
     return async (detail: NonCancelableCustomEvent<{}>) => {
@@ -423,8 +362,8 @@ export default function onSubmit({
             setShowUploadAndExecProgress(true);
             const uploadExecutionProps: UploadExecutionProps = {
                 assetDetail,
+                moveToQueued,
                 updateProgressForFileUploadItem,
-                setAssetUploadProgress,
                 fileUploadComplete,
                 fileUploadError,
                 setPreviewUploadProgress,
@@ -433,8 +372,7 @@ export default function onSubmit({
                 selectedWorkflows,
                 metadata,
                 setExecStatus,
-                execStatus,
-                setCanNavigateToAssetPage
+                execStatus
             }
             setUploadExecutionProps(uploadExecutionProps)
             await performUploads(uploadExecutionProps);

@@ -1,4 +1,4 @@
-import {Box, Grid, TextContent} from "@cloudscape-design/components";
+import {Box, Grid, Link, TextContent} from "@cloudscape-design/components";
 import Header from "@cloudscape-design/components/header";
 import {useEffect, useState} from "react";
 import {AssetDetail} from "./AssetUpload";
@@ -31,7 +31,7 @@ const FinishUploads = () => {
     const [assetDetail, setAssetDetail] = useState<AssetDetail | null>(null)
     const [fileUploadTableItems, setFileUploadTableItems] = useState<FileUploadTableItem[]>([]);
     const [reuploadClicked, setReuploadClicked] = useState(false);
-    const {databaseId, assetId} = useParams()
+    const {assetId} = useParams()
     useEffect(() => {
         if (assetId) {
             localforage.getItem<AssetDetail>(assetId).then((assetDetail) => {
@@ -50,15 +50,11 @@ const FinishUploads = () => {
                 return {...assetDetail, Asset: fileUploadTableItems}
             });
             localforage.setItem(assetDetail.assetId, {...assetDetail, Asset: fileUploadTableItems}).then(() => {
-                console.log("Asset saved to local storage")
-            }).catch((error) => {
-                console.log("Error saving asset to local storage")
-            });
+            }).catch((error) => {});
         }
     }, [fileUploadTableItems])
 
     const getUpdatedItemAfterProgress = (item: FileUploadTableItem, loaded: number, total: number): FileUploadTableItem =>  {
-        console.log(item)
         const progress = Math.round((loaded / total) * 100)
         const status = item.status
         if(loaded === total) {
@@ -88,9 +84,21 @@ const FinishUploads = () => {
         })
     }
 
+    const moveToQueued = (index: number) => {
+        setFileUploadTableItems((prevState) => {
+            return prevState.map((item) => item.index === index ? {...item, status: 'Queued'} : item);
+        })
+    }
+
     const onRetry = () => {
         console.log("Calling on retry")
-        verifyPermission(assetDetail?.DirectoryHandle, true)
+        let handle;
+        if (assetDetail && assetDetail.Asset && assetDetail.Asset.length === 1) {
+            handle = assetDetail.Asset[0].handle
+        } else {
+            handle = assetDetail?.DirectoryHandle
+        }
+        verifyPermission(handle, true)
             .then((result: boolean) => {
                 if (result && assetDetail && assetDetail.key && assetDetail.assetId && assetDetail.databaseId && fileUploadTableItems) {
                     setReuploadClicked(true)
@@ -98,9 +106,8 @@ const FinishUploads = () => {
                             assetId: assetDetail.assetId,
                             databaseId: assetDetail.databaseId,
                         },
+                        moveToQueued,
                         (index: number, progress: any) => {
-                            console.log("Updating progress ")
-                            console.log(progress)
                             updateProgressForFileUploadItem(index, progress.loaded, progress.total)
                         },
                         (index: number, event: any) => {
@@ -110,12 +117,8 @@ const FinishUploads = () => {
                             console.log("Error Uploading", event);
                             fileUploadError(index, event)
                         },
-                        true,
                     )
-                    const uploadComplete = executeUploads(uploads)
-                        .then(() => {
-
-                        })
+                    executeUploads(uploads)
                         .catch((err: any) => {
                             return Promise.reject(err)
                         })
@@ -125,7 +128,12 @@ const FinishUploads = () => {
     return <>
         { assetDetail?.Asset &&
             <>
-                <Box variant="awsui-key-label">Upload Progress for project {assetDetail.assetName}</Box>
+                <Box variant="awsui-key-label">
+                        Upload Progress for Asset:
+                    <Link href={`/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`} target="_blank">
+                        {assetDetail.assetName}
+                    </Link>
+                </Box>
                 <FileUploadTable allItems={assetDetail?.Asset} onRetry={onRetry} resume={!reuploadClicked}/>
             </>
         }

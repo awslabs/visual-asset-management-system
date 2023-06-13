@@ -2,7 +2,7 @@
  * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
-import {Box, Grid, SpaceBetween, TextContent} from "@cloudscape-design/components";
+import {Box, Grid, Link, SpaceBetween, TextContent} from "@cloudscape-design/components";
 
 import ProgressBar, { ProgressBarProps } from "@cloudscape-design/components/progress-bar";
 import StatusIndicator, {
@@ -10,11 +10,6 @@ import StatusIndicator, {
 } from "@cloudscape-design/components/status-indicator";
 import {FileUploadTable, FileUploadTableItem} from "./FileUploadTable";
 import {AssetDetail} from "../AssetUpload";
-
-class ProgressReport {
-    loaded!: number;
-    total!: number;
-}
 
 class ProgressScreenProps {
     assetDetail!: AssetDetail
@@ -36,7 +31,12 @@ export default function ProgressScreen({
             <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
                 <div>
                     <SpaceBetween size="l" direction={"vertical"} >
-                        <Box variant="awsui-key-label">Upload Progress for project {assetDetail.assetName}</Box>
+                        <Box variant="awsui-key-label">
+                            Upload Progress for Asset:
+                            <Link href={`/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`} target="_blank">
+                                {assetDetail.assetName}
+                            </Link>
+                        </Box>
 
                         <FileUploadTable allItems={allFileUploadItems} onRetry={onRetry} resume={false}/>
                         {
