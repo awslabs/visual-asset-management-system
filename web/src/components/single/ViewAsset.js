@@ -42,6 +42,7 @@ import CreateUpdateAsset from "../createupdate/CreateUpdateAsset";
 import { actionTypes } from "../createupdate/form-definitions/types/FormDefinition";
 import WorkflowSelectorWithModal from "../selectors/WorkflowSelectorWithModal";
 import { ErrorBoundary } from "react-error-boundary";
+import Synonyms from "../../synonyms";
 
 const ThreeDimensionalPlotter = React.lazy(() => import("../viewers/ThreeDimensionalPlotter"));
 const ColumnarViewer = React.lazy(() => import("../viewers/ColumnarViewer"));
@@ -233,7 +234,7 @@ export default function ViewAsset() {
         });
         if (result !== false && Array.isArray(result)) {
             if (result[0] === false) {
-                setAssetDownloadError(`Unable to download asset. ${result[1]}`);
+                setAssetDownloadError(`Unable to download ${Synonyms.asset}. ${result[1]}`);
             } else {
                 setAssetDownloadError("");
                 setDownloadUrl(result[1]);
@@ -292,7 +293,7 @@ export default function ViewAsset() {
                         <SpaceBetween direction="vertical" size="l">
                             <BreadcrumbGroup
                                 items={[
-                                    { text: "Databases", href: "/databases/" },
+                                    { text: Synonyms.Databases, href: "/databases/" },
                                     {
                                         text: databaseId,
                                         href: "/databases/" + databaseId + "/assets/",
@@ -325,7 +326,9 @@ export default function ViewAsset() {
                                                             Edit
                                                         </Button>
                                                     </div>
-                                                    <Header variant="h2">Asset Details</Header>
+                                                    <Header variant="h2">
+                                                        {Synonyms.Asset} Details
+                                                    </Header>
                                                 </div>
                                             }
                                         >

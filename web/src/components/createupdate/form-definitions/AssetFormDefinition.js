@@ -13,12 +13,13 @@ import AssetFilesUploadGroup from "../../form/AssetFilesUploadGroup";
 import { Cache, Storage } from "aws-amplify";
 import { ENTITY_TYPES_NAMES } from "../entity-types/EntitieTypes";
 import { validateEntityId } from "../entity-types/EntityPropTypes";
+import Synonyms from "../../../synonyms";
 
 export const AssetFormDefinition = new FormDefinition({
     entityType: ENTITY_TYPES_NAMES.ASSET,
-    singularName: "asset",
-    pluralName: "assets",
-    singularNameTitleCase: "Asset",
+    singularName: Synonyms.asset,
+    pluralName: Synonyms.assets,
+    singularNameTitleCase: Synonyms.Asset,
     customSubmitFunction: async (formValues, formErrors) => {
         const newFormValues = Object.assign({}, formValues);
         const newFormErrors = Object.assign({}, formErrors);
@@ -44,7 +45,7 @@ export const AssetFormDefinition = new FormDefinition({
         const assetFile = formValues?.Asset;
         const previewFile = formValues?.Preview;
         if (assetFile === null) {
-            newFormErrors.Asset = "Must choose local asset file to upload.";
+            newFormErrors.Asset = `Must choose local ${Synonyms.asset} file to upload.`;
             return { success: false, values: newFormValues, errors: newFormErrors };
         }
         newFormErrors.Asset = "";
@@ -73,13 +74,13 @@ export const AssetFormDefinition = new FormDefinition({
             metadata: metadata,
         });
         if (!assetUploaded.key) {
-            newFormErrors.Asset = `Asset upload failed. Error: ${assetUploaded}`;
+            newFormErrors.Asset = `${Synonyms.Asset} upload failed. Error: ${assetUploaded}`;
             return { success: false, values: newFormValues, errors: newFormErrors };
         }
         newFormErrors.Asset = "";
         const previewUploaded = await Storage.put(previewFileKey, previewFile);
         if (!previewUploaded.key) {
-            newFormErrors.Preview = `Asset upload failed. Error: ${previewUploaded}`;
+            newFormErrors.Preview = `${Synonyms.Asset} upload failed. Error: ${previewUploaded}`;
             return { success: false, values: newFormValues, errors: newFormErrors };
         }
         newFormErrors.Preview = "";
@@ -96,7 +97,7 @@ export const AssetFormDefinition = new FormDefinition({
     },
     controlDefinitions: [
         new ControlDefinition({
-            label: "Asset Name",
+            label: `${Synonyms.Asset} Name`,
             id: "assetName",
             constraintText:
                 "Required. All lower case, no special chars or spaces except - and _ only letters for first character min 4 and max 64.",
@@ -106,7 +107,7 @@ export const AssetFormDefinition = new FormDefinition({
             }),
         }),
         new ControlDefinition({
-            label: "Database Name",
+            label: `${Synonyms.Database} Name`,
             id: "databaseId",
             constraintText: "Required.",
             elementDefinition: new ElementDefinition({

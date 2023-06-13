@@ -27,6 +27,7 @@ import { Cache } from "aws-amplify";
 import { fetchDatabaseWorkflows, saveWorkflow, runWorkflow } from "../../services/APIService";
 import { WorkflowContext } from "../../context/WorkflowContex";
 import { validateEntityId, verifyStringMaxLength } from "./entity-types/EntityPropTypes";
+import Synonyms from "../../synonyms";
 
 const WorkflowEditor = React.lazy(() => import("../interactive/WorkflowEditor"));
 
@@ -226,7 +227,7 @@ export default function CreateUpdateWorkflow(props) {
                 <SpaceBetween direction="vertical" size="xs">
                     <BreadcrumbGroup
                         items={[
-                            { text: "Databases", href: "/databases/" },
+                            { text: Synonyms.Databases, href: "/databases/" },
                             {
                                 text: databaseId,
                                 href: "/databases/" + databaseId + "/workflows/",
@@ -406,7 +407,7 @@ export default function CreateUpdateWorkflow(props) {
                                                 ),
                                             },
                                             {
-                                                label: "Source Asset",
+                                                label: `Source ${Synonyms.Asset}`,
                                                 id: "asset",
                                                 content: (
                                                     <Form

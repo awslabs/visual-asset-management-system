@@ -6,6 +6,7 @@
 import React from "react";
 import { SideNavigation } from "@cloudscape-design/components";
 import config from "../config";
+import Synonyms from "../synonyms";
 
 const navHeader = {
     href: "/",
@@ -21,9 +22,9 @@ let navItems = [
         role: "assets",
         text: "Manage",
         items: [
-            { type: "link", text: "Databases", href: "/databases" },
-            { type: "link", text: "Assets", href: "/assets" },
-            { type: "link", text: "Upload Asset", href: "/upload" },
+            { type: "link", text: Synonyms.Databases, href: "/databases" },
+            { type: "link", text: Synonyms.Assets, href: "/assets" },
+            { type: "link", text: `Upload ${Synonyms.Asset}`, href: "/upload" },
         ],
     },
     {

@@ -21,6 +21,8 @@ import {
 
 import { highlightMatches } from "../../common/utils/utils";
 
+import Synonyms from "../../synonyms";
+
 const API = {};
 const Storage = {};
 
@@ -265,7 +267,7 @@ export default function AssetGrid(props) {
                                         { colspan: { l: "4", m: "4", default: "4" } },
                                     ]}
                                 >
-                                    <div style={{ color: "#545b64" }}>Asset Type</div>
+                                    <div style={{ color: "#545b64" }}>{Synonyms.Asset} Type</div>
                                     <div style={{ color: "#545b64" }}>Distributable</div>
                                     <div style={{ color: "#545b64" }}>Version</div>
                                 </Grid>
@@ -387,8 +389,8 @@ export default function AssetGrid(props) {
                     >
                         <TextFilter
                             filteringText={filterBy}
-                            filteringPlaceholder="Find assets"
-                            filteringAriaLabel="Filter assets"
+                            filteringPlaceholder={`Find ${Synonyms.assets}`}
+                            filteringAriaLabel={`Filter ${Synonyms.assets}`}
                             onChange={({ detail }) => handleFindResources(detail.filteringText)}
                             countText={filterBy === "" ? "" : filteredList.length + " matches"}
                             style={{ minWidth: "100%" }}
@@ -405,7 +407,7 @@ export default function AssetGrid(props) {
                                             return { label: row.assetId, value: row.assetId };
                                         })
                                     )}
-                                    placeholder={`Asset Name`}
+                                    placeholder={`${Synonyms.Asset} Name`}
                                     selectedAriaLabel="Selected"
                                 />
                                 <Select
@@ -463,12 +465,14 @@ export default function AssetGrid(props) {
                     >
                         <div>
                             <TextContent>
-                                <h2>Assets ({assetData.length})</h2>
+                                <h2>
+                                    {Synonyms.Assets} ({assetData.length})
+                                </h2>
                             </TextContent>
                         </div>
                         <div style={{ textAlign: "right" }}>
                             <Button variant="primary">
-                                <Icon name={"add-plus"} /> &nbsp;&nbsp;New Asset
+                                <Icon name={"add-plus"} /> &nbsp;&nbsp;New {Synonyms.Asset}
                             </Button>
                         </div>
                     </Grid>

@@ -7,6 +7,7 @@ import React from "react";
 import ListDefinition from "./types/ListDefinition";
 import { Link } from "@cloudscape-design/components";
 import ColumnDefinition from "./types/ColumnDefinition";
+import Synonyms from "../../../synonyms";
 
 export const PipelineListDefinition = new ListDefinition({
     pluralName: "pipelines",
@@ -38,7 +39,7 @@ export const PipelineListDefinition = new ListDefinition({
         }),
         new ColumnDefinition({
             id: "databaseId",
-            header: "Database",
+            header: Synonyms.Database,
             cellWrapper: (props) => {
                 const { item } = props;
                 return (

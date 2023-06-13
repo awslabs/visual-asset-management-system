@@ -11,6 +11,7 @@ import { WorkflowContext } from "../../context/WorkflowContex";
  * No viewer yet for cad and archive file formats
  */
 import { columnarFileFormats, modelFileFormats } from "../../common/constants/fileFormats";
+import Synonyms from "../../synonyms";
 
 const AssetSelector = (props) => {
     const { database, pathViewType } = props;
@@ -76,7 +77,11 @@ const AssetSelector = (props) => {
                     setActiveTab("asset");
                 }
             }}
-            placeholder={<>Select starting asset from {database} database.</>}
+            placeholder={
+                <>
+                    Select starting {Synonyms.asset} from {database} database.
+                </>
+            }
             options={allItems.map((item) => {
                 return {
                     label: `${item.assetName} (${item.assetType})`,
