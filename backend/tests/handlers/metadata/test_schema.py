@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 from decimal import Decimal
 import json
-import unittest
 from unittest.mock import Mock, call
 
 from backend.handlers.metadataschema.schema import MetadataSchema
 import pytest
-from boto3.dynamodb.conditions import Key, Attr
+from boto3.dynamodb.conditions import Key
 
 from backend.handlers.metadataschema.schema import APIGatewayProxyEvent
+
 
 def test_get_schema():
     mock_ddb = Mock()
@@ -31,7 +31,8 @@ def test_get_schema_not_found():
 
     result = metadataSchema.get_schema("databaseId123",  "schemaId123")
     assert mock_ddb.get_item.call_args == call(Key={'databaseId': 'databaseId123', 'field': 'schemaId123'})
-    assert None == result
+    assert result is None
+
 
 def test_get_schema_not_found2():
     mock_ddb = Mock()
@@ -42,7 +43,7 @@ def test_get_schema_not_found2():
 
     result = metadataSchema.get_schema("databaseId123",  "schemaId123")
     assert mock_ddb.get_item.call_args == call(Key={'databaseId': 'databaseId123', 'field': 'schemaId123'})
-    assert None == result
+    assert result is None
 
 
 def test_get_schema_error():
@@ -163,16 +164,16 @@ def test_lambda_handler_not_super_admin():
     mock_metadata_schema = Mock()
 
     event = APIGatewayProxyEvent({
-            "httpMethod": "GET",
-            "path": "/metadataschema",
-            "queryStringParameters": {},
-            "pathParameters": {
+        "httpMethod": "GET",
+        "path": "/metadataschema",
+        "queryStringParameters": {},
+        "pathParameters": {
                 "databaseId": "databaseId123",
-            },
-            "requestContext": {
-                "requestId": "woohoo!=",
-            }
-        })
+        },
+        "requestContext": {
+            "requestId": "woohoo!=",
+        }
+    })
     context = {}
 
     response = lambda_handler(event, context, claims_fn=mock_claims, metadata_schema_fn=mock_metadata_schema)
@@ -190,14 +191,14 @@ def test_lambda_handler_missing_databaseId():
     mock_metadata_schema = Mock()
 
     event = APIGatewayProxyEvent({
-            "httpMethod": "GET",
-            "path": "/metadataschema",
-            "queryStringParameters": {},
-            "pathParameters": {},
-            "requestContext": {
+        "httpMethod": "GET",
+        "path": "/metadataschema",
+        "queryStringParameters": {},
+        "pathParameters": {},
+        "requestContext": {
                 "requestId": "woohoo!=",
-            }
-        })
+        }
+    })
     context = {}
 
     response = lambda_handler(event, context, claims_fn=mock_claims, metadata_schema_fn=mock_metadata_schema)
@@ -207,6 +208,7 @@ def test_lambda_handler_missing_databaseId():
     assert response_body['error'] == 'Missing databaseId in path'
     assert response_body['requestid'] == 'woohoo!='
 
+
 def test_lambda_handler_get():
     from backend.handlers.metadataschema.schema import lambda_handler
     from backend.handlers.metadataschema.schema import APIGatewayProxyEvent
@@ -214,25 +216,25 @@ def test_lambda_handler_get():
     mock_metadata_schema = Mock()
     metadata_schema_factory = Mock(return_value=mock_metadata_schema)
     values = [
-        { "field": "schemaId123", "datatype": "string", "required": True, "dependsOn": ["schemaId122"]},
-        { "field": "schemaId122", "datatype": "string", "required": True, },
+        {"field": "schemaId123", "datatype": "string", "required": True, "dependsOn": ["schemaId122"]},
+        {"field": "schemaId122", "datatype": "string", "required": True, },
     ]
     mock_metadata_schema.get_all_schemas = Mock(return_value=values)
-    
+
     event = APIGatewayProxyEvent({
-            "httpMethod": "GET",
-            "path": "/metadataschema",
-            "queryStringParameters": {},
-            "pathParameters": {
+        "httpMethod": "GET",
+        "path": "/metadataschema",
+        "queryStringParameters": {},
+        "pathParameters": {
                 "databaseId": "databaseId123",
-            },
-            "requestContext": {
-                "requestId": "woohoo!=",
-                "http": {
-                    "method": "GET",   
-                }
+        },
+        "requestContext": {
+            "requestId": "woohoo!=",
+            "http": {
+                "method": "GET",
             }
-        })
+        }
+    })
     context = {}
 
     response = lambda_handler(event, context, claims_fn=mock_claims, metadata_schema_fn=metadata_schema_factory)
@@ -241,6 +243,7 @@ def test_lambda_handler_get():
     response_body = json.loads(response['body'])
     assert response_body['requestid'] == 'woohoo!='
     assert response_body['schemas'] == values
+
 
 def create_event(method):
 
@@ -265,29 +268,30 @@ def create_event(method):
             "dependsOn": ["schemaId122"],
         }),
     })
-    
+
 
 def create_delete_event():
 
     return APIGatewayProxyEvent({
-            "httpMethod": "DELETE",
-            "path": "/metadataschema",
-            "queryStringParameters": {},
-            "pathParameters": {
+        "httpMethod": "DELETE",
+        "path": "/metadataschema",
+        "queryStringParameters": {},
+        "pathParameters": {
                 "databaseId": "databaseId123",
                 "field": "schemaId123",
-            },
-            "requestContext": {
-                "requestId": "woohoo!=",
-                "http": {
-                    "method": "DELETE",
-                }
-            },
-        })
+        },
+        "requestContext": {
+            "requestId": "woohoo!=",
+            "http": {
+                "method": "DELETE",
+            }
+        },
+    })
+
 
 def test_lambda_handler_post():
 
-    event = create_event("POST") 
+    event = create_event("POST")
 
     response, mock_metadata_schema = _invoke_lambda_handler_harness(event)
 
@@ -297,14 +301,15 @@ def test_lambda_handler_post():
 
     mock_metadata_schema.update_schema.assert_called_once_with("databaseId123", "schemaId123", {
         "field": "schemaId123",
-        "datatype": "string",   
+        "datatype": "string",
         "required": True,
         "sequenceNumber": 1.0,
         "dependsOn": ["schemaId122"],
     })
+
 
 def test_lambda_handler_put():
-    event = create_event("PUT") 
+    event = create_event("PUT")
 
     response, mock_metadata_schema = _invoke_lambda_handler_harness(event)
 
@@ -314,11 +319,12 @@ def test_lambda_handler_put():
 
     mock_metadata_schema.update_schema.assert_called_once_with("databaseId123", "schemaId123", {
         "field": "schemaId123",
-        "datatype": "string",   
+        "datatype": "string",
         "required": True,
         "sequenceNumber": 1.0,
         "dependsOn": ["schemaId122"],
     })
+
 
 def test_lambda_handler_delete():
 
@@ -340,25 +346,26 @@ def test_lambda_handler_get_schema_with_decimal_response():
     mock_metadata_schema = Mock()
     metadata_schema_factory = Mock(return_value=mock_metadata_schema)
     values = [
-        { "field": "schemaId123", "datatype": "string", "sequenceNumber":  Decimal(5.0), "required": True, "dependsOn": ["schemaId122"]},
-        { "field": "schemaId122", "datatype": "string", "sequenceNumber": Decimal(10.0), "required": True, },
+        {"field": "schemaId123", "datatype": "string", "sequenceNumber":  Decimal(
+            5.0), "required": True, "dependsOn": ["schemaId122"]},
+        {"field": "schemaId122", "datatype": "string", "sequenceNumber": Decimal(10.0), "required": True, },
     ]
     mock_metadata_schema.get_all_schemas = Mock(return_value=values)
-    
+
     event = APIGatewayProxyEvent({
-            "httpMethod": "GET",
-            "path": "/metadataschema",
-            "queryStringParameters": {},
-            "pathParameters": {
+        "httpMethod": "GET",
+        "path": "/metadataschema",
+        "queryStringParameters": {},
+        "pathParameters": {
                 "databaseId": "databaseId123",
-            },
-            "requestContext": {
-                "requestId": "woohoo!=",
-                "http": {
-                    "method": "GET",   
-                }
+        },
+        "requestContext": {
+            "requestId": "woohoo!=",
+            "http": {
+                "method": "GET",
             }
-        })
+        }
+    })
     context = {}
 
     response = lambda_handler(event, context, claims_fn=mock_claims, metadata_schema_fn=metadata_schema_factory)
@@ -367,6 +374,7 @@ def test_lambda_handler_get_schema_with_decimal_response():
     response_body = json.loads(response['body'])
     assert response_body['requestid'] == 'woohoo!='
     assert response_body['schemas'] == values
+
 
 def _invoke_lambda_handler_harness(event,):
     from backend.handlers.metadataschema.schema import lambda_handler
