@@ -34,7 +34,6 @@ export const useTreeCollection = <T>(
     const [sortState, setSortState] = useState<TableProps.SortingState<T>>({
         ...(collectionProps.sorting?.defaultState || {}),
     } as TableProps.SortingState<T>);
-    const [columnsDefinitions] = useState(columnDefinitions);
 
     useEffect(() => {
         const treeNodes = TreeUtility.buildTreeNodes(
@@ -43,11 +42,11 @@ export const useTreeCollection = <T>(
             keyPropertyName,
             parentKeyPropertyName
         );
-        TreeUtility.sortTree(treeNodes, sortState, columnsDefinitions);
+        TreeUtility.sortTree(treeNodes, sortState, columnDefinitions);
         // only builds prefix after building and sorting the tree
         const tree = TreeUtility.buildTreePrefix(treeNodes);
         setNodes(TreeUtility.flatTree(tree));
-    }, [items, keyPropertyName, parentKeyPropertyName, sortState, columnsDefinitions, treeMap]);
+    }, [columnDefinitions, items, keyPropertyName, parentKeyPropertyName, sortState, treeMap]);
 
     const expandNode = (node: ITreeNode<T>) => {
         if (node) {
