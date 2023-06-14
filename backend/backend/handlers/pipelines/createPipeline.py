@@ -11,6 +11,8 @@ import datetime
 from decimal import Decimal
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from backend.common.validators import validate
+import traceback
+
 dynamodb = boto3.resource('dynamodb')
 cloudformation= boto3.client('cloudformation')
 lambda_client = boto3.client('lambda')
@@ -69,10 +71,10 @@ def upload_Pipeline(body):
         'isProvided': False,
         'resourceId': ''
     }
-    if body['containerUri'] != None:
+    if 'containerUri' in body:
         userResource['isProvided'] = True 
         userResource['resourceId'] = body['containerUri'] 
-    elif body['lambdaName'] != None:
+    elif 'lambdaName' in body:
         userResource['isProvided'] = True 
         userResource['resourceId'] = body['lambdaName']
 
@@ -284,7 +286,7 @@ def lambda_handler(event, context):
         return response
     except Exception as e:
         response['statusCode'] = 500
-        print("Error!", e.__class__, "occurred.")
+        print("Error!", e.__class__, "occurred.", traceback.format_exc())
         if e.response['Error']['Code']=='ConditionalCheckFailedException':
             response['statusCode']=500
             response['body'] = json.dumps({"message":"Pipeline "+str(event['body']['pipelineId']+" already exists.")})
