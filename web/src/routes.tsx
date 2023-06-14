@@ -18,69 +18,110 @@ import Workflows from "./pages/Workflows";
 import CreateUpdateWorkflow from "./components/createupdate/CreateUpdateWorkflow";
 import Constraints from "./pages/auth/Constraints";
 import FinishUploadsPage from "./pages/FinishUploads";
+import MetadataSchema from "./pages/MetadataSchema";
 
-const routeTable = [
+interface RouteOption {
+    path: string;
+    Page: React.FC;
+    active: string;
+    roles?: string[];
+}
+
+const routeTable: RouteOption[] = [
     { path: "/", Page: LandingPage, active: "/" },
-    { path: "/databases", Page: Databases, active: "/databases" },
-    { path: "/databases/:databaseId/assets", Page: Assets, active: "/assets" },
+    { path: "/databases", Page: Databases, active: "/databases", roles: ["assets"] },
+    { path: "/databases/:databaseId/assets", Page: Assets, active: "/assets", roles: ["assets"] },
     {
         path: "/databases/:databaseId/assets/:assetId",
         Page: ViewAsset,
         active: "/assets",
+        roles: ["assets"],
     },
     {
         path: "/databases/:databaseId/assets/:assetId/uploads",
         Page: FinishUploadsPage,
         active: "/assets",
+        roles: ["assets", "upload"],
     },
-    { path: "/assets/:assetId", Page: ViewAsset, active: "/assets" },
-    { path: "/upload/:databaseId", Page: AssetUploadPage, active: "/upload" },
-    { path: "/upload", Page: AssetUploadPage, active: "/upload" },
-    { path: "/visualizers/:pathViewType", Page: ViewAsset, active: "/assets" },
-    { path: "/assets", Page: Assets, active: "/assets" },
+    { path: "/assets/:assetId", Page: ViewAsset, active: "/assets", roles: ["assets"] },
+    {
+        path: "/upload/:databaseId",
+        Page: AssetUploadPage,
+        active: "/upload",
+        roles: ["assets", "upload"],
+    },
+    { path: "/upload", Page: AssetUploadPage, active: "/upload", roles: ["assets", "upload"] },
+    { path: "/visualizers/:pathViewType", Page: ViewAsset, active: "/assets", roles: ["assets"] },
+    { path: "/assets", Page: Assets, active: "/assets", roles: ["assets"] },
     {
         path: "/databases/:databaseId/pipelines",
         Page: Pipelines,
         active: "/pipelines",
+        roles: ["pipelines"],
     },
-    { path: "/pipelines", Page: Pipelines, active: "/pipelines" },
+    { path: "/pipelines", Page: Pipelines, active: "/pipelines", roles: ["pipelines"] },
     {
         path: "/pipelines/:pipelineName",
         Page: ViewPipeline,
         active: "/pipelines",
+        roles: ["pipelines"],
     },
     {
         path: "/databases/:databaseId/workflows",
         Page: Workflows,
         active: "/workflows",
+        roles: ["workflows"],
     },
-    { path: "/workflows", Page: Workflows, active: "/workflows" },
+    { path: "/workflows", Page: Workflows, active: "/workflows", roles: ["workflows"] },
     {
         path: "/databases/:databaseId/workflows/:workflowId",
         Page: CreateUpdateWorkflow,
         active: "/workflows",
+        roles: ["workflows"],
     },
     {
         path: "/workflows/create",
         Page: CreateUpdateWorkflow,
         active: "/workflows",
+        roles: ["workflows"],
     },
     {
         path: "/databases/:databaseId/workflows/create",
         Page: CreateUpdateWorkflow,
         active: "/workflows",
+        roles: ["workflows"],
     },
     {
         path: "/auth/constraints",
         Page: Constraints,
         active: "/auth/constraints",
+        roles: ["super-admin"],
+    },
+    {
+        path: "*",
+        Page: LandingPage,
+        active: "/",
+    },
+    {
+        path: "/metadataschema/create",
+        Page: MetadataSchema,
+        active: "/metadataschema",
+    },
+    {
+        path: "/metadataschema/:databaseId/create",
+        Page: MetadataSchema,
+        active: "/metadataschema",
     },
 ];
 
-export const AppRoutes = (props) => {
-    const { navigationOpen, setNavigationOpen, user } = props;
+interface AppRoutesProps {
+    navigationOpen: boolean;
+    setNavigationOpen: (open: boolean) => void;
+    user: any;
+}
 
-    const buildRoute = (routeOptions, i) => {
+export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutesProps) => {
+    const buildRoute = (routeOptions: RouteOption, i: number = 0) => {
         const { path, active, Page } = routeOptions;
         return (
             <Route
@@ -100,5 +141,16 @@ export const AppRoutes = (props) => {
         );
     };
 
-    return <Routes>{routeTable.map(buildRoute)}</Routes>;
+    const roles = JSON.parse(user.signInUserSession.idToken.payload["vams:roles"]);
+
+    const filterRoute = (routeOptions: RouteOption) => {
+        if (routeOptions.roles) {
+            if (roles.includes("super-admin")) return true;
+            return routeOptions.roles.some((role) => roles.includes(role));
+        } else {
+            return true;
+        }
+    };
+
+    return <Routes>{routeTable.filter(filterRoute).map(buildRoute)}</Routes>;
 };

@@ -33,12 +33,17 @@ const FileUploadControl = (props) => {
     const inputRef = useRef();
 
     useEffect(() => {
+        setFile(formValues[controlName]);
+    }, [formValues[controlName]]);
+
+    useEffect(() => {
         if (file) {
             const newFormValues = Object.assign({}, formValues);
             newFormValues[controlName] = file;
+            newFormValues.assetType = file.name.split(".").pop();
             setFormValues(newFormValues);
         }
-    }, [file, controlName, formValues, setFormValues]);
+    }, [file, controlName, setFormValues]);
 
     return (
         <>

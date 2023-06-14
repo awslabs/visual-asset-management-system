@@ -228,7 +228,12 @@ export class CognitoWebNativeConstruct extends Construct {
         authenticatedRole.addToPolicy(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
-                actions: ["s3:PutObject", "s3:GetObject", "s3:CreateMultipartUpload", "s3:ListBucket"],
+                actions: [
+                    "s3:PutObject",
+                    "s3:GetObject",
+                    "s3:CreateMultipartUpload",
+                    "s3:ListBucket",
+                ],
                 resources: [
                     props.storageResources.s3.assetBucket.bucketArn,
                     props.storageResources.s3.assetBucket.bucketArn + "/*",

@@ -2,19 +2,19 @@
  * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
-import {Box, Grid, Link, SpaceBetween, TextContent} from "@cloudscape-design/components";
+import { Box, Grid, Link, SpaceBetween, TextContent } from "@cloudscape-design/components";
 
 import ProgressBar, { ProgressBarProps } from "@cloudscape-design/components/progress-bar";
 import StatusIndicator, {
     StatusIndicatorProps,
 } from "@cloudscape-design/components/status-indicator";
-import {FileUploadTable, FileUploadTableItem} from "./FileUploadTable";
-import {AssetDetail} from "../AssetUpload";
+import { FileUploadTable, FileUploadTableItem } from "./FileUploadTable";
+import { AssetDetail } from "../AssetUpload";
 
 class ProgressScreenProps {
-    assetDetail!: AssetDetail
+    assetDetail!: AssetDetail;
     previewUploadProgress?: ProgressBarProps;
-    allFileUploadItems!: FileUploadTableItem[]
+    allFileUploadItems!: FileUploadTableItem[];
     execStatus!: Record<string, StatusIndicatorProps.Type>;
     onRetry!: () => void;
 }
@@ -24,29 +24,35 @@ export default function ProgressScreen({
     previewUploadProgress,
     execStatus,
     allFileUploadItems,
-    onRetry
+    onRetry,
 }: ProgressScreenProps): JSX.Element {
     return (
         <Box padding={{ top: false ? "s" : "m", horizontal: "l" }}>
             <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
                 <div>
-                    <SpaceBetween size="l" direction={"vertical"} >
+                    <SpaceBetween size="l" direction={"vertical"}>
                         <Box variant="awsui-key-label">
                             Upload Progress for Asset:
-                            <Link href={`/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`} target="_blank">
+                            <Link
+                                href={`/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`}
+                                target="_blank"
+                            >
                                 {assetDetail.assetName}
                             </Link>
                         </Box>
 
-                        <FileUploadTable allItems={allFileUploadItems} onRetry={onRetry} resume={false}/>
-                        {
-                            assetDetail.Preview &&  previewUploadProgress &&
+                        <FileUploadTable
+                            allItems={allFileUploadItems}
+                            onRetry={onRetry}
+                            resume={false}
+                        />
+                        {assetDetail.Preview && previewUploadProgress && (
                             <ProgressBar
                                 status={previewUploadProgress.status}
                                 value={previewUploadProgress.value}
                                 label="Preview Upload Progress"
                             />
-                        }
+                        )}
                         <Box variant="awsui-key-label">Exec Progress</Box>
 
                         {Object.keys(execStatus).map((label) => (
@@ -60,7 +66,7 @@ export default function ProgressScreen({
                             </TextContent>
                         </div>
                     </SpaceBetween>
-                    </div>
+                </div>
             </Grid>
         </Box>
     );

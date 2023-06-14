@@ -17,7 +17,7 @@ import {
     Spinner,
 } from "@cloudscape-design/components";
 
-import Metadata from "./Metadata";
+import ControlledMetadata from "../metadata/ControlledMetadata";
 import ImgViewer from "../viewers/ImgViewer";
 import React, { useEffect, useState, Suspense } from "react";
 import { useParams } from "react-router";
@@ -42,7 +42,10 @@ import { WorkflowExecutionListDefinition } from "../list/list-definitions/Workfl
 import CreateUpdateAsset from "../createupdate/CreateUpdateAsset";
 import { actionTypes } from "../createupdate/form-definitions/types/FormDefinition";
 import WorkflowSelectorWithModal from "../selectors/WorkflowSelectorWithModal";
-import localforage from "localforage"
+import localforage from "localforage";
+import { ErrorBoundary } from "react-error-boundary";
+import Synonyms from "../../synonyms";
+
 const ThreeDimensionalPlotter = React.lazy(() => import("../viewers/ThreeDimensionalPlotter"));
 const ColumnarViewer = React.lazy(() => import("../viewers/ColumnarViewer"));
 const HTMLViewer = React.lazy(() => import("../viewers/HTMLViewer"));
@@ -50,8 +53,8 @@ const ModelViewer = React.lazy(() => import("../viewers/ModelViewer"));
 const FolderViewer = React.lazy(() => import("../viewers/FolderViewer"));
 const checkFileFormat = (asset) => {
     let filetype;
-    if(asset?.isMultiFile) {
-        return "folder"
+    if (asset?.isMultiFile) {
+        return "folder";
     }
     if (asset?.generated_artifacts?.gltf?.Key) {
         filetype = asset?.generated_artifacts?.gltf?.Key.split(".").pop();
@@ -148,15 +151,17 @@ export default function ViewAsset() {
                     }
                 }
                 setAllItems(newRows);
-                console.log("newRows", newRows);
                 setLoading(false);
                 setReload(false);
             }
             localforage.getItem(assetId).then((value) => {
                 console.log("Reading from localforage:", value);
-                for(let i=0; i<value.Asset.length; i++) {
-                    if(value.Asset[i].status !== 'Completed' && (value.Asset[i].loaded !== value.Asset[i].total)) {
-                        setContainsIncompleteUploads(true)
+                for (let i = 0; i < value.Asset.length; i++) {
+                    if (
+                        value.Asset[i].status !== "Completed" &&
+                        value.Asset[i].loaded !== value.Asset[i].total
+                    ) {
+                        setContainsIncompleteUploads(true);
                         break;
                     }
                 }
@@ -165,7 +170,7 @@ export default function ViewAsset() {
         if (reload) {
             getData();
         }
-    }, [reload, assetId, databaseId]);
+    }, [reload, assetId, databaseId, asset]);
 
     const changeViewerMode = (mode) => {
         if (mode === "fullscreen" && viewerMode === "fullscreen") {
@@ -248,7 +253,7 @@ export default function ViewAsset() {
         });
         if (result !== false && Array.isArray(result)) {
             if (result[0] === false) {
-                setAssetDownloadError(`Unable to download asset. ${result[1]}`);
+                setAssetDownloadError(`Unable to download ${Synonyms.asset}. ${result[1]}`);
             } else {
                 setAssetDownloadError("");
                 setDownloadUrl(result[1]);
@@ -275,7 +280,7 @@ export default function ViewAsset() {
                     } else if (defaultViewType === "html") {
                         newViewerOptions.push({ text: "HTML", id: "html" });
                     } else if (defaultViewType === "folder") {
-                        newViewerOptions.push({text: "Folder", id: "folder"});
+                        newViewerOptions.push({ text: "Folder", id: "folder" });
                     }
                     setViewerOptions(newViewerOptions);
                     if (!window.location.hash) setViewType(defaultViewType);
@@ -291,7 +296,7 @@ export default function ViewAsset() {
                             setViewType("column");
                         } else if (window.location.hash === "#html") {
                             setViewType("html");
-                        } else if(window.location.hash === "#folder") {
+                        } else if (window.location.hash === "#folder") {
                             setViewType("folder");
                         }
                     }
@@ -301,17 +306,17 @@ export default function ViewAsset() {
         if (reload && !pathViewType) {
             getData();
         }
-    }, [reload, assetId, databaseId, pathViewType]);
+    }, [reload, assetId, databaseId, pathViewType, asset]);
 
     return (
         <>
             {assetId && (
                 <>
                     <Box padding={{ top: "s", horizontal: "l" }}>
-                        <SpaceBetween direction="vertical" size="xs">
+                        <SpaceBetween direction="vertical" size="l">
                             <BreadcrumbGroup
                                 items={[
-                                    { text: "Databases", href: "/databases/" },
+                                    { text: Synonyms.Databases, href: "/databases/" },
                                     {
                                         text: databaseId,
                                         href: "/databases/" + databaseId + "/assets/",
@@ -344,7 +349,9 @@ export default function ViewAsset() {
                                                             Edit
                                                         </Button>
                                                     </div>
-                                                    <Header variant="h2">Asset Details</Header>
+                                                    <Header variant="h2">
+                                                        {Synonyms.Asset} Details
+                                                    </Header>
                                                 </div>
                                             }
                                         >
@@ -395,14 +402,17 @@ export default function ViewAsset() {
                                                     </SpaceBetween>
                                                 </div>
                                             )}
-                                            {
-                                                containsIncompleteUploads &&
+                                            {containsIncompleteUploads && (
                                                 <>
                                                     <h5>Finish Incomplete uploads</h5>
-                                                    <Link href={`/databases/${databaseId}/assets/${assetId}/uploads`}> Finish Incomplete uploads </Link>
+                                                    <Link
+                                                        href={`/databases/${databaseId}/assets/${assetId}/uploads`}
+                                                    >
+                                                        {" "}
+                                                        Finish Incomplete uploads{" "}
+                                                    </Link>
                                                 </>
-
-                                            }
+                                            )}
                                             <FormField errorText={assetDownloadError}></FormField>
                                         </Container>
                                     </div>
@@ -486,7 +496,6 @@ export default function ViewAsset() {
                                                                 databaseId={asset?.databaseId}
                                                             />
                                                         )}
-
                                                     </div>
 
                                                     <div className="visualizer-footer">
@@ -578,26 +587,25 @@ export default function ViewAsset() {
                                     </SpaceBetween>
                                 </div>
                             </Grid>
-                            <div
-                                style={{
-                                    position: "relative",
-                                    minHeight: "650px",
-                                    width: "100%",
-                                }}
+                            <RelatedTableList
+                                allItems={allItems}
+                                loading={loading}
+                                listDefinition={WorkflowExecutionListDefinition}
+                                databaseId={databaseId}
+                                setReload={setReload}
+                                parentId={"workflowId"}
+                                HeaderControls={WorkflowHeaderControls}
+                            />
+                            <ErrorBoundary
+                                fallback={
+                                    <div>
+                                        Metadata failed to load due to an error. Contact your VAMS
+                                        administrator for help.
+                                    </div>
+                                }
                             >
-                                <div style={{ width: "100%" }}>
-                                    <RelatedTableList
-                                        allItems={allItems}
-                                        loading={loading}
-                                        listDefinition={WorkflowExecutionListDefinition}
-                                        databaseId={databaseId}
-                                        setReload={setReload}
-                                        parentId={"workflowId"}
-                                        HeaderControls={WorkflowHeaderControls}
-                                    />
-                                </div>
-                                <Metadata databaseId={databaseId} assetId={assetId} />
-                            </div>
+                                <ControlledMetadata databaseId={databaseId} assetId={assetId} />
+                            </ErrorBoundary>
                         </SpaceBetween>
                     </Box>
                     <CreateUpdateAsset
@@ -607,6 +615,10 @@ export default function ViewAsset() {
                         databaseId={databaseId}
                         assetId={assetId}
                         actionType={actionTypes.UPDATE}
+                        asset={asset}
+                        setAsset={(a) => {
+                            setViewType("preview");
+                        }}
                     />
                     <WorkflowSelectorWithModal
                         assetId={assetId}

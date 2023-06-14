@@ -23,6 +23,7 @@ import { Construct } from "constructs";
 import { NagSuppressions } from "cdk-nag";
 import { CustomCognitoConfigConstruct } from "./constructs/custom-cognito-config-construct";
 import { samlEnabled, samlSettings } from "./saml-config";
+import { LocationServiceConstruct } from "./constructs/location-service-construct";
 
 interface EnvProps {
     prod: boolean; //ToDo: replace with env
@@ -157,6 +158,10 @@ export class VAMS extends cdk.Stack {
         //     wafScope: WAFScope.REGIONAL,
         // });
 
+        const location = new LocationServiceConstruct(this, "LocationService", {
+            role: cognitoResources.authenticatedRole,
+        });
+
         const amplifyConfigProps: AmplifyConfigLambdaConstructProps = {
             ...props,
             api: api.apiGatewayV2,
@@ -204,7 +209,9 @@ export class VAMS extends cdk.Stack {
         this.node.findAll().forEach((item) => {
             if (item instanceof cdk.aws_lambda.Function) {
                 const fn = item as cdk.aws_lambda.Function;
-                if (fn.runtime.name == "python3.9") {
+                // python3.9 suppressed for CDK Bucket Deployment
+                // nodejs14.x suppressed for use of custom resource to deploy saml in CustomCognitoConfigConstruct
+                if (fn.runtime.name === "python3.9" || fn.runtime.name === "nodejs14.x") {
                     NagSuppressions.addResourceSuppressions(fn, [
                         {
                             id: "AwsSolutions-L1",

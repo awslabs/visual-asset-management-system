@@ -11,6 +11,7 @@ export default function PipelineEntity(props) {
         databaseId,
         description,
         pipelineType,
+        waitForCallback,
         externalContainerUri,
         externalLambdaName,
         assetType,
@@ -20,6 +21,7 @@ export default function PipelineEntity(props) {
     this.databaseId = databaseId;
     this.description = description;
     this.pipelineType = pipelineType;
+    this.waitForCallback = waitForCallback;
     this.externalContainerUri = externalContainerUri;
     this.externalLambdaName = externalLambdaName;
     this.assetType = assetType;
@@ -31,6 +33,7 @@ PipelineEntity.propTypes = {
     databaseId: EntityPropTypes.ENTITY_ID,
     description: EntityPropTypes.STRING_256,
     pipelineType: EntityPropTypes.STRING_32,
+    waitForCallback: EntityPropTypes.BOOLEAN,
     assetType: EntityPropTypes.FILE_TYPE,
     outputType: EntityPropTypes.FILE_TYPE,
     containerUri: EntityPropTypes.CONTAINER_URI,

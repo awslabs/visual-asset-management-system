@@ -92,7 +92,7 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
             bucket: config.bucket,
             customPrefix: {
                 public: "",
-                private: ""
+                private: "",
             },
         },
         API: {
@@ -110,6 +110,31 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
                     },
                 },
             ],
+        },
+        geo: {
+            AmazonLocationService: {
+                maps: {
+                    items: {
+                        "vams-map-raster": {
+                            // REQUIRED - Amazon Location Service Map resource name
+                            style: "RasterEsriImagery", // REQUIRED - String representing the style of map resource
+                        },
+                        "vams-map-streets": {
+                            style: "VectorEsriStreets",
+                        },
+                    },
+                    default: "vams-map-raster", // REQUIRED - Amazon Location Service Map resource name to set as default
+                },
+                search_indices: {
+                    items: ["vams-index"], // REQUIRED - Amazon Location Service Place Index name
+                    default: "vams-index", // REQUIRED - Amazon Location Service Place Index name to set as default
+                },
+                // geofenceCollections: {
+                //     items: ["XXXXXXXXX", "XXXXXXXXX"], // REQUIRED - Amazon Location Service Geofence Collection name
+                //     default: "XXXXXXXXX", // REQUIRED - Amazon Location Service Geofence Collection name to set as default
+                // },
+                region: config.region, // REQUIRED - Amazon Location Service Region
+            },
         },
     });
 

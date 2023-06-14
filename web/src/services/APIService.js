@@ -213,7 +213,11 @@ export const fetchAssetFiles = async ({ databaseId, assetId }, api = API) => {
     try {
         let response;
         if (databaseId && assetId) {
-            response = await api.get("api", `database/${databaseId}/assets/${assetId}/listFiles`, {});
+            response = await api.get(
+                "api",
+                `database/${databaseId}/assets/${assetId}/listFiles`,
+                {}
+            );
             if (response) return response;
         } else {
             return false;
@@ -222,7 +226,7 @@ export const fetchAssetFiles = async ({ databaseId, assetId }, api = API) => {
         console.log(error);
         return error?.message;
     }
-}
+};
 
 /**
  * Returns array of all assets the current user can access for all databases, or false if error.

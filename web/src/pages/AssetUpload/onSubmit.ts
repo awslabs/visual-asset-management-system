@@ -2,15 +2,15 @@
  * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
-import {ProgressBarProps} from "@cloudscape-design/components";
-import {NonCancelableCustomEvent} from "@cloudscape-design/components/interfaces";
-import {StatusIndicatorProps} from "@cloudscape-design/components/status-indicator";
+import { ProgressBarProps } from "@cloudscape-design/components";
+import { NonCancelableCustomEvent } from "@cloudscape-design/components/interfaces";
+import { StatusIndicatorProps } from "@cloudscape-design/components/status-indicator";
 
-import {API, Storage, Cache} from "aws-amplify";
-import {Metadata, MetadataApi} from "../../components/single/Metadata";
-import {AssetDetail} from "../AssetUpload";
-import {generateUUID} from "../../common/utils/utils";
-import {FileUploadTableItem} from "./FileUploadTable";
+import { API, Storage, Cache } from "aws-amplify";
+import { Metadata, MetadataApi } from "../../components/single/Metadata";
+import { AssetDetail } from "../AssetUpload";
+import { generateUUID } from "../../common/utils/utils";
+import { FileUploadTableItem } from "./FileUploadTable";
 
 export type ExecStatusType = Record<string, StatusIndicatorProps.Type>;
 
@@ -58,30 +58,38 @@ class ProgressCallbackArgs {
     total!: number;
 }
 
-function getUploadTaskPromise(index: number, key: string, f: File, metadata: { [p: string]: string }, progressCallback: (index: number, progress: ProgressCallbackArgs) => void, completeCallback: (index: number, event: any) => void, errorCallback: (index: number, event: any) => void) {
+function getUploadTaskPromise(
+    index: number,
+    key: string,
+    f: File,
+    metadata: { [p: string]: string },
+    progressCallback: (index: number, progress: ProgressCallbackArgs) => void,
+    completeCallback: (index: number, event: any) => void,
+    errorCallback: (index: number, event: any) => void
+) {
     return new Promise((resolve, reject) => {
         return Storage.put(key, f, {
             metadata,
             resumable: true,
             customPrefix: {
-                'public': ''
+                public: "",
             },
             progressCallback: (progress: ProgressCallbackArgs) => {
                 progressCallback(index, {
                     loaded: progress.loaded,
-                    total: progress.total
-                })
+                    total: progress.total,
+                });
             },
             completeCallback: (event: any) => {
-                completeCallback(index, null)
+                completeCallback(index, null);
                 resolve(true);
             },
             errorCallback: (event: any) => {
-                errorCallback(index, event)
+                errorCallback(index, event);
                 resolve(true);
-            }
+            },
         });
-    })
+    });
 }
 
 export function createAssetUploadPromises(
@@ -91,25 +99,47 @@ export function createAssetUploadPromises(
     moveToQueued: (index: number) => void,
     progressCallback: (index: number, progress: ProgressCallbackArgs) => void,
     completeCallback: (index: number, event: any) => void,
-    errorCallback: (index: number, event: any) => void,
+    errorCallback: (index: number, event: any) => void
 ) {
-    const uploads = []
+    const uploads = [];
     // KeyPrefix captures the entire path when a single file is selected as an asset
     // A promise begins executing right after creation, hence I am returning a function that returns a promise
     // so these promises can then be executed sequentially to track progress
 
     if (files.length === 1) {
-        uploads.push(async () => await files[0].handle.getFile().then((f: File) => {
-            return getUploadTaskPromise(0, keyPrefix, f, metadata, progressCallback, completeCallback, errorCallback);
-        }));
+        uploads.push(
+            async () =>
+                await files[0].handle.getFile().then((f: File) => {
+                    return getUploadTaskPromise(
+                        0,
+                        keyPrefix,
+                        f,
+                        metadata,
+                        progressCallback,
+                        completeCallback,
+                        errorCallback
+                    );
+                })
+        );
     } else {
         for (let i = 0; i < files.length; i++) {
-            if (files[i].status !== 'Completed') {
-                moveToQueued(i)
-                uploads.push(async () => await files[i].handle.getFile().then((f: File) => {
-                    let key = keyPrefix + files[i].relativePath
-                    return getUploadTaskPromise(i, key, f, metadata, progressCallback, completeCallback, errorCallback);
-                }));
+            if (files[i].status !== "Completed") {
+                moveToQueued(i);
+                uploads.push(
+                    async () =>
+                        await files[i].handle.getFile().then((f: File) => {
+                            let key = keyPrefix + files[i].relativePath;
+                            return getUploadTaskPromise(
+                                i,
+                                key,
+                                f,
+                                metadata,
+                                progressCallback,
+                                completeCallback,
+                                errorCallback
+                            );
+                        })
+                );
             }
         }
     }
@@ -119,7 +149,7 @@ export function createAssetUploadPromises(
 export async function executeUploads(uploadPromises: any) {
     let result = Promise.resolve();
     for (let i = 0; i < uploadPromises.length; i++) {
-        result = result.then(uploadPromises[i])
+        result = result.then(uploadPromises[i]);
     }
     return result;
 }
@@ -131,16 +161,16 @@ async function uploadAssetToS3(
     progressCallback: (progress: ProgressCallbackArgs) => void
 ) {
     console.log("upload", key, file);
-    return Storage.put(key, file, {metadata, progressCallback});
+    return Storage.put(key, file, { metadata, progressCallback });
 }
 
 const getAssetType = (assetDetail: AssetDetail) => {
     if (assetDetail.Asset?.length === 1) {
-        return "." + assetDetail.Asset[0].name.split(".").pop()
+        return "." + assetDetail.Asset[0].name.split(".").pop();
     } else {
-        return 'folder'
+        return "folder";
     }
-}
+};
 
 const getKeyPrefix = (uuid: string, assetDetail: AssetDetail) => {
     if (assetDetail.Asset?.length === 1) {
@@ -148,67 +178,66 @@ const getKeyPrefix = (uuid: string, assetDetail: AssetDetail) => {
     } else {
         return uuid + "/";
     }
-}
+};
 
 export interface UploadExecutionProps {
-    assetDetail: AssetDetail,
-    updateProgressForFileUploadItem: (index: number, loaded: number, total:number) => void,
-    moveToQueued: (index: number) => void,
-    fileUploadComplete: (index: number, event: any) => void,
-    fileUploadError: (index: number, event: any) => void,
-    setPreviewUploadProgress: (x: ProgressBarProps) => void,
-    uuid: string,
-    prevAssetId?: string,
-    selectedWorkflows: any,
-    metadata: Metadata,
-    setExecStatus: (x: (ExecStatusType | ((x: ExecStatusType) => ExecStatusType))) => void,
-    execStatus: ExecStatusType
+    assetDetail: AssetDetail;
+    updateProgressForFileUploadItem: (index: number, loaded: number, total: number) => void;
+    moveToQueued: (index: number) => void;
+    fileUploadComplete: (index: number, event: any) => void;
+    fileUploadError: (index: number, event: any) => void;
+    setPreviewUploadProgress: (x: ProgressBarProps) => void;
+    uuid: string;
+    prevAssetId?: string;
+    selectedWorkflows: any;
+    metadata: Metadata;
+    setExecStatus: (x: ExecStatusType | ((x: ExecStatusType) => ExecStatusType)) => void;
+    execStatus: ExecStatusType;
 }
 
 async function performUploads({
-                                  assetDetail,
-                                  updateProgressForFileUploadItem,
-                                  moveToQueued,
-                                  fileUploadComplete,
-                                  fileUploadError,
-                                  setPreviewUploadProgress,
-                                  uuid,
-                                  prevAssetId,
-                                  selectedWorkflows,
-                                  metadata,
-                                  setExecStatus,
-                                  execStatus,
-                              }: UploadExecutionProps) {
-    if (
-        assetDetail.Asset &&
-        assetDetail.assetId &&
-        assetDetail.databaseId &&
-        assetDetail.key
-    ) {
-        const uploads = createAssetUploadPromises(assetDetail.Asset, assetDetail.key, {
+    assetDetail,
+    updateProgressForFileUploadItem,
+    moveToQueued,
+    fileUploadComplete,
+    fileUploadError,
+    setPreviewUploadProgress,
+    uuid,
+    prevAssetId,
+    selectedWorkflows,
+    metadata,
+    setExecStatus,
+    execStatus,
+}: UploadExecutionProps) {
+    if (assetDetail.Asset && assetDetail.assetId && assetDetail.databaseId && assetDetail.key) {
+        const uploads = createAssetUploadPromises(
+            assetDetail.Asset,
+            assetDetail.key,
+            {
                 assetId: assetDetail.assetId,
                 databaseId: assetDetail.databaseId,
             },
             moveToQueued,
             (index, progress) => {
-                updateProgressForFileUploadItem(index, progress.loaded, progress.total)
+                updateProgressForFileUploadItem(index, progress.loaded, progress.total);
             },
             (index, event) => {
-                fileUploadComplete(index, event)
-            }, (index, event) => {
+                fileUploadComplete(index, event);
+            },
+            (index, event) => {
                 console.log("Error Uploading", event);
-                fileUploadError(index, event)
+                fileUploadError(index, event);
             }
-        )
+        );
         executeUploads(uploads)
-            .then(() => {
-            })
+            .then(() => {})
             .catch((err) => {
-                return Promise.reject(err)
-            })
+                return Promise.reject(err);
+            });
 
         const up2 =
-            (assetDetail.Preview && assetDetail?.previewLocation?.Key &&
+            (assetDetail.Preview &&
+                assetDetail?.previewLocation?.Key &&
                 uploadAssetToS3(
                     assetDetail.Preview,
                     assetDetail.previewLocation?.Key,
@@ -254,7 +283,7 @@ async function performUploads({
                         Bucket: assetDetail.bucket,
                         Key: uuid + "/" + prevAssetId + ".png",
                     },
-                    isMultiFile: assetDetail.isMultiFile
+                    isMultiFile: assetDetail.isMultiFile,
                 },
                 executeWorkflowBody: {
                     workflowIds: selectedWorkflows.map(
@@ -297,7 +326,6 @@ async function performUploads({
         });
         window.onbeforeunload = null;
     }
-
 }
 
 function updateAssetDetail(assetDetail: AssetDetail) {
@@ -309,7 +337,7 @@ function updateAssetDetail(assetDetail: AssetDetail) {
     // duplicate except that the uuids are unique to this version
     const config = Cache.getItem("config");
     assetDetail.bucket = config.bucket;
-    assetDetail.assetType = getAssetType(assetDetail)
+    assetDetail.assetType = getAssetType(assetDetail);
     assetDetail.key = getKeyPrefix(uuid, assetDetail);
     assetDetail.specifiedPipelines = [];
     assetDetail.previewLocation = {
@@ -326,32 +354,28 @@ function updateAssetDetail(assetDetail: AssetDetail) {
 
     assetDetail.assetName = assetDetail.assetId;
     assetDetail.assetId = uuid;
-    return {uuid, prevAssetId};
+    return { uuid, prevAssetId };
 }
 
 export default function onSubmit({
-                                     assetDetail,
-                                     setFreezeWizardButtons,
-                                     metadata,
-                                     selectedWorkflows,
-                                     execStatus,
-                                     setExecStatus,
-                                     setShowUploadAndExecProgress,
-                                     moveToQueued,
-                                     updateProgressForFileUploadItem,
-                                     fileUploadComplete,
-                                     fileUploadError,
-                                     setPreviewUploadProgress,
-                                     setUploadExecutionProps
-                                 }: OnSubmitProps) {
+    assetDetail,
+    setFreezeWizardButtons,
+    metadata,
+    selectedWorkflows,
+    execStatus,
+    setExecStatus,
+    setShowUploadAndExecProgress,
+    moveToQueued,
+    updateProgressForFileUploadItem,
+    fileUploadComplete,
+    fileUploadError,
+    setPreviewUploadProgress,
+    setUploadExecutionProps,
+}: OnSubmitProps) {
     return async (detail: NonCancelableCustomEvent<{}>) => {
         setFreezeWizardButtons(true);
-        if (
-            assetDetail.Asset &&
-            assetDetail.assetId &&
-            assetDetail.databaseId
-        ) {
-            const {uuid, prevAssetId} = updateAssetDetail(assetDetail);
+        if (assetDetail.Asset && assetDetail.assetId && assetDetail.databaseId) {
+            const { uuid, prevAssetId } = updateAssetDetail(assetDetail);
             const execStatusNew: Record<string, StatusIndicatorProps.Type> = {
                 "Asset Details": "pending",
             };
@@ -372,22 +396,21 @@ export default function onSubmit({
                 selectedWorkflows,
                 metadata,
                 setExecStatus,
-                execStatus
-            }
-            setUploadExecutionProps(uploadExecutionProps)
+                execStatus,
+            };
+            setUploadExecutionProps(uploadExecutionProps);
             await performUploads(uploadExecutionProps);
         } else {
-            console.log("Asset detail not right")
-            console.log(assetDetail)
+            console.log("Asset detail not right");
+            console.log(assetDetail);
         }
     };
 }
 
 export async function onUploadRetry(uploadExecutionProps: UploadExecutionProps) {
-    console.log("Retrying uploads")
+    console.log("Retrying uploads");
     window.onbeforeunload = function () {
         return "";
     };
     await performUploads(uploadExecutionProps);
-
 }

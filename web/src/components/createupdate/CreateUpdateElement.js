@@ -13,6 +13,8 @@ import { EntityPropTypes } from "./entity-types/EntityPropTypes";
 import { AssetContext } from "../../context/AssetContex";
 import { ACTION_TYPES } from "../../common/constants/actions";
 import { ACTIONS, createUpdateElements } from "../../services/APIService";
+import { ENTITY_TYPES_NAMES } from "./entity-types/EntitieTypes";
+import { Storage } from "aws-amplify";
 
 const actionStrings = {
     CREATE: {
@@ -27,6 +29,38 @@ const actionStrings = {
     },
 };
 
+async function fillFormWithAssetMetadata(asset) {
+    let values = {};
+    // fill in form values based on formentitty proptypes
+    const assetTransfer = new DataTransfer();
+    const previewTransfer = new DataTransfer();
+
+    //Retrieve the files from S3 so we can prefill them
+    let assetS3 = await Storage.get(asset.assetLocation.Key, { download: true });
+    let previewS3 = await Storage.get(asset.previewLocation.Key, { download: true });
+
+    assetTransfer.items.add(new File([assetS3.Body], asset.assetLocation.Key.split("/").pop()));
+    previewTransfer.items.add(
+        new File([previewS3.Body], asset.previewLocation.Key.split("/").pop())
+    );
+
+    values.Asset = assetTransfer.files[0]; //File
+    values.Comment = asset.currentVersion?.Comment;
+    values.Preview = previewTransfer.files[0]; //File
+    values.assetName = asset.assetName;
+    values.assetType = "." + asset.assetLocation.Key.split(".").pop();
+    values.bucket = asset.assetLocation?.Bucket;
+    values.databaseId = { label: asset.databaseId, value: asset.databaseId };
+    values.description = asset.description;
+    values.isDistributable = asset.isDistributable;
+    values.key = asset.assetLocation?.Key;
+    values.assetId = asset.assetLocation?.Key.split("/")[0];
+    values.previewLocation = asset.previewLocation;
+    values.specifiedPipelines = asset.specifiedPipelines;
+
+    return values;
+}
+
 export default function CreateUpdateElement(props) {
     const {
         open,
@@ -37,6 +71,8 @@ export default function CreateUpdateElement(props) {
         databaseId,
         elementId,
         actionType,
+        asset,
+        setAsset,
     } = props;
     const {
         entityType,
@@ -52,17 +88,33 @@ export default function CreateUpdateElement(props) {
     const [loadingElement, setLoadingElement] = useState(actionType === ACTION_TYPES.UPDATE);
     const [submitUpdateError, setSubmitUpdateError] = useState("");
     //populate blank form values based on entity definition
-    const startingValues = Object.keys(formEntity.propTypes).reduce((acc, cur) => {
-        if (formEntity.propTypes[cur] === EntityPropTypes.ENTITY_ID_ARRAY) {
-            acc[cur] = [];
-        } else {
-            acc[cur] = null;
-        }
-        if (databaseId && cur === "databaseId") {
-            acc[cur] = { label: databaseId, value: databaseId };
-        }
-        return acc;
-    }, {});
+    //TODO fields should be blank except the region!!
+    //console.log(props.open)
+    let startingValues = {};
+
+    useEffect(() => {
+        const getStartingValues = async () => {
+            if (entityType === ENTITY_TYPES_NAMES.ASSET && props.open === true) {
+                console.log("Filling in values with pre-populated data");
+                startingValues = await fillFormWithAssetMetadata(asset);
+                setFormValues(startingValues);
+            } else {
+                startingValues = Object.keys(formEntity.propTypes).reduce((acc, cur) => {
+                    if (formEntity.propTypes[cur] === EntityPropTypes.ENTITY_ID_ARRAY) {
+                        acc[cur] = [];
+                    } else {
+                        acc[cur] = null;
+                    }
+                    if (databaseId && cur === "databaseId") {
+                        acc[cur] = { label: databaseId, value: databaseId };
+                    }
+                    return acc;
+                }, {});
+            }
+        };
+        getStartingValues();
+    }, [props.open]);
+
     const [formValues, setFormValues] = useState(startingValues);
     //each validatable prop needs a corresponding error message
     const startingErrors = Object.keys(formEntity.propTypes).reduce((acc, cur) => {
@@ -109,7 +161,6 @@ export default function CreateUpdateElement(props) {
         if (open) {
             const newFormErrors = Object.assign({}, formErrors);
             const formPropNames = Object.keys(formValues);
-            console.log(formPropNames);
             for (let i = 0; i < formPropNames.length; i++) {
                 const formPropName = formPropNames[i];
                 //ignore values without validation on entity
@@ -164,8 +215,10 @@ export default function CreateUpdateElement(props) {
                     if (acc[cur] === undefined || acc[cur] == null) {
                         acc[cur] = null;
                     }
+
                     return acc;
                 }, {});
+
                 const config = {
                     body: formattedFormValues,
                 };
@@ -203,6 +256,7 @@ export default function CreateUpdateElement(props) {
             customSubmitResults = await customSubmitFunction(formValues, formErrors);
             setFormValues(customSubmitResults?.values);
             setFormErrors(customSubmitResults?.errors);
+            setAsset(formValues.Asset);
             if (customSubmitResults?.success === true) {
                 setReadySubmit(true);
             } else {
@@ -269,8 +323,11 @@ export default function CreateUpdateElement(props) {
                             //find the form field that isn't toggled based on pipeline type, then clear it.
                             const optionalFieldHidden =
                                 appearsWhen &&
-                                formValues[appearsWhen[0]] &&
-                                appearsWhen[1] !== formValues[appearsWhen[0]]["label"];
+                                !(
+                                    formValues[appearsWhen[0]] &&
+                                    appearsWhen[1] === formValues[appearsWhen[0]]["label"]
+                                );
+
                             if (formValues[id] && optionalFieldHidden) {
                                 console.log(id + ": " + formValues[id]);
                                 formValues[id] = "";
@@ -338,6 +395,7 @@ CreateUpdateElement.propTypes = {
     open: PropTypes.bool.isRequired,
     setOpen: PropTypes.func.isRequired,
     setReload: PropTypes.func.isRequired,
+    setAsset: PropTypes.func,
     formDefinition: PropTypes.instanceOf(FormDefinition),
     formEntity: EntityPropTypes.ENTITY,
     databaseId: EntityPropTypes.ENTITY_ID,

@@ -8,26 +8,24 @@
  * Once selected, this component will show in total how many files are in the folder and return the path for each of the files
  *
  */
-import { useState } from 'react'
+import { useState } from "react";
 import Button from "@cloudscape-design/components/button";
 import { Grid } from "@cloudscape-design/components";
 
 import FormField from "@cloudscape-design/components/form-field";
 
-
 function FolderUpload(props) {
-
     const [description, setDescription] = useState("");
 
     const handleFileListChange = (directoryHandle, fileHandles) => {
         if (props.onSelect) {
             props.onSelect(directoryHandle, fileHandles);
         }
-    }
+    };
 
     async function* getFilesRecursively(entry, path) {
         if (entry.kind === "file") {
-            yield { 'path': path + "/" + entry.name, 'handle': entry } ;
+            yield { path: path + "/" + entry.name, handle: entry };
         } else if (entry.kind === "directory") {
             const newPath = path ? path + "/" + entry.name : entry.name;
             for await (const handle of entry.values()) {
@@ -38,21 +36,21 @@ function FolderUpload(props) {
     const getFilesFromFileHandle = async (directoryHandle) => {
         const fileHandles = [];
         for await (const handle of getFilesRecursively(directoryHandle)) {
-            fileHandles.push(handle)
+            fileHandles.push(handle);
         }
-        return fileHandles
-    }
+        return fileHandles;
+    };
     const handleDirectorySelection = async () => {
         const directoryHandle = await window.showDirectoryPicker();
-        const fileHandles = await getFilesFromFileHandle(directoryHandle, directoryHandle.name)
-        console.log(fileHandles)
-        return {directoryHandle, fileHandles};
+        const fileHandles = await getFilesFromFileHandle(directoryHandle, directoryHandle.name);
+        console.log(fileHandles);
+        return { directoryHandle, fileHandles };
     };
 
     const handleFileSelection = async () => {
         const handles = await window.showOpenFilePicker();
-        const fileHandles = [{'path': handles[0].name, 'handle': handles[0]}]
-        return {handles, fileHandles};
+        const fileHandles = [{ path: handles[0].name, handle: handles[0] }];
+        return { handles, fileHandles };
     };
 
     return (
@@ -61,47 +59,43 @@ function FolderUpload(props) {
          * I found this from the stackoverflow answer mentioned at https://stackoverflow.com/a/5849341
          */
         <FormField label={props.label} description={description} errorText={props.errorText}>
-
-                <Grid gridDefinition={[
-                    {colspan: {default: 6}},
-                    {colspan: {default: 6}},
-                ]}>
-                    {
-                        props.multiFile ?
+            <Grid gridDefinition={[{ colspan: { default: 6 } }, { colspan: { default: 6 } }]}>
+                {props.multiFile ? (
+                    <Button
+                        variant="normal"
+                        iconName="upload"
+                        onClick={(e) => {
+                            handleDirectorySelection().then((fileSelectionResult) => {
+                                console.log(fileSelectionResult);
+                                const { directoryHandle, fileHandles } = fileSelectionResult;
+                                setDescription(`Total Files to Upload: ${fileHandles.length}`);
+                                handleFileListChange(directoryHandle, fileHandles);
+                            });
+                        }}
+                    >
+                        Choose Folder
+                    </Button>
+                ) : (
+                    <>
                         <Button
                             variant="normal"
                             iconName="upload"
                             onClick={(e) => {
-                                handleDirectorySelection()
-                                    .then((fileSelectionResult) => {
-                                        console.log(fileSelectionResult)
-                                        const {directoryHandle, fileHandles} = fileSelectionResult;
-                                        setDescription(`Total Files to Upload: ${fileHandles.length}`)
-                                        handleFileListChange(directoryHandle, fileHandles)})
+                                handleFileSelection().then((fileSelectionResult) => {
+                                    console.log(fileSelectionResult);
+                                    const { directoryHandle, fileHandles } = fileSelectionResult;
+                                    setDescription(`Total Files to Upload: ${fileHandles.length}`);
+                                    handleFileListChange(directoryHandle, fileHandles);
+                                });
                             }}
                         >
-                            Choose Folder
-                        </Button>  :
-                            <>
-                                <Button
-                                    variant="normal"
-                                    iconName="upload"
-                                    onClick={(e) => {
-                                        handleFileSelection()
-                                            .then((fileSelectionResult) => {
-                                                console.log(fileSelectionResult)
-                                                const {directoryHandle, fileHandles} = fileSelectionResult;
-                                                setDescription(`Total Files to Upload: ${fileHandles.length}`)
-                                                handleFileListChange(directoryHandle, fileHandles)})
-                                    }}
-                                >
-                                    Choose File
-                                </Button>
-                            </>
-                    }
-                </Grid>
+                            Choose File
+                        </Button>
+                    </>
+                )}
+            </Grid>
         </FormField>
     );
 }
 
-export default FolderUpload
+export default FolderUpload;

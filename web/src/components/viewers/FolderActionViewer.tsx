@@ -1,8 +1,8 @@
-import {Header} from "@cloudscape-design/components";
+import { Header } from "@cloudscape-design/components";
 import Button from "@cloudscape-design/components/button";
 import Container from "@cloudscape-design/components/container";
 import { Storage } from "@aws-amplify/storage";
-import {useEffect, useState} from "react";
+import { useEffect, useState } from "react";
 import ColumnLayout from "@cloudscape-design/components/column-layout";
 
 export class FolderActionProps {
@@ -12,27 +12,24 @@ export class FolderActionProps {
     [key: string]: any;
 }
 
-export default function FolderActionViewer({name, urlKey, ...props}: FolderActionProps) {
-    const [downloadLink, setDownloadLink] = useState<string>('');
+export default function FolderActionViewer({ name, urlKey, ...props }: FolderActionProps) {
+    const [downloadLink, setDownloadLink] = useState<string>("");
 
     function generateDownloadLink(key: string) {
-        Storage.get(key, {download: false}).then(data => {
-            setDownloadLink(data)
-        })
+        Storage.get(key, { download: false }).then((data) => {
+            setDownloadLink(data);
+        });
     }
 
     useEffect(() => {
-        setDownloadLink('')
-    }, [name])
+        setDownloadLink("");
+    }, [name]);
 
     return (
         <Container>
             <div>
-                <Header variant="h3">
-                    Actions
-                </Header>
-                {
-                    name &&
+                <Header variant="h3">Actions</Header>
+                {name && (
                     <>
                         <p>Selected file: {name}</p>
 
@@ -42,17 +39,15 @@ export default function FolderActionViewer({name, urlKey, ...props}: FolderActio
                             </Button>
                         </ColumnLayout>
                         <p>
-                            {
-                                downloadLink &&
+                            {downloadLink && (
                                 <Button href={downloadLink} target="_blank" rel="noreferrer">
                                     Download {name}
                                 </Button>
-                            }
+                            )}
                         </p>
                     </>
-                }
+                )}
             </div>
         </Container>
-
     );
 }

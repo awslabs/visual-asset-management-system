@@ -7,13 +7,14 @@ import React from "react";
 import ListDefinition from "./types/ListDefinition";
 import { Link } from "@cloudscape-design/components";
 import ColumnDefinition from "./types/ColumnDefinition";
+import Synonyms from "../../../synonyms";
 
 export const AssetListDefinition = new ListDefinition({
-    pluralName: "assets",
-    pluralNameTitleCase: "Assets",
+    pluralName: Synonyms.assets,
+    pluralNameTitleCase: Synonyms.Assets,
     visibleColumns: ["assetName", "databaseId", "description", "assetType"],
     filterColumns: [
-        { name: "databaseId", placeholder: "Database" },
+        { name: "databaseId", placeholder: Synonyms.Database },
         { name: "assetType", placeholder: "Type" },
     ],
     elementId: "assetId",
@@ -21,7 +22,7 @@ export const AssetListDefinition = new ListDefinition({
     columnDefinitions: [
         new ColumnDefinition({
             id: "assetName",
-            header: "Asset",
+            header: Synonyms.Asset,
             cellWrapper: (props) => {
                 const { item } = props;
                 return (
@@ -34,7 +35,7 @@ export const AssetListDefinition = new ListDefinition({
         }),
         new ColumnDefinition({
             id: "databaseId",
-            header: "Database",
+            header: Synonyms.Database,
             cellWrapper: (props) => {
                 const { item } = props;
                 return <Link href={`/databases/${item.databaseId}/assets/`}>{props.children}</Link>;
