@@ -1,7 +1,7 @@
+#  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#  SPDX-License-Identifier: Apache-2.0
 
 
-import pytest
-import json
 from unittest.mock import Mock, call
 
 from backend.handlers.pipelines.createPipeline import CreatePipeline
@@ -11,8 +11,8 @@ body = {
     "pipelineType": "Lambda",
     "databaseId": "default",
     "description": "demo",
-    "pipelineId": "demo", 
-    "assetType": ".stl", 
+    "pipelineId": "demo",
+    "assetType": ".stl",
     "outputType": ".stl"
 }
 
@@ -29,15 +29,19 @@ body_sagemaker = {
 env = {
     "PIPELINE_STORAGE_TABLE_NAME": "pipeline_storage",
     "ENABLE_PIPELINE_FUNCTION_NAME": "enable_pipeline",
-    "ENABLE_PIPELINE_FUNCTION_ARN": "0000000000000000000000000000000000000:function:enable_pipeline",
+    "ENABLE_PIPELINE_FUNCTION_ARN":
+        "0000000000000000000000000000000000000:function:enable_pipeline",
     'S3_BUCKET': 'pipeline-bucket',
     'SAGEMAKER_BUCKET_NAME': 'sagemaker-bucket',
     'SAGEMAKER_BUCKET_ARN': 'sagemaker-bucket-arn',
     'ASSET_BUCKET_ARN': 'asset-bucket-arn',
     'ROLE_TO_ATTACH_TO_LAMBDA_PIPELINE': 'role-to-attach-to-lambda-pipeline',
-    'LAMBDA_PIPELINE_SAMPLE_FUNCTION_BUCKET': 'lambda-pipeline-sample-function-bucket',
-    'LAMBDA_PIPELINE_SAMPLE_FUNCTION_KEY': 'lambda-pipeline-sample-function-key',
+    'LAMBDA_PIPELINE_SAMPLE_FUNCTION_BUCKET':
+        'lambda-pipeline-sample-function-bucket',
+    'LAMBDA_PIPELINE_SAMPLE_FUNCTION_KEY':
+        'lambda-pipeline-sample-function-key',
 }
+
 
 def test_create_pipeline():
     dynamodb = Mock()
@@ -46,16 +50,24 @@ def test_create_pipeline():
     lambda_client = Mock()
     lambda_client.create_function = Mock()
 
-    create_pipeline = CreatePipeline(dynamodb=dynamodb, cloudformation=cloudformation, lambda_client=lambda_client, env=env)
+    create_pipeline = CreatePipeline(
+        dynamodb=dynamodb,
+        cloudformation=cloudformation,
+        lambda_client=lambda_client,
+        env=env
+    )
 
     result = create_pipeline.createLambdaPipeline(body)
     print(result)
     assert lambda_client.create_function.call_count == 1
     assert lambda_client.create_function.call_args == call(
-        FunctionName='demo', 
-        Role='role-to-attach-to-lambda-pipeline', PackageType='Zip', 
-        Code={'S3Bucket': 'lambda-pipeline-sample-function-bucket', 'S3Key': 'lambda-pipeline-sample-function-key'}, 
-        Handler='lambda_function.lambda_handler', 
+        FunctionName='demo',
+        Role='role-to-attach-to-lambda-pipeline', PackageType='Zip',
+        Code={
+            'S3Bucket': 'lambda-pipeline-sample-function-bucket',
+            'S3Key': 'lambda-pipeline-sample-function-key',
+        },
+        Handler='lambda_function.lambda_handler',
         Runtime='python3.8')
 
 
@@ -68,16 +80,25 @@ def test_upload_pipeline():
     lambda_client = Mock()
     lambda_client.create_function = Mock()
 
-    create_pipeline = CreatePipeline(dynamodb=dynamodb, cloudformation=cloudformation, lambda_client=lambda_client, env=env)
+    create_pipeline = CreatePipeline(
+        dynamodb=dynamodb,
+        cloudformation=cloudformation,
+        lambda_client=lambda_client,
+        env=env
+    )
     date_created = "June 14 2023 - 19:53:45"
     create_pipeline._now = Mock(return_value=date_created)
     create_pipeline.createLambdaPipeline = Mock()
 
-    result = create_pipeline.upload_Pipeline(body)
+    create_pipeline.upload_Pipeline(body)
 
     assert table.put_item.call_count == 1
 
-    item_arg = { 'dateCreated': '"{}"'.format(date_created), 'userProvidedResource': '{"isProvided": false, "resourceId": ""}', 'enabled': False}
+    item_arg = {
+        'dateCreated': '"{}"'.format(date_created),
+        'userProvidedResource': '{"isProvided": false, "resourceId": ""}',
+        'enabled': False
+    }
     item_arg.update(body)
 
     assert table.put_item.call_args == call(
@@ -97,22 +118,32 @@ def test_upload_pipeline_sagemaker():
     lambda_client = Mock()
     lambda_client.create_function = Mock()
 
-    create_pipeline = CreatePipeline(dynamodb=dynamodb, cloudformation=cloudformation, lambda_client=lambda_client, env=env)
+    create_pipeline = CreatePipeline(dynamodb=dynamodb,
+                                     cloudformation=cloudformation,
+                                     lambda_client=lambda_client, env=env)
     date_created = "June 14 2023 - 19:53:45"
     create_pipeline._now = Mock(return_value=date_created)
     create_pipeline.createLambdaPipeline = Mock()
     create_pipeline.createSagemakerPipeline = Mock()
 
-    result = create_pipeline.upload_Pipeline(body_sagemaker)
+    create_pipeline.upload_Pipeline(body_sagemaker)
 
     assert table.put_item.call_count == 1
 
-    item_arg = { 'dateCreated': '"{}"'.format(date_created), 'userProvidedResource': '{"isProvided": false, "resourceId": ""}', 'enabled': False}
+    item_arg = {
+        'dateCreated': '"{}"'.format(date_created),
+        'userProvidedResource': '{"isProvided": false, "resourceId": ""}',
+        'enabled': False,
+    }
     item_arg.update(body_sagemaker)
 
     assert table.put_item.call_count == 1
 
-    item_arg = { 'dateCreated': '"{}"'.format(date_created), 'userProvidedResource': '{"isProvided": false, "resourceId": ""}', 'enabled': False}
+    item_arg = {
+        'dateCreated': '"{}"'.format(date_created),
+        'userProvidedResource': '{"isProvided": false, "resourceId": ""}',
+        'enabled': False,
+    }
     item_arg.update(body_sagemaker)
 
     assert table.put_item.call_args == call(
@@ -122,6 +153,3 @@ def test_upload_pipeline_sagemaker():
     assert create_pipeline.createLambdaPipeline.call_count == 0
     assert create_pipeline.createSagemakerPipeline.call_count == 1
     assert create_pipeline.createSagemakerPipeline.call_args == call(body_sagemaker)
-
-
-    
