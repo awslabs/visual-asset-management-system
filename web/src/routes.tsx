@@ -17,6 +17,7 @@ import ViewPipeline from "./components/single/ViewPipeline";
 import Workflows from "./pages/Workflows";
 import CreateUpdateWorkflow from "./components/createupdate/CreateUpdateWorkflow";
 import Constraints from "./pages/auth/Constraints";
+import FinishUploadsPage from "./pages/FinishUploads";
 import MetadataSchema from "./pages/MetadataSchema";
 
 interface RouteOption {
@@ -35,6 +36,12 @@ const routeTable: RouteOption[] = [
         Page: ViewAsset,
         active: "/assets",
         roles: ["assets"],
+    },
+    {
+        path: "/databases/:databaseId/assets/:assetId/uploads",
+        Page: FinishUploadsPage,
+        active: "/assets",
+        roles: ["assets", "upload"],
     },
     { path: "/assets/:assetId", Page: ViewAsset, active: "/assets", roles: ["assets"] },
     {

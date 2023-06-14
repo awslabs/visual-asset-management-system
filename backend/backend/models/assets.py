@@ -15,6 +15,7 @@ class AssetPreviewLocationModel(BaseModel):
 
 
 class UploadAssetModel(BaseModel):
+    isMultiFile: bool = False
     databaseId: str
     assetId: str
     assetName: str

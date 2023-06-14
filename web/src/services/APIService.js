@@ -146,7 +146,7 @@ export const createUpdateElements = async ({ pluralName, config }, api = API) =>
  * Returns array of all constraints from the auth/constraints api
  * @returns {Promise<boolean|{constraints}|any>}
  */
-export const fetchConstraints: Promise<boolean | { constraints: any }> = async (api = API) => {
+export const fetchConstraints = async (api = API) => {
     try {
         const response = await api.get("api", "auth/constraints", {});
         if (response.constraints) {
@@ -200,6 +200,25 @@ export const fetchAsset = async ({ databaseId, assetId }, api = API) => {
         if (databaseId && assetId) {
             response = await api.get("api", `database/${databaseId}/assets/${assetId}`, {});
             if (response.message) return response.message;
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return error?.message;
+    }
+};
+
+export const fetchAssetFiles = async ({ databaseId, assetId }, api = API) => {
+    try {
+        let response;
+        if (databaseId && assetId) {
+            response = await api.get(
+                "api",
+                `database/${databaseId}/assets/${assetId}/listFiles`,
+                {}
+            );
+            if (response) return response;
         } else {
             return false;
         }

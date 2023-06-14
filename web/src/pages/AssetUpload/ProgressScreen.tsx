@@ -2,51 +2,70 @@
  * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
-import { Box, Grid, TextContent } from "@cloudscape-design/components";
+import { Box, Grid, Link, SpaceBetween, TextContent } from "@cloudscape-design/components";
 
 import ProgressBar, { ProgressBarProps } from "@cloudscape-design/components/progress-bar";
 import StatusIndicator, {
     StatusIndicatorProps,
 } from "@cloudscape-design/components/status-indicator";
+import { FileUploadTable, FileUploadTableItem } from "./FileUploadTable";
+import { AssetDetail } from "../AssetUpload";
 
 class ProgressScreenProps {
-    assetUploadProgress!: ProgressBarProps;
-    previewUploadProgress!: ProgressBarProps;
+    assetDetail!: AssetDetail;
+    previewUploadProgress?: ProgressBarProps;
+    allFileUploadItems!: FileUploadTableItem[];
     execStatus!: Record<string, StatusIndicatorProps.Type>;
+    onRetry!: () => void;
 }
 
 export default function ProgressScreen({
-    assetUploadProgress,
+    assetDetail,
     previewUploadProgress,
     execStatus,
+    allFileUploadItems,
+    onRetry,
 }: ProgressScreenProps): JSX.Element {
     return (
         <Box padding={{ top: false ? "s" : "m", horizontal: "l" }}>
             <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
                 <div>
-                    <Box variant="awsui-key-label">Upload Progress</Box>
-                    <ProgressBar
-                        status={assetUploadProgress.status}
-                        value={assetUploadProgress.value}
-                        label="Asset Upload Progress"
-                    />
-                    <ProgressBar
-                        status={previewUploadProgress.status}
-                        value={previewUploadProgress.value}
-                        label="Preview Upload Progress"
-                    />
-                    <Box variant="awsui-key-label">Exec Progress</Box>
+                    <SpaceBetween size="l" direction={"vertical"}>
+                        <Box variant="awsui-key-label">
+                            Upload Progress for Asset:
+                            <Link
+                                href={`/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`}
+                                target="_blank"
+                            >
+                                {assetDetail.assetName}
+                            </Link>
+                        </Box>
 
-                    {Object.keys(execStatus).map((label) => (
-                        <div key={label}>
-                            <StatusIndicator type={execStatus[label]}>{label}</StatusIndicator>
+                        <FileUploadTable
+                            allItems={allFileUploadItems}
+                            onRetry={onRetry}
+                            resume={false}
+                        />
+                        {assetDetail.Preview && previewUploadProgress && (
+                            <ProgressBar
+                                status={previewUploadProgress.status}
+                                value={previewUploadProgress.value}
+                                label="Preview Upload Progress"
+                            />
+                        )}
+                        <Box variant="awsui-key-label">Exec Progress</Box>
+
+                        {Object.keys(execStatus).map((label) => (
+                            <div key={label}>
+                                <StatusIndicator type={execStatus[label]}>{label}</StatusIndicator>
+                            </div>
+                        ))}
+                        <div>
+                            <TextContent>
+                                Please do not close your browser window until processing completes.
+                            </TextContent>
                         </div>
-                    ))}
-                    <div>
-                        <TextContent>
-                            Please do not close your browser window until processing completes.
-                        </TextContent>
-                    </div>
+                    </SpaceBetween>
                 </div>
             </Grid>
         </Box>

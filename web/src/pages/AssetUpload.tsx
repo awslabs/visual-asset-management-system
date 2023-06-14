@@ -11,6 +11,7 @@ import {
     Select,
     Textarea,
     TextContent,
+    Toggle,
 } from "@cloudscape-design/components";
 import { useNavigate, useParams } from "react-router";
 import Container from "@cloudscape-design/components/container";
@@ -24,12 +25,7 @@ import FormField from "@cloudscape-design/components/form-field";
 import Input from "@cloudscape-design/components/input";
 
 import DatabaseSelector from "../components/selectors/DatabaseSelector";
-import {
-    cadFileFormats,
-    modelFileFormats,
-    columnarFileFormats,
-    previewFileFormats,
-} from "../common/constants/fileFormats";
+import { previewFileFormats } from "../common/constants/fileFormats";
 
 import { Metadata } from "../components/single/Metadata";
 import { fetchDatabaseWorkflows } from "../services/APIService";
@@ -43,16 +39,20 @@ import {
 } from "./AssetUpload/validations";
 import { DisplayKV, FileUpload } from "./AssetUpload/components";
 import ProgressScreen from "./AssetUpload/ProgressScreen";
-import onSubmit from "./AssetUpload/onSubmit";
 import ControlledMetadata from "../components/metadata/ControlledMetadata";
 import Synonyms from "../synonyms";
+import onSubmit, { onUploadRetry, UploadExecutionProps } from "./AssetUpload/onSubmit";
+import FolderUpload from "../components/form/FolderUpload";
+import { FileUploadTableItem } from "./AssetUpload/FileUploadTable";
+import localforage from "localforage";
 
 // eslint-disable-next-line @typescript-eslint/no-array-constructor
-const objectFileFormats = new Array().concat(cadFileFormats, modelFileFormats, columnarFileFormats);
-const objectFileFormatsStr = objectFileFormats.join(", ");
+// const objectFileFormats = new Array().concat(cadFileFormats, modelFileFormats, columnarFileFormats);
+// const objectFileFormatsStr = objectFileFormats.join(", ");
 const previewFileFormatsStr = previewFileFormats.join(", ");
 
 export class AssetDetail {
+    isMultiFile: boolean = false;
     assetId?: string;
     assetName?: string;
     databaseId?: string;
@@ -67,7 +67,8 @@ export class AssetDetail {
         Bucket?: string;
         Key?: string;
     };
-    Asset?: File;
+    Asset?: FileUploadTableItem[];
+    DirectoryHandle?: any;
     Preview?: File;
 }
 
@@ -95,7 +96,6 @@ const isDistributableOptions: OptionDefinition[] = [
 ];
 
 const UploadForm = () => {
-    const navigate = useNavigate();
     const urlParams = useParams();
     const [databaseId, setDatabaseId] = useState({
         label: urlParams.databaseId,
@@ -104,29 +104,129 @@ const UploadForm = () => {
     const [activeStepIndex, setActiveStepIndex] = useState(0);
 
     const [assetDetail, setAssetDetail] = useState<AssetDetail>({
+        isMultiFile: false,
         isDistributable: false,
         databaseId: urlParams.databaseId,
     });
+    const [isMultiFile, setMultiFile] = useState(false);
     const [metadata, setMetadata] = useState<Metadata>({});
 
     const [workflows, setWorkflows] = useState<any>([]);
     const [selectedWorkflows, setSelectedWorkflows] = useState<any>([]);
+    const [fileUploadTableItems, setFileUploadTableItems] = useState<FileUploadTableItem[]>([]);
 
     const [freezeWizardButtons, setFreezeWizardButtons] = useState(false);
 
     const [showUploadAndExecProgress, setShowUploadAndExecProgress] = useState(false);
 
-    const [assetUploadProgress, setAssetUploadProgress] = useState<ProgressBarProps>({
-        value: 0,
-        status: "in-progress",
-    });
+    const [uploadExecutionProps, setUploadExecutionProps] = useState<UploadExecutionProps>();
+
     const [previewUploadProgress, setPreviewUploadProgress] = useState<ProgressBarProps>({
         value: 0,
         status: "in-progress",
     });
 
+    useEffect(() => {
+        if (assetDetail.assetId && fileUploadTableItems.length > 0) {
+            setAssetDetail((assetDetail) => {
+                return { ...assetDetail, Asset: fileUploadTableItems };
+            });
+            localforage
+                .setItem(assetDetail.assetId, { ...assetDetail, Asset: fileUploadTableItems })
+                .then(() => {})
+                .catch(() => {
+                    console.log("Error setting item in localforage");
+                });
+        }
+    }, [fileUploadTableItems]);
+
     const [execStatus, setExecStatus] = useState<Record<string, StatusIndicatorProps.Type>>({});
-    const [canNavigateToAssetPage, setCanNavigateToAssetPage] = useState(false);
+
+    const getFilesFromFileHandles = async (fileHandles: any[]) => {
+        const fileUploadTableItems: FileUploadTableItem[] = [];
+        for (let i = 0; i < fileHandles.length; i++) {
+            const file = (await fileHandles[i].handle.getFile()) as File;
+            fileUploadTableItems.push({
+                handle: fileHandles[i].handle,
+                index: i,
+                name: fileHandles[i].handle.name,
+                size: file.size,
+                relativePath: fileHandles[i].path,
+                progress: 0,
+                status: "Queued",
+                loaded: 0,
+                total: file.size,
+            });
+        }
+        console.log(fileUploadTableItems);
+        return fileUploadTableItems;
+    };
+
+    const getUpdatedItemAfterProgress = (
+        item: FileUploadTableItem,
+        loaded: number,
+        total: number
+    ): FileUploadTableItem => {
+        const progress = Math.round((loaded / total) * 100);
+        const status = item.status;
+        if (loaded === total) {
+            return {
+                ...item,
+                loaded: loaded,
+                total: total,
+                progress: progress,
+                status: "Completed",
+            };
+        }
+        if (status === "Queued") {
+            return {
+                ...item,
+                loaded: loaded,
+                total: total,
+                progress: progress,
+                status: "In Progress",
+                startedAt: Math.floor(new Date().getTime() / 1000),
+            };
+        } else {
+            return {
+                ...item,
+                loaded: loaded,
+                total: total,
+                status: "In Progress",
+                progress: progress,
+            };
+        }
+    };
+    const updateProgressForFileUploadItem = (index: number, loaded: number, total: number) => {
+        setFileUploadTableItems((prevState) => {
+            return prevState.map((item) =>
+                item.index === index ? getUpdatedItemAfterProgress(item, loaded, total) : item
+            );
+        });
+    };
+
+    const fileUploadComplete = (index: number, event: any) => {
+        setFileUploadTableItems((prevState) => {
+            return prevState.map((item) =>
+                item.index === index ? { ...item, status: "Completed", progress: 100 } : item
+            );
+        });
+    };
+
+    const fileUploadError = (index: number, event: any) => {
+        setFileUploadTableItems((prevState) => {
+            return prevState.map((item) =>
+                item.index === index ? { ...item, status: "Failed" } : item
+            );
+        });
+    };
+    const moveToQueued = (index: number) => {
+        setFileUploadTableItems((prevState) => {
+            return prevState.map((item) =>
+                item.index === index ? { ...item, status: "Queued" } : item
+            );
+        });
+    };
 
     useEffect(() => {
         if (!assetDetail?.databaseId) {
@@ -141,14 +241,16 @@ const UploadForm = () => {
 
     return (
         <Box padding={{ left: "l", right: "l" }}>
-            {canNavigateToAssetPage &&
-                navigate(`/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`)}
-            {showUploadAndExecProgress && (
-                <ProgressScreen
-                    execStatus={execStatus}
-                    previewUploadProgress={previewUploadProgress}
-                    assetUploadProgress={assetUploadProgress}
-                />
+            {showUploadAndExecProgress && uploadExecutionProps && (
+                <>
+                    <ProgressScreen
+                        assetDetail={assetDetail}
+                        execStatus={execStatus}
+                        previewUploadProgress={previewUploadProgress}
+                        allFileUploadItems={fileUploadTableItems}
+                        onRetry={() => onUploadRetry(uploadExecutionProps)}
+                    />
+                </>
             )}
             {!showUploadAndExecProgress && (
                 <Wizard
@@ -178,9 +280,12 @@ const UploadForm = () => {
                         execStatus,
                         setExecStatus,
                         setShowUploadAndExecProgress,
-                        setAssetUploadProgress,
+                        moveToQueued,
+                        updateProgressForFileUploadItem,
+                        fileUploadComplete,
+                        fileUploadError,
                         setPreviewUploadProgress,
-                        setCanNavigateToAssetPage,
+                        setUploadExecutionProps,
                     })}
                     allowSkipTo
                     steps={[
@@ -192,13 +297,7 @@ const UploadForm = () => {
                                     header={<Header variant="h2">{Synonyms.Asset} Details</Header>}
                                 >
                                     <SpaceBetween direction="vertical" size="l">
-                                        <FormField
-                                            label={`${Synonyms.Asset} Name`}
-                                            constraintText="All lower case, no special chars or spaces except - and _ only letters for first character min 4 and max 64."
-                                            errorText={validateEntityIdAsYouType(
-                                                assetDetail.assetId
-                                            )}
-                                        >
+                                        <FormField label={`${Synonyms.Asset} Name`}>
                                             <Input
                                                 value={assetDetail.assetId || ""}
                                                 data-testid="assetid-input"
@@ -206,6 +305,8 @@ const UploadForm = () => {
                                                     setAssetDetail((assetDetail) => ({
                                                         ...assetDetail,
                                                         assetId: e.detail.value,
+                                                        description: e.detail.value,
+                                                        Comment: e.detail.value,
                                                     }));
                                                 }}
                                             />
@@ -294,49 +395,6 @@ const UploadForm = () => {
                                                 data-testid="asset-comment-input"
                                             />
                                         </FormField>
-
-                                        <Grid
-                                            gridDefinition={[
-                                                { colspan: { default: 6 } },
-                                                { colspan: { default: 6 } },
-                                            ]}
-                                        >
-                                            <FileUpload
-                                                label="Asset"
-                                                disabled={false}
-                                                errorText={
-                                                    (!assetDetail.Asset && "Asset is required") ||
-                                                    undefined
-                                                }
-                                                setFile={(file) => {
-                                                    setAssetDetail((assetDetail) => ({
-                                                        ...assetDetail,
-                                                        Asset: file,
-                                                    }));
-                                                }}
-                                                fileFormats={objectFileFormatsStr}
-                                                file={assetDetail.Asset}
-                                                data-testid="asset-file"
-                                            />
-                                            <FileUpload
-                                                label="Preview"
-                                                disabled={false}
-                                                errorText={
-                                                    (!assetDetail.Preview &&
-                                                        "Preview is required") ||
-                                                    undefined
-                                                }
-                                                setFile={(file) => {
-                                                    setAssetDetail((assetDetail) => ({
-                                                        ...assetDetail,
-                                                        Preview: file,
-                                                    }));
-                                                }}
-                                                fileFormats={previewFileFormatsStr}
-                                                file={assetDetail.Preview}
-                                                data-testid="preview-file"
-                                            />
-                                        </Grid>
                                     </SpaceBetween>
                                 </Container>
                             ),
@@ -366,6 +424,78 @@ const UploadForm = () => {
                             ),
                             isOptional: true,
                         },
+                        {
+                            title: "Select Files to upload",
+                            content: (
+                                <Container
+                                    header={<Header variant="h2">Select Files to Upload</Header>}
+                                >
+                                    <>
+                                        <FormField>
+                                            <Toggle
+                                                onChange={({ detail }) => {
+                                                    setMultiFile(detail.checked);
+                                                    setAssetDetail((assetDetail) => ({
+                                                        ...assetDetail,
+                                                        isMultiFile: detail.checked,
+                                                    }));
+                                                }}
+                                                checked={isMultiFile}
+                                            >
+                                                Folder Upload?
+                                            </Toggle>
+                                        </FormField>
+                                        <Grid
+                                            gridDefinition={[
+                                                { colspan: { default: 6 } },
+                                                { colspan: { default: 6 } },
+                                            ]}
+                                        >
+                                            <FolderUpload
+                                                label={
+                                                    isMultiFile ? "Choose Folder" : "Choose File"
+                                                }
+                                                multiFile={isMultiFile}
+                                                errorText={
+                                                    (!assetDetail.Asset && "Asset is required") ||
+                                                    undefined
+                                                }
+                                                onSelect={async (
+                                                    directoryHandle: any,
+                                                    fileHandles: any[]
+                                                ) => {
+                                                    const files = await getFilesFromFileHandles(
+                                                        fileHandles
+                                                    );
+                                                    setFileUploadTableItems(files);
+                                                    setAssetDetail((assetDetail) => ({
+                                                        ...assetDetail,
+                                                        DirectoryHandle: directoryHandle,
+                                                        Asset: files,
+                                                    }));
+                                                }}
+                                            ></FolderUpload>
+
+                                            <FileUpload
+                                                label="Preview (Optional)"
+                                                disabled={false}
+                                                setFile={(file) => {
+                                                    setAssetDetail((assetDetail) => ({
+                                                        ...assetDetail,
+                                                        Preview: file,
+                                                    }));
+                                                }}
+                                                fileFormats={previewFileFormatsStr}
+                                                file={assetDetail.Preview}
+                                                data-testid="preview-file"
+                                            />
+                                        </Grid>
+                                    </>
+                                </Container>
+                            ),
+                            isOptional: false,
+                        },
+
                         {
                             title: "Workflow Actions",
                             content: (
@@ -425,13 +555,18 @@ const UploadForm = () => {
                                         }
                                     >
                                         <ColumnLayout columns={2} variant="text-grid">
-                                            {Object.keys(assetDetail).map((k) => (
-                                                <DisplayKV
-                                                    key={k}
-                                                    label={k}
-                                                    value={assetDetail[k as keyof AssetDetail]}
-                                                />
-                                            ))}
+                                            {Object.keys(assetDetail)
+                                                .filter(
+                                                    (k) => k !== "Asset" && k !== "DirectoryHandle"
+                                                )
+                                                .sort()
+                                                .map((k) => (
+                                                    <DisplayKV
+                                                        key={k}
+                                                        label={k}
+                                                        value={assetDetail[k as keyof AssetDetail]}
+                                                    />
+                                                ))}
                                         </ColumnLayout>
                                     </Container>
                                     <Container

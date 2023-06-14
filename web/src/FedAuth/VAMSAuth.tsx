@@ -92,6 +92,7 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
             bucket: config.bucket,
             customPrefix: {
                 public: "",
+                private: "",
             },
         },
         API: {

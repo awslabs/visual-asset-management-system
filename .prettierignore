@@ -5,3 +5,4 @@ cdk.out
 .pytest_cache
 ash_cf2cdk_output
 ash
+backend/.venv

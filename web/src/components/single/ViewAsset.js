@@ -35,12 +35,14 @@ import {
     modelFileFormats,
     presentationFileFormats,
 } from "../../common/constants/fileFormats";
+import { Link } from "@cloudscape-design/components";
 import AssetSelectorWithModal from "../selectors/AssetSelectorWithModal";
 import RelatedTableList from "../list/RelatedTableList";
 import { WorkflowExecutionListDefinition } from "../list/list-definitions/WorkflowExecutionListDefinition";
 import CreateUpdateAsset from "../createupdate/CreateUpdateAsset";
 import { actionTypes } from "../createupdate/form-definitions/types/FormDefinition";
 import WorkflowSelectorWithModal from "../selectors/WorkflowSelectorWithModal";
+import localforage from "localforage";
 import { ErrorBoundary } from "react-error-boundary";
 import Synonyms from "../../synonyms";
 
@@ -48,8 +50,12 @@ const ThreeDimensionalPlotter = React.lazy(() => import("../viewers/ThreeDimensi
 const ColumnarViewer = React.lazy(() => import("../viewers/ColumnarViewer"));
 const HTMLViewer = React.lazy(() => import("../viewers/HTMLViewer"));
 const ModelViewer = React.lazy(() => import("../viewers/ModelViewer"));
+const FolderViewer = React.lazy(() => import("../viewers/FolderViewer"));
 const checkFileFormat = (asset) => {
     let filetype;
+    if (asset?.isMultiFile) {
+        return "folder";
+    }
     if (asset?.generated_artifacts?.gltf?.Key) {
         filetype = asset?.generated_artifacts?.gltf?.Key.split(".").pop();
     } else {
@@ -88,6 +94,7 @@ export default function ViewAsset() {
     const [loading, setLoading] = useState(true);
     const [allItems, setAllItems] = useState([]);
     const [workflowOpen, setWorkflowOpen] = useState(false);
+    const [containsIncompleteUploads, setContainsIncompleteUploads] = useState(false);
 
     // error state
     const [assetDownloadError, setAssetDownloadError] = useState("");
@@ -147,6 +154,18 @@ export default function ViewAsset() {
                 setLoading(false);
                 setReload(false);
             }
+            localforage.getItem(assetId).then((value) => {
+                console.log("Reading from localforage:", value);
+                for (let i = 0; i < value.Asset.length; i++) {
+                    if (
+                        value.Asset[i].status !== "Completed" &&
+                        value.Asset[i].loaded !== value.Asset[i].total
+                    ) {
+                        setContainsIncompleteUploads(true);
+                        break;
+                    }
+                }
+            });
         };
         if (reload) {
             getData();
@@ -260,6 +279,8 @@ export default function ViewAsset() {
                         newViewerOptions.push({ text: "Model", id: "model" });
                     } else if (defaultViewType === "html") {
                         newViewerOptions.push({ text: "HTML", id: "html" });
+                    } else if (defaultViewType === "folder") {
+                        newViewerOptions.push({ text: "Folder", id: "folder" });
                     }
                     setViewerOptions(newViewerOptions);
                     if (!window.location.hash) setViewType(defaultViewType);
@@ -275,6 +296,8 @@ export default function ViewAsset() {
                             setViewType("column");
                         } else if (window.location.hash === "#html") {
                             setViewType("html");
+                        } else if (window.location.hash === "#folder") {
+                            setViewType("folder");
                         }
                     }
                 }
@@ -379,6 +402,17 @@ export default function ViewAsset() {
                                                     </SpaceBetween>
                                                 </div>
                                             )}
+                                            {containsIncompleteUploads && (
+                                                <>
+                                                    <h5>Finish Incomplete uploads</h5>
+                                                    <Link
+                                                        href={`/databases/${databaseId}/assets/${assetId}/uploads`}
+                                                    >
+                                                        {" "}
+                                                        Finish Incomplete uploads{" "}
+                                                    </Link>
+                                                </>
+                                            )}
                                             <FormField errorText={assetDownloadError}></FormField>
                                         </Container>
                                     </div>
@@ -454,6 +488,12 @@ export default function ViewAsset() {
                                                         {viewType === "html" && (
                                                             <HTMLViewer
                                                                 assetKey={asset?.assetLocation?.Key}
+                                                            />
+                                                        )}
+                                                        {viewType === "folder" && (
+                                                            <FolderViewer
+                                                                assetId={asset?.assetId}
+                                                                databaseId={asset?.databaseId}
                                                             />
                                                         )}
                                                     </div>
