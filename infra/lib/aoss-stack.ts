@@ -16,6 +16,7 @@
 import { Construct } from "constructs";
 import * as cdk from "aws-cdk-lib";
 import { OpensearchServerlessConstruct } from "./constructs/opensearch-serverless";
+import { NagSuppressions } from "cdk-nag";
 
 interface EnvProps {
     env?: cdk.Environment;
@@ -32,5 +33,55 @@ export class AossStack extends cdk.Stack {
                 "arn:aws:iam::098204178297:role/Admin",
             ],
         });
+
+        NagSuppressions.addResourceSuppressions(
+            this,
+            [
+                {
+                    id: "AwsSolutions-IAM4",
+                    reason: "Intend to use AWSLambdaBasicExecutionRole as is at this stage of this project.",
+                    appliesTo: [
+                        {
+                            regex: "/.*AWSLambdaBasicExecutionRole$/g",
+                        },
+                    ],
+                },
+            ],
+            true
+        );
+
+        NagSuppressions.addResourceSuppressions(
+            this,
+            [
+                {
+                    id: "AwsSolutions-L1",
+                    reason: "Configured as intended.",
+                },
+            ]
+        );
+
+        NagSuppressions.addResourceSuppressionsByPath(this, `/${this.stackName}/OpensearchServerlessConstruct/OpensearchServerlessDeploySchemaProvider/framework-onEvent/Resource`, [
+            {
+                id: "AwsSolutions-L1",
+                reason: "Configured as intended."
+            }
+        ])
+
+        NagSuppressions.addResourceSuppressions(
+            this,
+            [
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason: "Configured as intended.",
+                    appliesTo: [
+                        {
+                            regex: "/.*$/g",
+                        },
+                    ],
+                },
+            ],
+            true
+        );
+
     }
 }
