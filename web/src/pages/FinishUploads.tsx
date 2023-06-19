@@ -140,6 +140,7 @@ const FinishUploads = () => {
             ) {
                 setReuploadClicked(true);
                 const uploads = createAssetUploadPromises(
+                    assetDetail.isMultiFile,
                     fileUploadTableItems,
                     assetDetail.key,
                     {
