@@ -56,7 +56,7 @@ export class OpensearchServerlessConstruct extends Construct {
 
         const principalsForAOSS = [...props.principalArn, schemaDeploy.role?.roleArn];
 
-        this.createAossAccessPolicy(principalsForAOSS);
+        const accessPolicy = this._grantCollectionAccess(principalsForAOSS);
 
         const collection = new aoss.CfnCollection(this, "OpensearchCollection", {
             name: this.collectionUid,
@@ -102,6 +102,7 @@ export class OpensearchServerlessConstruct extends Construct {
 
         schemaDeployProvider.node.addDependency(schemaDeploy);
         schemaDeployProvider.node.addDependency(collection);
+        schemaDeployProvider.node.addDependency(accessPolicy);
 
         new CustomResource(this, "DeployIndex", {
             serviceToken: schemaDeployProvider.serviceToken,
@@ -120,7 +121,8 @@ export class OpensearchServerlessConstruct extends Construct {
         // return cdk.aws_ssm.StringParameter.valueForStringParameter(this, 
     }
 
-    public createAccessPolicy(construct: Construct & { role?: cdk.aws_iam.IRole }) {
+    // todo rename to grantXxxx
+    public _grantCollectionAccess(construct: Construct & { role?: cdk.aws_iam.IRole }) {
         const policy = [
             {
                 Description: "Access",
@@ -149,7 +151,7 @@ export class OpensearchServerlessConstruct extends Construct {
 
     }
 
-    private createAossAccessPolicy(principalsForAOSS: (string | undefined)[]) {
+    private _grantCollectionAccess(principalsForAOSS: (string | undefined)[]) {
         // type that extends Construct and has a role property
         const policy = [
             {
