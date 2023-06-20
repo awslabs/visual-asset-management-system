@@ -10,15 +10,20 @@ import * as cr from "aws-cdk-lib/custom-resources";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as njslambda from "aws-cdk-lib/aws-lambda-nodejs";
 import * as path from "path";
-import { CustomResource } from "aws-cdk-lib";
+import { CustomResource, Names } from "aws-cdk-lib";
 
 interface OpensearchServerlessConstructProps extends cdk.StackProps {
     principalArn: string[];
 }
 
 export class OpensearchServerlessConstruct extends Construct {
+
+    collectionUid: string;
+
     constructor(parent: Construct, name: string, props: OpensearchServerlessConstructProps) {
         super(parent, name);
+
+        this.collectionUid = Names.uniqueResourceName(this, { maxLength: 16 }).toLowerCase();
 
         const schemaDeploy = new njslambda.NodejsFunction(
             this,
@@ -40,37 +45,21 @@ export class OpensearchServerlessConstruct extends Construct {
                 effect: cdk.aws_iam.Effect.ALLOW,
             })
         );
+        schemaDeploy.addToRolePolicy(
+            new cdk.aws_iam.PolicyStatement({
+                actions: ["ssm:*"],
+                resources: ["*"],
+                // resources: [`arn:aws:ssm:::parameter/${cdk.Stack.of(this).stackName}/*`],
+                effect: cdk.aws_iam.Effect.ALLOW,
+            })
+        )
 
         const principalsForAOSS = [...props.principalArn, schemaDeploy.role?.roleArn];
 
-        const policy = [
-            {
-                Description: "Access for test-user",
-                Rules: [
-                    {
-                        ResourceType: "index",
-                        Resource: ["index/*/*"],
-                        Permission: ["aoss:*"],
-                    },
-                    {
-                        ResourceType: "collection",
-                        Resource: ["collection/my-collection"],
-                        Permission: ["aoss:*"],
-                    },
-                ],
-                Principal: principalsForAOSS,
-            },
-        ];
-
-        const accessPolicy = new aoss.CfnAccessPolicy(this, "OpensearchAccessPolicy", {
-            name: "accplicyname",
-            type: "data",
-            policy: JSON.stringify(policy),
-        });
+        this.createAossAccessPolicy(principalsForAOSS);
 
         const collection = new aoss.CfnCollection(this, "OpensearchCollection", {
-            name: "my-collection",
-            description: "my most excellent collection",
+            name: this.collectionUid,
             type: "SEARCH",
         });
 
@@ -79,7 +68,7 @@ export class OpensearchServerlessConstruct extends Construct {
             AWSOwnedKey: true,
         };
         const encryptionPolicyCfn = new aoss.CfnSecurityPolicy(this, "OpensearchEncryptionPolicy", {
-            name: "my-encryption-policy",
+            name: "encryption-policy",
             policy: JSON.stringify(encryptionPolicy),
             type: "encryption",
         });
@@ -95,14 +84,13 @@ export class OpensearchServerlessConstruct extends Construct {
         ];
 
         const networkPolicyCfn = new aoss.CfnSecurityPolicy(this, "OpensearchNetworkPolicy", {
-            name: "my-network-policy",
+            name: "network-policy",
             policy: JSON.stringify(networkPolicy),
             type: "network",
         });
 
         collection.addDependency(encryptionPolicyCfn);
         collection.addDependency(networkPolicyCfn);
-        collection.addDependency(accessPolicy);
 
         const schemaDeployProvider = new cr.Provider(
             this,
@@ -120,7 +108,73 @@ export class OpensearchServerlessConstruct extends Construct {
             properties: {
                 collectionName: collection.name,
                 indexName: "assets1236",
+                stackName: cdk.Stack.of(this).stackName,
             },
         });
+    }
+
+    // type ConstructWithRole = Construct & { role?: cdk.aws_iam.IRole };
+    public endpointSSMParameterName() {
+        // look up parameter store value
+        return "/" + [cdk.Stack.of(this).stackName, this.collectionUid, "endpoint"].join("/");
+        // return cdk.aws_ssm.StringParameter.valueForStringParameter(this, 
+    }
+
+    public createAccessPolicy(construct: Construct & { role?: cdk.aws_iam.IRole }) {
+        const policy = [
+            {
+                Description: "Access",
+                Rules: [
+                    {
+                        ResourceType: "index",
+                        Resource: ["index/*/*"],
+                        Permission: ["aoss:*"],
+                    },
+                    {
+                        ResourceType: "collection",
+                        Resource: [`collection/${this.collectionUid}`],
+                        Permission: ["aoss:*"],
+                    },
+                ],
+                Principal: [construct.role?.roleArn],
+            },
+        ];
+
+        const accessPolicy = new aoss.CfnAccessPolicy(construct, "OpensearchAccessPolicy", {
+            name: "acc" + Names.uniqueResourceName(construct, { maxLength: 8 }).toLowerCase(),
+            type: "data",
+            policy: JSON.stringify(policy),
+        });
+        return accessPolicy;
+
+    }
+
+    private createAossAccessPolicy(principalsForAOSS: (string | undefined)[]) {
+        // type that extends Construct and has a role property
+        const policy = [
+            {
+                Description: "Access",
+                Rules: [
+                    {
+                        ResourceType: "index",
+                        Resource: ["index/*/*"],
+                        Permission: ["aoss:*"],
+                    },
+                    {
+                        ResourceType: "collection",
+                        Resource: [`collection/${this.collectionUid}`],
+                        Permission: ["aoss:*"],
+                    },
+                ],
+                Principal: principalsForAOSS,
+            },
+        ];
+
+        const accessPolicy = new aoss.CfnAccessPolicy(this, "Policy", {
+            name: "acc" + Names.uniqueResourceName(this, { maxLength: 8 }).toLowerCase(),
+            type: "data",
+            policy: JSON.stringify(policy),
+        });
+        return accessPolicy;
     }
 }

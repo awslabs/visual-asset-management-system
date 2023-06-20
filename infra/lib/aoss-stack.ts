@@ -27,7 +27,7 @@ export class AossStack extends cdk.Stack {
     constructor(scope: Construct, id: string, props: EnvProps) {
         super(scope, id, { ...props, crossRegionReferences: true });
 
-        new OpensearchServerlessConstruct(this, "OpensearchServerlessConstruct", {
+        new OpensearchServerlessConstruct(this, "AOSS", {
             principalArn: [
                 "arn:aws:iam::098204178297:role/vams-dev-us-east-1-CognitoDefaultAuthenticatedRole-1XK4JA5DESZWR",
                 "arn:aws:iam::098204178297:role/Admin",
@@ -60,7 +60,7 @@ export class AossStack extends cdk.Stack {
             ]
         );
 
-        NagSuppressions.addResourceSuppressionsByPath(this, `/${this.stackName}/OpensearchServerlessConstruct/OpensearchServerlessDeploySchemaProvider/framework-onEvent/Resource`, [
+        NagSuppressions.addResourceSuppressionsByPath(this, `/${this.stackName}/AOSS/OpensearchServerlessDeploySchemaProvider/framework-onEvent/Resource`, [
             {
                 id: "AwsSolutions-L1",
                 reason: "Configured as intended."
