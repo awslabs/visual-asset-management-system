@@ -472,6 +472,7 @@ const UploadForm = () => {
                                                         ...assetDetail,
                                                         DirectoryHandle: directoryHandle,
                                                         Asset: files,
+                                                        isMultiFile: files.length > 1
                                                     }));
                                                 }}
                                             ></FolderUpload>
