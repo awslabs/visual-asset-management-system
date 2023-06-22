@@ -494,6 +494,7 @@ export default function ViewAsset() {
                                                             <FolderViewer
                                                                 assetId={asset?.assetId}
                                                                 databaseId={asset?.databaseId}
+                                                                assetName={asset?.assetName}
                                                             />
                                                         )}
                                                     </div>

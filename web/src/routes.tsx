@@ -7,6 +7,7 @@ import React from "react";
 import { Route, Routes } from "react-router-dom";
 import AppLayout from "@cloudscape-design/components/app-layout";
 import LandingPage from "./pages/LandingPage";
+import SearchPage from './pages/search/SearchPage'
 import { Navigation } from "./layout/Navigation";
 import Databases from "./pages/Databases";
 import Assets from "./pages/Assets";
@@ -29,6 +30,7 @@ interface RouteOption {
 
 const routeTable: RouteOption[] = [
     { path: "/", Page: LandingPage, active: "/" },
+    { path: "/search", Page: SearchPage, active: "/" },
     { path: "/databases", Page: Databases, active: "/databases", roles: ["assets"] },
     { path: "/databases/:databaseId/assets", Page: Assets, active: "/assets", roles: ["assets"] },
     {
