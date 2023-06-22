@@ -11,6 +11,7 @@ import FolderActionViewer, { FolderActionProps } from "./FolderActionViewer";
 class FolderViewerProps {
     databaseId!: string;
     assetId!: string;
+    assetName!: string;
 }
 
 class AssetFileList {
@@ -18,7 +19,7 @@ class AssetFileList {
     relativePath!: string;
 }
 
-export default function FolderViewer({ databaseId, assetId }: FolderViewerProps) {
+export default function FolderViewer({ databaseId, assetId, assetName }: FolderViewerProps) {
     const [folderActionProps, setFolderActionProps] = useState<FolderActionProps>({
         name: "",
         urlKey: "",
@@ -31,11 +32,11 @@ export default function FolderViewer({ databaseId, assetId }: FolderViewerProps)
     });
     const [reload, setReload] = useState(true);
     const convertFileListToDataSet = (fileList: AssetFileList[]) => {
-        const root: NodeData = { name: "root", isOpen: true};
+        const root: NodeData = { name: assetName, isOpen: true};
         const rootChildren: NodeData[] = [];
 
         for (const filePath of fileList) {
-            const components = filePath.relativePath.split('/'); // Adjust the separator based on your file system
+            const components = filePath.relativePath.split('/');
 
             const fileName = components.pop()!; // Extract the file name
 
