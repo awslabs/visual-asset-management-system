@@ -7,7 +7,7 @@ from unittest.mock import Mock, call
 import pytest
 
 
-from backend.handlers.indexing.streams import lambda_handler, AOSSIndex
+from backend.handlers.indexing.streams import lambda_handler, AOSSIndexAssetMetadata
 
 
 example_event = {
@@ -61,38 +61,87 @@ example_event = {
                 "SizeBytes": 926,
                 "StreamViewType": "NEW_IMAGE"
             },
-            "eventSourceARN": "arn:aws:dynamodb:us-east-1:1234789010:table/vams-dev-us-east-1-MetadataStorageTable8114119D-SVTAR5CJTH10/stream/2023-06-21T01:08:09.109"
+            "eventSourceARN": "arn:aws:dynamodb:us-east-1:1234123123:table/vams-dev-us-east-1-MetadataStorageTable8114119D-SVTAR5CJTH10/stream/2023-06-21T01:08:09.109"
         }
     ]
 }
 
+example_event_delete = {
+ "eventID": "230ef08216a12978bfcc1d5195683492",
+ "eventName": "REMOVE",
+ "eventVersion": "1.1",
+ "eventSource": "aws:dynamodb",
+ "awsRegion": "us-east-1",
+ "dynamodb": {
+  "ApproximateCreationDateTime": 1687441798.0,
+  "Keys": {
+   "assetId": {
+    "S": "bar"
+   },
+   "databaseId": {
+    "S": "foo"
+   }
+  },
+  "SequenceNumber": "558915800000000035170341055",
+  "SizeBytes": 23,
+  "StreamViewType": "NEW_IMAGE"
+ },
+ "eventSourceARN": "arn:aws:dynamodb:us-east-1:123123123:table/vams-dev-us-east-1-MetadataStorageTable8114119D-SVTAR5CJTH10/stream/2023-06-21T01:08:09.109"
+}
+
+example_event_delete_records = {
+ "Records": [
+  {
+   "eventID": "230ef08216a12978bfcc1d5195683492",
+   "eventName": "REMOVE",
+   "eventVersion": "1.1",
+   "eventSource": "aws:dynamodb",
+   "awsRegion": "us-east-1",
+   "dynamodb": {
+    "ApproximateCreationDateTime": 1687441798.0,
+    "Keys": {
+     "assetId": {
+      "S": "bar"
+     },
+     "databaseId": {
+      "S": "foo"
+     }
+    },
+    "SequenceNumber": "558915800000000035170341055",
+    "SizeBytes": 23,
+    "StreamViewType": "NEW_IMAGE"
+   },
+   "eventSourceARN": "arn:aws:dynamodb:us-east-1:098204178297:table/vams-dev-us-east-1-MetadataStorageTable8114119D-SVTAR5CJTH10/stream/2023-06-21T01:08:09.109"
+  }
+ ]
+}
 
 def test_determined_field_type():
 
-    assert "geo_point_and_polygon" == AOSSIndex._determine_field_type(
+    assert "geo_point_and_polygon" == AOSSIndexAssetMetadata._determine_field_type(
         example_event["Records"][0]["dynamodb"]["NewImage"]["location"]["S"])
-    assert "json" == AOSSIndex._determine_field_type(json.dumps({"a": "b"}))
-    assert "date" == AOSSIndex._determine_field_type("2023-06-28")
-    assert "bool" == AOSSIndex._determine_field_type("true")
-    assert "bool" == AOSSIndex._determine_field_type("false")
-    assert "num" == AOSSIndex._determine_field_type("123")
-    assert "str" == AOSSIndex._determine_field_type("example string value")
-    assert "num" == AOSSIndex._determine_field_type("123")
-    assert "num" == AOSSIndex._determine_field_type("123.0")
-    assert "str" == AOSSIndex._determine_field_type(None)
-    assert "str" == AOSSIndex._determine_field_type("")
-    assert "str" == AOSSIndex._determine_field_type("{would not parse as json}")
+    assert "json" == AOSSIndexAssetMetadata._determine_field_type(json.dumps({"a": "b"}))
+    assert "date" == AOSSIndexAssetMetadata._determine_field_type("2023-06-28")
+    assert "bool" == AOSSIndexAssetMetadata._determine_field_type("true")
+    assert "bool" == AOSSIndexAssetMetadata._determine_field_type("false")
+    assert "num" == AOSSIndexAssetMetadata._determine_field_type("123")
+    assert "str" == AOSSIndexAssetMetadata._determine_field_type("example string value")
+    assert "num" == AOSSIndexAssetMetadata._determine_field_type("123")
+    assert "num" == AOSSIndexAssetMetadata._determine_field_type("123.0")
+    assert "str" == AOSSIndexAssetMetadata._determine_field_type(None)
+    assert "str" == AOSSIndexAssetMetadata._determine_field_type("")
+    assert "str" == AOSSIndexAssetMetadata._determine_field_type("{would not parse as json}")
 
 
 def test_determine_field_name():
 
-    assert [("str_business_line", "Musical Instruments")] == AOSSIndex._determine_field_name(
+    assert [("str_business_line", "Musical Instruments")] == AOSSIndexAssetMetadata._determine_field_name(
         "Business Line", "Musical Instruments")
-    assert [("num_example_number", 123)] == AOSSIndex._determine_field_name("Example Number", "123")
-    assert [("num_example_number", 123)] == AOSSIndex._determine_field_name("Example Number", Decimal("123"))
-    assert [("num_example_number", 123.53)] == AOSSIndex._determine_field_name("Example Number", Decimal("123.53"))
-    assert [("bool_example_boolean", True)] == AOSSIndex._determine_field_name("Example Boolean", "true")
-    assert [("bool_example_boolean", False)] == AOSSIndex._determine_field_name("Example Boolean", "false")
+    assert [("num_example_number", 123)] == AOSSIndexAssetMetadata._determine_field_name("Example Number", "123")
+    assert [("num_example_number", 123)] == AOSSIndexAssetMetadata._determine_field_name("Example Number", Decimal("123"))
+    assert [("num_example_number", 123.53)] == AOSSIndexAssetMetadata._determine_field_name("Example Number", Decimal("123.53"))
+    assert [("bool_example_boolean", True)] == AOSSIndexAssetMetadata._determine_field_name("Example Boolean", "true")
+    assert [("bool_example_boolean", False)] == AOSSIndexAssetMetadata._determine_field_name("Example Boolean", "false")
     assert [
         ("gp_location", {
             "lon": -91.2091897,
@@ -105,17 +154,18 @@ def test_determine_field_name():
                 [-91.21440391432446, 30.55663668610957], [-91.2024734486266, 30.559593086143792], [-91.2056920994444, 30.565357807147976]
             ]]
          })
-    ] == AOSSIndex._determine_field_name("location", example_event["Records"][0]["dynamodb"]["NewImage"]["location"]["S"])
+    ] == AOSSIndexAssetMetadata._determine_field_name("location", example_event["Records"][0]["dynamodb"]["NewImage"]["location"]["S"])
 
 
 def test_deserializer():
 
 
     item = example_event["Records"][0]
-    result = AOSSIndex._process_item(item)
+    result = AOSSIndexAssetMetadata._process_item(item)
     print(result)
 
     assert {
+        '_rectype': 'asset',
         'bool_boolean_example': True, 
         'str_example_string_name': 'example string value', 
         'num_example_number': 123.0, 
@@ -150,6 +200,37 @@ def test_lambda_handler():
     lambda_handler_mock.assert_called_once()
     index.process_item.assert_called_once()
     index.process_item.assert_called_with(example_event["Records"][0])
+
+
+def test_lambda_handler_delete():
+
+    lambda_handler_mock = Mock()
+    index = Mock()
+    lambda_handler_mock.return_value = index
+    index.process_item = Mock()
+    index.delete_item = Mock()
+
+    lambda_handler(example_event_delete, {}, index=lambda_handler_mock)
+
+    lambda_handler_mock.assert_called_once()
+    index.process_item.assert_not_called()
+    index.delete_item.assert_called_once()
+    index.delete_item.assert_called_with(example_event_delete["dynamodb"]['Keys']['assetId']['S'])
+
+
+def test_lambda_handler_delete_records():
+    lambda_handler_mock = Mock()
+    index = Mock()
+    lambda_handler_mock.return_value = index
+    index.process_item = Mock()
+    index.delete_item = Mock()
+
+    lambda_handler(example_event_delete_records, {}, index=lambda_handler_mock)
+
+    lambda_handler_mock.assert_called_once()
+    index.process_item.assert_not_called()
+    index.delete_item.assert_called_once()
+    index.delete_item.assert_called_with(example_event_delete_records['Records'][0]["dynamodb"]['Keys']['assetId']['S'])
 
     # determine duplicate identifiers in the batch, take the last one
     # for each record

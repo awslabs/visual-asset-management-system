@@ -51,7 +51,7 @@ from boto3.dynamodb.types import TypeDeserializer
 
 
 
-class AOSSIndex():
+class AOSSIndexAssetMetadata():
 
     def __init__(self, host, auth, region, service):
         self.client = OpenSearch(
@@ -74,7 +74,7 @@ class AOSSIndex():
         service = 'aoss'
         credentials = boto3.Session().get_credentials()
         auth = AWSV4SignerAuth(credentials, region, service)
-        return AOSSIndex(host=env.get('AOSS_ENDPOINT'), region=region, service=service, auth=auth)
+        return AOSSIndexAssetMetadata(host=env.get('AOSS_ENDPOINT'), region=region, service=service, auth=auth)
 
 
     @staticmethod
@@ -121,7 +121,7 @@ class AOSSIndex():
             return None
 
         field_name = field.lower().replace(" ", "_")
-        data_type = AOSSIndex._determine_field_type(data)
+        data_type = AOSSIndexAssetMetadata._determine_field_type(data)
         if data_type == "geo_point_and_polygon":
             j = json.loads(data)
             return [
@@ -156,28 +156,54 @@ class AOSSIndex():
     @staticmethod
     def _process_item(item):
         deserialize = TypeDeserializer().deserialize
-        return {
+        result = {
             x : y 
             for k, v in item["dynamodb"]["NewImage"].items()
-            for x, y in AOSSIndex._determine_field_name(k, deserialize(v)) 
+            for x, y in AOSSIndexAssetMetadata._determine_field_name(k, deserialize(v)) 
         }
+        result['_rectype'] = 'asset'
+        return result
 
     def process_item(self, item):
-        body = AOSSIndex._process_item(item)
-        return self.client.index(
+        try:
+            body = AOSSIndexAssetMetadata._process_item(item)
+            return self.client.index(
+                index = "assets1236",
+                body = body,
+                id = item['dynamodb']['Keys']['assetId']['S'],
+                # refresh = True,
+            )
+        except Exception as e:
+            print("failed input", item)
+            traceback.print_exc()
+            raise e
+
+    def delete_item(self, assetId):
+        return self.client.delete(
             index = "assets1236",
-            body = body,
-            id = item['dynamodb']['Keys']['assetId']['S'],
-            # refresh = True,
+            id = assetId,
         )
 
-def lambda_handler(event, context, index=AOSSIndex.from_env):
+def lambda_handler(event, context, index=AOSSIndexAssetMetadata.from_env):
 
     print("the event", event)
     client = index()
 
+    # 'eventName': 'REMOVE'
+    if event.get("eventName") == "REMOVE":
+        client.delete_item(event['dynamodb']['Keys']['assetId']['S'])
+        return
+    else:
+        print("not a remove record")
+
+    if 'Records' not in event:
+        return
+
     for record in event['Records']:
         print("record", record)
+        if record['eventName'] == 'REMOVE':
+            client.delete_item(record['dynamodb']['Keys']['assetId']['S'])
+            continue
         try:
             print(client.process_item(record))
         except Exception as e:
