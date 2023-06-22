@@ -40,3 +40,33 @@ export function buildMetadataFunction(
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     return fun;
 }
+
+export function buildMetadataIndexingFunction(
+    scope: Construct,
+    storageResources: storageResources, 
+    aossEndpoint: string,
+): lambda.Function {
+    const fun = new lambda.DockerImageFunction(scope, "ndxng", {
+        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
+            cmd: ["backend.handlers.indexing.streams.lambda_handler"],
+        }),
+        timeout: Duration.minutes(15),
+        memorySize: 3008,
+        environment: {
+            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+            AOSS_ENDPOINT: aossEndpoint,
+        },
+    });
+    storageResources.dynamo.metadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
+
+    // trigger the lambda from the dynamodb db streams
+    storageResources.dynamo.metadataStorageTable.grantStreamRead(fun);
+    storageResources.dynamo.assetStorageTable.grantStreamRead(fun);
+
+
+    return fun;
+}

@@ -14,22 +14,25 @@ import { defaultProvider } from "@aws-sdk/credential-provider-node";
 
 import { SSMClient, PutParameterCommand } from "@aws-sdk/client-ssm"; // ES Modules import
 
-const setCollectionEndpointSSM = async (stackName: string, collectionName: string, value: string | undefined) => {
-    if(! value) {
+const setCollectionEndpointSSM = async (
+    stackName: string,
+    collectionName: string,
+    value: string | undefined
+) => {
+    if (!value) {
         return;
     }
     const client = new SSMClient({});
     const command = new PutParameterCommand({
         // PutParameterRequest
-        Name: "/" + [stackName, collectionName, "endpoint"].join("/"), 
-        Description: "The endpoint of the OpenSearch Service in " + stackName, 
+        Name: "/" + [stackName, collectionName, "endpoint"].join("/"),
+        Description: "The endpoint of the OpenSearch Service in " + stackName,
         Value: value, // required
         Type: "String",
         Overwrite: true,
     });
     const response = await client.send(command);
     console.log("response", response);
-
 };
 
 export const handler: Handler = async function (event: any) {
@@ -82,7 +85,11 @@ export const handler: Handler = async function (event: any) {
         node: response.collectionDetails![0].collectionEndpoint,
     });
 
-    setCollectionEndpointSSM(event?.ResourceProperties?.stackName, collectionName, response.collectionDetails![0].collectionEndpoint);
+    setCollectionEndpointSSM(
+        event?.ResourceProperties?.stackName,
+        collectionName,
+        response.collectionDetails![0].collectionEndpoint
+    );
 
     const exists_resp = await client.indices.exists({
         index: event?.ResourceProperties?.indexName,
@@ -123,6 +130,14 @@ export const handler: Handler = async function (event: any) {
                             match: "num_*",
                             mapping: {
                                 type: "long",
+                            },
+                        },
+                    },
+                    {
+                        boolean: {
+                            match: "bool_*",
+                            mapping: {
+                                type: "boolean",
                             },
                         },
                     },

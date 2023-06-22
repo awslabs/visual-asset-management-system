@@ -68,7 +68,7 @@ export class OpensearchServerlessConstruct extends Construct {
             AWSOwnedKey: true,
         };
         const encryptionPolicyCfn = new aoss.CfnSecurityPolicy(this, "OpensearchEncryptionPolicy", {
-            name: "encryption-policy",
+            name: `EncryptPolicy${this.collectionUid}`.toLowerCase(),
             policy: JSON.stringify(encryptionPolicy),
             type: "encryption",
         });
@@ -84,7 +84,7 @@ export class OpensearchServerlessConstruct extends Construct {
         ];
 
         const networkPolicyCfn = new aoss.CfnSecurityPolicy(this, "OpensearchNetworkPolicy", {
-            name: "network-policy",
+            name: `NetworkPolicy${this.collectionUid}`.toLowerCase(),
             policy: JSON.stringify(networkPolicy),
             type: "network",
         });
@@ -115,14 +115,14 @@ export class OpensearchServerlessConstruct extends Construct {
     }
 
     // type ConstructWithRole = Construct & { role?: cdk.aws_iam.IRole };
-    public endpointSSMParameterName() {
+    public endpointSSMParameterName(): string {
         // look up parameter store value
         return "/" + [cdk.Stack.of(this).stackName, this.collectionUid, "endpoint"].join("/");
         // return cdk.aws_ssm.StringParameter.valueForStringParameter(this, 
     }
 
     // todo rename to grantXxxx
-    public _grantCollectionAccess(construct: Construct & { role?: cdk.aws_iam.IRole }) {
+    public grantCollectionAccess(construct: Construct & { role?: cdk.aws_iam.IRole }) {
         const policy = [
             {
                 Description: "Access",
@@ -142,7 +142,7 @@ export class OpensearchServerlessConstruct extends Construct {
             },
         ];
 
-        const accessPolicy = new aoss.CfnAccessPolicy(construct, "OpensearchAccessPolicy", {
+        const accessPolicy = new aoss.CfnAccessPolicy(construct, "Policy", {
             name: "acc" + Names.uniqueResourceName(construct, { maxLength: 8 }).toLowerCase(),
             type: "data",
             policy: JSON.stringify(policy),

@@ -8,7 +8,7 @@ import * as cdk from "aws-cdk-lib";
 import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as cloudTrail from "aws-cdk-lib/aws-cloudtrail";
 import { apiBuilder } from "./api-builder";
-import { storageResourcesBuilder } from "./storage-builder";
+import { storageResources, storageResourcesBuilder } from "./storage-builder";
 import {
     AmplifyConfigLambdaConstruct,
     AmplifyConfigLambdaConstructProps,
@@ -24,6 +24,7 @@ import { NagSuppressions } from "cdk-nag";
 import { CustomCognitoConfigConstruct } from "./constructs/custom-cognito-config-construct";
 import { samlEnabled, samlSettings } from "./saml-config";
 import { LocationServiceConstruct } from "./constructs/location-service-construct";
+import { streamsBuilder } from "./streams-builder";
 
 interface EnvProps {
     prod: boolean; //ToDo: replace with env
@@ -152,6 +153,8 @@ export class VAMS extends cdk.Stack {
 
         apiBuilder(this, api, storageResources);
 
+        streamsBuilder(this, cognitoResources, api, storageResources);
+
         // required by AWS internal accounts.  Can be removed in customer Accounts
         // const wafv2Regional = new Wafv2BasicConstruct(this, "Wafv2Regional", {
         //     ...props,
@@ -258,6 +261,7 @@ export class VAMS extends cdk.Stack {
             `/${props.stackName}/pipelineService`,
             `/${props.stackName}/workflowService`,
             `/${props.stackName}/listExecutions`,
+            `/${props.stackName}/ndxng`,
         ];
         for (const path of refactorPaths) {
             const reason = `Intention is to refactor this model away moving forward 
@@ -282,3 +286,4 @@ export class VAMS extends cdk.Stack {
         }
     }
 }
+
