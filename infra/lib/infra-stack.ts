@@ -48,7 +48,7 @@ export class VAMS extends cdk.Stack {
             type: "String",
             description:
                 "Email address for login and where your password is sent to. You will be sent a temporary password for the turbine to authenticate to Cognito.",
-            default: providedAdminEmailAddress,
+            default: providedAdminEmailAddress
         });
 
         ///Setup optional pipelines
@@ -60,7 +60,7 @@ export class VAMS extends cdk.Stack {
             type: "String",
             description:
               "Parameter for whether the Point Cloud (PC) Visualizer Pipeline is activated as part of this deployment",
-            default: pipelineActivated_PCVisualizer,
+            default: pipelineActivated_PCVisualizer
           });    
 
         const webAppBuildPath = "../web/build";

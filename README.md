@@ -104,9 +104,10 @@ You can identify stable releases by their tag. Fetch the tags `git fetch --all -
 
 6. Set the CDK stack name and the region for deployment with environment variables `export AWS_REGION=us-east-1 && export STACK_NAME=dev` - replace with the region you would like to deploy to and the name you want to associate with the cloudformation stack that the CDK will deploy.
 
-7. `npm run deploy.dev adminEmailAddress=myuser@example.com` - replace with your email address to deploy. An account is created in an AWS Cognito User Pool using this email address. Expect an email from no-reply@verificationemail.com with a temporary password.
+7. (Optional) Set the optional feature to deploy the Point Cloud (PC) visualizer pipeline with environment variables `export pipelineActivatePCVisualizer=true` - the point cloud (PC) visualizer pipeline stack is for viewing Point Cloud files in the VAMS visualizer preview. You can optionally set this via CDK deploy context parameter. Note: This does deploy additional AWS components that may have additional static infrastructure costs. 
 
-8. (Optional) `npm run deploy.dev adminEmailAddress=myuser@example.com pipelineActivatePCVisualizer=true` - Follow step 7 to replace email address to deploy. Add 'pipelineActivatePCVisualizer=true' to deploy the point cloud (PC) visualizer pipeline stack for viewing Point Cloud files. Note: This does deploy additional AWS components that may have additional static infrastructure costs. 
+8. `npm run deploy.dev adminEmailAddress=myuser@example.com` - replace with your email address to deploy. An account is created in an AWS Cognito User Pool using this email address. Expect an email from no-reply@verificationemail.com with a temporary password.
+
 
 #### Deployment Success
 
