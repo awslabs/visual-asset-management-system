@@ -51,6 +51,7 @@ const ThreeDimensionalPlotter = React.lazy(() => import("../viewers/ThreeDimensi
 const ColumnarViewer = React.lazy(() => import("../viewers/ColumnarViewer"));
 const HTMLViewer = React.lazy(() => import("../viewers/HTMLViewer"));
 const ModelViewer = React.lazy(() => import("../viewers/ModelViewer"));
+const PointCloudViewer = React.lazy(() => import("../viewers/PointCloudViewer"));
 const FolderViewer = React.lazy(() => import("../viewers/FolderViewer"));
 const checkFileFormat = (asset) => {
     let filetype;
