@@ -83,9 +83,9 @@ export default function PointCloudViewer(props) {
                     top: "50%", 
                     left: "50%", 
                     transform: "translate(-50%, -50%)" }}>
-                        Visualizer files not currently available.
+                        Visualizer files not currently available
                         <br></br>
-                        Please refresh after a few minutes.
+                        Please run the Point Cloud Visualizer Pipeline to enable visualization for this asset
                 </div>)}
             </div>
             <div>
