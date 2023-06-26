@@ -33,6 +33,7 @@ let navItems = [
         text: "Visualize",
         items: [
             { type: "link", text: "3D Model Viewer", href: "/visualizers/model" },
+            { type: "link", text: "3D Point Cloud Viewer", href: "/visualizers/pc" },
             { type: "link", text: "3D Plotter", href: "/visualizers/plot" },
             { type: "link", text: "Columnar Viewer", href: "/visualizers/column" },
         ],
