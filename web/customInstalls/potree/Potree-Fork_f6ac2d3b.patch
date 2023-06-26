@@ -1,7 +1,7 @@
 From 1fc411b299d2b15caac6812560390037663764e3 Mon Sep 17 00:00:00 2001
 From: Scott Patten <scopatvr@amazon.com>
 Date: Tue, 16 May 2023 15:19:44 -0700
-Subject: [PATCH 1/5] Added header mods to OctreeLoader
+Subject: [PATCH 1/6] Added header mods to OctreeLoader
 
 ---
  src/modules/loader/2.0/OctreeLoader.js | 9 ++++++---
@@ -34,7 +34,7 @@ index 0f025661..53e1ecf8 100644
 From 91e38851dda88b10196c4640936d562d2e5985fe Mon Sep 17 00:00:00 2001
 From: Scott Patten <scopatvr@amazon.com>
 Date: Wed, 17 May 2023 16:23:17 -0700
-Subject: [PATCH 2/5] Add header injection to potree octree.
+Subject: [PATCH 2/6] Add header injection to potree octree.
 
 ---
  src/Potree.js                          | 6 +++---
@@ -91,7 +91,7 @@ index 53e1ecf8..40617d39 100644
 From 28c865baab39e7bf4bcd6d6eb256577958448346 Mon Sep 17 00:00:00 2001
 From: Scott Patten <scopatvr@amazon.com>
 Date: Fri, 19 May 2023 14:35:21 -0700
-Subject: [PATCH 3/5] Suppressed warnings.
+Subject: [PATCH 3/6] Suppressed warnings.
 
 ---
  src/Potree.js                          | 13 +++++---
@@ -278,7 +278,7 @@ index baf1fb1b..c1b8dec8 100644
 From d6c970e6bf69b29ab66e3ff29b6774ceb4bd36b8 Mon Sep 17 00:00:00 2001
 From: Scott Patten <scopatvr@amazon.com>
 Date: Thu, 8 Jun 2023 10:50:22 -0700
-Subject: [PATCH 4/5] Update: Comment out sidebar items.
+Subject: [PATCH 4/6] Update: Comment out sidebar items.
 
 ---
  src/viewer/sidebar.html | 8 ++++----
@@ -330,7 +330,7 @@ index 15524270..b1ad490e 100644
 From c36b126ee9fbf1570118d7ca9383302c53123529 Mon Sep 17 00:00:00 2001
 From: Scott Patten <scopatvr@amazon.com>
 Date: Fri, 9 Jun 2023 08:57:28 -0700
-Subject: [PATCH 5/5] Added: License headers and Amazon modification comments.
+Subject: [PATCH 5/6] Added: License headers and Amazon modification comments.
 
 ---
  src/Potree.js                          | 11 ++++++++++-
@@ -543,6 +543,93 @@ index c1b8dec8..7b63d8a4 100644
  		this.renderer.domElement.addEventListener('mousedown', () => {
  			this.renderer.domElement.focus();
  		});
+-- 
+2.38.1.windows.1
+
+
+From 287e98e010ff2d5111a04be631b9019c08078cdc Mon Sep 17 00:00:00 2001
+From: Scott Patten <scopatvr@amazon.com>
+Date: Mon, 26 Jun 2023 12:23:34 -0700
+Subject: [PATCH 6/6] Modified headers
+
+---
+ src/Potree.js                          | 3 +--
+ src/PotreeRenderer.js                  | 3 +--
+ src/modules/loader/2.0/OctreeLoader.js | 3 +--
+ src/viewer/sidebar.html                | 3 +--
+ src/viewer/viewer.js                   | 3 +--
+ 5 files changed, 5 insertions(+), 10 deletions(-)
+
+diff --git a/src/Potree.js b/src/Potree.js
+index 645038d6..b8afccc6 100644
+--- a/src/Potree.js
++++ b/src/Potree.js
+@@ -1,8 +1,7 @@
+ /*
+ * Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
+ * Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+-* SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
+-* Licensed under the Amazon Software License  http://aws.amazon.com/asl/
++* SPDX-License-Identifier: Apache-2.0
+ */
+ 
+ export * from "./Actions.js";
+diff --git a/src/PotreeRenderer.js b/src/PotreeRenderer.js
+index e5366b5f..88f4196b 100644
+--- a/src/PotreeRenderer.js
++++ b/src/PotreeRenderer.js
+@@ -1,8 +1,7 @@
+ /*
+ * Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
+ * Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+-* SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
+-* Licensed under the Amazon Software License  http://aws.amazon.com/asl/
++* SPDX-License-Identifier: Apache-2.0
+ */
+ 
+ import * as THREE from "../libs/three.js/build/three.module.js";
+diff --git a/src/modules/loader/2.0/OctreeLoader.js b/src/modules/loader/2.0/OctreeLoader.js
+index 8b9748f5..10a6f0de 100644
+--- a/src/modules/loader/2.0/OctreeLoader.js
++++ b/src/modules/loader/2.0/OctreeLoader.js
+@@ -1,8 +1,7 @@
+ /*
+ * Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
+ * Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+-* SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
+-* Licensed under the Amazon Software License  http://aws.amazon.com/asl/
++* SPDX-License-Identifier: Apache-2.0
+ */
+ 
+ import * as THREE from "../../../../libs/three.js/build/three.module.js";
+diff --git a/src/viewer/sidebar.html b/src/viewer/sidebar.html
+index 73f37dc5..f5c28a8a 100644
+--- a/src/viewer/sidebar.html
++++ b/src/viewer/sidebar.html
+@@ -1,8 +1,7 @@
+ <!--
+ # Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
+ # Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+-# SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
+-# Licensed under the Amazon Software License  http://aws.amazon.com/asl/
++# SPDX-License-Identifier: Apache-2.0
+ -->
+ 
+ <div id="sidebar_root" class="">
+diff --git a/src/viewer/viewer.js b/src/viewer/viewer.js
+index 7b63d8a4..3f03b5c2 100644
+--- a/src/viewer/viewer.js
++++ b/src/viewer/viewer.js
+@@ -1,8 +1,7 @@
+ /*
+ * Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
+ * Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+-* SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
+-* Licensed under the Amazon Software License  http://aws.amazon.com/asl/
++* SPDX-License-Identifier: Apache-2.0
+ */
+ 
+ import * as THREE from "../../libs/three.js/build/three.module.js";
 -- 
 2.38.1.windows.1
 
