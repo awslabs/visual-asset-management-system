@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -15,6 +15,7 @@ import { NagSuppressions } from "cdk-nag";
 export interface storageResources {
     s3: {
         assetBucket: s3.Bucket;
+        assetVisualizerBucket: s3.Bucket;
         artefactsBucket: s3.Bucket;
         accessLogsBucket: s3.Bucket;
         sagemakerBucket: s3.Bucket;
@@ -97,6 +98,25 @@ export function storageResourcesBuilder(
         serverAccessLogsPrefix: "asset-bucket-logs/",
     });
     requireTLSAddToResourcePolicy(assetBucket);
+
+    const assetVisualizerBucket = new s3.Bucket(scope, "AssetVisualizerBucket", {
+        ...s3DefaultProps,
+        cors: [
+            {
+                allowedOrigins: ["*"],
+                allowedHeaders: ["*"],
+                allowedMethods: [
+                    s3.HttpMethods.GET, 
+                    s3.HttpMethods.PUT, 
+                    s3.HttpMethods.POST, 
+                    s3.HttpMethods.HEAD,],
+                exposedHeaders: ["ETag"],
+            },
+        ],
+        serverAccessLogsBucket: accessLogsBucket,
+        serverAccessLogsPrefix: "asset-bucket-logs/",
+    });
+    requireTLSAddToResourcePolicy(assetVisualizerBucket);
 
     const artefactsBucket = new s3.Bucket(scope, "ArtefactsBucket", {
         ...s3DefaultProps,
@@ -233,6 +253,7 @@ export function storageResourcesBuilder(
     return {
         s3: {
             assetBucket: assetBucket,
+            assetVisualizerBucket: assetVisualizerBucket,
             artefactsBucket: artefactsBucket,
             accessLogsBucket: accessLogsBucket,
             sagemakerBucket: sagemakerBucket,

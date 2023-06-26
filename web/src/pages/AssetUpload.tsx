@@ -47,7 +47,7 @@ import { FileUploadTableItem } from "./AssetUpload/FileUploadTable";
 import localforage from "localforage";
 
 // eslint-disable-next-line @typescript-eslint/no-array-constructor
-// const objectFileFormats = new Array().concat(cadFileFormats, modelFileFormats, columnarFileFormats);
+// const objectFileFormats = new Array().concat(cadFileFormats, pcFileFormats, modelFileFormats, columnarFileFormats);
 // const objectFileFormatsStr = objectFileFormats.join(", ");
 const previewFileFormatsStr = previewFileFormats.join(", ");
 

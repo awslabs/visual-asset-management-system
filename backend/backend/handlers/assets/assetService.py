@@ -1,4 +1,4 @@
-#  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -25,6 +25,7 @@ response = {
 }
 asset_database = None
 db_database = None
+s3_assetVisualizer_bucket = None
 unitTest = {
     "body": {
         "databaseId": "Unit_Test"
@@ -35,6 +36,7 @@ unitTest['body'] = json.dumps(unitTest['body'])
 try:
     asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
     db_database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
+    s3_assetVisualizer_bucket = os.environ["S3_ASSET_VISUALIZER_BUCKET"]
 except:
     print("Failed Loading Environment Variables")
     response['body']['message'] = "Failed Loading Environment Variables"
@@ -150,6 +152,7 @@ def delete_asset(databaseId, assetId, queryParameters):
         print("Deleting asset: ", item)
         if "assetLocation" in item:
             archive_file(item['assetLocation'])
+            delete_assetVisualizer_files(item['assetLocation'])
         if "previewLocation" in item:
             archive_file(item['previewLocation'])
         item['databaseId'] = databaseId + "#deleted"
@@ -461,6 +464,42 @@ def delete_handler(response, pathParameters, queryParameters):
     print(response)
     return response
 
+def delete_assetVisualizer_files(assetLocation):
+    s3 = boto3.client('s3')
+
+    key = ""
+    if "Key" in assetLocation:
+        key = assetLocation['Key']
+
+    if  len(key)==0:
+        return
+    
+    #Check if key does not end in file extension of E57, LAS, or LAZ
+    #Return as visualizer files only exists for these file extension types
+    #if not key.endswith(".e57") and not key.endswith(".las") and not key.endswith(".laz"):
+    #    return
+    
+    #Add the folder deliminiator to the end of the key
+    key = key + '/'
+
+    print("Deleting Temporary Asset Visualizer Files Under Folder: ", s3_assetVisualizer_bucket, ":", key)
+
+    try:
+        #Get all assets in assetVisualizer bucket (unversioned, temporary files for the web visualizers) for deletion
+        #Use assetLocation key as root folder key for assetVisualizerFiles
+        assetVisualizerBucketFilesDeleted = []
+        paginator = s3.get_paginator('list_objects')
+        for page in paginator.paginate(Bucket=s3_assetVisualizer_bucket, Prefix=key):
+            for item in page['Contents']:
+                assetVisualizerBucketFilesDeleted.append(item['Key'])
+                print("Deleting visualizer asset file: ", item['Key'])
+                s3.delete_object(Bucket=s3_assetVisualizer_bucket, Key=item['Key'])
+                # print(item)
+
+    except Exception as e:
+        print("Error: ", e)
+
+    return
 
 def lambda_handler(event, context):
     print(event)

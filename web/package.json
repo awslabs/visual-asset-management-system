@@ -62,7 +62,7 @@
         "build": "react-scripts build",
         "test": "react-scripts test --coverage",
         "eject": "react-scripts eject",
-        "postinstall": "patch-package && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js-worker.js && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.js && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.license.md && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.wasm"
+        "postinstall": "node ./customInstalls/potree/potreeInstall.js && patch-package && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js-worker.js && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.js && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.license.md && del-cli ./node_modules/online-3d-viewer/libs/loaders/occt-import-js.wasm"
     },
     "eslintConfig": {
         "extends": [
@@ -93,12 +93,14 @@
         "@types/react": "^17.0.2",
         "@types/react-dom": "^17.0.2",
         "assert": "^2.0.0",
+        "fs-extra": "^11.1.1",
         "babel-jest": "^29.5.0",
         "prettier": "^2.4.1",
         "react-error-overlay": "^6.0.9",
         "react-test-renderer": "^17.0.2",
         "sass": "^1.43.4",
         "sass-loader": "^12.3.0",
+        "simple-git": "^3.19.0",
         "ts-node": "^10.9.1"
     },
     "jest": {

@@ -29,6 +29,7 @@ import {
     buildAssetService,
     buildUploadAllAssetsFunction,
     buildUploadAssetFunction,
+    buildFetchVisualizerAssetFunction,
     buildDownloadAssetFunction,
     buildRevertAssetFunction,
     buildUploadAssetWorkflowFunction,
@@ -123,7 +124,8 @@ export function apiBuilder(
         scope,
         storageResources.dynamo.assetStorageTable,
         storageResources.dynamo.databaseStorageTable,
-        storageResources.s3.assetBucket
+        storageResources.s3.assetBucket,
+        storageResources.s3.assetVisualizerBucket
     );
     attachFunctionToApi(scope, assetService, {
         routePath: "/database/{databaseId}/assets",
@@ -203,6 +205,16 @@ export function apiBuilder(
     attachFunctionToApi(scope, uploadAllAssetFunction, {
         routePath: "/assets/all",
         method: apigwv2.HttpMethod.PUT,
+        api: api.apiGatewayV2,
+    });
+
+    const fetchVisualizerAssetFunction = buildFetchVisualizerAssetFunction(
+        scope,
+        storageResources.s3.assetVisualizerBucket
+    );
+    attachFunctionToApi(scope, fetchVisualizerAssetFunction, {
+        routePath: "/visualizerAssets/{proxy+}",
+        method: apigwv2.HttpMethod.GET,
         api: api.apiGatewayV2,
     });
 

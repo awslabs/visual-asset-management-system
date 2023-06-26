@@ -1,8 +1,9 @@
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
+export const pcFileFormats = [".e57", ".las", ".laz"];
 export const cadFileFormats = [".step", ".dwg", ".sldasm", ".stp", ".fcstd", "3dm", "brep", ".ifc"];
 export const modelFileFormats = [
     ".obj",
@@ -30,6 +31,7 @@ export const FILE_FORMATS = {
     CAD: cadFileFormats,
     PRINT: [],
     VR: [],
+    PC: pcFileFormats,
     MODEL: modelFileFormats,
     COLUMNAR: columnarFileFormats,
     PREVIEW: previewFileFormats,

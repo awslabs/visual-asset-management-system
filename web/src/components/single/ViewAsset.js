@@ -1,6 +1,6 @@
 /* eslint-disable jsx-a11y/anchor-is-valid */
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -33,6 +33,7 @@ import {
 import {
     columnarFileFormats,
     modelFileFormats,
+    pcFileFormats,
     presentationFileFormats,
 } from "../../common/constants/fileFormats";
 import { Link } from "@cloudscape-design/components";
@@ -65,6 +66,9 @@ const checkFileFormat = (asset) => {
     filetype = filetype.toLowerCase();
     if (modelFileFormats.includes(filetype) || modelFileFormats.includes("." + filetype)) {
         return "model";
+    }
+    if (pcFileFormats.includes(filetype) || pcFileFormats.includes("." + filetype)) {
+        return "pc";
     }
     if (columnarFileFormats.includes(filetype) || columnarFileFormats.includes("." + filetype)) {
         return "plot";
@@ -277,6 +281,8 @@ export default function ViewAsset() {
                         newViewerOptions.push({ text: "Column", id: "column" });
                     } else if (defaultViewType === "model") {
                         newViewerOptions.push({ text: "Model", id: "model" });
+                    } else if (defaultViewType === "pc") {
+                        newViewerOptions.push({ text: "Point Cloud", id: "pc" });
                     } else if (defaultViewType === "html") {
                         newViewerOptions.push({ text: "HTML", id: "html" });
                     } else if (defaultViewType === "folder") {
@@ -290,6 +296,8 @@ export default function ViewAsset() {
                         }
                         if (window.location.hash === "#model") {
                             setViewType("model");
+                        } else if (window.location.hash === "#pc") {
+                            setViewType("pc");
                         } else if (window.location.hash === "#plot") {
                             setViewType("plot");
                         } else if (window.location.hash === "#column") {
@@ -468,6 +476,16 @@ export default function ViewAsset() {
                                                             <ModelViewer
                                                                 assetKey={
                                                                     asset?.generated_artifacts?.gltf
+                                                                        ?.Key ||
+                                                                    asset?.assetLocation?.Key
+                                                                }
+                                                                className="visualizer-container-canvas"
+                                                            />
+                                                        )}
+                                                        {viewType === "pc" && (
+                                                            <PointCloudViewer
+                                                                assetKey={
+                                                                    asset?.generated_artifacts?.laz
                                                                         ?.Key ||
                                                                     asset?.assetLocation?.Key
                                                                 }
