@@ -1,7 +1,7 @@
 From 1fc411b299d2b15caac6812560390037663764e3 Mon Sep 17 00:00:00 2001
 From: Scott Patten <scopatvr@amazon.com>
 Date: Tue, 16 May 2023 15:19:44 -0700
-Subject: [PATCH 1/6] Added header mods to OctreeLoader
+Subject: [PATCH 1/5] Added header mods to OctreeLoader
 
 ---
  src/modules/loader/2.0/OctreeLoader.js | 9 ++++++---
@@ -34,7 +34,7 @@ index 0f025661..53e1ecf8 100644
 From 91e38851dda88b10196c4640936d562d2e5985fe Mon Sep 17 00:00:00 2001
 From: Scott Patten <scopatvr@amazon.com>
 Date: Wed, 17 May 2023 16:23:17 -0700
-Subject: [PATCH 2/6] Add header injection to potree octree.
+Subject: [PATCH 2/5] Add header injection to potree octree.
 
 ---
  src/Potree.js                          | 6 +++---
@@ -91,7 +91,7 @@ index 53e1ecf8..40617d39 100644
 From 28c865baab39e7bf4bcd6d6eb256577958448346 Mon Sep 17 00:00:00 2001
 From: Scott Patten <scopatvr@amazon.com>
 Date: Fri, 19 May 2023 14:35:21 -0700
-Subject: [PATCH 3/6] Suppressed warnings.
+Subject: [PATCH 3/5] Suppressed warnings.
 
 ---
  src/Potree.js                          | 13 +++++---
@@ -278,7 +278,7 @@ index baf1fb1b..c1b8dec8 100644
 From d6c970e6bf69b29ab66e3ff29b6774ceb4bd36b8 Mon Sep 17 00:00:00 2001
 From: Scott Patten <scopatvr@amazon.com>
 Date: Thu, 8 Jun 2023 10:50:22 -0700
-Subject: [PATCH 4/6] Update: Comment out sidebar items.
+Subject: [PATCH 4/5] Update: Comment out sidebar items.
 
 ---
  src/viewer/sidebar.html | 8 ++++----
@@ -327,44 +327,44 @@ index 15524270..b1ad490e 100644
 2.38.1.windows.1
 
 
-From c36b126ee9fbf1570118d7ca9383302c53123529 Mon Sep 17 00:00:00 2001
+From 1db965270e584822ea00914c31791160fddb281e Mon Sep 17 00:00:00 2001
 From: Scott Patten <scopatvr@amazon.com>
-Date: Fri, 9 Jun 2023 08:57:28 -0700
-Subject: [PATCH 5/6] Added: License headers and Amazon modification comments.
+Date: Mon, 26 Jun 2023 12:38:21 -0700
+Subject: [PATCH 5/5] Added headers
 
 ---
- src/Potree.js                          | 11 ++++++++++-
- src/PotreeRenderer.js                  |  9 ++++++++-
- src/modules/loader/2.0/OctreeLoader.js | 13 ++++++++++---
- src/viewer/sidebar.html                | 11 ++++++++++-
- src/viewer/viewer.js                   | 13 ++++++++++++-
- 5 files changed, 50 insertions(+), 7 deletions(-)
+ src/Potree.js                          | 12 +++++++++---
+ src/PotreeRenderer.js                  |  9 +++++++--
+ src/modules/loader/2.0/OctreeLoader.js | 12 +++++++++---
+ src/viewer/sidebar.html                |  9 +++++++++
+ src/viewer/viewer.js                   | 13 +++++++++++--
+ 5 files changed, 45 insertions(+), 10 deletions(-)
 
 diff --git a/src/Potree.js b/src/Potree.js
-index e38a66d1..645038d6 100644
+index e38a66d1..eb8c969f 100644
 --- a/src/Potree.js
 +++ b/src/Potree.js
-@@ -1,3 +1,9 @@
+@@ -1,3 +1,8 @@
 +/*
 +* Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
 +* Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-+* SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
-+* Licensed under the Amazon Software License  http://aws.amazon.com/asl/
++* SPDX-License-Identifier: Apache-2.0
 +*/
  
  export * from "./Actions.js";
  export * from "./AnimationPath.js";
-@@ -96,7 +102,9 @@ export const version = {
+@@ -95,8 +100,9 @@ export const version = {
+ };
  
  export let lru = new LRU();
- 
+-
 +// 2023-05-19 Amazon modification
  // console.log('Potree ' + version.major + '.' + version.minor + version.suffix);
 +// End of Amazon modification
  
  export let pointBudget = 1 * 1000 * 1000;
  export let framenumber = 0;
-@@ -127,7 +135,7 @@ let resourcePath = scriptPath + '/resources';
+@@ -127,7 +133,7 @@ let resourcePath = scriptPath + '/resources';
  // resourcePath:build/potree/resources
  export {scriptPath, resourcePath};
  
@@ -373,54 +373,54 @@ index e38a66d1..645038d6 100644
  export function loadPointCloud(path, name, requestHeaders, callback){
  	let loaded = function(e){
  		e.pointcloud.name = name;
-@@ -221,6 +229,7 @@ export function loadPointCloud(path, name, requestHeaders, callback){
+@@ -221,7 +227,7 @@ export function loadPointCloud(path, name, requestHeaders, callback){
  		return promise;
  	}
  };
+-
 +// End of Amazon modification
  
- 
  // add selectgroup
+ (function($){
 diff --git a/src/PotreeRenderer.js b/src/PotreeRenderer.js
-index 1aee7a2e..e5366b5f 100644
+index 1aee7a2e..3823e64c 100644
 --- a/src/PotreeRenderer.js
 +++ b/src/PotreeRenderer.js
-@@ -1,3 +1,9 @@
+@@ -1,3 +1,8 @@
 +/*
 +* Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
 +* Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-+* SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
-+* Licensed under the Amazon Software License  http://aws.amazon.com/asl/
++* SPDX-License-Identifier: Apache-2.0
 +*/
  
  import * as THREE from "../libs/three.js/build/three.module.js";
  import {PointCloudTree} from "./PointCloudTree.js";
-@@ -327,8 +333,9 @@ class Shader {
+@@ -327,9 +332,9 @@ class Shader {
  
  		const tEnd = performance.now();
  		const duration = tEnd - tStart;
 -
 +		// 2023-05-19 Amazon modifications
  		// console.log(`shader compile duration: ${duration.toFixed(3)}`);
+-
 +		// End of Amazon modifications
  
- 
  	}
+ 
 diff --git a/src/modules/loader/2.0/OctreeLoader.js b/src/modules/loader/2.0/OctreeLoader.js
-index 3a5c4133..8b9748f5 100644
+index 3a5c4133..684687c1 100644
 --- a/src/modules/loader/2.0/OctreeLoader.js
 +++ b/src/modules/loader/2.0/OctreeLoader.js
-@@ -1,3 +1,9 @@
+@@ -1,3 +1,8 @@
 +/*
 +* Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
 +* Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-+* SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
-+* Licensed under the Amazon Software License  http://aws.amazon.com/asl/
++* SPDX-License-Identifier: Apache-2.0
 +*/
  
  import * as THREE from "../../../../libs/three.js/build/three.module.js";
  import {PointAttribute, PointAttributes, PointAttributeTypes} from "../../../loader/PointAttributes.js";
-@@ -6,7 +12,7 @@ import {OctreeGeometry, OctreeGeometryNode} from "./OctreeGeometry.js";
+@@ -6,7 +11,7 @@ import {OctreeGeometry, OctreeGeometryNode} from "./OctreeGeometry.js";
  // let loadedNodes = new Set();
  
  export class NodeLoader{
@@ -429,16 +429,16 @@ index 3a5c4133..8b9748f5 100644
  	constructor(url, appendHeaders){
  		this.url = url;
  		this.appendHeaders = appendHeaders
-@@ -269,7 +275,7 @@ export class NodeLoader{
- 		let response = await fetch(hierarchyPath, {
+@@ -270,7 +275,7 @@ export class NodeLoader{
  			headers: headers
  		});
+ 
 -
 +// End of Amazon modifications
  
- 
  		let buffer = await response.arrayBuffer();
-@@ -396,7 +402,7 @@ export class OctreeLoader{
+ 
+@@ -396,7 +401,7 @@ export class OctreeLoader{
  
  		return attributes;
  	}
@@ -447,7 +447,7 @@ index 3a5c4133..8b9748f5 100644
  	static async load(url, headers){
  		let response = await fetch(url, {
  			method: 'GET',
-@@ -413,6 +419,7 @@ export class OctreeLoader{
+@@ -413,6 +418,7 @@ export class OctreeLoader{
  		let attributes = OctreeLoader.parseAttributes(metadata.attributes);
  
  		let loader = new NodeLoader(url, headers);
@@ -456,15 +456,14 @@ index 3a5c4133..8b9748f5 100644
  		loader.attributes = attributes;
  		loader.scale = metadata.scale;
 diff --git a/src/viewer/sidebar.html b/src/viewer/sidebar.html
-index b1ad490e..73f37dc5 100644
+index b1ad490e..e71ebc9c 100644
 --- a/src/viewer/sidebar.html
 +++ b/src/viewer/sidebar.html
-@@ -1,5 +1,12 @@
+@@ -1,5 +1,11 @@
 +<!--
 +# Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
 +# Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-+# SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
-+# Licensed under the Amazon Software License  http://aws.amazon.com/asl/
++# SPDX-License-Identifier: Apache-2.0
 +-->
  
  <div id="sidebar_root" class="">
@@ -472,7 +471,7 @@ index b1ad490e..73f37dc5 100644
  	<!-- <div id="sidebar_header">
  		<span id="potree_branding" class="potree_sidebar_brand">
  			<a href="http://potree.org" target="_blank">potree.org</a> 
-@@ -12,6 +19,7 @@
+@@ -12,6 +18,7 @@
  		</span>
  		<div id="potree_languages" style="font-family:arial;"></div>
  	</div> -->
@@ -480,11 +479,9 @@ index b1ad490e..73f37dc5 100644
  	<div> 
  
  	<div id="potree_menu" class="accordion">
-@@ -164,8 +172,8 @@
- 
- 			</div>
+@@ -166,6 +173,7 @@
  		</div>
--		
+ 		
  		<!-- ABOUT -->
 +		<!-- 2023-06-08 Amazon modification -->
  		<!-- <h3 id="menu_about"><span data-i18n="tb.about_opt"></span></h3>
@@ -499,30 +496,30 @@ index b1ad490e..73f37dc5 100644
  	</div>
  
 diff --git a/src/viewer/viewer.js b/src/viewer/viewer.js
-index c1b8dec8..7b63d8a4 100644
+index c1b8dec8..ad908b14 100644
 --- a/src/viewer/viewer.js
 +++ b/src/viewer/viewer.js
-@@ -1,3 +1,9 @@
+@@ -1,3 +1,8 @@
 +/*
 +* Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
 +* Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-+* SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
-+* Licensed under the Amazon Software License  http://aws.amazon.com/asl/
++* SPDX-License-Identifier: Apache-2.0
 +*/
  
  import * as THREE from "../../libs/three.js/build/three.module.js";
  import {ClipTask, ClipMethod, CameraMode, LengthUnits, ElevationGradientRepeat} from "../defines.js";
-@@ -1232,7 +1238,9 @@ export class Viewer extends EventDispatcher{
+@@ -1232,8 +1237,9 @@ export class Viewer extends EventDispatcher{
  			VRButton.createButton(this.renderer).then(vrButton => {
  
  				if(vrButton == null){
 +					// 2023-05-19 Amazon modifications
  					//console.log("VR not supported or active.");
+-
 +					// End of Amazon modifications
- 
  					return;
  				}
-@@ -1400,8 +1408,9 @@ export class Viewer extends EventDispatcher{
+ 
+@@ -1400,8 +1406,9 @@ export class Viewer extends EventDispatcher{
  	}
  
  	initThree () {
@@ -533,7 +530,7 @@ index c1b8dec8..7b63d8a4 100644
  
  		let width = this.renderArea.clientWidth;
  		let height = this.renderArea.clientHeight;
-@@ -1441,7 +1450,9 @@ export class Viewer extends EventDispatcher{
+@@ -1441,7 +1448,9 @@ export class Viewer extends EventDispatcher{
  		this.renderArea.appendChild(this.renderer.domElement);
  		this.renderer.domElement.tabIndex = '2222';
  		this.renderer.domElement.style.position = 'absolute';
@@ -543,93 +540,6 @@ index c1b8dec8..7b63d8a4 100644
  		this.renderer.domElement.addEventListener('mousedown', () => {
  			this.renderer.domElement.focus();
  		});
--- 
-2.38.1.windows.1
-
-
-From 287e98e010ff2d5111a04be631b9019c08078cdc Mon Sep 17 00:00:00 2001
-From: Scott Patten <scopatvr@amazon.com>
-Date: Mon, 26 Jun 2023 12:23:34 -0700
-Subject: [PATCH 6/6] Modified headers
-
----
- src/Potree.js                          | 3 +--
- src/PotreeRenderer.js                  | 3 +--
- src/modules/loader/2.0/OctreeLoader.js | 3 +--
- src/viewer/sidebar.html                | 3 +--
- src/viewer/viewer.js                   | 3 +--
- 5 files changed, 5 insertions(+), 10 deletions(-)
-
-diff --git a/src/Potree.js b/src/Potree.js
-index 645038d6..b8afccc6 100644
---- a/src/Potree.js
-+++ b/src/Potree.js
-@@ -1,8 +1,7 @@
- /*
- * Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
- * Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
--* SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
--* Licensed under the Amazon Software License  http://aws.amazon.com/asl/
-+* SPDX-License-Identifier: Apache-2.0
- */
- 
- export * from "./Actions.js";
-diff --git a/src/PotreeRenderer.js b/src/PotreeRenderer.js
-index e5366b5f..88f4196b 100644
---- a/src/PotreeRenderer.js
-+++ b/src/PotreeRenderer.js
-@@ -1,8 +1,7 @@
- /*
- * Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
- * Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
--* SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
--* Licensed under the Amazon Software License  http://aws.amazon.com/asl/
-+* SPDX-License-Identifier: Apache-2.0
- */
- 
- import * as THREE from "../libs/three.js/build/three.module.js";
-diff --git a/src/modules/loader/2.0/OctreeLoader.js b/src/modules/loader/2.0/OctreeLoader.js
-index 8b9748f5..10a6f0de 100644
---- a/src/modules/loader/2.0/OctreeLoader.js
-+++ b/src/modules/loader/2.0/OctreeLoader.js
-@@ -1,8 +1,7 @@
- /*
- * Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
- * Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
--* SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
--* Licensed under the Amazon Software License  http://aws.amazon.com/asl/
-+* SPDX-License-Identifier: Apache-2.0
- */
- 
- import * as THREE from "../../../../libs/three.js/build/three.module.js";
-diff --git a/src/viewer/sidebar.html b/src/viewer/sidebar.html
-index 73f37dc5..f5c28a8a 100644
---- a/src/viewer/sidebar.html
-+++ b/src/viewer/sidebar.html
-@@ -1,8 +1,7 @@
- <!--
- # Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
- # Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
--# SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
--# Licensed under the Amazon Software License  http://aws.amazon.com/asl/
-+# SPDX-License-Identifier: Apache-2.0
- -->
- 
- <div id="sidebar_root" class="">
-diff --git a/src/viewer/viewer.js b/src/viewer/viewer.js
-index 7b63d8a4..3f03b5c2 100644
---- a/src/viewer/viewer.js
-+++ b/src/viewer/viewer.js
-@@ -1,8 +1,7 @@
- /*
- * Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
- * Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
--* SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
--* Licensed under the Amazon Software License  http://aws.amazon.com/asl/
-+* SPDX-License-Identifier: Apache-2.0
- */
- 
- import * as THREE from "../../libs/three.js/build/three.module.js";
 -- 
 2.38.1.windows.1
 
