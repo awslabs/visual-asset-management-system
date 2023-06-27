@@ -91,7 +91,7 @@ jobs:
 
             - name: Npm audit infrastructure directory
               working-directory: vams/infra
-              run: npm audit
+              run: npm audit --production
 
             - name: Synthesize Cloudformation templates
               working-directory: vams/infra
