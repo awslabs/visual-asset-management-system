@@ -11,13 +11,13 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as njslambda from "aws-cdk-lib/aws-lambda-nodejs";
 import * as path from "path";
 import { CustomResource, Names } from "aws-cdk-lib";
+import * as iam from "aws-cdk-lib/aws-iam";
 
 interface OpensearchServerlessConstructProps extends cdk.StackProps {
     principalArn: string[];
 }
 
 export class OpensearchServerlessConstruct extends Construct {
-
     collectionUid: string;
 
     constructor(parent: Construct, name: string, props: OpensearchServerlessConstructProps) {
@@ -52,7 +52,7 @@ export class OpensearchServerlessConstruct extends Construct {
                 // resources: [`arn:aws:ssm:::parameter/${cdk.Stack.of(this).stackName}/*`],
                 effect: cdk.aws_iam.Effect.ALLOW,
             })
-        )
+        );
 
         const principalsForAOSS = [...props.principalArn, schemaDeploy.role?.roleArn];
 
@@ -118,7 +118,7 @@ export class OpensearchServerlessConstruct extends Construct {
     public endpointSSMParameterName(): string {
         // look up parameter store value
         return "/" + [cdk.Stack.of(this).stackName, this.collectionUid, "endpoint"].join("/");
-        // return cdk.aws_ssm.StringParameter.valueForStringParameter(this, 
+        // return cdk.aws_ssm.StringParameter.valueForStringParameter(this,
     }
 
     // todo rename to grantXxxx
@@ -129,13 +129,28 @@ export class OpensearchServerlessConstruct extends Construct {
                 Rules: [
                     {
                         ResourceType: "index",
-                        Resource: ["index/*/*"],
-                        Permission: ["aoss:*"],
+                        // Resource: ["index/*/*"],
+                        Resource: [`index/${this.collectionUid}/assets1236`],
+                        Permission: [
+                            // "aoss:*",
+                            "aoss:ReadDocument",
+                            "aoss:WriteDocument",
+                            "aoss:CreateIndex",
+                            "aoss:DeleteIndex",
+                            "aoss:UpdateIndex",
+                            "aoss:DescribeIndex",
+                        ],
                     },
                     {
                         ResourceType: "collection",
                         Resource: [`collection/${this.collectionUid}`],
-                        Permission: ["aoss:*"],
+                        Permission: [
+                            // "aoss:*",
+                            "aoss:CreateCollectionItems",
+                            "aoss:DeleteCollectionItems",
+                            "aoss:UpdateCollectionItems",
+                            "aoss:DescribeCollectionItems",
+                        ],
                     },
                 ],
                 Principal: [construct.role?.roleArn],
@@ -147,8 +162,13 @@ export class OpensearchServerlessConstruct extends Construct {
             type: "data",
             policy: JSON.stringify(policy),
         });
-        return accessPolicy;
 
+        construct.role?.addToPrincipalPolicy(new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            resources: ["*"],
+            actions: ["aoss:*"],
+        }))
+        return accessPolicy;
     }
 
     private _grantCollectionAccess(principalsForAOSS: (string | undefined)[]) {
@@ -159,7 +179,7 @@ export class OpensearchServerlessConstruct extends Construct {
                 Rules: [
                     {
                         ResourceType: "index",
-                        Resource: ["index/*/*"],
+                        Resource: [`index/${this.collectionUid}/assets1236`],
                         Permission: ["aoss:*"],
                     },
                     {

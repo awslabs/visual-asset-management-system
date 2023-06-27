@@ -118,7 +118,7 @@ class AOSSIndexAssetMetadata():
     def _determine_field_name(field, data):
 
         if data is None or field is None:
-            return None
+            return []
 
         field_name = field.lower().replace(" ", "_")
         data_type = AOSSIndexAssetMetadata._determine_field_type(data)
