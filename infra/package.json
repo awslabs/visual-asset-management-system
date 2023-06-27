@@ -30,6 +30,7 @@
         "@aws-cdk/aws-apigatewayv2-alpha": "^2.47.0-alpha.0",
         "@aws-cdk/aws-apigatewayv2-authorizers-alpha": "^2.47.0-alpha.0",
         "@aws-cdk/aws-apigatewayv2-integrations-alpha": "^2.47.0-alpha.0",
+        "@aws-cdk/aws-batch-alpha": "2.70.0-alpha.0",
         "@aws-cdk/aws-lambda-python-alpha": "^2.47.0-alpha.0",
         "aws-cdk-lib": "^2.73.0",
         "cdk-nag": "^2.25.2",

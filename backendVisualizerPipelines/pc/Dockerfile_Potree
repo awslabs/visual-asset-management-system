@@ -1,0 +1,28 @@
+# Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+FROM python:3.11-alpine
+
+#Build PotreeConverter
+WORKDIR /PotreeConverterBuild
+
+# install build deps, download Potree Source, and build for Potree Conveter
+RUN apk add --no-cache git cmake make gcc g++ libtbb-dev && \
+    git clone --depth 1 --branch $VERSION https://github.com/potree/PotreeConverter /PotreeConverter || \
+    git clone --depth 1 https://github.com/potree/PotreeConverter /PotreeConverter && \
+    cmake /PotreeConverter && make && \
+    apk del git cmake make gcc g++ && \
+    rm -rf /PotreeConverter
+
+# python environment varibles
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+
+# copy python scripts app to container
+COPY ./ ./pc_pipeline
+
+# install python app and deps
+RUN pip3 install -r ./pc_pipeline/requirements.txt
+
+# set entry point to app
+ENTRYPOINT ["python3", "-m", "pc_pipeline"]
