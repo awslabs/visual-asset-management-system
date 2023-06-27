@@ -23,6 +23,7 @@ def generate_prefixes(path):
     return prefixes
 
 def get_metadata_with_prefix(databaseId, assetId, prefix):
+    result = {}
     if prefix is not None:
         for paths in generate_prefixes(prefix):
             resp = table.get_item(
@@ -32,8 +33,13 @@ def get_metadata_with_prefix(databaseId, assetId, prefix):
                 }
             )
             if "Item" in resp:
-                return resp['Item']
-        return get_metadata(databaseId, assetId)
+                result = resp['Item'] | result
+        try:
+            asset_metadata = get_metadata(databaseId, assetId)
+            result = asset_metadata | result
+            return result
+        except ValidationError as ex:
+            return result
     else:
         return get_metadata(databaseId, assetId)
 def get_metadata(databaseId, assetId):
