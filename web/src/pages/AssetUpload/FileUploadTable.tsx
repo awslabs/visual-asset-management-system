@@ -1,18 +1,19 @@
 //create a react functional component named FileUploadTable
 
-import React, { useState } from "react";
-import { useCollection } from "@cloudscape-design/collection-hooks";
+import React, {useState} from "react";
+import {useCollection} from "@cloudscape-design/collection-hooks";
 import {
     Box,
     Button,
     CollectionPreferences,
     Header,
-    Pagination,
+    Pagination, SpaceBetween,
     Table,
     TextFilter,
 } from "@cloudscape-design/components";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
+
 interface FileUploadTableProps {
     allItems: FileUploadTableItem[];
     onRetry?: () => void;
@@ -144,8 +145,8 @@ export const paginationLabels = {
 const pageSizePreference = {
     title: "Select page size",
     options: [
-        { value: 10, label: "10 Files" },
-        { value: 20, label: "20 Files" },
+        {value: 10, label: "10 Files"},
+        {value: 20, label: "20 Files"},
     ],
 };
 
@@ -154,7 +155,7 @@ const visibleContentPreference = {
     options: [
         {
             label: "Main properties",
-            options: FileUploadTableColumnDefinitions.map(({ id, header }) => ({
+            options: FileUploadTableColumnDefinitions.map(({id, header}) => ({
                 id,
                 label: header,
                 editable: id !== "id",
@@ -174,13 +175,14 @@ interface EmptyStateProps {
     title: string;
     subtitle: string;
 }
-function EmptyState({ title, subtitle }: EmptyStateProps) {
+
+function EmptyState({title, subtitle}: EmptyStateProps) {
     return (
         <Box textAlign="center" color="inherit">
             <Box variant="strong" textAlign="center" color="inherit">
                 {title}
             </Box>
-            <Box variant="p" padding={{ bottom: "s" }} color="inherit">
+            <Box variant="p" padding={{bottom: "s"}} color="inherit">
                 {subtitle}
             </Box>
         </Box>
@@ -190,6 +192,7 @@ function EmptyState({ title, subtitle }: EmptyStateProps) {
 function getCompletedItemsCount(allItems: FileUploadTableItem[]) {
     return allItems.filter((item) => item.status === "Completed").length;
 }
+
 function getActions(allItems: FileUploadTableItem[], resume: boolean, onRetry?: () => void) {
     const failed = allItems.filter((item) => item.status === "Failed").length;
     const notCompleted = allItems.filter((item) => item.status !== "Completed").length;
@@ -210,43 +213,48 @@ function getActions(allItems: FileUploadTableItem[], resume: boolean, onRetry?: 
     }
 }
 
-export const FileUploadTable = ({ allItems, onRetry, resume }: FileUploadTableProps) => {
+export const FileUploadTable = ({allItems, onRetry, resume}: FileUploadTableProps) => {
     const [preferences, setPreferences] = useState({
         pageSize: 10,
         visibleContent: ["filesize", "status", "progress"],
     });
-    const { items, filterProps, paginationProps } = useCollection(allItems, {
+    const {items, filterProps, paginationProps} = useCollection(allItems, {
         filtering: {
-            empty: <EmptyState title="No matches" subtitle="No Files to display." />,
-            noMatch: <EmptyState title="No matches" subtitle="We can’t find a match." />,
+            empty: <EmptyState title="No matches" subtitle="No Files to display."/>,
+            noMatch: <EmptyState title="No matches" subtitle="We can’t find a match."/>,
         },
-        pagination: { pageSize: preferences.pageSize },
+        pagination: {pageSize: preferences.pageSize},
         sorting: {},
         selection: {},
     });
     return (
-        <Table
-            header={
-                <Header
-                    counter={`${getCompletedItemsCount(allItems)}/${allItems.length}`}
-                    actions={getActions(allItems, resume, onRetry)}
-                >
-                    Files to upload
-                </Header>
-            }
-            columnDefinitions={FileUploadTableColumnDefinitions}
-            visibleColumns={preferences.visibleContent}
-            items={items}
-            pagination={<Pagination {...paginationProps} ariaLabels={paginationLabels} />}
-            filter={<TextFilter {...filterProps} filteringAriaLabel="Filter Files" />}
-            preferences={
-                <CollectionPreferences
-                    {...collectionPreferencesProps}
-                    preferences={preferences}
-                    //@ts-ignore
-                    onConfirm={({ detail }) => setPreferences(detail)}
+        <Box>
+            <SpaceBetween size="l" direction={"vertical"}>
+
+                <Table
+                    header={
+                        <Header
+                            counter={`${getCompletedItemsCount(allItems)}/${allItems.length}`}
+                            actions={getActions(allItems, resume, onRetry)}
+                        >
+                            Files to upload
+                        </Header>
+                    }
+                    columnDefinitions={FileUploadTableColumnDefinitions}
+                    visibleColumns={preferences.visibleContent}
+                    items={items}
+                    pagination={<Pagination {...paginationProps} ariaLabels={paginationLabels}/>}
+                    filter={<TextFilter {...filterProps} filteringAriaLabel="Filter Files"/>}
+                    preferences={
+                        <CollectionPreferences
+                            {...collectionPreferencesProps}
+                            preferences={preferences}
+                            //@ts-ignore
+                            onConfirm={({detail}) => setPreferences(detail)}
+                        />
+                    }
                 />
-            }
-        />
+            </SpaceBetween>
+        </Box>
     );
 };

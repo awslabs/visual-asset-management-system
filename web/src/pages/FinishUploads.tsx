@@ -1,11 +1,13 @@
-import { Box, Grid, Link, TextContent } from "@cloudscape-design/components";
+import {Box, Grid, Link, SpaceBetween, TextContent} from "@cloudscape-design/components";
 import Header from "@cloudscape-design/components/header";
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { AssetDetail } from "./AssetUpload";
 import { useParams } from "react-router";
 import localforage from "localforage";
 import { FileUploadTable, FileUploadTableItem } from "./AssetUpload/FileUploadTable";
 import { createAssetUploadPromises, executeUploads } from "./AssetUpload/onSubmit";
+import ProgressBar from "@cloudscape-design/components/progress-bar";
+import Synonyms from "../synonyms";
 
 export async function verifyPermission(fileHandle: any, readWrite: any) {
     const options = {};
@@ -30,6 +32,11 @@ const FinishUploads = () => {
     const [fileUploadTableItems, setFileUploadTableItems] = useState<FileUploadTableItem[]>([]);
     const [reuploadClicked, setReuploadClicked] = useState(false);
     const { assetId } = useParams();
+
+    const get_completed_items = (items: FileUploadTableItem[]) => {
+        return items.filter((item) => item.status === "Completed");
+    }
+
     useEffect(() => {
         if (assetId) {
             localforage.getItem<AssetDetail>(assetId).then((assetDetail) => {
@@ -169,22 +176,27 @@ const FinishUploads = () => {
     return (
         <>
             {assetDetail?.Asset && (
-                <>
+                <SpaceBetween direction="vertical" size="l" >
                     <Box variant="awsui-key-label">
-                        Upload Progress for Asset:
+                        Upload Progress for {Synonyms.Asset}
                         <Link
                             href={`/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`}
                             target="_blank"
                         >
-                            {assetDetail.assetName}
+                            { ` ${assetDetail.assetName}`}
                         </Link>
                     </Box>
+                    <ProgressBar
+                        status={get_completed_items(assetDetail.Asset).length == assetDetail.Asset.length ? "success" : "in-progress"}
+                        value={(get_completed_items(assetDetail.Asset).length / assetDetail.Asset.length) * 100}
+                        label="Overall Upload Progress"
+                    />
                     <FileUploadTable
                         allItems={assetDetail?.Asset}
                         onRetry={onRetry}
                         resume={!reuploadClicked}
                     />
-                </>
+                </SpaceBetween>
             )}
         </>
     );
@@ -193,6 +205,7 @@ const FinishUploads = () => {
 export default function FinishUploadsPage() {
     return (
         <Box padding={{ top: false ? "s" : "m", horizontal: "l" }}>
+
             <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
                 <div>
                     <TextContent>
