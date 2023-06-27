@@ -18,8 +18,9 @@ export interface Metadata {
 interface ControlledMetadataProps {
     assetId: string;
     databaseId: string;
+    prefix?: string;
     initialState?: Metadata;
-    store?: (databaseId: string, assetId: string, record: Metadata) => Promise<any>;
+    store?: (databaseId: string, assetId: string, record: Metadata, prefix?: string) => Promise<any>;
     apiget?: (apiName: string, path: string, init: any) => Promise<any>;
     storageget?: (key: string) => Promise<any>;
     handleCSVControlData?: HandleControlData;
@@ -37,6 +38,7 @@ export interface TableRow {
 export default function ControlledMetadata({
     databaseId,
     assetId,
+    prefix,
     initialState,
     apiget = API.get.bind(API),
     storageget = Storage.get.bind(Storage),
@@ -100,7 +102,11 @@ export default function ControlledMetadata({
         }
 
         if (initialState === undefined) {
-            apiget("api", `metadata/${databaseId}/${assetId}`, {}).then(
+            let path = `metadata/${databaseId}/${assetId}`
+            if (prefix) {
+                path += `?prefix=${prefix}`
+            }
+            apiget("api", path, {}).then(
                 ({ metadata: start }: MetadataApi) => {
                     apiget("api", `metadataschema/${databaseId}`, {}).then(
                         (data: SchemaContextData) => {
@@ -151,6 +157,7 @@ export default function ControlledMetadata({
                 databaseId={databaseId || ""}
                 initialState={initialState}
                 store={store}
+                prefix={prefix}
                 data-testid="metadata-table"
             />
         );
@@ -200,7 +207,7 @@ export default function ControlledMetadata({
                                             setItems(next);
                                             setMetadata(tableRowToMeta(next));
                                             if (store)
-                                                store(databaseId, assetId, tableRowToMeta(next));
+                                                store(databaseId, assetId, tableRowToMeta(next), prefix);
                                         } else {
                                             console.log("undefined value", row);
                                         }

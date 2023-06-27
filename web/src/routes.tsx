@@ -20,6 +20,7 @@ import CreateUpdateWorkflow from "./components/createupdate/CreateUpdateWorkflow
 import Constraints from "./pages/auth/Constraints";
 import FinishUploadsPage from "./pages/FinishUploads";
 import MetadataSchema from "./pages/MetadataSchema";
+import ViewFile from "./components/single/ViewFile";
 
 interface RouteOption {
     path: string;
@@ -42,6 +43,12 @@ const routeTable: RouteOption[] = [
     {
         path: "/databases/:databaseId/assets/:assetId/uploads",
         Page: FinishUploadsPage,
+        active: "/assets",
+        roles: ["assets", "upload"],
+    },
+    {
+        path: "/databases/:databaseId/assets/:assetId/file",
+        Page: ViewFile,
         active: "/assets",
         roles: ["assets", "upload"],
     },

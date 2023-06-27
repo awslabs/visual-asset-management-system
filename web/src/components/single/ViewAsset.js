@@ -12,6 +12,7 @@ import {
     FormField,
     Grid,
     Header,
+    Link,
     SegmentedControl,
     SpaceBetween,
     Spinner,
@@ -19,64 +20,24 @@ import {
 
 import ControlledMetadata from "../metadata/ControlledMetadata";
 import ImgViewer from "../viewers/ImgViewer";
-import React, { useEffect, useState, Suspense } from "react";
-import { useParams } from "react-router";
-import {
-    fetchAsset,
-    fetchWorkflowExecutions,
-    fetchDatabaseWorkflows,
-    downloadAsset,
-} from "../../services/APIService";
+import React, {Suspense, useEffect, useState} from "react";
+import {useParams} from "react-router";
+import {downloadAsset, fetchAsset, fetchDatabaseWorkflows, fetchWorkflowExecutions,} from "../../services/APIService";
 /**
  * No viewer yet for cad and archive file formats
  */
-import {
-    columnarFileFormats,
-    modelFileFormats,
-    presentationFileFormats,
-} from "../../common/constants/fileFormats";
-import { Link } from "@cloudscape-design/components";
 import AssetSelectorWithModal from "../selectors/AssetSelectorWithModal";
 import RelatedTableList from "../list/RelatedTableList";
-import { WorkflowExecutionListDefinition } from "../list/list-definitions/WorkflowExecutionListDefinition";
+import {WorkflowExecutionListDefinition} from "../list/list-definitions/WorkflowExecutionListDefinition";
 import CreateUpdateAsset from "../createupdate/CreateUpdateAsset";
-import { actionTypes } from "../createupdate/form-definitions/types/FormDefinition";
+import {actionTypes} from "../createupdate/form-definitions/types/FormDefinition";
 import WorkflowSelectorWithModal from "../selectors/WorkflowSelectorWithModal";
 import localforage from "localforage";
-import { ErrorBoundary } from "react-error-boundary";
+import {ErrorBoundary} from "react-error-boundary";
 import Synonyms from "../../synonyms";
 
-const ThreeDimensionalPlotter = React.lazy(() => import("../viewers/ThreeDimensionalPlotter"));
-const ColumnarViewer = React.lazy(() => import("../viewers/ColumnarViewer"));
-const HTMLViewer = React.lazy(() => import("../viewers/HTMLViewer"));
-const ModelViewer = React.lazy(() => import("../viewers/ModelViewer"));
-const FolderViewer = React.lazy(() => import("../viewers/FolderViewer"));
-const checkFileFormat = (asset) => {
-    let filetype;
-    if (asset?.isMultiFile) {
-        return "folder";
-    }
-    if (asset?.generated_artifacts?.gltf?.Key) {
-        filetype = asset?.generated_artifacts?.gltf?.Key.split(".").pop();
-    } else {
-        filetype = asset.assetType;
-    }
 
-    filetype = filetype.toLowerCase();
-    if (modelFileFormats.includes(filetype) || modelFileFormats.includes("." + filetype)) {
-        return "model";
-    }
-    if (columnarFileFormats.includes(filetype) || columnarFileFormats.includes("." + filetype)) {
-        return "plot";
-    }
-    if (
-        presentationFileFormats.includes(filetype) ||
-        presentationFileFormats.includes("." + filetype)
-    ) {
-        return "html";
-    }
-    return "preview";
-};
+const FolderViewer = React.lazy(() => import("../viewers/FolderViewer"));
 
 export default function ViewAsset() {
     const { databaseId, assetId, pathViewType } = useParams();
@@ -155,14 +116,16 @@ export default function ViewAsset() {
                 setReload(false);
             }
             localforage.getItem(assetId).then((value) => {
-                console.log("Reading from localforage:", value);
-                for (let i = 0; i < value.Asset.length; i++) {
-                    if (
-                        value.Asset[i].status !== "Completed" &&
-                        value.Asset[i].loaded !== value.Asset[i].total
-                    ) {
-                        setContainsIncompleteUploads(true);
-                        break;
+                if (value) {
+                    console.log("Reading from localforage:", value);
+                    for (let i = 0; i < value.Asset.length; i++) {
+                        if (
+                            value.Asset[i].status !== "Completed" &&
+                            value.Asset[i].loaded !== value.Asset[i].total
+                        ) {
+                            setContainsIncompleteUploads(true);
+                            break;
+                        }
                     }
                 }
             });
@@ -268,38 +231,7 @@ export default function ViewAsset() {
                 if (item !== false) {
                     console.log(item);
                     setAsset(item);
-
-                    const defaultViewType = checkFileFormat(item);
-                    console.log("default view type", defaultViewType);
-                    const newViewerOptions = [{ text: "Preview", id: "preview" }];
-                    if (defaultViewType === "plot") {
-                        newViewerOptions.push({ text: "Plot", id: "plot" });
-                        newViewerOptions.push({ text: "Column", id: "column" });
-                    } else if (defaultViewType === "model") {
-                        newViewerOptions.push({ text: "Model", id: "model" });
-                    } else if (defaultViewType === "html") {
-                        newViewerOptions.push({ text: "HTML", id: "html" });
-                    } else if (defaultViewType === "folder") {
-                        newViewerOptions.push({ text: "Folder", id: "folder" });
-                    }
-                    setViewerOptions(newViewerOptions);
-                    if (!window.location.hash) setViewType(defaultViewType);
-                    else {
-                        if (window.location.hash === "#preview") {
-                            setViewType("preview");
-                        }
-                        if (window.location.hash === "#model") {
-                            setViewType("model");
-                        } else if (window.location.hash === "#plot") {
-                            setViewType("plot");
-                        } else if (window.location.hash === "#column") {
-                            setViewType("column");
-                        } else if (window.location.hash === "#html") {
-                            setViewType("html");
-                        } else if (window.location.hash === "#folder") {
-                            setViewType("folder");
-                        }
-                    }
+                    setViewerOptions([{ text: "Folder", id: "folder" }]);
                 }
             }
         };
@@ -464,39 +396,16 @@ export default function ViewAsset() {
                                                                     }
                                                                 />
                                                             )}
-                                                        {viewType === "model" && (
-                                                            <ModelViewer
-                                                                assetKey={
-                                                                    asset?.generated_artifacts?.gltf
-                                                                        ?.Key ||
-                                                                    asset?.assetLocation?.Key
-                                                                }
-                                                                className="visualizer-container-canvas"
-                                                            />
-                                                        )}
-                                                        {viewType === "plot" && (
-                                                            <ThreeDimensionalPlotter
-                                                                assetKey={asset?.assetLocation?.Key}
-                                                                className="visualizer-container-canvas"
-                                                            />
-                                                        )}
-                                                        {viewType === "column" && (
-                                                            <ColumnarViewer
-                                                                assetKey={asset?.assetLocation?.Key}
-                                                            />
-                                                        )}
-                                                        {viewType === "html" && (
-                                                            <HTMLViewer
-                                                                assetKey={asset?.assetLocation?.Key}
-                                                            />
-                                                        )}
-                                                        {viewType === "folder" && (
+                                                        {
+                                                            asset.assetId && asset.databaseId &&
                                                             <FolderViewer
                                                                 assetId={asset?.assetId}
                                                                 databaseId={asset?.databaseId}
                                                                 assetName={asset?.assetName}
                                                             />
-                                                        )}
+
+                                                        }
+
                                                     </div>
 
                                                     <div className="visualizer-footer">

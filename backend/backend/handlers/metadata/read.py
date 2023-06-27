@@ -11,6 +11,31 @@ from backend.handlers.metadata import logger, mask_sensitive_data, build_respons
 from backend.handlers.auth import get_database_set, request_to_claims
 
 
+def generate_prefixes(path):
+    prefixes = []
+    parts = path.split('/')
+    for i in range(1, len(parts)):
+        prefix = '/'.join(parts[:i]) + '/'
+        prefixes.insert(0, prefix)
+
+    if(not path.endswith('/')):
+        prefixes.insert(0, path)
+    return prefixes
+
+def get_metadata_with_prefix(databaseId, assetId, prefix):
+    if prefix is not None:
+        for paths in generate_prefixes(prefix):
+            resp = table.get_item(
+                Key={
+                    "databaseId": databaseId,
+                    "assetId": paths,
+                }
+            )
+            if "Item" in resp:
+                return resp['Item']
+        return get_metadata(databaseId, assetId)
+    else:
+        return get_metadata(databaseId, assetId)
 def get_metadata(databaseId, assetId):
     resp = table.get_item(
         Key={
@@ -29,13 +54,16 @@ def lambda_handler(event, context):
         validate_event(event)
         databaseId = event['pathParameters']['databaseId']
         assetId = event['pathParameters']['assetId']
+        prefix = None
+        if ('queryStringParameters' in event and 'prefix' in event['queryStringParameters']):
+            prefix = event['queryStringParameters'] and event['queryStringParameters']['prefix']
 
         claims_and_roles = request_to_claims(event)
         databases = get_database_set(claims_and_roles['tokens'])
         if databaseId in databases or "super-admin" in claims_and_roles['roles']:
             return build_response(200, json.dumps({
                 "version": "1",
-                "metadata": get_metadata(databaseId, assetId)
+                "metadata": get_metadata_with_prefix(databaseId, assetId, prefix)
             }))
         else:
             print("raising 403 databaseId not in claims and roles?", databaseId, claims_and_roles, databases)
