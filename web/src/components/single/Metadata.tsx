@@ -22,7 +22,12 @@ class TableRow {
     type: string | null | undefined;
 }
 
-export const put = async (databaseId: string, assetId: string, record: Metadata, prefix?: string,) => {
+export const put = async (
+    databaseId: string,
+    assetId: string,
+    record: Metadata,
+    prefix?: string
+) => {
     if (Object.keys(record).length < 1) {
         return;
     }
@@ -56,7 +61,12 @@ class MetadataInputs {
     databaseId!: string;
     initialState?: Metadata;
     prefix?: string;
-    store?: (databaseId: string, assetId: string, record: Metadata, prefix?: string) => Promise<any>;
+    store?: (
+        databaseId: string,
+        assetId: string,
+        record: Metadata,
+        prefix?: string
+    ) => Promise<any>;
 }
 
 const MetadataTable = ({ assetId, databaseId, store, prefix, initialState }: MetadataInputs) => {

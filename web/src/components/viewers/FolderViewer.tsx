@@ -1,11 +1,11 @@
-import React, {useEffect, useState} from "react";
-import FolderTree, {NodeData} from "react-folder-tree";
+import React, { useEffect, useState } from "react";
+import FolderTree, { NodeData } from "react-folder-tree";
 import "react-folder-tree/dist/style.css";
-import {fetchAssetFiles} from "../../services/APIService";
+import { fetchAssetFiles } from "../../services/APIService";
 import Container from "@cloudscape-design/components/container";
 import ColumnLayout from "@cloudscape-design/components/column-layout";
-import {Header} from "@cloudscape-design/components";
-import FolderActionViewer, {FolderActionProps} from "./FolderActionViewer";
+import { Header } from "@cloudscape-design/components";
+import FolderActionViewer, { FolderActionProps } from "./FolderActionViewer";
 
 class FolderViewerProps {
     databaseId!: string;
@@ -34,34 +34,40 @@ export default function FolderViewer({ databaseId, assetId, assetName }: FolderV
     });
     const [reload, setReload] = useState(true);
     const convertFileListToDataSet = (fileList: AssetFileList[]) => {
-        const root: NodeData = { name: assetName, isOpen: true};
+        const root: NodeData = { name: assetName, isOpen: true };
         const rootChildren: NodeData[] = [];
 
         for (const filePath of fileList) {
-            const components = filePath.relativePath.split('/');
+            const components = filePath.relativePath.split("/");
 
             const fileName = components.pop()!; // Extract the file name
-            console.log("components are ")
-            console.log(components)
-            if(!components || components.length === 0) {
-                console.log("components length is 0")
-                rootChildren.push({name: filePath.relativePath || filePath.key, isOpen: true, key:filePath.key})
+            console.log("components are ");
+            console.log(components);
+            if (!components || components.length === 0) {
+                console.log("components length is 0");
+                rootChildren.push({
+                    name: filePath.relativePath || filePath.key,
+                    isOpen: true,
+                    key: filePath.key,
+                });
             } else {
                 let currentChildren = rootChildren;
                 for (const component of components) {
-                    let foundChild: NodeData | undefined = currentChildren.find(child => child.name === component);
+                    let foundChild: NodeData | undefined = currentChildren.find(
+                        (child) => child.name === component
+                    );
                     if (!foundChild) {
-                        foundChild = { name: component, isOpen: false};
+                        foundChild = { name: component, isOpen: false };
                         currentChildren.push(foundChild);
                         foundChild.children = [];
                     }
                     currentChildren = foundChild.children!;
                 }
-                currentChildren.push({name: fileName, isOpen: true, key:filePath.key}); // Add the file name as a child node with the key
+                currentChildren.push({ name: fileName, isOpen: true, key: filePath.key }); // Add the file name as a child node with the key
             }
         }
         root.children = rootChildren;
-        console.log(root)
+        console.log(root);
         return root;
     };
     useEffect(() => {
@@ -85,14 +91,14 @@ export default function FolderViewer({ databaseId, assetId, assetName }: FolderV
         console.log("Clicked on ", nodeData);
         defaultOnClick();
         let root = treeState;
-        let parents = [assetId]
+        let parents = [assetId];
         for (let i = 0; i < nodeData.path.length; i++) {
             console.log(nodeData.path[i]);
             const p = nodeData.path[i];
             if (root.children) {
                 // @ts-ignore
                 const child = root.children[p];
-                parents.push(child.name)
+                parents.push(child.name);
                 root = child;
             }
         }
@@ -111,9 +117,9 @@ export default function FolderViewer({ databaseId, assetId, assetName }: FolderV
                     ...prevState,
                     isDirectory: true,
                     name: root.name,
-                    urlKey: parents.join("/") + "/"
-                }
-            })
+                    urlKey: parents.join("/") + "/",
+                };
+            });
         }
     };
 

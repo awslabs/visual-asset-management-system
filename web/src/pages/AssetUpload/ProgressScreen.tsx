@@ -20,7 +20,6 @@ class ProgressScreenProps {
     onRetry!: () => void;
 }
 
-
 export default function ProgressScreen({
     assetDetail,
     previewUploadProgress,
@@ -30,7 +29,7 @@ export default function ProgressScreen({
 }: ProgressScreenProps): JSX.Element {
     const get_completed_items = (items: FileUploadTableItem[]) => {
         return items.filter((item) => item.status === "Completed");
-    }
+    };
     return (
         <Box padding={{ top: false ? "s" : "m", horizontal: "l" }}>
             <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
@@ -46,8 +45,17 @@ export default function ProgressScreen({
                             </Link>
                         </Box>
                         <ProgressBar
-                            status={get_completed_items(allFileUploadItems).length === allFileUploadItems.length ? "success" : "in-progress"}
-                            value={(get_completed_items(allFileUploadItems).length/allFileUploadItems.length) * 100}
+                            status={
+                                get_completed_items(allFileUploadItems).length ===
+                                allFileUploadItems.length
+                                    ? "success"
+                                    : "in-progress"
+                            }
+                            value={
+                                (get_completed_items(allFileUploadItems).length /
+                                    allFileUploadItems.length) *
+                                100
+                            }
                             label="Overall Upload Progress"
                         />
 

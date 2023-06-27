@@ -20,7 +20,12 @@ interface ControlledMetadataProps {
     databaseId: string;
     prefix?: string;
     initialState?: Metadata;
-    store?: (databaseId: string, assetId: string, record: Metadata, prefix?: string) => Promise<any>;
+    store?: (
+        databaseId: string,
+        assetId: string,
+        record: Metadata,
+        prefix?: string
+    ) => Promise<any>;
     apiget?: (apiName: string, path: string, init: any) => Promise<any>;
     storageget?: (key: string) => Promise<any>;
     handleCSVControlData?: HandleControlData;
@@ -102,28 +107,26 @@ export default function ControlledMetadata({
         }
 
         if (initialState === undefined) {
-            let path = `metadata/${databaseId}/${assetId}`
+            let path = `metadata/${databaseId}/${assetId}`;
             if (prefix) {
-                path += `?prefix=${prefix}`
+                path += `?prefix=${prefix}`;
             }
-            apiget("api", path, {}).then(
-                ({ metadata: start }: MetadataApi) => {
-                    apiget("api", `metadataschema/${databaseId}`, {}).then(
-                        (data: SchemaContextData) => {
-                            setSchema(data);
-                            if (data.schemas.length > 0) {
-                                const meta = data.schemas.reduce((acc, x) => {
-                                    acc[x.field] = start[x.field] || "";
-                                    return acc;
-                                }, start);
-                                console.log("metadata in init", meta);
-                                setMetadata(meta);
-                                setItems(metaToTableRow(meta, data));
-                            }
+            apiget("api", path, {}).then(({ metadata: start }: MetadataApi) => {
+                apiget("api", `metadataschema/${databaseId}`, {}).then(
+                    (data: SchemaContextData) => {
+                        setSchema(data);
+                        if (data.schemas.length > 0) {
+                            const meta = data.schemas.reduce((acc, x) => {
+                                acc[x.field] = start[x.field] || "";
+                                return acc;
+                            }, start);
+                            console.log("metadata in init", meta);
+                            setMetadata(meta);
+                            setItems(metaToTableRow(meta, data));
                         }
-                    );
-                }
-            );
+                    }
+                );
+            });
         } else {
             apiget("api", `metadataschema/${databaseId}`, {}).then((data: SchemaContextData) => {
                 setSchema(data);
@@ -207,7 +210,12 @@ export default function ControlledMetadata({
                                             setItems(next);
                                             setMetadata(tableRowToMeta(next));
                                             if (store)
-                                                store(databaseId, assetId, tableRowToMeta(next), prefix);
+                                                store(
+                                                    databaseId,
+                                                    assetId,
+                                                    tableRowToMeta(next),
+                                                    prefix
+                                                );
                                         } else {
                                             console.log("undefined value", row);
                                         }

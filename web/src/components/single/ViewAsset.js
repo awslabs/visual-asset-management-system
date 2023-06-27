@@ -20,22 +20,26 @@ import {
 
 import ControlledMetadata from "../metadata/ControlledMetadata";
 import ImgViewer from "../viewers/ImgViewer";
-import React, {Suspense, useEffect, useState} from "react";
-import {useParams} from "react-router";
-import {downloadAsset, fetchAsset, fetchDatabaseWorkflows, fetchWorkflowExecutions,} from "../../services/APIService";
+import React, { Suspense, useEffect, useState } from "react";
+import { useParams } from "react-router";
+import {
+    downloadAsset,
+    fetchAsset,
+    fetchDatabaseWorkflows,
+    fetchWorkflowExecutions,
+} from "../../services/APIService";
 /**
  * No viewer yet for cad and archive file formats
  */
 import AssetSelectorWithModal from "../selectors/AssetSelectorWithModal";
 import RelatedTableList from "../list/RelatedTableList";
-import {WorkflowExecutionListDefinition} from "../list/list-definitions/WorkflowExecutionListDefinition";
+import { WorkflowExecutionListDefinition } from "../list/list-definitions/WorkflowExecutionListDefinition";
 import CreateUpdateAsset from "../createupdate/CreateUpdateAsset";
-import {actionTypes} from "../createupdate/form-definitions/types/FormDefinition";
+import { actionTypes } from "../createupdate/form-definitions/types/FormDefinition";
 import WorkflowSelectorWithModal from "../selectors/WorkflowSelectorWithModal";
 import localforage from "localforage";
-import {ErrorBoundary} from "react-error-boundary";
+import { ErrorBoundary } from "react-error-boundary";
 import Synonyms from "../../synonyms";
-
 
 const FolderViewer = React.lazy(() => import("../viewers/FolderViewer"));
 
@@ -396,16 +400,13 @@ export default function ViewAsset() {
                                                                     }
                                                                 />
                                                             )}
-                                                        {
-                                                            asset.assetId && asset.databaseId &&
+                                                        {asset.assetId && asset.databaseId && (
                                                             <FolderViewer
                                                                 assetId={asset?.assetId}
                                                                 databaseId={asset?.databaseId}
                                                                 assetName={asset?.assetName}
                                                             />
-
-                                                        }
-
+                                                        )}
                                                     </div>
 
                                                     <div className="visualizer-footer">

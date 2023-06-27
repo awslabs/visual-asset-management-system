@@ -6,30 +6,37 @@
 
 import {
     Box,
-    BreadcrumbGroup, Button,
-    Container, FormField,
+    BreadcrumbGroup,
+    Button,
+    Container,
+    FormField,
     Grid,
-    Header, Link,
+    Header,
+    Link,
     SegmentedControl,
     SpaceBetween,
 } from "@cloudscape-design/components";
 
 import ControlledMetadata from "../metadata/ControlledMetadata";
-import React, {useEffect, useState} from "react";
-import {useLocation, useParams} from "react-router";
-import {downloadAsset, fetchAsset,} from "../../services/APIService";
+import React, { useEffect, useState } from "react";
+import { useLocation, useParams } from "react-router";
+import { downloadAsset, fetchAsset } from "../../services/APIService";
 /**
  * No viewer yet for cad and archive file formats
  */
-import {columnarFileFormats, modelFileFormats, presentationFileFormats,} from "../../common/constants/fileFormats";
-import AssetVisualizer from './AssetVisualizer'
+import {
+    columnarFileFormats,
+    modelFileFormats,
+    presentationFileFormats,
+} from "../../common/constants/fileFormats";
+import AssetVisualizer from "./AssetVisualizer";
 import AssetSelectorWithModal from "../selectors/AssetSelectorWithModal";
-import {ErrorBoundary} from "react-error-boundary";
+import { ErrorBoundary } from "react-error-boundary";
 import Synonyms from "../../synonyms";
 
 const checkFileFormat = (fileName, isDirectory) => {
     if (isDirectory) {
-        return "folder"
+        return "folder";
     }
 
     let filetype = fileName.split(".").pop();
@@ -50,10 +57,10 @@ const checkFileFormat = (fileName, isDirectory) => {
 };
 
 export default function ViewFile() {
-    const { state } = useLocation()
-    const { filename, key, isDirectory } = state
-    console.log(filename, key)
-    const {databaseId, assetId, pathViewType} = useParams();
+    const { state } = useLocation();
+    const { filename, key, isDirectory } = state;
+    console.log(filename, key);
+    const { databaseId, assetId, pathViewType } = useParams();
 
     const [reload, setReload] = useState(true);
     const [viewType, setViewType] = useState(null);
@@ -125,27 +132,27 @@ export default function ViewFile() {
     useEffect(() => {
         const getData = async () => {
             if (databaseId && assetId) {
-                const item = await fetchAsset({databaseId: databaseId, assetId: assetId});
+                const item = await fetchAsset({ databaseId: databaseId, assetId: assetId });
                 if (item !== false) {
                     console.log(item);
                     setAsset(item);
 
                     const defaultViewType = checkFileFormat(filename, isDirectory);
                     console.log("default view type", defaultViewType);
-                    const newViewerOptions = [{text: "Preview", id: "preview"}];
+                    const newViewerOptions = [{ text: "Preview", id: "preview" }];
                     if (defaultViewType === "plot") {
-                        newViewerOptions.push({text: "Plot", id: "plot"});
-                        newViewerOptions.push({text: "Column", id: "column"});
+                        newViewerOptions.push({ text: "Plot", id: "plot" });
+                        newViewerOptions.push({ text: "Column", id: "column" });
                     } else if (defaultViewType === "model") {
-                        newViewerOptions.push({text: "Model", id: "model"});
+                        newViewerOptions.push({ text: "Model", id: "model" });
                     } else if (defaultViewType === "html") {
-                        newViewerOptions.push({text: "HTML", id: "html"});
+                        newViewerOptions.push({ text: "HTML", id: "html" });
                     } else if (defaultViewType === "folder") {
-                        newViewerOptions.push({text: "Folder", id: "folder"});
+                        newViewerOptions.push({ text: "Folder", id: "folder" });
                     }
                     setViewerOptions(newViewerOptions);
-                    setViewType(defaultViewType)
-                    setReload(false)
+                    setViewType(defaultViewType);
+                    setReload(false);
                 }
             }
         };
@@ -158,38 +165,38 @@ export default function ViewFile() {
         <>
             {assetId && (
                 <>
-                    <Box padding={{top: "s", horizontal: "l"}}>
+                    <Box padding={{ top: "s", horizontal: "l" }}>
                         <SpaceBetween direction="vertical" size="l">
                             <BreadcrumbGroup
                                 items={[
-                                    {text: Synonyms.Databases, href: "/databases/"},
+                                    { text: Synonyms.Databases, href: "/databases/" },
                                     {
                                         text: databaseId,
                                         href: "/databases/" + databaseId + "/assets/",
                                     },
                                     {
                                         text: asset?.assetName,
-                                        href: "/databases/" + databaseId + "/assets/" + assetId
+                                        href: "/databases/" + databaseId + "/assets/" + assetId,
                                     },
-                                    {text: "view " + filename }
+                                    { text: "view " + filename },
                                 ]}
                                 ariaLabel="Breadcrumbs"
                             />
-                            <Grid gridDefinition={[{colspan: 4}]}>
+                            <Grid gridDefinition={[{ colspan: 4 }]}>
                                 <h1>{asset?.assetName}</h1>
                             </Grid>
-                            {!isDirectory &&
+                            {!isDirectory && (
                                 <div id="view-edit-asset-right-column" className={viewerMode}>
                                     <SpaceBetween direction="vertical" size="m">
                                         <Container
                                             header={
                                                 <Grid
                                                     gridDefinition={[
-                                                        {colspan: 3},
-                                                        {colspan: 9},
+                                                        { colspan: 3 },
+                                                        { colspan: 9 },
                                                     ]}
                                                 >
-                                                    <Box margin={{bottom: "m"}}>
+                                                    <Box margin={{ bottom: "m" }}>
                                                         <Header variant="h2">Visualizer</Header>
                                                     </Box>
                                                     <SegmentedControl
@@ -202,18 +209,18 @@ export default function ViewFile() {
                                                 </Grid>
                                             }
                                         >
-
                                             <AssetVisualizer
                                                 viewType={viewType}
                                                 asset={asset}
                                                 viewerMode={viewerMode}
-                                                onViewerModeChange={(newViewerMode) => changeViewerMode(newViewerMode)}/>
-
-
+                                                onViewerModeChange={(newViewerMode) =>
+                                                    changeViewerMode(newViewerMode)
+                                                }
+                                            />
                                         </Container>
                                     </SpaceBetween>
                                 </div>
-                            }
+                            )}
                             <ErrorBoundary
                                 fallback={
                                     <div>
@@ -222,13 +229,17 @@ export default function ViewFile() {
                                     </div>
                                 }
                             >
-                                <ControlledMetadata databaseId={databaseId} assetId={assetId} prefix={key}/>
+                                <ControlledMetadata
+                                    databaseId={databaseId}
+                                    assetId={assetId}
+                                    prefix={key}
+                                />
                             </ErrorBoundary>
                         </SpaceBetween>
                     </Box>
                 </>
             )}
-            {pathViewType && <AssetSelectorWithModal pathViewType={pathViewType}/>}
+            {pathViewType && <AssetSelectorWithModal pathViewType={pathViewType} />}
         </>
     );
 }

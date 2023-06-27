@@ -1,4 +1,4 @@
-import {Box, Grid, Link, SpaceBetween, TextContent} from "@cloudscape-design/components";
+import { Box, Grid, Link, SpaceBetween, TextContent } from "@cloudscape-design/components";
 import Header from "@cloudscape-design/components/header";
 import React, { useEffect, useState } from "react";
 import { AssetDetail } from "./AssetUpload";
@@ -35,7 +35,7 @@ const FinishUploads = () => {
 
     const get_completed_items = (items: FileUploadTableItem[]) => {
         return items.filter((item) => item.status === "Completed");
-    }
+    };
 
     useEffect(() => {
         if (assetId) {
@@ -176,19 +176,28 @@ const FinishUploads = () => {
     return (
         <>
             {assetDetail?.Asset && (
-                <SpaceBetween direction="vertical" size="l" >
+                <SpaceBetween direction="vertical" size="l">
                     <Box variant="awsui-key-label">
                         Upload Progress for {Synonyms.Asset}
                         <Link
                             href={`/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`}
                             target="_blank"
                         >
-                            { ` ${assetDetail.assetName}`}
+                            {` ${assetDetail.assetName}`}
                         </Link>
                     </Box>
                     <ProgressBar
-                        status={get_completed_items(assetDetail.Asset).length == assetDetail.Asset.length ? "success" : "in-progress"}
-                        value={(get_completed_items(assetDetail.Asset).length / assetDetail.Asset.length) * 100}
+                        status={
+                            get_completed_items(assetDetail.Asset).length ==
+                            assetDetail.Asset.length
+                                ? "success"
+                                : "in-progress"
+                        }
+                        value={
+                            (get_completed_items(assetDetail.Asset).length /
+                                assetDetail.Asset.length) *
+                            100
+                        }
                         label="Overall Upload Progress"
                     />
                     <FileUploadTable
@@ -205,7 +214,6 @@ const FinishUploads = () => {
 export default function FinishUploadsPage() {
     return (
         <Box padding={{ top: false ? "s" : "m", horizontal: "l" }}>
-
             <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
                 <div>
                     <TextContent>

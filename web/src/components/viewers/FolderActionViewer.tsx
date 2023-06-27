@@ -4,9 +4,9 @@ import Container from "@cloudscape-design/components/container";
 import { Storage } from "@aws-amplify/storage";
 import { useEffect, useState } from "react";
 import ColumnLayout from "@cloudscape-design/components/column-layout";
-import { useNavigate, useParams } from "react-router"
+import { useNavigate, useParams } from "react-router";
 export class FolderActionProps {
-    databaseId!: string
+    databaseId!: string;
     assetId!: string;
     name!: string;
     urlKey!: string;
@@ -14,7 +14,7 @@ export class FolderActionProps {
 }
 
 export default function FolderActionViewer({ name, urlKey, ...props }: FolderActionProps) {
-    const navigate = useNavigate()
+    const navigate = useNavigate();
     const [downloadLink, setDownloadLink] = useState<string>("");
 
     function generateDownloadLink(key: string) {
@@ -24,7 +24,9 @@ export default function FolderActionViewer({ name, urlKey, ...props }: FolderAct
     }
 
     function navigateToAssetFilePage() {
-        navigate(`/databases/${props.databaseId}/assets/${props.assetId}/file`, { state: { 'filename': name, 'key': urlKey, 'isDirectory': props.isDirectory }})
+        navigate(`/databases/${props.databaseId}/assets/${props.assetId}/file`, {
+            state: { filename: name, key: urlKey, isDirectory: props.isDirectory },
+        });
     }
 
     useEffect(() => {
@@ -37,18 +39,27 @@ export default function FolderActionViewer({ name, urlKey, ...props }: FolderAct
                 <Header variant="h3">Actions</Header>
                 {name && (
                     <>
-                        <p>Selected {props.isDirectory ? 'directory' : 'file'} : {name}</p>
+                        <p>
+                            Selected {props.isDirectory ? "directory" : "file"} : {name}
+                        </p>
 
                         {!props.isDirectory && (
                             <>
                                 <ColumnLayout columns={2}>
-                                    <Button variant="primary" onClick={() => generateDownloadLink(urlKey)}>
+                                    <Button
+                                        variant="primary"
+                                        onClick={() => generateDownloadLink(urlKey)}
+                                    >
                                         Generate download link
                                     </Button>
                                 </ColumnLayout>
                                 <p>
                                     {downloadLink && (
-                                        <Button href={downloadLink} target="_blank" rel="noreferrer">
+                                        <Button
+                                            href={downloadLink}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                        >
                                             Download {name}
                                         </Button>
                                     )}
@@ -56,11 +67,9 @@ export default function FolderActionViewer({ name, urlKey, ...props }: FolderAct
                             </>
                         )}
                         <p>
-
                             <Button variant={"primary"} onClick={() => navigateToAssetFilePage()}>
-                                View { props.isDirectory ? 'directory' : 'file'}
+                                View {props.isDirectory ? "directory" : "file"}
                             </Button>
-
                         </p>
                     </>
                 )}

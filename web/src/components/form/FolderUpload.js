@@ -48,10 +48,10 @@ function FolderUpload(props) {
     };
 
     const handleFileSelection = async () => {
-        const handles = await window.showOpenFilePicker({multiple: true});
-        const fileHandles = []
-        for(let i=0; i<handles.length; i++) {
-            fileHandles.push({ path: handles[i].name, handle: handles[i] })
+        const handles = await window.showOpenFilePicker({ multiple: true });
+        const fileHandles = [];
+        for (let i = 0; i < handles.length; i++) {
+            fileHandles.push({ path: handles[i].name, handle: handles[i] });
         }
         return { handles, fileHandles };
     };
