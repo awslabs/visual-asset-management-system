@@ -127,6 +127,7 @@ def test_determined_field_type():
     assert "bool" == AOSSIndexAssetMetadata._determine_field_type("true")
     assert "bool" == AOSSIndexAssetMetadata._determine_field_type("false")
     assert "num" == AOSSIndexAssetMetadata._determine_field_type("123")
+    assert "num" == AOSSIndexAssetMetadata._determine_field_type(123)
     assert "str" == AOSSIndexAssetMetadata._determine_field_type(
         "example string value")
     assert "num" == AOSSIndexAssetMetadata._determine_field_type("123")
@@ -233,7 +234,10 @@ def test_lambda_handler():
     lambda_handler_mock.return_value = index
     index.process_item = Mock()
 
-    lambda_handler(example_event, {}, index=lambda_handler_mock)
+    s3index_mock = Mock()
+    s3index_fn = Mock(return_value=s3index_mock)
+
+    lambda_handler(example_event, {}, index=lambda_handler_mock, s3index=s3index_fn)
 
     lambda_handler_mock.assert_called_once()
     index.process_item.assert_called_once()

@@ -56,12 +56,14 @@ export function buildMetadataIndexingFunction(
             METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+            ASSET_BUCKET_NAME: storageResources.s3.assetBucket.bucketName,
             AOSS_ENDPOINT: aossEndpoint,
         },
     });
     storageResources.dynamo.metadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
+    storageResources.s3.assetBucket.grantRead(fun);
 
     // trigger the lambda from the dynamodb db streams
     storageResources.dynamo.metadataStorageTable.grantStreamRead(fun);

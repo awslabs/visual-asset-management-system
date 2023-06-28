@@ -7,6 +7,7 @@ import os
 import traceback
 from backend.logging.logger import safeLogger
 from backend.common.dynamodb import to_update_expr
+# from backend.handlers.metadata.read import get_metadata_with_prefix
 from boto3.dynamodb.conditions import Key, Attr
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.data_classes import APIGatewayProxyEvent
@@ -50,6 +51,134 @@ from boto3.dynamodb.types import TypeDeserializer
 # client.bulk(movies)
 
 
+class ValidationError(Exception):
+    def __init__(self, code: int, resp: object) -> None:
+        self.code = code
+        self.resp = resp
+
+
+class MetadataTable():
+
+    def __init__(self, table):
+        self.table = table
+        pass
+
+    @staticmethod
+    def from_env(env=os.environ):
+        tableName = env.get("METADATA_STORAGE_TABLE_NAME")
+        dynamodb = boto3.resource('dynamodb')
+        table = dynamodb.Table(tableName)
+        return MetadataTable(table)
+
+    def generate_prefixes(self, path):
+        prefixes = []
+        parts = path.split('/')
+        for i in range(1, len(parts)):
+            prefix = '/'.join(parts[:i]) + '/'
+            prefixes.insert(0, prefix)
+
+        if(not path.endswith('/')):
+            prefixes.insert(0, path)
+        return prefixes
+
+    def get_metadata_with_prefix(self, databaseId, assetId, prefix):
+        result = {}
+        if prefix is not None:
+            for paths in self.generate_prefixes(prefix):
+                resp = self.table.get_item(
+                    Key={
+                        "databaseId": databaseId,
+                        "assetId": paths,
+                    }
+                )
+                if "Item" in resp:
+                    result = resp['Item'] | result
+            try:
+                asset_metadata = self.get_metadata(databaseId, assetId)
+                result = asset_metadata | result
+                return result
+            except ValidationError as ex:
+                return result
+        else:
+            return self.get_metadata(databaseId, assetId)
+
+    def get_metadata(self, databaseId, assetId):
+        resp = self.table.get_item(
+            Key={
+                "databaseId": databaseId,
+                "assetId": assetId,
+            }
+        )
+        if "Item" not in resp:
+            raise ValidationError(404, "Item Not Found")
+        return resp['Item']
+
+
+class AOSSIndexS3Objects():
+    def __init__(self, bucketName, s3client, aosclient, metadataTable=MetadataTable.from_env):
+        self.bucketName = bucketName
+        self.s3client = s3client
+        self.aosclient = aosclient
+        self.metadataTable = metadataTable()
+
+    @staticmethod
+    def from_env(env=os.environ):
+        bucketName = env.get("ASSET_BUCKET_NAME")
+        s3client = boto3.client('s3')
+        region = env.get('AWS_REGION')
+        service = 'aoss'
+        credentials = boto3.Session().get_credentials()
+        auth = AWSV4SignerAuth(credentials, region, service)
+        aosclient = OpenSearch(
+            hosts=[{'host': urlparse(env.get('AOSS_ENDPOINT')).hostname, 'port': 443}],
+            http_auth=auth,
+            use_ssl=True,
+            verify_certs=True,
+            connection_class=RequestsHttpConnection,
+            pool_maxsize=20
+        )
+        return AOSSIndexS3Objects(bucketName, s3client, aosclient)
+        
+    def _get_s3_object_keys_generator(self, prefix):
+        paginator = self.s3client.get_paginator('list_objects')
+        page_iterator = paginator.paginate(Bucket=self.bucketName, Prefix=prefix)
+        for page in page_iterator:
+            for obj in page['Contents']:
+                yield obj
+
+    @staticmethod
+    def _metadata_and_s3_object_to_opensearch(s3object, metadata):
+        s3object['LastModified'] = s3object['LastModified'].strftime("%Y-%m-%d")
+        del s3object['Owner']
+        s3object['fileext'] = s3object['Key'].split('.')[-1]
+        
+        print("s3object", s3object)
+        print("metadata", metadata)
+        result = {
+            x : y
+            for k, v in (s3object | metadata).items()
+            for x, y in AOSSIndexAssetMetadata._determine_field_name(k, v) 
+        }
+        result['_rectype'] = 's3object'
+        print("aoss s3", result)
+        return result
+
+    def process_item(self, databaseId, assetIdOrPrefix):
+        prefix = None
+        assetId = assetIdOrPrefix
+        if "/" in assetIdOrPrefix:
+            prefix = assetIdOrPrefix
+            assetId = assetIdOrPrefix.split("/")[0]
+        
+        for s3object in self._get_s3_object_keys_generator(assetIdOrPrefix):
+            metadata = self.metadataTable.get_metadata_with_prefix(databaseId, assetId, prefix)
+            aosrecord = self._metadata_and_s3_object_to_opensearch(s3object, metadata) 
+            self.aosclient.index(
+                index = "assets1236",
+                body = aosrecord,
+                id = s3object['Key'],
+            )
+    
 
 class AOSSIndexAssetMetadata():
 
@@ -89,7 +218,7 @@ class AOSSIndexAssetMetadata():
         # regex that matches int or float
         num = re.compile(r"^\d+$|^\d+\.\d+$")
 
-        if isinstance(data, Decimal):
+        if isinstance(data, Decimal) or isinstance(data, float) or isinstance(data, int):
             return "num"
 
         if j.match(data):
@@ -141,12 +270,14 @@ class AOSSIndexAssetMetadata():
             if isinstance(data, Decimal):
                 return float(data)
 
-            if data_type == "num":
+            if data_type == "num" and isinstance(data, str):
                 # determine int or float
                 if "." in data:
                     return float(data)
                 else:
                     return int(data)
+            elif data_type == "num" and (isinstance(data, float) or isinstance(data, int)):
+                return data
             elif data_type == "bool":
                 return data == "true"
             else: return data
@@ -157,7 +288,7 @@ class AOSSIndexAssetMetadata():
     def _process_item(item):
         deserialize = TypeDeserializer().deserialize
         result = {
-            x : y 
+            x : y
             for k, v in item["dynamodb"]["NewImage"].items()
             for x, y in AOSSIndexAssetMetadata._determine_field_name(k, deserialize(v)) 
         }
@@ -184,7 +315,7 @@ class AOSSIndexAssetMetadata():
             id = assetId,
         )
 
-def lambda_handler(event, context, index=AOSSIndexAssetMetadata.from_env):
+def lambda_handler(event, context, index=AOSSIndexAssetMetadata.from_env, s3index=AOSSIndexS3Objects.from_env):
 
     print("the event", event)
     client = index()
@@ -204,10 +335,29 @@ def lambda_handler(event, context, index=AOSSIndexAssetMetadata.from_env):
         if record['eventName'] == 'REMOVE':
             client.delete_item(record['dynamodb']['Keys']['assetId']['S'])
             continue
-        try:
-            print(client.process_item(record))
-        except Exception as e:
-            print("error", e)
-            traceback.print_exc()
-            raise e
+
+        # if this is metadata at a s3 key prefix rather than an asset, just index the items with that prefix as files    
+        if (record['eventName'] == "INSERT" or record['eventName'] == "MODIFY") and "/" in record['dynamodb']['Keys']['assetId']['S']:
+            pass
+            # for each s3 key with the prefix $assetId
+                # determine the metadata by calling get_metadata_with_prefix
+                # the _rectype is s3object
+                # otherwise the same?????
+        
+        else:
+            # this is an asset level record
+            try:
+                print(client.process_item(record))
+
+                s3index().process_item(record['dynamodb']['Keys']['databaseId']['S'], record['dynamodb']['Keys']['assetId']['S'])
+            except Exception as e:
+                print("error", e)
+                traceback.print_exc()
+                raise e
+
+        # for each s3 key with the prefix $assetId
+            # determine the metadata by calling get_metadata_with_prefix
+           
+
+        
 
