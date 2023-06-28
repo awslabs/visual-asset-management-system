@@ -32,6 +32,7 @@ def lambda_handler(event, context):
 
     return {
         "jobName": event.get("jobName"),
+        #"externalSfnTaskToken": event.get("externalSfnTaskToken"),
         "pipeline": {
             "type": definition["stages"][0]["type"],
             "definition": [json.dumps(definition)]

@@ -104,7 +104,7 @@ You can identify stable releases by their tag. Fetch the tags `git fetch --all -
 
 6. Set the CDK stack name and the region for deployment with environment variables `export AWS_REGION=us-east-1 && export STACK_NAME=dev` - replace with the region you would like to deploy to and the name you want to associate with the cloudformation stack that the CDK will deploy.
 
-7. (Optional) Set the optional feature to deploy the Point Cloud (PC) visualizer pipeline with environment variables `export pipelineActivatePCVisualizer=true` - the point cloud (PC) visualizer pipeline stack is for viewing Point Cloud files in the VAMS visualizer preview. You can optionally set this via CDK deploy context parameter. Note: This does deploy additional AWS components that may have additional static infrastructure costs. 
+7. (Optional) Set the optional feature to deploy the Point Cloud (PC) visualizer pipeline with environment variables `export pipelineActivatePCVisualizer=true` - the point cloud (PC) visualizer pipeline stack is for viewing Point Cloud files in the VAMS visualizer preview. You can optionally set this via CDK deploy context parameter. Note: This does deploy additional AWS components such as a VPC and EPV endpoints that may have additional static infrastructure costs. 
 
 8. `npm run deploy.dev adminEmailAddress=myuser@example.com` - replace with your email address to deploy. An account is created in an AWS Cognito User Pool using this email address. Expect an email from no-reply@verificationemail.com with a temporary password.
 
@@ -222,6 +222,16 @@ An approximate cost breakdown is below (excluding free tiers):
 | Amazon Rekognition                | 9000 Image analysis, 3 Custom Label inference units      | $22.32 |
 | Amazon SageMaker                  | 2 inference endpoints                                    | $5.13  |
 | Amazon Elastic Container Registry | ECR (In region)40GB                                      | $4     |
+
+
+Below are the additional costs for including visualizer pipeline and their outputs in your deployment:
+
+| Service                           | Quantity                                                 | Cost   |
+| :-------------------------------- | :------------------------------------------------------- | :----- |
+| VPC                               | 7 VPC endpoints per AZ (1 AZ configuration){Static Cost} | $51.11 |
+| Batch Fargate                     | 10 hours of processing                                   | $3.56  |
+| Amazon S3                         | 300 GB storage, 30GB transfer out                        | $9.60  |
+| Amazon Cloudwatch                 | 1GB logs - VPC Flowlogs/API Gateway/Pipeline             | $3.28  |
 
 ## License
 

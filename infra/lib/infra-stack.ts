@@ -207,11 +207,11 @@ export class VAMS extends cdk.Stack {
        //Point CLoud (PC) Visualizer Preview Pipeline
        if(pipelineActivated_PCVisualizer)
        {
-           const visualizerPipelineNetwork = new VpcSecurityGroupGatewayWebVisualizerPipelineConstruct(this, "PipelineNetwork", {
+           const visualizerPipelineNetwork = new VpcSecurityGroupGatewayWebVisualizerPipelineConstruct(this, "VisualizerPipelineNetwork", {
                ...props
              });
          
-             const visualizerPipeline = new WebVisualizationPipelineConstruct(this, "AssetVisualizerTransformationPipeline", {
+             const visualizerPipeline = new WebVisualizationPipelineConstruct(this, "VisualizerPipeline", {
                ...props,
                assetBucket: storageResources.s3.assetBucket,
                assetVisualizerBucket: storageResources.s3.assetVisualizerBucket,
@@ -222,7 +222,7 @@ export class VAMS extends cdk.Stack {
              
              NagSuppressions.addResourceSuppressionsByPath(
                this,
-               `/${props.stackName}/AssetVisualizerTransformationPipeline/VisualizerPipelineContainerExecutionRole/Resource`,
+               `/${visualizerPipeline.toString()}/VisualizerPipelineContainerExecutionRole/Resource`,
                [
                {
                    id: "AwsSolutions-IAM4",
@@ -249,7 +249,7 @@ export class VAMS extends cdk.Stack {
        
            NagSuppressions.addResourceSuppressionsByPath(
                this,
-               `/${props.stackName}/AssetVisualizerTransformationPipeline/VisualizerPipelineContainerJobRole/Resource`,
+               `/${visualizerPipeline.toString()}/VisualizerPipelineContainerJobRole/Resource`,
                [
                {
                    id: "AwsSolutions-IAM4",
@@ -277,7 +277,7 @@ export class VAMS extends cdk.Stack {
        
            NagSuppressions.addResourceSuppressionsByPath(
                this,
-               `/${props.stackName}/AssetVisualizerTransformationPipeline/BatchFargatePipeline_PDAL/PipelineBatchComputeEnvironment/Resource-Service-Instance-Role/Resource`,
+               `/${visualizerPipeline.toString()}/BatchFargatePipeline_PDAL/PipelineBatchComputeEnvironment/Resource-Service-Instance-Role/Resource`,
                [
                {
                    id: "AwsSolutions-IAM4",
@@ -293,7 +293,7 @@ export class VAMS extends cdk.Stack {
        
            NagSuppressions.addResourceSuppressionsByPath(
                this,
-               `/${props.stackName}/AssetVisualizerTransformationPipeline/BatchFargatePipeline_Potree/PipelineBatchComputeEnvironment/Resource-Service-Instance-Role/Resource`,
+               `/${visualizerPipeline.toString()}/BatchFargatePipeline_Potree/PipelineBatchComputeEnvironment/Resource-Service-Instance-Role/Resource`,
                [
                {
                    id: "AwsSolutions-IAM4",
@@ -309,7 +309,7 @@ export class VAMS extends cdk.Stack {
        
            NagSuppressions.addResourceSuppressionsByPath(
                this,
-               `/${props.stackName}/AssetVisualizerTransformationPipeline/PointCloudVisualizerPipelineProcessing-StateMachine/Role/DefaultPolicy/Resource`,
+               `/${visualizerPipeline.toString()}/PointCloudVisualizerPipelineProcessing-StateMachine/Role/DefaultPolicy/Resource`,
                [
                {
                    id: "AwsSolutions-IAM5",
@@ -333,7 +333,7 @@ export class VAMS extends cdk.Stack {
        
            NagSuppressions.addResourceSuppressionsByPath(
                this,
-               `/${props.stackName}/AssetVisualizerTransformationPipeline/openPipeline/ServiceRole/Resource`,
+               `/${visualizerPipeline.toString()}/openPipeline/ServiceRole/Resource`,
                [
                {
                    id: "AwsSolutions-IAM4",
@@ -356,7 +356,7 @@ export class VAMS extends cdk.Stack {
        
            NagSuppressions.addResourceSuppressionsByPath(
                this,
-               `/${props.stackName}/AssetVisualizerTransformationPipeline/constructPipeline/ServiceRole/Resource`,
+               `/${visualizerPipeline.toString()}/constructPipeline/ServiceRole/Resource`,
                [
                {
                    id: "AwsSolutions-IAM4",

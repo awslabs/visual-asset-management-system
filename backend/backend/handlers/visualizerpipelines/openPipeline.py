@@ -59,9 +59,23 @@ def lambda_handler(event, context):
 
         for record in s3_records:
             print(f"S3 Record: {record}")
+
+            #Extract S3 file or files (if coming from a non S3 event source where you can group files to process)
+            #TODO: Upgrade this to support multiple files. For now it can take an array but still only grabs the first item
+            if(isinstance(record['s3'], list)):
+                s3Record = record['s3'][0]
+            else:
+                s3Record = record['s3']
+
             # Extract the S3 bucket and key from the event data
-            s3_source_bucket = record['s3']['bucket']['name']
-            s3_source_key = record['s3']['object']['key']
+            s3_source_bucket = s3Record['bucket']['name']
+            s3_source_key = s3Record['object']['key']
+
+            #Get any given additional outer/external task token to report back to (when using this pipeline as part of another state machine)
+            if('sfnExternalTaskToken' in record):
+                external_sfn_task_token = record['sfnExternalTaskToken']
+            else:
+                external_sfn_task_token = ''
 
             # Extract the root name and extension from the input key
             file_root, extension = os.path.splitext(s3_source_key)
@@ -77,6 +91,7 @@ def lambda_handler(event, context):
                 "sourceFileExtension": extension,
                 "destinationBucketName": DEST_BUCKET_NAME,
                 "destinationObjectFolderKey": f"{s3_source_key}/",
+                "externalSfnTaskToken": external_sfn_task_token
             }
 
             try:

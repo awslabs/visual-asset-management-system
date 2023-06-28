@@ -67,6 +67,7 @@ class PipelineStage(JsonEncodable):
 @dataclass 
 class PipelineDefinition(JsonEncodable):
     jobName: str
+    #externalSfnTaskToken: str
     stages: list[PipelineStage ]
     completedStages: list[PipelineStage] = None
     currentStage: PipelineStage = None
@@ -75,5 +76,6 @@ class PipelineDefinition(JsonEncodable):
 @dataclass
 class PipelineExecutionParams(JsonEncodable):
     jobName: str
+    #externalSfnTaskToken: str
     pipeline: dict
     status: PipelineStatus = PipelineStatus.PENDING

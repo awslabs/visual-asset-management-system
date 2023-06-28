@@ -18,7 +18,7 @@ import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import * as cdk from "aws-cdk-lib";
 import { Duration, Stack } from "aws-cdk-lib";
 import { Construct } from "constructs";
-import { buildConstructPipelineFunction, buildOpenPipelineFunction } from "../lambdaBuilder/visualizerPipelineFunctions";
+import { buildConstructPipelineFunction, buildOpenPipelineFunction, buildExecuteVisualizerPCPipelineFunction, buildPipelineEndFunction } from "../lambdaBuilder/visualizerPipelineFunctions";
 import { CfnJobDefinition } from "aws-cdk-lib/aws-batch";
 import { BatchFargatePipelineConstruct } from "./nested/batch-fargate-pipeline";
 
@@ -228,30 +228,13 @@ export class WebVisualizationPipelineConstruct extends Construct {
       props.pipelineSubnets,
       props.pipelineSecurityGroups
     );
-
+  
     // creates pipeline definition based on event notification input
     const constructPipelineTask = new tasks.LambdaInvoke(this, "ConstructPipelineTask", {
       lambdaFunction: constructPipelineFunction,
       outputPath: "$.Payload",
     });
 
-    // error handler pass - PDAL Batch
-    const handlePdalError = new sfn.Pass(
-      this,
-      "HandlePdalError",
-      {
-        resultPath: "$",
-      }
-    );
-
-    // error handler pass - Potree Batch
-    const handlePotreeError = new sfn.Pass(
-      this,
-      "HandlePotreeError",
-      {
-        resultPath: "$",
-      }
-    );
 
     // end state: success
     const successState = new sfn.Succeed(this, "SuccessState", {
@@ -263,6 +246,47 @@ export class WebVisualizationPipelineConstruct extends Construct {
       cause: "AWS Batch Job Failed",
       error: "Batch Job returned FAIL",
     });
+
+    // end state evaluation: success or failure
+    const endStatesChoice = new sfn.Choice(this, "EndStatesChoice")
+    .when(sfn.Condition.isPresent("$.result.error"), failState)
+    .otherwise(successState)
+
+
+    // final lambda called on pipeline end to close out the statemachine run
+    const pipelineEndFunction = buildPipelineEndFunction(
+      this,
+      props.assetBucket,
+      props.assetVisualizerBucket,
+      props.vpc,
+      props.pipelineSubnets,
+      props.pipelineSecurityGroups
+    );
+
+    
+    const pipeLineEndTask = new tasks.LambdaInvoke(this, "PipelineEndTask", {
+      lambdaFunction: constructPipelineFunction,
+      inputPath: "$",
+      outputPath: "$",
+    }).next(endStatesChoice);
+
+    // error handler passthrough - PDAL Batch
+    const handlePdalError = new sfn.Pass(
+      this,
+      "HandlePdalError",
+      {
+        resultPath: "$"
+      }
+    ).next(pipeLineEndTask);
+
+    // error handler passthrough - Potree Batch
+    const handlePotreeError = new sfn.Pass(
+      this,
+      "HandlePotreeError",
+      {
+        resultPath: "$"
+      }
+    ).next(pipeLineEndTask);
 
     // batch job Potree Converter
     const potreeConverterBatchJob = new tasks.BatchSubmitJob(
@@ -284,15 +308,13 @@ export class WebVisualizationPipelineConstruct extends Construct {
         resultPath: "$.error",
       })
       .next(
-        new sfn.Choice(this, "EndStatesChoice")
-          .when(sfn.Condition.isPresent("$.result.error"), failState)
-          .otherwise(successState)
+        pipeLineEndTask
       );
 
     // batch job PDAL
     const pdalConverterBatchJob = new tasks.BatchSubmitJob(
       this,
-      "PdalConverterBatchJob-PDAL",
+      "PdalConverterBatchJob",
       {
         jobName: sfn.JsonPath.stringAt("$.jobName"),
         jobDefinitionArn: pdalBatchPipeline.batchJobDefinition.jobDefinitionArn,
@@ -377,7 +399,28 @@ export class WebVisualizationPipelineConstruct extends Construct {
     /**
      * Lambda Resources & SNS Subscriptions
      */
-    //Build Lambda Web Visualizer Pipeline Resources
+    //Build Lambda VAMS Execution Function (as an optional pipeline execution action)
+    const visualizerPCPipelineExecuteFunction = buildExecuteVisualizerPCPipelineFunction(
+      this,
+      props.assetBucket,
+      props.assetVisualizerBucket,
+      S3AssetsObjectCreatedTopic_PointCloud
+    );
+
+    visualizerPCPipelineExecuteFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "kms:Decrypt",
+          "kms:DescribeKey",
+          "kms:Encrypt",
+          "kms:GenerateDataKey*",
+          "kms:ImportKeyMaterial",
+        ],
+        resources: [topicKey.keyArn],
+      })
+    );
+
+    //Build Lambda Web Visualizer Pipeline Resources to Open the Pipeline through a SNS Topic Subscription
     const openPipelineFunction = buildOpenPipelineFunction(
       this,
       props.assetBucket,
@@ -387,7 +430,7 @@ export class WebVisualizationPipelineConstruct extends Construct {
       props.pipelineSubnets,
     );
 
-    //Add subscription to kick-off lambda function of pipeline
+    //Add subscription to kick-off lambda function of pipeline (as the main pipeline execution action)
     S3AssetsObjectCreatedTopic_PointCloud.addSubscription(
       new LambdaSubscription(openPipelineFunction)
     );

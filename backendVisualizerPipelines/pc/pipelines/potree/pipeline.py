@@ -57,9 +57,9 @@ def run(stage: PipelineStage) -> PipelineStage:
 
     # check file extension to determine if we can continue processing
     # currently only supports E57, LAZ, and LAS
-    if not local_filepath.endswith(ext.Extensions.E57) and not local_filepath.endswith(ext.Extensions.LAZ) and not local_filepath.endswith(ext.Extensions.LAS):
+    if not local_filepath.endswith(ext.Extensions.LAZ) and not local_filepath.endswith(ext.Extensions.LAS):
         return ext.error_response(
-            "Unsupported file type for point cloud visualization pipeline conversion. Currently only supports E57, LAZ, and LAS."
+            "Unsupported file type for point cloud visualization pipeline conversion. Currently only supports LAZ and LAS."
         )
 
     # If input file is LAZ/LAS, run through Potree Converter Pipeline

@@ -13,7 +13,9 @@
         "cdk.synth.app": "cdk synth",
         "cdk.deploy.app": "cdk deploy --all",
         "deploy.dev": "npm run cdk.deploy.app -- --require-approval never --context ",
-        "deploy.vams": "cdk deploy --all -c stack-name=vams -c region=us-east-1 --require-approval never --context"
+        "deploy.dev.pipeline": "npm run cdk.deploy.app -- --require-approval never --context pipelineActivatePCVisualizer=true --context ",
+        "deploy.vams": "cdk deploy --all -c stack-name=vams -c region=us-east-1 --require-approval never --context",
+        "deploy.vams.pipeline": "cdk deploy --all -c stack-name=vams -c region=us-east-1 --require-approval never --context pipelineActivatePCVisualizer=true --context"
     },
     "devDependencies": {
         "@aws-cdk/assert": "^2.68.0",

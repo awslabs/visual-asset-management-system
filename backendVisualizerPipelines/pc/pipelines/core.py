@@ -44,6 +44,7 @@ def run(params: dict) -> PipelineExecutionParams:
         logger.error(f"Pipeline Type {current_stage.type} not supported")
         sfn.send_task_failure(PipelineExecutionParams(
             definition.jobName,
+            #definition.externalSfnTaskToken,
             {
                 "type": "",
                 "definition": [definition.to_json()]
@@ -69,6 +70,7 @@ def run(params: dict) -> PipelineExecutionParams:
 
     output = PipelineExecutionParams(
         definition.jobName,
+        #definition.externalSfnTaskToken,
         {
             "type": next_stage_type,
             "definition": [definition.to_json()]
