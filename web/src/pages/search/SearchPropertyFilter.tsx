@@ -10,24 +10,7 @@ interface SearchPropertyFilterProps {
     dispatch: Dispatch<ReducerAction<any>>;
 }
 
-export async function paginateSearch(
-    from: number,
-    size: number,
-    { state, dispatch }: SearchPropertyFilterProps
-) {
-    dispatch({
-        type: "query-paginate",
-        pagination: {
-            from,
-            size,
-        },
-    });
-    const body = {
-        tokens: state.query.tokens,
-        operation: state.query.operation,
-        from,
-        size,
-    };
+async function search(body: any, { dispatch }: SearchPropertyFilterProps) {
     console.log("body to send", body);
     try {
         const result = await API.post("api", "search", {
@@ -46,6 +29,62 @@ export async function paginateSearch(
     }
 }
 
+export async function sortSearch(
+    sortingField: string,
+    isDescending: boolean,
+    { state, dispatch }: SearchPropertyFilterProps
+) {
+    let sortingFieldIndex = sortingField;
+    if (sortingField.indexOf("str_") === 0) {
+        sortingFieldIndex = sortingField + ".raw";
+    }
+    const sort = [
+        {
+            [sortingFieldIndex]: {
+                missing: "_last",
+                order: isDescending ? "desc" : "asc",
+            },
+        },
+        "_score",
+    ];
+    dispatch({
+        type: "query-sort",
+        sort,
+        tableSort: {
+            sortingField,
+            sortingDescending: isDescending,
+        }
+    });
+    const body = {
+        tokens: state.query.tokens,
+        operation: state.query.operation,
+        sort,
+    };
+    search(body, { dispatch, state });
+}
+
+export async function paginateSearch(
+    from: number,
+    size: number,
+    { state, dispatch }: SearchPropertyFilterProps
+) {
+    dispatch({
+        type: "query-paginate",
+        pagination: {
+            from,
+            size,
+        },
+    });
+    const body = {
+        tokens: state.query.tokens,
+        operation: state.query.operation,
+        sort: state.query.sort,
+        from,
+        size,
+    };
+    search(body, { dispatch, state });
+}
+
 async function runSearch(
     detail: PropertyFilterProps.Query,
     { state, dispatch }: SearchPropertyFilterProps
@@ -54,23 +93,9 @@ async function runSearch(
         type: "query-update",
         tokens: detail.tokens,
         operation: detail.operation,
+        sort: ["_score"],
     });
-    console.log("body to send", detail);
-    try {
-        const result = await API.post("api", "search", {
-            "Content-type": "application/json",
-            body: detail,
-        });
-        dispatch({
-            type: "search-result-update",
-            result,
-        });
-    } catch (e) {
-        dispatch({
-            type: "search-result-error",
-            error: e,
-        });
-    }
+    search(detail, { dispatch, state });
 }
 
 function SearchPropertyFilter({ state, dispatch }: SearchPropertyFilterProps) {

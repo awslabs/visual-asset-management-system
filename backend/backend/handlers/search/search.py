@@ -103,6 +103,7 @@ def property_token_filter_to_opensearch_query(token_filter, start=0, size=100):
     query = {
         "from": token_filter.get("from", start),
         "size": token_filter.get("size", size),
+        "sort": token_filter.get("sort", ["_score"]),
         "query": {
             "bool": {
                 "must": must_criteria,

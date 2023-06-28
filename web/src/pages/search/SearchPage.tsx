@@ -19,6 +19,16 @@ interface SearchPageProps {}
 function searchReducer(state: any, action: any) {
     console.log("searchReducer", action);
     switch (action.type) {
+        case "query-sort": 
+            return {
+                ...state,
+                sort: action.sort,
+                pagination: {
+                    from: 0,
+                },
+                tableSort: action.tableSort,
+            };
+
         case "query-paginate":
             return {
                 ...state,
@@ -33,9 +43,11 @@ function searchReducer(state: any, action: any) {
         case "query-update":
             return {
                 ...state,
-                query: { tokens: action.tokens, operation: action.operation },
+                query: { tokens: action.tokens, operation: action.operation, },
                 error: undefined,
                 loading: true,
+                sort: action.sort,
+                tableSort: {},
                 pagination: {
                     from: 0,
                 }

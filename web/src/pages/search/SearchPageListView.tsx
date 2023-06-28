@@ -1,7 +1,7 @@
 import React, { Dispatch, ReducerAction } from "react";
 import Table, { TableProps } from "@cloudscape-design/components/table";
 import { CollectionPreferences, Header, Link, Pagination } from "@cloudscape-design/components";
-import { paginateSearch } from "./SearchPropertyFilter";
+import { paginateSearch, sortSearch } from "./SearchPropertyFilter";
 
 export interface SearchPageListViewProps {
     state: any;
@@ -56,6 +56,19 @@ function SearchPageListView({ state, dispatch }: SearchPageListViewProps) {
             }
             loading={state.loading}
             items={state?.result?.hits?.hits?.map((hit: any) => hit._source)}
+            sortingColumn={{
+                sortingField: state?.tableSort?.sortingField,
+             }}
+            sortingDescending={state?.tableSort?.sortingDescending}
+            onSortingChange={({ detail }) => {
+                console.log("sorting change", detail);
+                if (detail.sortingColumn.sortingField) {
+                    sortSearch(detail.sortingColumn.sortingField, detail.isDescending || false, {
+                        state,
+                        dispatch,
+                    });
+                }
+            }}
             pagination={
                 <Pagination
                     pagesCount={pageCount}
