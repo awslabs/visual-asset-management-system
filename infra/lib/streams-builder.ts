@@ -52,7 +52,7 @@ export function streamsBuilder(
 
     aoss.grantCollectionAccess(indexingFunction);
 
-    const searchFun = buildSearchFunction(scope, aossParam.stringValue, aoss);
+    const searchFun = buildSearchFunction(scope, aossParam.stringValue, aoss, storage);
     attachFunctionToApi(scope, searchFun, {
         routePath: "/search",
         method: apigwv2.HttpMethod.POST,

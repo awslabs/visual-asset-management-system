@@ -7,7 +7,13 @@ import {SearchPageViewProps} from "./SearchPage";
 
 function columnRender(e: any, name: string, value: any) {
     if (name.indexOf("str") === 0 || name.indexOf("date_") === 0) {
-        return <div><Link href={`/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`}>{value}</Link></div>;
+        return (
+            <div>
+                <Link href={`/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`}>
+                    {value}
+                </Link>
+            </div>
+        );
     }
 }
 
@@ -55,7 +61,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
             items={state?.result?.hits?.hits?.map((hit: any) => hit._source)}
             sortingColumn={{
                 sortingField: state?.tableSort?.sortingField,
-             }}
+            }}
             sortingDescending={state?.tableSort?.sortingDescending}
             onSortingChange={({ detail }) => {
                 console.log("sorting change", detail);
@@ -93,7 +99,15 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                     // }
                 />
             }
-            header={<Header children="Matches" counter={state?.result?.hits?.total?.value} />}
+            header={
+                <Header
+                    children="Matches"
+                    counter={
+                        state?.result?.hits?.total?.value +
+                        (state?.result?.hits?.total?.relation === "gte" ? "+" : "")
+                    }
+                />
+            }
             preferences={
                 <CollectionPreferences
                     onConfirm={({ detail }) => {

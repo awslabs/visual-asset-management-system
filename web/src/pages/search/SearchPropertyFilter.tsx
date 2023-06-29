@@ -3,7 +3,7 @@ import PropertyFilter, { PropertyFilterProps } from "@cloudscape-design/componen
 import Synonyms from "../../synonyms";
 import { Dispatch, ReducerAction, useEffect, useState } from "react";
 import { API } from "aws-amplify";
-import { PropertyFilterProperty } from "@cloudscape-design/collection-hooks";
+import { PropertyFilterOperator, PropertyFilterProperty } from "@cloudscape-design/collection-hooks";
 
 interface SearchPropertyFilterProps {
     state: any;
@@ -59,6 +59,7 @@ export async function sortSearch(
         tokens: state.query.tokens,
         operation: state.query.operation,
         sort,
+        size: state?.tablePreferences?.pageSize
     };
     search(body, { dispatch, state });
 }
@@ -78,7 +79,7 @@ export async function paginateSearch(
     const body = {
         tokens: state.query.tokens,
         operation: state.query.operation,
-        sort: state.query.sort,
+        sort: state.sort,
         from,
         size,
     };
@@ -95,7 +96,14 @@ async function runSearch(
         operation: detail.operation,
         sort: ["_score"],
     });
-    search(detail, { dispatch, state });
+    const body = {
+        tokens: detail.tokens,
+        operation: detail.operation,
+        sort: ["_score"],
+        from: 0,
+        size: state?.tablePreferences?.pageSize
+    }
+    search(body, { dispatch, state });
 }
 
 function SearchPropertyFilter({ state, dispatch }: SearchPropertyFilterProps) {
@@ -116,6 +124,10 @@ function SearchPropertyFilter({ state, dispatch }: SearchPropertyFilterProps) {
                     return false;
                 })
                 .map((key) => {
+                    let operators: PropertyFilterOperator[] = ["=", "!="];
+                    if (key.indexOf("date_") === 0) {
+                        operators = ["=", "!=", ">", "<", ">=", "<="];
+                    }
                     const property = response?.assets1236?.mappings?.properties[key];
                     const result: PropertyFilterProperty = {
                         key,
@@ -125,6 +137,8 @@ function SearchPropertyFilter({ state, dispatch }: SearchPropertyFilterProps) {
                             .map((x) => x.charAt(0).toUpperCase() + x.slice(1))
                             .join(" "),
                         groupValuesLabel: property.type,
+                        operators: operators,
+                        defaultOperator: "=",
                     };
                     return result;
                 });
