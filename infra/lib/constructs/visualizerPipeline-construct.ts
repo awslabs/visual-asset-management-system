@@ -8,32 +8,30 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
-import * as batch from '@aws-cdk/aws-batch-alpha';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as kms from "aws-cdk-lib/aws-kms";
-import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as path from "path";
 import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import * as cdk from "aws-cdk-lib";
 import { Duration, Stack } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { buildConstructPipelineFunction, buildOpenPipelineFunction, buildExecuteVisualizerPCPipelineFunction, buildPipelineEndFunction } from "../lambdaBuilder/visualizerPipelineFunctions";
-import { CfnJobDefinition } from "aws-cdk-lib/aws-batch";
 import { BatchFargatePipelineConstruct } from "./nested/batch-fargate-pipeline";
+import { NagSuppressions } from "cdk-nag";
 
-export interface WebVisualizationPipelineConstructProps extends cdk.StackProps {
+export interface VisualizationPipelineConstructProps extends cdk.StackProps {
   assetBucket: s3.Bucket;
   assetVisualizerBucket: s3.Bucket;
   vpc: ec2.Vpc;
-  pipelineSubnets: ec2.ISubnet[];
-  pipelineSecurityGroups: ec2.SecurityGroup[];
+  visualizerPipelineSubnets: ec2.ISubnet[];
+  visualizerPipelineSecurityGroups: ec2.SecurityGroup[];
 }
 
 /**
  * Default input properties
  */
-const defaultProps: Partial<WebVisualizationPipelineConstructProps> = {
+const defaultProps: Partial<VisualizationPipelineConstructProps> = {
   stackName: "",
   env: {},
 };
@@ -49,8 +47,8 @@ const defaultProps: Partial<WebVisualizationPipelineConstructProps> = {
  * - IAM Roles / Policy Documents for permissions to S3 / Lambda
  * On redeployment, will automatically invalidate the CloudFront distribution cache
  */
-export class WebVisualizationPipelineConstruct extends Construct {
-  constructor(parent: Construct, name: string, props: WebVisualizationPipelineConstructProps) {
+export class VisualizationPipelineConstruct extends Construct {
+  constructor(parent: Construct, name: string, props: VisualizationPipelineConstructProps) {
     super(parent, name);
 
     props = { ...defaultProps, ...props };
@@ -59,7 +57,7 @@ export class WebVisualizationPipelineConstruct extends Construct {
     const account = Stack.of(this).account;
 
     const vpcSubnets = props.vpc.selectSubnets({
-      subnets: props.pipelineSubnets,
+      subnets: props.visualizerPipelineSubnets,
     });
 
     /**
@@ -193,8 +191,8 @@ export class WebVisualizationPipelineConstruct extends Construct {
      */
     const pdalBatchPipeline = new BatchFargatePipelineConstruct(this, "BatchFargatePipeline_PDAL", {
       vpc: props.vpc,
-      subnets: props.pipelineSubnets,
-      securityGroups: props.pipelineSecurityGroups,
+      subnets: props.visualizerPipelineSubnets,
+      securityGroups: props.visualizerPipelineSecurityGroups,
       jobRole: containerJobRole,
       executionRole: containerExecutionRole,
       imageAssetPath: path.join("..", "..", "..", "..", "backendVisualizerPipelines", "pc"),
@@ -207,8 +205,8 @@ export class WebVisualizationPipelineConstruct extends Construct {
      */
     const potreeBatchPipeline = new BatchFargatePipelineConstruct(this, "BatchFargatePipeline_Potree", {
       vpc: props.vpc,
-      subnets: props.pipelineSubnets,
-      securityGroups: props.pipelineSecurityGroups,
+      subnets: props.visualizerPipelineSubnets,
+      securityGroups: props.visualizerPipelineSecurityGroups,
       jobRole: containerJobRole,
       executionRole: containerExecutionRole,
       imageAssetPath: path.join("..", "..", "..", "..", "backendVisualizerPipelines", "pc"),
@@ -225,8 +223,8 @@ export class WebVisualizationPipelineConstruct extends Construct {
     const constructPipelineFunction = buildConstructPipelineFunction(
       this,
       props.vpc,
-      props.pipelineSubnets,
-      props.pipelineSecurityGroups
+      props.visualizerPipelineSubnets,
+      props.visualizerPipelineSecurityGroups
     );
   
     // creates pipeline definition based on event notification input
@@ -259,8 +257,8 @@ export class WebVisualizationPipelineConstruct extends Construct {
       props.assetBucket,
       props.assetVisualizerBucket,
       props.vpc,
-      props.pipelineSubnets,
-      props.pipelineSecurityGroups
+      props.visualizerPipelineSubnets,
+      props.visualizerPipelineSecurityGroups
     );
 
     
@@ -427,13 +425,230 @@ export class WebVisualizationPipelineConstruct extends Construct {
       props.assetVisualizerBucket,
       pipelineStateMachine,
       props.vpc,
-      props.pipelineSubnets,
+      props.visualizerPipelineSubnets,
     );
 
     //Add subscription to kick-off lambda function of pipeline (as the main pipeline execution action)
     S3AssetsObjectCreatedTopic_PointCloud.addSubscription(
       new LambdaSubscription(openPipelineFunction)
     );
+
+
+    //Nag Supressions
+    NagSuppressions.addResourceSuppressionsByPath(
+      Stack.of(this),
+      `/${this.toString()}/VisualizerPipelineContainerExecutionRole/Resource`,
+      [
+      {
+          id: "AwsSolutions-IAM4",
+          reason:
+          "The IAM role for ECS Container execution uses AWS Managed Policies",
+          appliesTo: [
+          "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
+          "Policy::arn:<AWS::Partition>:iam::aws:policy/AWSXrayWriteOnlyAccess",
+          ],
+      },
+      {
+          id: "AwsSolutions-IAM5",
+          reason: "ECS Containers require access to objects in the DataBucket",
+          appliesTo: [
+          `Resource::arn:aws:states:${region}:${account}:*`,
+          {
+              regex: "/^Resource::<DataBucket.*.Arn>/\\*$/g",
+          },
+          ],
+      },
+      ],
+      true
+  );
+
+    NagSuppressions.addResourceSuppressionsByPath(
+      Stack.of(this),
+        `/${this.toString()}/VisualizerPipelineContainerJobRole/Resource`,
+        [
+        {
+            id: "AwsSolutions-IAM4",
+            reason:
+            "The IAM role for ECS Container execution uses AWS Managed Policies",
+            appliesTo: [
+            "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
+            "Policy::arn:<AWS::Partition>:iam::aws:policy/AWSXrayWriteOnlyAccess",
+            ],
+        },
+        {
+            id: "AwsSolutions-IAM5",
+            reason: "ECS Containers require access to objects in the DataBucket",
+            appliesTo: [
+            "Resource::*",
+            `Resource::arn:aws:states:${region}:${account}:*`,
+            {
+                regex: "/^Resource::<DataBucket.*.Arn>/\\*$/g",
+            },
+            ],
+        },
+        ],
+        true
+    );
+
+    NagSuppressions.addResourceSuppressionsByPath(
+      Stack.of(this),
+        `/${this.toString()}/BatchFargatePipeline_PDAL/PipelineBatchComputeEnvironment/Resource-Service-Instance-Role/Resource`,
+        [
+        {
+            id: "AwsSolutions-IAM4",
+            reason:
+            "The IAM role for AWS Batch Compute Environment uses AWSBatchServiceRole",
+            appliesTo: [
+            "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSBatchServiceRole",
+            ],
+        },
+        ],
+        true
+    );
+
+    NagSuppressions.addResourceSuppressionsByPath(
+        Stack.of(this),
+        `/${this.toString()}/BatchFargatePipeline_Potree/PipelineBatchComputeEnvironment/Resource-Service-Instance-Role/Resource`,
+        [
+        {
+            id: "AwsSolutions-IAM4",
+            reason:
+            "The IAM role for AWS Batch Compute Environment uses AWSBatchServiceRole",
+            appliesTo: [
+            "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSBatchServiceRole",
+            ],
+        },
+        ],
+        true
+    );
+
+    NagSuppressions.addResourceSuppressionsByPath(
+        Stack.of(this),
+        `/${this.toString()}/PointCloudVisualizerPipelineProcessing-StateMachine/Role/DefaultPolicy/Resource`,
+        [
+        {
+            id: "AwsSolutions-IAM5",
+            reason:
+            "PointCloudProcessingStateMachine uses default policy that contains wildcard",
+            appliesTo: [
+            "Resource::*",
+            "Action::kms:GenerateDataKey*",
+            `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+            {
+                regex: "/^Resource::<.*Function.*.Arn>:.*$/g",
+            },
+            {
+                regex: "/^Action::s3:.*$/g",
+            },
+            ],
+        },
+        ],
+        true
+    );
+
+    NagSuppressions.addResourceSuppressionsByPath(
+        Stack.of(this),
+        `/${this.toString()}/openPipeline/ServiceRole/Resource`,
+        [
+        {
+            id: "AwsSolutions-IAM4",
+            reason:
+            "openPipeline requires AWS Managed Policies, AWSLambdaBasicExecutionRole and AWSLambdaVPCAccessExecutionRole",
+            appliesTo: [
+            "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole",
+            "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+            ],
+        },
+        {
+            id: "AwsSolutions-IAM5",
+            reason:
+            "openPipeline uses default policy that contains wildcard",
+            appliesTo: ["Resource::*"],
+        },
+        ],
+        true
+    );
+
+    NagSuppressions.addResourceSuppressionsByPath(
+        Stack.of(this),
+        `/${this.toString()}/constructPipeline/ServiceRole/Resource`,
+        [
+        {
+            id: "AwsSolutions-IAM4",
+            reason:
+            "constructPipeline requires AWS Managed Policies, AWSLambdaBasicExecutionRole and AWSLambdaVPCAccessExecutionRole",
+            appliesTo: [
+            "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole",
+            "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+            ],
+        },
+        {
+            id: "AwsSolutions-IAM5",
+            reason:
+            "openPipeline uses default policy that contains wildcard",
+            appliesTo: ["Resource::*"],
+        },
+        ],
+        true
+    );
+
+    NagSuppressions.addResourceSuppressionsByPath(
+        Stack.of(this),
+        `/${this.toString()}/executeVisualizerPCPipeline/ServiceRole/DefaultPolicy/Resource`,
+        [
+        {
+            id: "AwsSolutions-IAM4",
+            reason:
+            "executeVisualizerPCPipeline requires AWS Managed Policies, AWSLambdaBasicExecutionRole and AWSLambdaVPCAccessExecutionRole",
+            appliesTo: [
+            "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole",
+            "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+            ],
+        },
+        {
+            id: "AwsSolutions-IAM5",
+            reason:
+            "executeVisualizerPCPipeline uses default policy that contains wildcard",
+            appliesTo: ["Resource::*"],
+        },
+        {
+            id: "AwsSolutions-IAM5",
+            reason:
+            "executeVisualizerPCPipeline uses default policy that contains wildcard",
+            appliesTo: [
+            "Action::kms:GenerateDataKey*",
+            {
+                regex: "/^Resource::<.*Function.*.Arn>:.*$/g",
+            },
+            ],
+        },
+        ],
+        true
+    );
+
+    NagSuppressions.addResourceSuppressionsByPath(
+        Stack.of(this),
+        `/${this.toString()}/pipelineEnd/ServiceRole/Resource`,
+        [
+        {
+            id: "AwsSolutions-IAM4",
+            reason:
+            "pipelineEnd requires AWS Managed Policies, AWSLambdaBasicExecutionRole and AWSLambdaVPCAccessExecutionRole",
+            appliesTo: [
+            "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole",
+            "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+            ],
+        },
+        {
+            id: "AwsSolutions-IAM5",
+            reason:
+            "pipelineEnd uses default policy that contains wildcard",
+            appliesTo: ["Resource::*"],
+        },
+        ],
+        true
+    );
+
   }
 
 }

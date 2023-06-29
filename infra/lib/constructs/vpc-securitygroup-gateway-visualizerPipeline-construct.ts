@@ -5,17 +5,17 @@
 import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { CfnOutput } from "aws-cdk-lib";
+import { Stack } from "aws-cdk-lib";
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { NagSuppressions } from "cdk-nag";
 
-
 /* eslint-disable @typescript-eslint/no-empty-interface */
-export interface VpcSecurityGroupGatewayWebVisualizerPipelineConstructProps {
+export interface VpcSecurityGroupGatewayVisualizerPipelineConstructProps {
 
 }
 
-const defaultProps: Partial<VpcSecurityGroupGatewayWebVisualizerPipelineConstructProps> = {
+const defaultProps: Partial<VpcSecurityGroupGatewayVisualizerPipelineConstructProps> = {
   stackName: "",
   env: {},
 };
@@ -23,7 +23,7 @@ const defaultProps: Partial<VpcSecurityGroupGatewayWebVisualizerPipelineConstruc
 /**
  * Custom configuration to Cognito.
  */
-export class VpcSecurityGroupGatewayWebVisualizerPipelineConstruct extends Construct {
+export class VpcSecurityGroupGatewayVisualizerPipelineConstruct extends Construct {
 
   readonly vpc: ec2.Vpc;
   readonly subnets: {
@@ -33,7 +33,7 @@ export class VpcSecurityGroupGatewayWebVisualizerPipelineConstruct extends Const
     pipeline: ec2.SecurityGroup;
   };
 
-  constructor(parent: Construct, name: string, props: VpcSecurityGroupGatewayWebVisualizerPipelineConstructProps) {
+  constructor(parent: Construct, name: string, props: VpcSecurityGroupGatewayVisualizerPipelineConstructProps) {
     super(parent, name);
 
     props = { ...defaultProps, ...props };
@@ -82,10 +82,10 @@ export class VpcSecurityGroupGatewayWebVisualizerPipelineConstruct extends Const
     /**
      * Security Groups
      */
-    const pipelineSecurityGroup = new ec2.SecurityGroup(this, "PipelineSecurityGroup", {
+    const pipelineSecurityGroup = new ec2.SecurityGroup(this, "VisualizerPipelineSecurityGroup", {
       vpc: this.vpc,
       allowAllOutbound: true,
-      description: "Pipeline Security Group",
+      description: "Visualizer Pipeline Security Group",
     });
 
     // add ingress rules to allow Fargate to pull from ECR
@@ -179,5 +179,16 @@ export class VpcSecurityGroupGatewayWebVisualizerPipelineConstruct extends Const
     new CfnOutput(this, "PipelineVpcId", {
       value: this.vpc.vpcId,
     });
+
+    //Nag Supressions
+    NagSuppressions.addResourceSuppressionsByPath(
+      Stack.of(this),
+      `/${this.toString()}/VisualizerPipelineSecurityGroup/Resource`, [
+      {
+      id: "AwsSolutions-EC23",
+      reason: "Pipeline Security Group is restricted to VPC cidr range on ports 443 and 53"
+      },
+    ]);
+
   }
 }
