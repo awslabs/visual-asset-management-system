@@ -14081,13 +14081,6 @@ react-map-gl@7.0.15:
   dependencies:
     "@types/mapbox-gl" "^2.6.0"
 
-react-map-gl@^7.0.25:
-  version "7.0.25"
-  resolved "https://registry.yarnpkg.com/react-map-gl/-/react-map-gl-7.0.25.tgz#60b7577cd1821efe3f1bc1e42225d10e006e152a"
-  integrity sha512-8aZfbDKxVcJnmTEC1eQ00VnTOu722i5wqnx+lV8VHN37ZvWEfMgb84EQ2kW6w/Q3zq6oZqP4helF7u4ydPFLtA==
-  dependencies:
-    "@types/mapbox-gl" "^2.6.0"
-
 react-native-get-random-values@^1.4.0:
   version "1.9.0"
   resolved "https://registry.yarnpkg.com/react-native-get-random-values/-/react-native-get-random-values-1.9.0.tgz#6cb30511c406922e75fe73833dc1812a85bfb37e"

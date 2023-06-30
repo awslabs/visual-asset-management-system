@@ -2,11 +2,8 @@ import React, { Dispatch, ReducerAction } from "react";
 import Table, { TableProps } from "@cloudscape-design/components/table";
 import { CollectionPreferences, Header, Link, Pagination } from "@cloudscape-design/components";
 import { paginateSearch, sortSearch } from "./SearchPropertyFilter";
+import {SearchPageViewProps} from "./SearchPage";
 
-export interface SearchPageListViewProps {
-    state: any;
-    dispatch: Dispatch<ReducerAction<any>>;
-}
 
 function columnRender(e: any, name: string, value: any) {
     if (name.indexOf("str") === 0 || name.indexOf("date_") === 0) {
@@ -14,7 +11,7 @@ function columnRender(e: any, name: string, value: any) {
     }
 }
 
-function SearchPageListView({ state, dispatch }: SearchPageListViewProps) {
+function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
     // identify all the names of columns from state.result.hits.hits
     // create a column definition for each column
 

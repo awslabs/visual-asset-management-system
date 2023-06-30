@@ -1,4 +1,4 @@
-import React, { useReducer, useState } from "react";
+import React, {Dispatch, ReducerAction, useReducer, useState} from "react";
 import SearchPropertyFilter from "./SearchPropertyFilter";
 import Container from "@cloudscape-design/components/container";
 import {
@@ -13,6 +13,12 @@ import SearchPageSegmentedControl from "./SearchPageSegmentedControl";
 import SearchPageMapView from "./SearchPageMapView";
 import SearchPageListView from "./SearchPageListView";
 import Box from "@cloudscape-design/components/box";
+
+export interface SearchPageViewProps {
+    state: any;
+    dispatch: Dispatch<ReducerAction<any>>;
+}
+
 
 interface SearchPageProps {}
 
@@ -70,6 +76,12 @@ function searchReducer(state: any, action: any) {
                 tablePreferences: action.payload,
             };
 
+        case "set-popup-info":
+            console.log(action.payload)
+            return {
+                ...state,
+                popupInfo: action.payload,
+            };
         default:
             return state;
     }
@@ -107,7 +119,7 @@ function SearchPage(props: SearchPageProps) {
                 </ColumnLayout>
                 <Grid>
                     {viewSelected === "mapview" ? (
-                        <SearchPageMapView />
+                        <SearchPageMapView state={state} dispatch={dispatch} />
                     ) : (
                         <Box>
                             <SearchPageListView state={state} dispatch={dispatch} />
