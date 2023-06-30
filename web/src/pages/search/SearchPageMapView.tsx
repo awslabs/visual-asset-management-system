@@ -78,6 +78,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                 ref={mapRef}
                 style={{ width: "72vw" }}
                 onLoad={(map) => {
+                    dispatch({ type: "set-map", map })
                     const { minLat, maxLat, minLong, maxLong } = getMinMaxLatLongBounds(
                         state.result
                     );

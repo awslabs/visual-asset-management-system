@@ -15,6 +15,30 @@ export interface SearchPageViewProps {
 
 interface SearchPageProps {}
 
+const getMinMaxLatLongBounds = (result: any) => {
+    let minLat = -90;
+    let maxLat = 90;
+    let minLong = -180;
+    let maxLong = 180;
+    result?.hits?.hits
+        ?.filter((hit: any) => hit?._source?.gp_location?.lat && hit?._source?.gp_location?.lon)
+        .forEach((hit: any) => {
+            console.log("hit", hit?._source?.gp_location?.lat, hit?._source?.gp_location?.lon);
+            minLat = Math.max(minLat, hit?._source?.gp_location?.lat);
+            maxLat = Math.min(maxLat, hit?._source?.gp_location?.lat);
+            minLong = Math.max(minLong, hit?._source?.gp_location?.lon);
+            maxLong = Math.min(maxLong, hit?._source?.gp_location?.lon);
+        });
+    const r = {
+        minLat,
+        maxLat,
+        minLong,
+        maxLong,
+    };
+    console.log("bounds result", r);
+    return r;
+};
+
 function searchReducer(state: any, action: any) {
     console.log("searchReducer", action);
     switch (action.type) {
@@ -51,7 +75,21 @@ function searchReducer(state: any, action: any) {
                     from: 0,
                 },
             };
+
         case "search-result-update":
+            if (state.map) {
+                try {
+                    console.log("fit map");
+                    const bounds = getMinMaxLatLongBounds(action.result);
+                    state.map.target.fitBounds([
+                        [bounds.minLong, bounds.minLat],
+                        [bounds.maxLong, bounds.maxLat],
+                    ]);
+                } catch (e) {
+                    console.log("error fitting map", e);
+                }
+            }
+
             return {
                 ...state,
                 loading: false,
@@ -85,6 +123,12 @@ function searchReducer(state: any, action: any) {
             return {
                 ...state,
                 view: action.view,
+            };
+
+        case "set-map":
+            return {
+                ...state,
+                map: action.map,
             };
 
         default:
