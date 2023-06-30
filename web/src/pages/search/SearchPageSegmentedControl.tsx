@@ -3,14 +3,13 @@ import SegmentedControl from "@cloudscape-design/components/segmented-control";
 
 interface SearchPageSegmentedControlProps {
     onchange: (selectedId: string) => void;
+    selectedId: string;
 }
-export default ({ onchange }: SearchPageSegmentedControlProps) => {
-    const [selectedId, setSelectedId] = React.useState("mapview");
+const SearchPageSegmentedControl = ({ onchange, selectedId }: SearchPageSegmentedControlProps) => {
     return (
         <SegmentedControl
             selectedId={selectedId}
             onChange={({ detail }) => {
-                setSelectedId(detail.selectedId);
                 onchange(detail.selectedId);
             }}
             label="Select Map or List view"
@@ -21,3 +20,5 @@ export default ({ onchange }: SearchPageSegmentedControlProps) => {
         />
     );
 };
+
+export default SearchPageSegmentedControl;

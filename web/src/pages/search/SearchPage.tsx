@@ -1,4 +1,4 @@
-import React, {Dispatch, ReducerAction, useReducer, useState} from "react";
+import React, { Dispatch, ReducerAction, useReducer, useState } from "react";
 import SearchPropertyFilter from "./SearchPropertyFilter";
 import Container from "@cloudscape-design/components/container";
 import { Alert, ColumnLayout, Grid, Header, SpaceBetween } from "@cloudscape-design/components";
@@ -12,7 +12,6 @@ export interface SearchPageViewProps {
     state: any;
     dispatch: Dispatch<ReducerAction<any>>;
 }
-
 
 interface SearchPageProps {}
 
@@ -71,7 +70,7 @@ function searchReducer(state: any, action: any) {
             };
 
         case "set-popup-info":
-            console.log(action.payload)
+            console.log(action.payload);
             return {
                 ...state,
                 popupInfo: action.payload,
@@ -82,14 +81,18 @@ function searchReducer(state: any, action: any) {
                 rectype: action.rectype,
             };
 
+        case "set-view":
+            return {
+                ...state,
+                view: action.view,
+            };
+
         default:
             return state;
     }
 }
 
 function SearchPage(props: SearchPageProps) {
-    const [viewSelected, setViewSelected] = useState<String>("mapview");
-
     const [state, dispatch] = useReducer(searchReducer, {
         query: { tokens: [], operation: "AND" },
         loading: false,
@@ -98,10 +101,12 @@ function SearchPage(props: SearchPageProps) {
         },
         pagination: {
             from: 0,
+        },
         rectype: {
             value: "asset",
             label: Synonyms.Assets,
         },
+        view: "mapview",
     });
 
     return (
@@ -116,12 +121,15 @@ function SearchPage(props: SearchPageProps) {
                     <SearchPropertyFilter state={state} dispatch={dispatch} />
                     <div style={{ display: "flex", justifyContent: "flex-end" }}>
                         <SearchPageSegmentedControl
-                            onchange={(selectedId: string) => setViewSelected(selectedId)}
+                            selectedId={state.view}
+                            onchange={(selectedId: string) =>
+                                dispatch({ type: "set-view", view: selectedId })
+                            }
                         />
                     </div>
                 </ColumnLayout>
                 <Grid>
-                    {viewSelected === "mapview" ? (
+                    {state.view === "mapview" ? (
                         <SearchPageMapView state={state} dispatch={dispatch} />
                     ) : (
                         <Box>
