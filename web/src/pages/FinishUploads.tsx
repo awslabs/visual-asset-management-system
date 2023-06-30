@@ -204,6 +204,7 @@ const FinishUploads = () => {
                         allItems={assetDetail?.Asset}
                         onRetry={onRetry}
                         resume={!reuploadClicked}
+                        showCount={true}
                     />
                 </SpaceBetween>
             )}

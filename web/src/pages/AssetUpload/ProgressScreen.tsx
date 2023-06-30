@@ -63,6 +63,7 @@ export default function ProgressScreen({
                             allItems={allFileUploadItems}
                             onRetry={onRetry}
                             resume={false}
+                            showCount={true}
                         />
                         {assetDetail.Preview && previewUploadProgress && (
                             <ProgressBar
