@@ -163,6 +163,23 @@ class AOSSIndexS3Objects():
         print("aoss s3", result)
         return result
 
+    def get_asset_fields(self, databaseId, assetId):
+        ddb = boto3.resource("dynamodb")
+        table = ddb.Table(os.environ.get("ASSET_STORAGE_TABLE_NAME"))
+
+        result = table.get_item(
+            Key={
+                "assetId": assetId,
+                "databaseId": databaseId,
+            },
+            AttributesToGet=[
+                'assetName', "description", "assetType"
+            ],
+        )
+
+        item = result['Item']
+        return item
+
     def process_item(self, databaseId, assetIdOrPrefix):
         prefix = None
         assetId = assetIdOrPrefix
@@ -170,8 +187,11 @@ class AOSSIndexS3Objects():
             prefix = assetIdOrPrefix
             assetId = assetIdOrPrefix.split("/")[0]
         
+        asset_fields = self.get_asset_fields(databaseId, assetId)
+
         for s3object in self._get_s3_object_keys_generator(assetIdOrPrefix):
             metadata = self.metadataTable.get_metadata_with_prefix(databaseId, assetId, prefix)
+            metadata = metadata | asset_fields
             aosrecord = self._metadata_and_s3_object_to_opensearch(s3object, metadata) 
             self.aosclient.index(
                 index = "assets1236",
@@ -315,7 +335,23 @@ class AOSSIndexAssetMetadata():
             id = assetId,
         )
 
-def lambda_handler(event, context, index=AOSSIndexAssetMetadata.from_env, s3index=AOSSIndexS3Objects.from_env):
+def get_asset_fields(keys):
+    # 'Keys': {'assetId': {'S': 'xe46db27e-89f2-4602-9bde-e1596c5a43a2'}, 'databaseId': {'S': 'exxon'}},
+    client = boto3.client("dynamodb")
+    result = client.get_item(
+        TableName = os.environ.get("ASSET_STORAGE_TABLE_NAME"),
+        Key = keys,
+        AttributesToGet=[
+            'assetName', "description", "assetType"
+        ],
+    )
+    item = result['Item']
+    return item
+
+def lambda_handler(event, context, 
+                   index=AOSSIndexAssetMetadata.from_env, 
+                   s3index=AOSSIndexS3Objects.from_env, 
+                   get_asset_fields_fn=get_asset_fields):
 
     print("the event", event)
     client = index()
@@ -335,29 +371,14 @@ def lambda_handler(event, context, index=AOSSIndexAssetMetadata.from_env, s3inde
         if record['eventName'] == 'REMOVE':
             client.delete_item(record['dynamodb']['Keys']['assetId']['S'])
             continue
-
+        
+        record['dynamodb']['NewImage'] = record['dynamodb']['NewImage'] | get_asset_fields_fn(record['dynamodb']['Keys'])
+        print("with asset fields", record)
         # if this is metadata at a s3 key prefix rather than an asset, just index the items with that prefix as files    
-        if (record['eventName'] == "INSERT" or record['eventName'] == "MODIFY") and "/" in record['dynamodb']['Keys']['assetId']['S']:
-            pass
-            # for each s3 key with the prefix $assetId
-                # determine the metadata by calling get_metadata_with_prefix
-                # the _rectype is s3object
-                # otherwise the same?????
-        
-        else:
-            # this is an asset level record
-            try:
-                print(client.process_item(record))
-
-                s3index().process_item(record['dynamodb']['Keys']['databaseId']['S'], record['dynamodb']['Keys']['assetId']['S'])
-            except Exception as e:
-                print("error", e)
-                traceback.print_exc()
-                raise e
-
-        # for each s3 key with the prefix $assetId
-            # determine the metadata by calling get_metadata_with_prefix
-           
-
-        
-
+        try:
+            print(client.process_item(record))
+            s3index().process_item(record['dynamodb']['Keys']['databaseId']['S'], record['dynamodb']['Keys']['assetId']['S'])
+        except Exception as e:
+            print("error", e)
+            traceback.print_exc()
+            raise e

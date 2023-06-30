@@ -43,8 +43,8 @@ export function buildMetadataFunction(
 
 export function buildMetadataIndexingFunction(
     scope: Construct,
-    storageResources: storageResources, 
-    aossEndpoint: string,
+    storageResources: storageResources,
+    aossEndpoint: string
 ): lambda.Function {
     const fun = new lambda.DockerImageFunction(scope, "ndxng", {
         code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
@@ -68,7 +68,6 @@ export function buildMetadataIndexingFunction(
     // trigger the lambda from the dynamodb db streams
     storageResources.dynamo.metadataStorageTable.grantStreamRead(fun);
     storageResources.dynamo.assetStorageTable.grantStreamRead(fun);
-
 
     return fun;
 }

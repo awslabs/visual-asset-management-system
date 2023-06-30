@@ -14,7 +14,7 @@ export function buildSearchFunction(
     scope: Construct,
     aossEndpoint: string,
     aossConstruct: OpensearchServerlessConstruct,
-    storageResources: storageResources,
+    storageResources: storageResources
 ): lambda.Function {
     const fun = new lambda.DockerImageFunction(scope, "srch", {
         code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {

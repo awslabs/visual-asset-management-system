@@ -208,24 +208,34 @@ def lambda_handler(
         body = json.loads(event['body'])
 
         search_ao = search_fn()
-        auth_entities = auth_fn()
-        all_constraints = auth_entities.all_constraints()
-        database_set = database_set_fn()
-        print("all constraints", all_constraints)
         authn = request_to_claims(event)
         print("authn", authn)
-        auth_filters = auth_entities.claims_to_opensearch_filters(all_constraints, authn['tokens'])
+        query = property_token_filter_to_opensearch_query(body)
+
+        # add fine grained access controls to the query
+        auth_entities = auth_fn()
+        all_constraints = auth_entities.all_constraints()
+
+        query['query']['bool']['filter'].extend(body.get("filters", []))
+
+        print("all constraints", all_constraints)
+        if len(all_constraints) > 0:
+            auth_filters = auth_entities.claims_to_opensearch_filters(all_constraints, authn['tokens'])
+            print("opensearch filters", auth_filters)
+            if auth_filters['query']['query_string']['query'] != "":
+                query['query']['bool']['filter'].append(auth_filters['query'])
+
+        # database acl filters 
+        database_set = database_set_fn()
         accessible_databases = database_set(authn['tokens'])
         accessible_databases = "str_databaseid:(%s)" % " OR ".join(accessible_databases)
         print("accessible databases", accessible_databases)
-        print("opensearch filters", auth_filters)
-        query = property_token_filter_to_opensearch_query(body)
-        query['query']['bool']['filter'].append(auth_filters['query'])
         query['query']['bool']['filter'].append({
             'query_string': {
                 'query': accessible_databases
             }
         })
+
         result = search_ao.search(query)
 
         return {

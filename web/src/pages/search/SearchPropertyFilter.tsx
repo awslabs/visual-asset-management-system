@@ -3,14 +3,28 @@ import PropertyFilter, { PropertyFilterProps } from "@cloudscape-design/componen
 import Synonyms from "../../synonyms";
 import { Dispatch, ReducerAction, useEffect, useState } from "react";
 import { API } from "aws-amplify";
-import { PropertyFilterOperator, PropertyFilterProperty } from "@cloudscape-design/collection-hooks";
+import {
+    PropertyFilterOperator,
+    PropertyFilterProperty,
+} from "@cloudscape-design/collection-hooks";
+import { Select, SpaceBetween } from "@cloudscape-design/components";
+import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
 
 interface SearchPropertyFilterProps {
     state: any;
     dispatch: Dispatch<ReducerAction<any>>;
 }
 
-async function search(body: any, { dispatch }: SearchPropertyFilterProps) {
+async function search(overrides: any, { dispatch, state }: SearchPropertyFilterProps) {
+    const body = {
+        tokens: state.query.tokens,
+        operation: state.query.operation,
+        sort: state.sort,
+        from: state?.pagination?.from,
+        size: state?.tablePreferences?.pageSize,
+        filters: [{ query_string: { query: `(_rectype:(${state?.rectype.value}))` } }],
+        ...overrides,
+    };
     console.log("body to send", body);
     try {
         const result = await API.post("api", "search", {
@@ -53,13 +67,10 @@ export async function sortSearch(
         tableSort: {
             sortingField,
             sortingDescending: isDescending,
-        }
+        },
     });
     const body = {
-        tokens: state.query.tokens,
-        operation: state.query.operation,
         sort,
-        size: state?.tablePreferences?.pageSize
     };
     search(body, { dispatch, state });
 }
@@ -77,11 +88,22 @@ export async function paginateSearch(
         },
     });
     const body = {
-        tokens: state.query.tokens,
-        operation: state.query.operation,
-        sort: state.sort,
         from,
         size,
+    };
+    search(body, { dispatch, state });
+}
+
+async function changeRectype(
+    value: OptionDefinition,
+    { state, dispatch }: SearchPropertyFilterProps
+) {
+    dispatch({
+        type: "set-rectype",
+        rectype: value,
+    });
+    const body = {
+        filters: [{ query_string: { query: `(_rectype:(${value.value}))` } }],
     };
     search(body, { dispatch, state });
 }
@@ -101,8 +123,9 @@ async function runSearch(
         operation: detail.operation,
         sort: ["_score"],
         from: 0,
-        size: state?.tablePreferences?.pageSize
-    }
+        size: state?.tablePreferences?.pageSize,
+        filters: [{ query_string: { query: `(_rectype:(${state?.rectype.value}))` } }],
+    };
     search(body, { dispatch, state });
 }
 
@@ -147,22 +170,32 @@ function SearchPropertyFilter({ state, dispatch }: SearchPropertyFilterProps) {
     }, []);
 
     return (
-        <PropertyFilter
-            disabled={state.loading}
-            onChange={({ detail }) => runSearch(detail, { state, dispatch })}
-            query={state.query}
-            filteringProperties={properties}
-            i18nStrings={{
-                filteringAriaLabel: `Find ${Synonyms.Asset}`,
-                filteringPlaceholder: `Find ${Synonyms.Asset}`,
-                operationAndText: "AND",
-                operationOrText: "OR",
-                cancelActionText: "Cancel",
-                applyActionText: "Search",
-                clearFiltersText: "Clear",
-            }}
-            expandToViewport
-        />
+        <SpaceBetween direction="horizontal" size="l">
+            <PropertyFilter
+                disabled={state.loading}
+                onChange={({ detail }) => runSearch(detail, { state, dispatch })}
+                query={state.query}
+                filteringProperties={properties}
+                i18nStrings={{
+                    filteringAriaLabel: `Find ${Synonyms.Asset}`,
+                    filteringPlaceholder: `Find ${Synonyms.Asset}`,
+                    operationAndText: "AND",
+                    operationOrText: "OR",
+                    cancelActionText: "Cancel",
+                    applyActionText: "Search",
+                    clearFiltersText: "Clear",
+                }}
+                expandToViewport
+            />
+            <Select
+                selectedOption={state.rectype}
+                onChange={(e) => changeRectype(e.detail.selectedOption, { state, dispatch })}
+                options={[
+                    { label: Synonyms.Assets, value: "asset" },
+                    { label: "Files", value: "s3object" },
+                ]}
+            />
+        </SpaceBetween>
     );
 }
 

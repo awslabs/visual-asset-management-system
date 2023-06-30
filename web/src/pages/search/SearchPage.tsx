@@ -1,13 +1,7 @@
 import React, {Dispatch, ReducerAction, useReducer, useState} from "react";
 import SearchPropertyFilter from "./SearchPropertyFilter";
 import Container from "@cloudscape-design/components/container";
-import {
-    Alert,
-    ColumnLayout,
-    Grid,
-    Header,
-    SpaceBetween,
-} from "@cloudscape-design/components";
+import { Alert, ColumnLayout, Grid, Header, SpaceBetween } from "@cloudscape-design/components";
 import Synonyms from "../../synonyms";
 import SearchPageSegmentedControl from "./SearchPageSegmentedControl";
 import SearchPageMapView from "./SearchPageMapView";
@@ -25,7 +19,7 @@ interface SearchPageProps {}
 function searchReducer(state: any, action: any) {
     console.log("searchReducer", action);
     switch (action.type) {
-        case "query-sort": 
+        case "query-sort":
             return {
                 ...state,
                 sort: action.sort,
@@ -49,14 +43,14 @@ function searchReducer(state: any, action: any) {
         case "query-update":
             return {
                 ...state,
-                query: { tokens: action.tokens, operation: action.operation, },
+                query: { tokens: action.tokens, operation: action.operation },
                 error: undefined,
                 loading: true,
                 sort: action.sort,
                 tableSort: {},
                 pagination: {
                     from: 0,
-                }
+                },
             };
         case "search-result-update":
             return {
@@ -82,6 +76,12 @@ function searchReducer(state: any, action: any) {
                 ...state,
                 popupInfo: action.payload,
             };
+        case "set-rectype":
+            return {
+                ...state,
+                rectype: action.rectype,
+            };
+
         default:
             return state;
     }
@@ -98,7 +98,10 @@ function SearchPage(props: SearchPageProps) {
         },
         pagination: {
             from: 0,
-        }
+        rectype: {
+            value: "asset",
+            label: Synonyms.Assets,
+        },
     });
 
     return (

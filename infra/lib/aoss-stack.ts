@@ -50,8 +50,16 @@ export class AossStack extends cdk.Stack {
             true
         );
 
-        NagSuppressions.addResourceSuppressions(
+        NagSuppressions.addResourceSuppressions(this, [
+            {
+                id: "AwsSolutions-L1",
+                reason: "Configured as intended.",
+            },
+        ]);
+
+        NagSuppressions.addResourceSuppressionsByPath(
             this,
+            `/${this.stackName}/AOSS/OpensearchServerlessDeploySchemaProvider/framework-onEvent/Resource`,
             [
                 {
                     id: "AwsSolutions-L1",
@@ -59,13 +67,6 @@ export class AossStack extends cdk.Stack {
                 },
             ]
         );
-
-        NagSuppressions.addResourceSuppressionsByPath(this, `/${this.stackName}/AOSS/OpensearchServerlessDeploySchemaProvider/framework-onEvent/Resource`, [
-            {
-                id: "AwsSolutions-L1",
-                reason: "Configured as intended."
-            }
-        ])
 
         NagSuppressions.addResourceSuppressions(
             this,
@@ -82,6 +83,5 @@ export class AossStack extends cdk.Stack {
             ],
             true
         );
-
     }
 }

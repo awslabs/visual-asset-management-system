@@ -207,7 +207,6 @@ export function storageResourcesBuilder(
         stream: dynamodb.StreamViewType.NEW_IMAGE,
     });
 
-
     const metadataSchemaStorageTable = new dynamodb.Table(scope, "MetadataSchemaStorageTable", {
         ...dynamodbDefaultProps,
 

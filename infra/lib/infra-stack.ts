@@ -286,4 +286,3 @@ export class VAMS extends cdk.Stack {
         }
     }
 }
-

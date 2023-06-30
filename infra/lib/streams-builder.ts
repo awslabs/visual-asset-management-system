@@ -62,7 +62,7 @@ export function streamsBuilder(
         routePath: "/search",
         method: apigwv2.HttpMethod.GET,
         api: api.apiGatewayV2,
-    })
+    });
 
     NagSuppressions.addResourceSuppressions(
         scope,

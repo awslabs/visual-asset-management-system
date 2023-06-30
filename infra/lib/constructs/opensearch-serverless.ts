@@ -163,11 +163,13 @@ export class OpensearchServerlessConstruct extends Construct {
             policy: JSON.stringify(policy),
         });
 
-        construct.role?.addToPrincipalPolicy(new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            resources: ["*"],
-            actions: ["aoss:*"],
-        }))
+        construct.role?.addToPrincipalPolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                resources: ["*"],
+                actions: ["aoss:*"],
+            })
+        );
         return accessPolicy;
     }
 

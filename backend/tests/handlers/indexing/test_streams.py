@@ -6,6 +6,7 @@ from unittest.mock import Mock, call
 
 import pytest
 
+import copy
 
 from backend.handlers.indexing.streams import lambda_handler, AOSSIndexAssetMetadata
 
@@ -237,11 +238,22 @@ def test_lambda_handler():
     s3index_mock = Mock()
     s3index_fn = Mock(return_value=s3index_mock)
 
-    lambda_handler(example_event, {}, index=lambda_handler_mock, s3index=s3index_fn)
+    def get_asset_fields_fn(record):
+        fields = {
+            "assetName": "epic story",
+            "description": "a long time ago"
+        }
+        return record | fields
+
+    lambda_handler(example_event, {}, index=lambda_handler_mock, s3index=s3index_fn, 
+                   get_asset_fields_fn=get_asset_fields_fn)
+
+    expected = example_event["Records"][0]
+    expected['dynamodb']['NewImage'] = expected['dynamodb']['NewImage'] | { "assetName": "epic story", "description": "a long time ago" }
 
     lambda_handler_mock.assert_called_once()
     index.process_item.assert_called_once()
-    index.process_item.assert_called_with(example_event["Records"][0])
+    index.process_item.assert_called_with(expected)
 
 
 def test_lambda_handler_delete():
