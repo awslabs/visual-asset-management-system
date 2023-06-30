@@ -19,6 +19,7 @@ import { Construct } from "constructs";
 import { buildConstructPipelineFunction, buildOpenPipelineFunction, buildExecuteVisualizerPCPipelineFunction, buildPipelineEndFunction } from "../lambdaBuilder/visualizerPipelineFunctions";
 import { BatchFargatePipelineConstruct } from "./nested/batch-fargate-pipeline";
 import { NagSuppressions } from "cdk-nag";
+import { CfnOutput } from "aws-cdk-lib";
 
 export interface VisualizationPipelineConstructProps extends cdk.StackProps {
   assetBucket: s3.Bucket;
@@ -432,6 +433,13 @@ export class VisualizationPipelineConstruct extends Construct {
     S3AssetsObjectCreatedTopic_PointCloud.addSubscription(
       new LambdaSubscription(openPipelineFunction)
     );
+
+    //Output VAMS Pipeline Execution Function name
+    new CfnOutput(this, "PCVisualizerLambdaExecutionFunctionName", {
+      value: visualizerPCPipelineExecuteFunction.functionName,
+      description: "The Point Cloud Visualizer Pipeline Lambda Function Name to use in a VAMS Pipeline",
+      exportName: "PCVisualizerLambdaExecutionFunctionName",
+  });
 
 
     //Nag Supressions

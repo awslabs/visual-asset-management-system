@@ -176,7 +176,7 @@ export class VpcSecurityGroupGatewayVisualizerPipelineConstruct extends Construc
     /**
      * Outputs
      */
-    new CfnOutput(this, "PipelineVpcId", {
+    new CfnOutput(this, "VisualizerPipelineVpcId", {
       value: this.vpc.vpcId,
     });
 
@@ -188,7 +188,10 @@ export class VpcSecurityGroupGatewayVisualizerPipelineConstruct extends Construc
       id: "AwsSolutions-EC23",
       reason: "Pipeline Security Group is restricted to VPC cidr range on ports 443 and 53"
       },
+      {
+        id: "CdkNagValidationFailure",
+        reason: "Validation failure due to inherent nature of CDK Nag Validations of CIDR ranges" //https://github.com/cdklabs/cdk-nag/issues/817
+      }
     ]);
-
   }
 }
