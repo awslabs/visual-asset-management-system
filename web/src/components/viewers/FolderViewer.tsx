@@ -130,8 +130,8 @@ export default function FolderViewer({ databaseId, assetId, assetName }: FolderV
                     <div style={{ height: "100%", overflow: "auto" }}>
                         <Header variant="h3">Folder</Header>
                         <FolderTree
+                            readOnly={true}
                             data={treeState}
-                            readOnly
                             showCheckbox={false}
                             onNameClick={onNameClick}
                             initOpenStatus="open"

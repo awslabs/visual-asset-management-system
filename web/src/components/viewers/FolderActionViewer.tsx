@@ -45,31 +45,39 @@ export default function FolderActionViewer({ name, urlKey, ...props }: FolderAct
 
                         {!props.isDirectory && (
                             <>
-                                <ColumnLayout columns={2}>
+                                <ColumnLayout columns={4}>
                                     <Button
                                         variant="primary"
                                         onClick={() => generateDownloadLink(urlKey)}
                                     >
                                         Generate download link
                                     </Button>
+                                    <p>
+                                        {downloadLink && (
+                                            <Button
+                                                href={downloadLink}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                            >
+                                                Download {name}
+                                            </Button>
+                                        )}
+                                    </p>
                                 </ColumnLayout>
-                                <p>
-                                    {downloadLink && (
-                                        <Button
-                                            href={downloadLink}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                        >
-                                            Download {name}
-                                        </Button>
-                                    )}
-                                </p>
                             </>
                         )}
                         <p>
                             <Button variant={"primary"} onClick={() => navigateToAssetFilePage()}>
                                 View {props.isDirectory ? "directory" : "file"}
                             </Button>
+                            {props.isDirectory && (
+                                <>
+                                    <ColumnLayout columns={4}>
+                                        <Button> Add a Folder </Button>
+                                        <Button> Add a File </Button>
+                                    </ColumnLayout>
+                                </>
+                            )}
                         </p>
                     </>
                 )}
