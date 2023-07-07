@@ -40,6 +40,7 @@ import WorkflowSelectorWithModal from "../selectors/WorkflowSelectorWithModal";
 import localforage from "localforage";
 import { ErrorBoundary } from "react-error-boundary";
 import Synonyms from "../../synonyms";
+import {UpdateAsset} from "../createupdate/UpdateAsset";
 
 const FolderViewer = React.lazy(() => import("../viewers/FolderViewer"));
 
@@ -47,7 +48,7 @@ export default function ViewAsset() {
     const { databaseId, assetId, pathViewType } = useParams();
 
     const [reload, setReload] = useState(true);
-    const [viewType, setViewType] = useState(null);
+    const [viewType, setViewType] = useState("preview");
     const [asset, setAsset] = useState({});
 
     const [viewerOptions, setViewerOptions] = useState([]);
@@ -235,7 +236,7 @@ export default function ViewAsset() {
                 if (item !== false) {
                     console.log(item);
                     setAsset(item);
-                    setViewerOptions([{ text: "Folder", id: "folder" }]);
+                    setViewerOptions([{ text: "Folder", id: "folder" }, {text: "Preview", id: "preview"}]);
                 }
             }
         };
@@ -519,18 +520,18 @@ export default function ViewAsset() {
                             </ErrorBoundary>
                         </SpaceBetween>
                     </Box>
-                    <CreateUpdateAsset
-                        open={openUpdateAsset}
-                        setOpen={setOpenUpdateAsset}
-                        setReload={setReload}
-                        databaseId={databaseId}
-                        assetId={assetId}
-                        actionType={actionTypes.UPDATE}
-                        asset={asset}
-                        setAsset={(a) => {
-                            setViewType("preview");
-                        }}
-                    />
+                    {
+                        asset &&
+                        <UpdateAsset
+                            asset={asset}
+                            isOpen={openUpdateAsset}
+                            onClose={() => handleOpenUpdateAsset(false)}
+                            onComplete={() => {
+                                handleOpenUpdateAsset(false)
+                                window.location.reload(true)
+                            }}
+                        />
+                    }
                     <WorkflowSelectorWithModal
                         assetId={assetId}
                         databaseId={databaseId}
