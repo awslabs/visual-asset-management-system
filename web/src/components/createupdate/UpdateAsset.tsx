@@ -1,21 +1,21 @@
-import {FileUpload, Modal, Select, SpaceBetween} from "@cloudscape-design/components";
+import { FileUpload, Modal, Select, SpaceBetween } from "@cloudscape-design/components";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import FormField from "@cloudscape-design/components/form-field";
 import Synonyms from "../../synonyms";
 import Input from "@cloudscape-design/components/input";
-import {useEffect, useState} from "react";
-import {OptionDefinition} from "@cloudscape-design/components/internal/components/option/interfaces";
-import { Storage, API } from "aws-amplify"
-import {AssetDetail} from "../../pages/AssetUpload";
+import { useEffect, useState } from "react";
+import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
+import { Storage, API } from "aws-amplify";
+import { AssetDetail } from "../../pages/AssetUpload";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
-import {UploadAssetWorkflowApi} from "../../pages/AssetUpload/onSubmit";
+import { UploadAssetWorkflowApi } from "../../pages/AssetUpload/onSubmit";
 
 interface UpdateAssetProps {
-    asset: any
-    onClose: () => void,
-    onComplete: () => void,
-    isOpen: boolean,
+    asset: any;
+    onClose: () => void;
+    onComplete: () => void;
+    isOpen: boolean;
 }
 
 const isDistributableOptions: OptionDefinition[] = [
@@ -23,76 +23,78 @@ const isDistributableOptions: OptionDefinition[] = [
     { label: "No", value: "false" },
 ];
 
-const update = async (updatedAsset: any, files: File[],
-                setProgress: (progress: number) => void,
-                setError: (error : {isError: boolean, message: string}) => void,
-                setComplete: (complete: boolean) => void,
-                onComplete : () => void) => {
-    console.log("Updating asset")
-    let uploadBody = Object.assign({}, updatedAsset)
-    uploadBody.bucket = updatedAsset.assetLocation.Bucket
-    uploadBody.key = updatedAsset.assetLocation.Key
-    uploadBody.Comment = updatedAsset.currentVersion.Comment
+const update = async (
+    updatedAsset: any,
+    files: File[],
+    setProgress: (progress: number) => void,
+    setError: (error: { isError: boolean; message: string }) => void,
+    setComplete: (complete: boolean) => void,
+    onComplete: () => void
+) => {
+    console.log("Updating asset");
+    let uploadBody = Object.assign({}, updatedAsset);
+    uploadBody.bucket = updatedAsset.assetLocation.Bucket;
+    uploadBody.key = updatedAsset.assetLocation.Key;
+    uploadBody.Comment = updatedAsset.currentVersion.Comment;
 
-    let isError = false
-    if(files && files.length > 0) {
-        console.log(files[0].name.split(".").pop())
+    let isError = false;
+    if (files && files.length > 0) {
+        console.log(files[0].name.split(".").pop());
         const newKey =
-                "previews" +
-                "/" +
-                updatedAsset.assetId +
-                "/" +
-                updatedAsset.assetName +
-                "." +
-                files[0].name.split(".").pop()
+            "previews" +
+            "/" +
+            updatedAsset.assetId +
+            "/" +
+            updatedAsset.assetName +
+            "." +
+            files[0].name.split(".").pop();
 
-        console.log(newKey)
+        console.log(newKey);
         await Storage.put(newKey, files[0], {
             resumable: true,
-            customPrefix:  {
-                public: ""
+            customPrefix: {
+                public: "",
             },
             progressCallback(progress) {
                 console.log(`Uploaded: ${progress.loaded}/${progress.total}`);
-                setProgress(Math.floor( (progress.loaded/progress.total) * 100))
+                setProgress(Math.floor((progress.loaded / progress.total) * 100));
             },
             errorCallback: (err) => {
                 isError = true;
-                console.error('Unexpected error while uploading', err);
-                setError({isError: true, message: err})
+                console.error("Unexpected error while uploading", err);
+                setError({ isError: true, message: err });
             },
             completeCallback: (event) => {
                 console.log(`Successfully uploaded ${event.key}`);
-                setComplete(true)
+                setComplete(true);
             },
-        })
+        });
         uploadBody.previewLocation = {
-            Bucket: updatedAsset.previewLocation.Bucket,
-            Key: newKey
-        }
-
+            Bucket: updatedAsset.assetLocation.Bucket,
+            Key: newKey,
+        };
     }
-    const body: Partial<UploadAssetWorkflowApi> = { uploadAssetBody: uploadBody }
-    console.log(body)
+    const body: Partial<UploadAssetWorkflowApi> = { uploadAssetBody: uploadBody };
+    console.log(body);
 
     if (!isError) {
         return API.post("api", "assets/uploadAssetWorkflow", {
             "Content-type": "application/json",
             body,
         }).then(() => {
-            console.log("Calling API")
-        })
+            console.log("Calling API");
+        });
     }
-}
-export const UpdateAsset = ({asset, ...props} : UpdateAssetProps) => {
-    const [assetDetail, setAssetDetail] = useState(asset)
-    const [progress, setProgress] = useState(0)
-    const [error, setError] = useState({isError: false, message: ""})
-    const [complete, setComplete] = useState(false)
-    console.log(asset)
+};
+export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
+    const [assetDetail, setAssetDetail] = useState(asset);
+    const [progress, setProgress] = useState(0);
+    const [error, setError] = useState({ isError: false, message: "" });
+    const [complete, setComplete] = useState(false);
+    console.log(asset);
     useEffect(() => {
         return () => {
-            setAssetDetail(asset)
+            setAssetDetail(asset);
         };
     }, [asset]);
 
@@ -107,21 +109,35 @@ export const UpdateAsset = ({asset, ...props} : UpdateAssetProps) => {
                 <Box float="right">
                     <SpaceBetween direction="horizontal" size="xs">
                         <Button variant="link">Cancel</Button>
-                        <Button variant="primary" onClick={() => update(assetDetail, value, setProgress, setError, setComplete, props.onComplete)}>Update Asset</Button>
+                        <Button
+                            variant="primary"
+                            onClick={() =>
+                                update(
+                                    assetDetail,
+                                    value,
+                                    setProgress,
+                                    setError,
+                                    setComplete,
+                                    props.onComplete
+                                )
+                            }
+                        >
+                            Update Asset
+                        </Button>
                     </SpaceBetween>
                 </Box>
             }
             header="Update Asset"
-            >
+        >
             <SpaceBetween direction="vertical" size="l">
                 <FormField label={`${Synonyms.Asset} Name`}>
                     <Input
                         value={assetDetail.assetName || ""}
                         data-testid="assetid-input"
                         onChange={(e) => {
-                            setAssetDetail((assetDetail : any) => ({
+                            setAssetDetail((assetDetail: any) => ({
                                 ...assetDetail,
-                                assetName: e.detail.value
+                                assetName: e.detail.value,
                             }));
                         }}
                     />
@@ -133,7 +149,7 @@ export const UpdateAsset = ({asset, ...props} : UpdateAssetProps) => {
                         onChange={(e) => {
                             setAssetDetail((assetDetail: any) => ({
                                 ...assetDetail,
-                                description: e.detail.value
+                                description: e.detail.value,
                             }));
                         }}
                     />
@@ -145,18 +161,15 @@ export const UpdateAsset = ({asset, ...props} : UpdateAssetProps) => {
                             isDistributableOptions
                                 .filter(
                                     (o) =>
-                                        (assetDetail.isDistributable ===
-                                        true
-                                            ? "Yes"
-                                            : "No") === o.label
+                                        (assetDetail.isDistributable === true ? "Yes" : "No") ===
+                                        o.label
                                 )
                                 .pop() || null
                         }
                         onChange={({ detail }) => {
                             setAssetDetail((assetDetail: any) => ({
                                 ...assetDetail,
-                                isDistributable:
-                                    detail.selectedOption.label === "Yes",
+                                isDistributable: detail.selectedOption.label === "Yes",
                             }));
                         }}
                         filteringType="auto"
@@ -164,24 +177,18 @@ export const UpdateAsset = ({asset, ...props} : UpdateAssetProps) => {
                         data-testid="isDistributable-select"
                     />
                 </FormField>
-                <FormField
-                    label="Preview"
-                >
+                <FormField label="Preview">
                     <FileUpload
                         onChange={({ detail }) => setValue(detail.value)}
                         value={value}
                         i18nStrings={{
-                            uploadButtonText: e =>
-                                e ? "Choose files" : "Choose file",
-                            dropzoneText: e =>
-                                e
-                                    ? "Drop files to upload"
-                                    : "Drop file to upload",
-                            removeFileAriaLabel: e =>
-                                `Remove file ${e + 1}`,
+                            uploadButtonText: (e) => (e ? "Choose files" : "Choose file"),
+                            dropzoneText: (e) =>
+                                e ? "Drop files to upload" : "Drop file to upload",
+                            removeFileAriaLabel: (e) => `Remove file ${e + 1}`,
                             limitShowFewer: "Show fewer files",
                             limitShowMore: "Show more files",
-                            errorIconAriaLabel: "Error"
+                            errorIconAriaLabel: "Error",
                         }}
                         accept={"image/*"}
                         multiple={false}
@@ -192,16 +199,17 @@ export const UpdateAsset = ({asset, ...props} : UpdateAssetProps) => {
                         constraintText="Image files only"
                     />
                 </FormField>
-                {
-                    progress > 0 &&
+                {progress > 0 && (
                     <ProgressBar
                         value={complete ? 100 : progress}
                         label={"Preview upload progress"}
                         status={error.isError ? "error" : complete ? "success" : "in-progress"}
-                        additionalInfo={error.isError ? error.message : complete ? "Upload complete" : ""}
+                        additionalInfo={
+                            error.isError ? error.message : complete ? "Upload complete" : ""
+                        }
                     ></ProgressBar>
-                }
+                )}
             </SpaceBetween>
         </Modal>
-    )
-}
+    );
+};

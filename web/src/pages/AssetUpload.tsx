@@ -13,7 +13,7 @@ import {
     TextContent,
     Toggle,
 } from "@cloudscape-design/components";
-import {useLocation, useNavigate, useParams} from "react-router";
+import { useLocation, useNavigate, useParams } from "react-router";
 import Container from "@cloudscape-design/components/container";
 import Header from "@cloudscape-design/components/header";
 import SpaceBetween from "@cloudscape-design/components/space-between";
@@ -43,7 +43,7 @@ import ControlledMetadata from "../components/metadata/ControlledMetadata";
 import Synonyms from "../synonyms";
 import onSubmit, { onUploadRetry, UploadExecutionProps } from "./AssetUpload/onSubmit";
 import FolderUpload from "../components/form/FolderUpload";
-import {FileUploadTable, FileUploadTableItem, shortenBytes} from "./AssetUpload/FileUploadTable";
+import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./AssetUpload/FileUploadTable";
 import localforage from "localforage";
 
 // eslint-disable-next-line @typescript-eslint/no-array-constructor
@@ -586,27 +586,33 @@ const UploadForm = () => {
                                             ))}
                                         </ColumnLayout>
                                     </Container>
-                                    {
-                                        assetDetail.Asset &&
-
-                                        <FileUploadTable allItems={assetDetail.Asset} resume={false} showCount={false} columnDefinitions={[
-                                            {
-                                                id: "filepath",
-                                                header: "Path",
-                                                cell: (item: FileUploadTableItem) => item.relativePath,
-                                                sortingField: "filepath",
-                                                isRowHeader: true,
-                                            },
-                                            {
-                                                id: "filesize",
-                                                header: "Size",
-                                                cell: (item: FileUploadTableItem) => (item.total ? shortenBytes(item.total) : "0b"),
-                                                sortingField: "filesize",
-                                                isRowHeader: true,
-                                            },
-                                        ]}
+                                    {assetDetail.Asset && (
+                                        <FileUploadTable
+                                            allItems={assetDetail.Asset}
+                                            resume={false}
+                                            showCount={false}
+                                            columnDefinitions={[
+                                                {
+                                                    id: "filepath",
+                                                    header: "Path",
+                                                    cell: (item: FileUploadTableItem) =>
+                                                        item.relativePath,
+                                                    sortingField: "filepath",
+                                                    isRowHeader: true,
+                                                },
+                                                {
+                                                    id: "filesize",
+                                                    header: "Size",
+                                                    cell: (item: FileUploadTableItem) =>
+                                                        item.total
+                                                            ? shortenBytes(item.total)
+                                                            : "0b",
+                                                    sortingField: "filesize",
+                                                    isRowHeader: true,
+                                                },
+                                            ]}
                                         />
-                                    }
+                                    )}
                                     <Container
                                         header={<Header variant="h2">Selected Workflows</Header>}
                                     >

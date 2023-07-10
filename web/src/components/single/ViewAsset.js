@@ -40,7 +40,7 @@ import WorkflowSelectorWithModal from "../selectors/WorkflowSelectorWithModal";
 import localforage from "localforage";
 import { ErrorBoundary } from "react-error-boundary";
 import Synonyms from "../../synonyms";
-import {UpdateAsset} from "../createupdate/UpdateAsset";
+import { UpdateAsset } from "../createupdate/UpdateAsset";
 
 const FolderViewer = React.lazy(() => import("../viewers/FolderViewer"));
 
@@ -236,7 +236,10 @@ export default function ViewAsset() {
                 if (item !== false) {
                     console.log(item);
                     setAsset(item);
-                    setViewerOptions([{ text: "Folder", id: "folder" }, {text: "Preview", id: "preview"}]);
+                    setViewerOptions([
+                        { text: "Folder", id: "folder" },
+                        { text: "Preview", id: "preview" },
+                    ]);
                 }
             }
         };
@@ -520,18 +523,17 @@ export default function ViewAsset() {
                             </ErrorBoundary>
                         </SpaceBetween>
                     </Box>
-                    {
-                        asset &&
+                    {asset && (
                         <UpdateAsset
                             asset={asset}
                             isOpen={openUpdateAsset}
                             onClose={() => handleOpenUpdateAsset(false)}
                             onComplete={() => {
-                                handleOpenUpdateAsset(false)
-                                window.location.reload(true)
+                                handleOpenUpdateAsset(false);
+                                window.location.reload(true);
                             }}
                         />
-                    }
+                    )}
                     <WorkflowSelectorWithModal
                         assetId={assetId}
                         databaseId={databaseId}

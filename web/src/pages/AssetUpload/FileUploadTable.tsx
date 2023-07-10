@@ -55,7 +55,6 @@ const FileUploadTableColumnDefinitions = [
     },
 ];
 
-
 interface FileUploadTableProps {
     allItems: FileUploadTableItem[];
     onRetry?: () => void;
@@ -218,12 +217,18 @@ function getActions(allItems: FileUploadTableItem[], resume: boolean, onRetry?: 
     }
 }
 
-export const FileUploadTable = ({ allItems, onRetry, resume, columnDefinitions, showCount }: FileUploadTableProps) => {
-    let visibleContent = ["filesize", "status", "progress"]
+export const FileUploadTable = ({
+    allItems,
+    onRetry,
+    resume,
+    columnDefinitions,
+    showCount,
+}: FileUploadTableProps) => {
+    let visibleContent = ["filesize", "status", "progress"];
     if (!columnDefinitions) {
         columnDefinitions = FileUploadTableColumnDefinitions;
     } else {
-        visibleContent = columnDefinitions.map((definition) => definition.id)
+        visibleContent = columnDefinitions.map((definition) => definition.id);
     }
     const [preferences, setPreferences] = useState({
         pageSize: 10,
@@ -244,7 +249,11 @@ export const FileUploadTable = ({ allItems, onRetry, resume, columnDefinitions, 
                 <Table
                     header={
                         <Header
-                            counter={ showCount ? `${getCompletedItemsCount(allItems)}/${allItems.length}` : `(${allItems.length})`}
+                            counter={
+                                showCount
+                                    ? `${getCompletedItemsCount(allItems)}/${allItems.length}`
+                                    : `(${allItems.length})`
+                            }
                             actions={getActions(allItems, resume, onRetry)}
                         >
                             Files to upload
