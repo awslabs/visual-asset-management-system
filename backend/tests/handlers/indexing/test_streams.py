@@ -112,7 +112,7 @@ example_event_delete_records = {
                 "SizeBytes": 23,
                 "StreamViewType": "NEW_IMAGE"
             },
-            "eventSourceARN": "arn:aws:dynamodb:us-east-1:098204178297:table/vams-dev-us-east-1-MetadataStorageTable8114119D-SVTAR5CJTH10/stream/2023-06-21T01:08:09.109"
+            "eventSourceARN": "arn:aws:dynamodb:us-east-1::table/vams-dev-us-east-1-MetadataStorageTable8114119D-SVTAR5CJTH10/stream/2023-06-21T01:08:09.109"
         }
     ]
 }

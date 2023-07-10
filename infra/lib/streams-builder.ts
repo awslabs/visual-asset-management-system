@@ -29,7 +29,6 @@ export function streamsBuilder(
         // TODO Change to an admin only role
         principalArn: [
             cognitoResources.authenticatedRole.roleArn,
-            "arn:aws:iam::098204178297:role/Admin",
         ],
     });
 

@@ -59,13 +59,4 @@ const vamsStack = new VAMS(app, `vams-${stackName || process.env.DEMO_LABEL || "
 vamsStack.addDependency(cfWafStack);
 //new VAMS(app, 'prod', {prod: true, stackName: 'vams--prod'});
 
-// const aossStack = new AossStack(app, `aoss-${stackName || process.env.DEMO_LABEL || "dev"}`, {
-//     stackName: `aoss-${stackName || process.env.DEPLOYMENT_ENV || "dev"}`,
-//     env: {
-//         account: process.env.CDK_DEFAULT_ACCOUNT,
-//         region: region,
-//     },
-// }
-// );
-
 app.synth();
