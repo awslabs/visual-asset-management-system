@@ -11,6 +11,7 @@ class FolderViewerProps {
     databaseId!: string;
     assetId!: string;
     assetName!: string;
+    isDistributable!: boolean;
 }
 
 class AssetFileList {
@@ -18,13 +19,19 @@ class AssetFileList {
     relativePath!: string;
 }
 
-export default function FolderViewer({ databaseId, assetId, assetName }: FolderViewerProps) {
+export default function FolderViewer({
+    databaseId,
+    assetId,
+    assetName,
+    isDistributable,
+}: FolderViewerProps) {
     const [folderActionProps, setFolderActionProps] = useState<FolderActionProps>({
         databaseId,
         assetId,
         name: "",
         urlKey: "",
         isDirectory: true,
+        isDistributable: isDistributable,
     });
 
     const [treeState, setTreeState] = useState<NodeData>({
@@ -145,6 +152,7 @@ export default function FolderViewer({ databaseId, assetId, assetName }: FolderV
                         name={folderActionProps.name}
                         urlKey={folderActionProps.urlKey}
                         isDirectory={folderActionProps.isDirectory}
+                        isDistributable={folderActionProps.isDistributable}
                     />
                 </div>
             </ColumnLayout>

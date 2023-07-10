@@ -409,6 +409,9 @@ export default function ViewAsset() {
                                                                 assetId={asset?.assetId}
                                                                 databaseId={asset?.databaseId}
                                                                 assetName={asset?.assetName}
+                                                                isDistributable={
+                                                                    asset?.isDistributable
+                                                                }
                                                             />
                                                         )}
                                                     </div>
