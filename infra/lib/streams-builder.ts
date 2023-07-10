@@ -27,9 +27,7 @@ export function streamsBuilder(
 ) {
     const aoss = new OpensearchServerlessConstruct(scope, "AOSS", {
         // TODO Change to an admin only role
-        principalArn: [
-            cognitoResources.authenticatedRole.roleArn,
-        ],
+        principalArn: [cognitoResources.authenticatedRole.roleArn],
     });
 
     // the ssm parameter store value for the endpoint

@@ -71,14 +71,14 @@ const getMinMaxLatLongBounds = (result: any) => {
 
 function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     const mapRef = useRef<MapRef>({} as MapRef);
- 
+
     return (
         <div>
             <MapView
                 ref={mapRef}
                 style={{ width: "72vw" }}
                 onLoad={(map) => {
-                    dispatch({ type: "set-map", map })
+                    dispatch({ type: "set-map", map });
                     const { minLat, maxLat, minLong, maxLong } = getMinMaxLatLongBounds(
                         state.result
                     );

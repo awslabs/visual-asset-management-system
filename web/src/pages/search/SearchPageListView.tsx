@@ -2,8 +2,7 @@ import React, { Dispatch, ReducerAction } from "react";
 import Table, { TableProps } from "@cloudscape-design/components/table";
 import { CollectionPreferences, Header, Link, Pagination } from "@cloudscape-design/components";
 import { paginateSearch, sortSearch } from "./SearchPropertyFilter";
-import {SearchPageViewProps} from "./SearchPage";
-
+import { SearchPageViewProps } from "./SearchPage";
 
 function columnRender(e: any, name: string, value: any) {
     if (name.indexOf("str") === 0 || name.indexOf("date_") === 0) {
