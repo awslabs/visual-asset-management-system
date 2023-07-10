@@ -28,7 +28,7 @@ class AssetPreprocessingBody {
     isMultiFile: boolean = false;
 }
 
-class UploadAssetWorkflowApi {
+export class UploadAssetWorkflowApi {
     assetPreprocessingBody?: AssetPreprocessingBody;
     uploadAssetBody!: AssetDetail;
     updateMetadataBody!: MetadataApi;
@@ -93,6 +93,7 @@ function getUploadTaskPromise(
 }
 
 export function createAssetUploadPromises(
+    isMultiFile: boolean,
     files: FileUploadTableItem[],
     keyPrefix: string,
     metadata: { [k: string]: string },
@@ -106,7 +107,7 @@ export function createAssetUploadPromises(
     // A promise begins executing right after creation, hence I am returning a function that returns a promise
     // so these promises can then be executed sequentially to track progress
 
-    if (files.length === 1) {
+    if (!isMultiFile) {
         uploads.push(
             async () =>
                 await files[0].handle.getFile().then((f: File) => {
@@ -211,6 +212,7 @@ async function performUploads({
 }: UploadExecutionProps) {
     if (assetDetail.Asset && assetDetail.assetId && assetDetail.databaseId && assetDetail.key) {
         const uploads = createAssetUploadPromises(
+            assetDetail.isMultiFile,
             assetDetail.Asset,
             assetDetail.key,
             {
