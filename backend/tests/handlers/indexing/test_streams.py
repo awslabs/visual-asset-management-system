@@ -2,12 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from decimal import Decimal
 import json
-from unittest.mock import Mock, call
-
-import pytest
-
-import copy
-
+from unittest.mock import Mock
 from backend.handlers.indexing.streams import lambda_handler, AOSSIndexAssetMetadata
 
 
@@ -52,7 +47,7 @@ example_event = {
                         "S": "2023-06-28"
                     },
                     "location": {
-                        "S": "{\"loc\":[\"-91.2091897\",\"30.5611007\"],\"zoom\":\"14\",\"polygons\":{\"type\":\"FeatureCollection\",\"features\":[{\"id\":\"a5d440f5cb30db2b50ade518bac047e2\",\"type\":\"Feature\",\"properties\":{},\"geometry\":{\"coordinates\":[[[-91.2056920994444,30.565357807147976],[-91.2141893376036,30.562992834836322],[-91.21676425825763,30.559814812515683],[-91.21440391432446,30.55663668610957],[-91.2024734486266,30.559593086143792],[-91.2056920994444,30.565357807147976]]],\"type\":\"Polygon\"}}]}}"
+                        "S": "{\"loc\":[\"-91.2091897\",\"30.5611007\"],\"zoom\":\"14\",\"polygons\":{\"type\":\"FeatureCollection\",\"features\":[{\"id\":\"a5d440f5cb30db2b50ade518bac047e2\",\"type\":\"Feature\",\"properties\":{},\"geometry\":{\"coordinates\":[[[-91.2056920994444,30.565357807147976],[-91.2141893376036,30.562992834836322],[-91.21676425825763,30.559814812515683],[-91.21440391432446,30.55663668610957],[-91.2024734486266,30.559593086143792],[-91.2056920994444,30.565357807147976]]],\"type\":\"Polygon\"}}]}}" # noqa E501
                     },
                     "databaseId": {
                         "S": "asdf"
@@ -62,7 +57,7 @@ example_event = {
                 "SizeBytes": 926,
                 "StreamViewType": "NEW_IMAGE"
             },
-            "eventSourceARN": "arn:aws:dynamodb:us-east-1:1234123123:table/vams-dev-us-east-1-MetadataStorageTable8114119D-SVTAR5CJTH10/stream/2023-06-21T01:08:09.109"
+            "eventSourceARN": "arn:aws:dynamodb:us-east-1:1234123123:table/vams-dev-us-east-1-MetadataStorageTable8114119D-SVTAR5CJTH10/stream/2023-06-21T01:08:09.109" # noqa E501
         }
     ]
 }
@@ -87,7 +82,7 @@ example_event_delete = {
         "SizeBytes": 23,
         "StreamViewType": "NEW_IMAGE"
     },
-    "eventSourceARN": "arn:aws:dynamodb:us-east-1:123123123:table/vams-dev-us-east-1-MetadataStorageTable8114119D-SVTAR5CJTH10/stream/2023-06-21T01:08:09.109"
+    "eventSourceARN": "arn:aws:dynamodb:us-east-1:123123123:table/vams-dev-us-east-1-MetadataStorageTable8114119D-SVTAR5CJTH10/stream/2023-06-21T01:08:09.109" # noqa E501
 }
 
 example_event_delete_records = {
@@ -112,7 +107,7 @@ example_event_delete_records = {
                 "SizeBytes": 23,
                 "StreamViewType": "NEW_IMAGE"
             },
-            "eventSourceARN": "arn:aws:dynamodb:us-east-1::table/vams-dev-us-east-1-MetadataStorageTable8114119D-SVTAR5CJTH10/stream/2023-06-21T01:08:09.109"
+            "eventSourceARN": "arn:aws:dynamodb:us-east-1::table/vams-dev-us-east-1-MetadataStorageTable8114119D-SVTAR5CJTH10/stream/2023-06-21T01:08:09.109" # noqa E501
         }
     ]
 }
@@ -167,7 +162,8 @@ def test_determine_field_name():
                                                           30.559593086143792], [-91.2056920994444, 30.565357807147976]
             ]]
         })
-    ] == AOSSIndexAssetMetadata._determine_field_name("location", example_event["Records"][0]["dynamodb"]["NewImage"]["location"]["S"])
+    ] == AOSSIndexAssetMetadata._determine_field_name(
+        "location", example_event["Records"][0]["dynamodb"]["NewImage"]["location"]["S"])
 
 
 def test_deserializer():
@@ -205,14 +201,18 @@ def test_deserializer():
 def test_deserialize_null_values():
 
     item = {
-        'eventID': '9697e06bba16c95689f2ed60bd7a0fc0', 'eventName': 'INSERT', 'eventVersion': '1.1', 'eventSource': 'aws:dynamodb', 'awsRegion': 'us-east-1',
+        'eventID': '9697e06bba16c95689f2ed60bd7a0fc0',
+        'eventName': 'INSERT',
+        'eventVersion': '1.1',
+        'eventSource': 'aws:dynamodb',
+        'awsRegion': 'us-east-1',
         'dynamodb': {
             'ApproximateCreationDateTime': 1687724501.0,
             'Keys': {
                 'assetId': {'S': 'xbe3b2f2c-4338-475f-828a-2b03ca92b9ec'},
-                'databaseId': {'S': 'asdf'}}, 
+                'databaseId': {'S': 'asdf'}},
             'NewImage': {
-                'Field With Null': {'NULL': True },
+                'Field With Null': {'NULL': True},
             },
             'SequenceNumber': '574239200000000012164077835',
             'SizeBytes': 738,
@@ -224,8 +224,6 @@ def test_deserialize_null_values():
     result = AOSSIndexAssetMetadata._process_item(item)
 
     assert result == {'_rectype': 'asset'}
-
-
 
 
 def test_lambda_handler():
@@ -245,11 +243,12 @@ def test_lambda_handler():
         }
         return record | fields
 
-    lambda_handler(example_event, {}, index=lambda_handler_mock, s3index=s3index_fn, 
+    lambda_handler(example_event, {}, index=lambda_handler_mock, s3index=s3index_fn,
                    get_asset_fields_fn=get_asset_fields_fn)
 
     expected = example_event["Records"][0]
-    expected['dynamodb']['NewImage'] = expected['dynamodb']['NewImage'] | { "assetName": "epic story", "description": "a long time ago" }
+    expected['dynamodb']['NewImage'] = expected['dynamodb']['NewImage'] | \
+        {"assetName": "epic story", "description": "a long time ago"}
 
     lambda_handler_mock.assert_called_once()
     index.process_item.assert_called_once()
@@ -287,44 +286,3 @@ def test_lambda_handler_delete_records():
     index.delete_item.assert_called_once()
     index.delete_item.assert_called_with(
         example_event_delete_records['Records'][0]["dynamodb"]['Keys']['assetId']['S'])
-
-
-    
-
-    # determine duplicate identifiers in the batch, take the last one
-    # for each record
-    # determine the key for the record
-    # for each field
-    # determine the field type
-    # bool_*
-    # the field value is literal "true" or "false"
-    # dt_*
-    # the field matches a regex for yyyy-mm-dd
-    # num_*
-    # the field is only numeric values
-    # gp_*
-    # the field is a GeoJSON point
-    # gs_*
-    # the field is a GeoJSON shape
-    # str_*
-    # otherwise, the field is a string
-    # determine the field name
-    # => field type + lower case + spaces converted to underscores
-
-    # print(example_event.get("Records"))
-
-    # if "Records" in example_event:
-    #     for record in example_event.get("Records"):
-    #         print(record)
-    #         if "dynamodb" in record:
-    #             print(record.get("dynamodb"))
-    #             if "NewImage" in record.get("dynamodb"):
-    #                 print(record.get("dynamodb").get("NewImage"))
-    #                 if "location" in record.get("dynamodb").get("NewImage"):
-    #                     print(record.get("dynamodb").get("NewImage").get("location"))
-    #                     print(json.loads(record.get("dynamodb").get("NewImage").get("location").get("S")))
-    #                     print(json.loads(record.get("dynamodb").get("NewImage").get("location").get("S")).get("polygons"))
-    #                     print(json.loads(record.get("dynamodb").get("NewImage").get("location").get("S")).get("polygons").get("features"))
-    #                     print(json.loads(record.get("dynamodb").get("NewImage").get("location").get("S")).get("polygons").get("features")[0].get("geometry"))
-
-    # assert False
