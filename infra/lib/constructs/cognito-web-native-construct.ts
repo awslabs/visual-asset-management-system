@@ -71,7 +71,7 @@ export class CognitoWebNativeConstruct extends Construct {
         );
 
         const userPool = new cognito.UserPool(this, "UserPool", {
-            selfSignUpEnabled: true,
+            selfSignUpEnabled: false,
             autoVerify: { email: true },
             userVerification: {
                 emailSubject: "Verify your email the app!",
