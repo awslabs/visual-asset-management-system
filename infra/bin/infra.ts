@@ -11,7 +11,6 @@ import { VAMS } from "../lib/infra-stack";
 import { CfWafStack } from "../lib/cf-waf-stack";
 import { AwsSolutionsChecks } from "cdk-nag";
 import { Aspects } from "aws-cdk-lib";
-import { AossStack } from "../lib/aoss-stack";
 
 const app = new cdk.App();
 
