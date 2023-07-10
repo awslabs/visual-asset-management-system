@@ -9,7 +9,6 @@
     "dependencies": {
         "@aws-amplify/ui-react": "^2.1.5",
         "@aws-sdk/client-s3": "^3.338.0",
-        "@aws-amplify/storage": "^5.4.0",
         "@cloudscape-design/collection-hooks": "^1.0.19",
         "@cloudscape-design/components": "^3.0.196",
         "@cloudscape-design/design-tokens": "^3.0.8",
@@ -19,7 +18,7 @@
         "@types/mapbox__mapbox-gl-draw": "^1.4.0",
         "@types/styled-components": "^5.1.21",
         "arraybuffer-to-buffer": "^0.0.7",
-        "aws-amplify": "^5.2.4",
+        "aws-amplify": "^5.2.7",
         "aws-amplify-react": "^5.1.9",
         "babylonjs": "^4.2.0",
         "babylonjs-loaders": "^4.2.0",
