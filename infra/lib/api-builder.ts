@@ -52,7 +52,7 @@ interface apiGatewayLambdaConfiguration {
     api: apigwv2.HttpApi;
 }
 
-function attachFunctionToApi(
+export function attachFunctionToApi(
     scope: Construct,
     lambdaFunction: lambda.Function,
     apiGatewayConfiguration: apiGatewayLambdaConfiguration

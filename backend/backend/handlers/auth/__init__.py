@@ -4,7 +4,6 @@ import json
 
 import os
 import boto3
-import json
 
 dynamodb = boto3.resource('dynamodb')
 dynamodb_client = boto3.client('dynamodb')
@@ -20,6 +19,7 @@ except:
     raise Exception("Failed Loading Environment Variables")
 
 
+# @DeprecationWarning
 def request_to_claims(request):
     if 'requestContext' not in request:
         return {

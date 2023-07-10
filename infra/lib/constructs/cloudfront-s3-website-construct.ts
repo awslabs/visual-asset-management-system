@@ -98,6 +98,27 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
             originAccessIdentity: originAccessIdentity,
         });
 
+        const connectSrc = [
+            "'self'",
+            props.cognitoDomain,
+            `https://cognito-idp.${props.env?.region}.amazonaws.com/`,
+            `https://cognito-identity.${props.env?.region}.amazonaws.com/`,
+            `https://${props.apiUrl}`,
+            `https://${props.assetBucketUrl}`,
+            `https://maps.geo.${props.env?.region}.amazonaws.com/`,
+        ];
+
+        const scriptSrc = [
+            "'self'",
+            "blob:",
+            "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
+            props.cognitoDomain,
+            `https://cognito-idp.${props.env?.region}.amazonaws.com/`,
+            `https://cognito-identity.${props.env?.region}.amazonaws.com/`,
+            `https://${props.apiUrl}`,
+            `https://${props.assetBucketUrl}`,
+        ];
+
         const responseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(
             this,
             "ResponseHeadersPolicy",
@@ -123,8 +144,8 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
                     contentSecurityPolicy: {
                         contentSecurityPolicy:
                             `default-src 'none'; style-src 'self' 'unsafe-inline'; ` +
-                            `connect-src 'self' ${props.cognitoDomain} https://cognito-idp.${props.env?.region}.amazonaws.com/ https://cognito-identity.${props.env?.region}.amazonaws.com https://${props.apiUrl} https://${props.assetBucketUrl}; ` +
-                            `script-src 'self' ${props.cognitoDomain} https://cognito-idp.${props.env?.region}.amazonaws.com/ https://cognito-identity.${props.env?.region}.amazonaws.com https://${props.apiUrl} https://${props.assetBucketUrl}; ` +
+                            `connect-src ${connectSrc.join(" ")}; ` +
+                            `script-src ${scriptSrc.join(" ")}; ` +
                             `img-src 'self' data: https://${props.assetBucketUrl}; ` +
                             `media-src 'self' data: https://${props.assetBucketUrl}; ` +
                             `object-src 'none'; ` +
