@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Construct } from "constructs";
 import { ApiGatewayV2CloudFrontConstruct } from "./constructs/apigatewayv2-cloudfront-construct";
 import { storageResources } from "./storage-builder";
 import { buildMetadataIndexingFunction } from "./lambdaBuilder/metadataFunctions";
@@ -13,7 +12,6 @@ import { NagSuppressions } from "cdk-nag";
 import { OpensearchServerlessConstruct } from "./constructs/opensearch-serverless";
 import { Stack } from "aws-cdk-lib";
 import { CognitoWebNativeConstruct } from "./constructs/cognito-web-native-construct";
-import { SSMPARAM_NO_INVALIDATE } from "aws-cdk-lib/cx-api";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import { buildSearchFunction } from "./lambdaBuilder/searchFunctions";
 import { attachFunctionToApi } from "./api-builder";
@@ -26,8 +24,7 @@ export function streamsBuilder(
     storage: storageResources
 ) {
     const aoss = new OpensearchServerlessConstruct(scope, "AOSS", {
-        // TODO Change to an admin only role
-        principalArn: [cognitoResources.authenticatedRole.roleArn],
+        principalArn: [],
     });
 
     // the ssm parameter store value for the endpoint
