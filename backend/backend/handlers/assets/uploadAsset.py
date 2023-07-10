@@ -116,7 +116,11 @@ def iter_Asset(body, item=None):
         asset['assetLocation']['Key'] = body['key']
         asset['assetLocation']['Bucket'] = body['bucket']
     else:
-        prevVersions = asset['versions']
+        if 'versions' not in asset:
+            prevVersions = []
+        else:
+            prevVersions = asset['versions']
+
         asset['currentVersion']['previewLocation'] = asset['previewLocation']
         prevVersions.append(asset['currentVersion'])
         version = int(asset['currentVersion']['Version']) + 1

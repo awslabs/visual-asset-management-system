@@ -25,6 +25,7 @@ let navItems = [
             { type: "link", text: Synonyms.Databases, href: "/databases" },
             { type: "link", text: Synonyms.Assets, href: "/assets" },
             { type: "link", text: `Upload ${Synonyms.Asset}`, href: "/upload" },
+            { type: "link", text: `Search`, href: "/search" },
         ],
     },
     {

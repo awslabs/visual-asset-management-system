@@ -28,7 +28,7 @@ class AssetPreprocessingBody {
     isMultiFile: boolean = false;
 }
 
-class UploadAssetWorkflowApi {
+export class UploadAssetWorkflowApi {
     assetPreprocessingBody?: AssetPreprocessingBody;
     uploadAssetBody!: AssetDetail;
     updateMetadataBody!: MetadataApi;
