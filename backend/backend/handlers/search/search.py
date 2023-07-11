@@ -152,8 +152,16 @@ class SearchAOSS():
         credentials = boto3.Session().get_credentials()
         auth = AWSV4SignerAuth(credentials, region, service)
         print(auth)
+
+        ssm = boto3.client('ssm', region_name=region)
+        param = ssm.get_parameter(
+            Name=env.get('AOSS_ENDPOINT_PARAM'),
+            WithDecryption=False
+        )
+        host = param.get("Parameter", {}).get("Value")
+
         return SearchAOSS(
-            host=env.get('AOSS_ENDPOINT'),
+            host=host,
             region=region,
             service=service,
             auth=auth

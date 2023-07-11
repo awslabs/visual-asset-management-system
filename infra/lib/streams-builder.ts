@@ -27,16 +27,11 @@ export function streamsBuilder(
         principalArn: [],
     });
 
-    // the ssm parameter store value for the endpoint
-    const aossParam = ssm.StringParameter.fromStringParameterName(
+    const indexingFunction = buildMetadataIndexingFunction(
         scope,
-        "aossEndpoint",
+        storage,
         aoss.endpointSSMParameterName()
     );
-
-    aossParam.node.addDependency(aoss);
-
-    const indexingFunction = buildMetadataIndexingFunction(scope, storage, aossParam.stringValue);
 
     indexingFunction.addEventSource(
         new eventsources.DynamoEventSource(storage.dynamo.metadataStorageTable, {
@@ -46,7 +41,7 @@ export function streamsBuilder(
 
     aoss.grantCollectionAccess(indexingFunction);
 
-    const searchFun = buildSearchFunction(scope, aossParam.stringValue, aoss, storage);
+    const searchFun = buildSearchFunction(scope, aoss.endpointSSMParameterName(), aoss, storage);
     attachFunctionToApi(scope, searchFun, {
         routePath: "/search",
         method: apigwv2.HttpMethod.POST,

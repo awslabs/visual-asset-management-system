@@ -129,8 +129,14 @@ class AOSSIndexS3Objects():
         service = 'aoss'
         credentials = boto3.Session().get_credentials()
         auth = AWSV4SignerAuth(credentials, region, service)
+        ssm = boto3.client('ssm', region_name=region)
+        param = ssm.get_parameter(
+            Name=env.get('AOSS_ENDPOINT_PARAM'),
+            WithDecryption=False
+        )
+        host = param.get("Parameter", {}).get("Value")
         aosclient = OpenSearch(
-            hosts=[{'host': urlparse(env.get('AOSS_ENDPOINT')).hostname, 'port': 443}],
+            hosts=[{'host': urlparse(host).hostname, 'port': 443}],
             http_auth=auth,
             use_ssl=True,
             verify_certs=True,
@@ -223,7 +229,15 @@ class AOSSIndexAssetMetadata():
         service = 'aoss'
         credentials = boto3.Session().get_credentials()
         auth = AWSV4SignerAuth(credentials, region, service)
-        return AOSSIndexAssetMetadata(host=env.get('AOSS_ENDPOINT'), region=region, service=service, auth=auth)
+
+        ssm = boto3.client('ssm', region_name=region)
+        param = ssm.get_parameter(
+            Name=env.get('AOSS_ENDPOINT_PARAM'),
+            WithDecryption=False
+        )
+        host = param.get("Parameter", {}).get("Value")
+
+        return AOSSIndexAssetMetadata(host=host, region=region, service=service, auth=auth)
 
 
     @staticmethod
