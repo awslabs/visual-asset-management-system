@@ -4,6 +4,8 @@
 import os
 import boto3
 import json
+
+import botocore.exceptions
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from backend.common.validators import validate
@@ -198,6 +200,9 @@ def archive_file(location):
         print("S3 object already archived: ", key)
         print(ios)
 
+    except botocore.exceptions.ClientError as e:
+        # TODO: Most likely an error when the key doesnt exist
+        print("Error occurred: ", e)
     return
 
 

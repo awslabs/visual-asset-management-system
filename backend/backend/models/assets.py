@@ -25,9 +25,8 @@ class UploadAssetModel(BaseModel):
     description: str
     isDistributable: bool
     Comment: str
-    previewLocation: AssetPreviewLocationModel
     specifiedPipelines: list[str]
-
+    previewLocation: Optional[AssetPreviewLocationModel]
 
 class UpdateMetadataModel(BaseModel):
     version: str
