@@ -70,6 +70,7 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                             assetId={props.asset?.assetId}
                             databaseId={props.asset?.databaseId}
                             assetName={props.asset?.assetName}
+                            isDistributable={props.asset?.isDistributable}
                         />
                     )}
                 </div>

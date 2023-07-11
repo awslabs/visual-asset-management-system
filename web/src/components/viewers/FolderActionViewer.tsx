@@ -8,6 +8,7 @@ import { useNavigate, useParams } from "react-router";
 export class FolderActionProps {
     databaseId!: string;
     assetId!: string;
+    isDistributable!: boolean;
     name!: string;
     urlKey!: string;
     isDirectory!: boolean;
@@ -43,7 +44,7 @@ export default function FolderActionViewer({ name, urlKey, ...props }: FolderAct
                             Selected {props.isDirectory ? "directory" : "file"} : {name}
                         </p>
 
-                        {!props.isDirectory && (
+                        {!props.isDirectory && props.isDistributable && (
                             <>
                                 <ColumnLayout columns={4}>
                                     <Button
@@ -70,14 +71,6 @@ export default function FolderActionViewer({ name, urlKey, ...props }: FolderAct
                             <Button variant={"primary"} onClick={() => navigateToAssetFilePage()}>
                                 View {props.isDirectory ? "directory" : "file"}
                             </Button>
-                            {props.isDirectory && (
-                                <>
-                                    <ColumnLayout columns={4}>
-                                        <Button> Add a Folder </Button>
-                                        <Button> Add a File </Button>
-                                    </ColumnLayout>
-                                </>
-                            )}
                         </p>
                     </>
                 )}
