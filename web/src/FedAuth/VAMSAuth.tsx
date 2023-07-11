@@ -61,6 +61,8 @@ interface Config {
      * bucket
      */
     bucket?: string;
+
+    stackName: string;
 }
 
 function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
@@ -115,20 +117,20 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
             AmazonLocationService: {
                 maps: {
                     items: {
-                        "vams-map-raster": {
+                        [`vams-map-raster-${config.region}-${config.stackName}`]: {
                             // REQUIRED - Amazon Location Service Map resource name
                             style: "RasterEsriImagery", // REQUIRED - String representing the style of map resource
                         },
-                        "vams-map-streets": {
+                        [`vams-map-streets-${config.region}-${config.stackName}`]: {
                             style: "VectorEsriStreets",
                         },
                     },
-                    default: "vams-map-raster", // REQUIRED - Amazon Location Service Map resource name to set as default
+                    default: `vams-map-raster-${config.region}-${config.stackName}`, // REQUIRED - Amazon Location Service Map resource name to set as default
                 },
-                search_indices: {
-                    items: ["vams-index"], // REQUIRED - Amazon Location Service Place Index name
-                    default: "vams-index", // REQUIRED - Amazon Location Service Place Index name to set as default
-                },
+                // search_indices: {
+                //     items: ["vams-index"], // REQUIRED - Amazon Location Service Place Index name
+                //     default: "vams-index", // REQUIRED - Amazon Location Service Place Index name to set as default
+                // },
                 // geofenceCollections: {
                 //     items: ["XXXXXXXXX", "XXXXXXXXX"], // REQUIRED - Amazon Location Service Geofence Collection name
                 //     default: "XXXXXXXXX", // REQUIRED - Amazon Location Service Geofence Collection name to set as default

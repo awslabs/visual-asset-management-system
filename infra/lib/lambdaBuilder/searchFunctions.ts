@@ -9,6 +9,8 @@ import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import { OpensearchServerlessConstruct } from "../constructs/opensearch-serverless";
 import { storageResources } from "../storage-builder";
+import { iam } from "cdk-nag/lib/rules";
+import * as cdk from "aws-cdk-lib";
 
 export function buildSearchFunction(
     scope: Construct,
@@ -23,11 +25,23 @@ export function buildSearchFunction(
         timeout: Duration.minutes(15),
         memorySize: 3008,
         environment: {
-            AOSS_ENDPOINT: aossEndpoint,
+            AOSS_ENDPOINT_PARAM: aossEndpoint,
             AUTH_ENTITIES_TABLE: storageResources.dynamo.authEntitiesStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
         },
     });
+
+    // add access to read the parameter store param aossEndpoint
+    fun.role?.addToPrincipalPolicy(
+        new cdk.aws_iam.PolicyStatement({
+            actions: ["ssm:GetParameter"],
+            resources: [
+                `arn:aws:ssm:${cdk.Stack.of(scope).region}:${
+                    cdk.Stack.of(scope).account
+                }:parameter${aossEndpoint}`,
+            ],
+        })
+    );
 
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);

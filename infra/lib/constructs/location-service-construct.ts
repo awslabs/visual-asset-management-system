@@ -4,7 +4,7 @@
  */
 
 import * as iam from "aws-cdk-lib/aws-iam";
-import { CfnOutput, aws_location } from "aws-cdk-lib";
+import { CfnOutput, aws_location, Stack } from "aws-cdk-lib";
 
 import { Construct } from "constructs";
 
@@ -38,13 +38,13 @@ export class LocationServiceConstruct extends Construct {
             configuration: {
                 style: "RasterEsriImagery",
             },
-            mapName: "vams-map-raster",
+            mapName: `vams-map-raster-${Stack.of(scope).region}-${Stack.of(scope).stackName}`,
         });
         const cfnMap_streets = new aws_location.CfnMap(scope, "MyCfnMapStreets", {
             configuration: {
                 style: "VectorEsriStreets",
             },
-            mapName: "vams-map-streets",
+            mapName: `vams-map-streets-${Stack.of(scope).region}-${Stack.of(scope).stackName}`,
         });
 
         role.addToPolicy(
@@ -60,23 +60,23 @@ export class LocationServiceConstruct extends Construct {
             })
         );
 
-        const cfnIndex = new aws_location.CfnPlaceIndex(scope, "MyCfnPlaceIndex", {
-            dataSource: "Esri",
-            indexName: "vams-index",
-        });
+        // const cfnIndex = new aws_location.CfnPlaceIndex(scope, "MyCfnPlaceIndex", {
+        //     dataSource: "Esri",
+        //     indexName: "vams-index",
+        // });
 
-        role.addToPolicy(
-            new iam.PolicyStatement({
-                effect: iam.Effect.ALLOW,
-                actions: [
-                    "geo:SearchPlaceIndexForPosition",
-                    "geo:SearchPlaceIndexForText",
-                    "geo:SearchPlaceIndexForSuggestions",
-                    "geo:GetPlace",
-                ],
-                resources: [cfnIndex.attrArn],
-            })
-        );
+        // role.addToPolicy(
+        //     new iam.PolicyStatement({
+        //         effect: iam.Effect.ALLOW,
+        //         actions: [
+        //             "geo:SearchPlaceIndexForPosition",
+        //             "geo:SearchPlaceIndexForText",
+        //             "geo:SearchPlaceIndexForSuggestions",
+        //             "geo:GetPlace",
+        //         ],
+        //         resources: [cfnIndex.attrArn],
+        //     })
+        // );
 
         // make cfn outputs
 
@@ -95,11 +95,11 @@ export class LocationServiceConstruct extends Construct {
         //     description: "Location Service Index Arn",
         //     exportName: "LocationServiceIndexArn",
         // });
-        new CfnOutput(this, "MapArn", {
-            value: cfnMap.attrArn,
-            description: "Map Arn",
-            exportName: "MapArn",
-        });
+        // new CfnOutput(this, "MapArn", {
+        //     value: cfnMap.attrArn,
+        //     description: "Map Arn",
+        //     exportName: "MapArn",
+        // });
 
         this.map = cfnMap;
         // this.location = location;
