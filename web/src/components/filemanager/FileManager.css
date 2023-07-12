@@ -1,0 +1,23 @@
+.wrapper {
+    border-top: 1px solid lightgray;
+    margin-top: 15px;
+    display: grid;
+    grid-template-columns: 4fr 8fr;
+}
+
+.wrapper-left {
+    border-right: 1px solid lightgray;
+}
+
+.wrapper-right {
+}
+
+.gallery-top-control {
+    border-bottom: 1px solid lightgray;
+    padding-top: 15px;
+    padding-bottom: 20px;
+}
+
+.gallery-top-control-wrapper {
+    margin-left: 10px;
+}
