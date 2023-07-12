@@ -496,46 +496,6 @@ const UploadForm = () => {
                             ),
                             isOptional: false,
                         },
-
-                        {
-                            title: "Workflow Actions",
-                            content: (
-                                <Container header={<Header variant="h2">Workflow Actions</Header>}>
-                                    <SpaceBetween direction="vertical" size="l">
-                                        <Table
-                                            columnDefinitions={workflowColumnDefns}
-                                            items={workflows}
-                                            onSelectionChange={({ detail }) => {
-                                                console.log("detail selection change", detail);
-                                                setSelectedWorkflows(detail.selectedItems);
-                                            }}
-                                            selectedItems={selectedWorkflows}
-                                            trackBy="workflowId"
-                                            selectionType="multi"
-                                            ariaLabels={{
-                                                selectionGroupLabel: "Items selection",
-                                                allItemsSelectionLabel: ({ selectedItems }) =>
-                                                    `${selectedItems.length} ${
-                                                        selectedItems.length === 1
-                                                            ? "item"
-                                                            : "items"
-                                                    } selected`,
-                                                itemSelectionLabel: ({ selectedItems }, item) => {
-                                                    const isItemSelected = selectedItems.filter(
-                                                        (i) => i.name === item.name
-                                                    ).length;
-                                                    return `${item.name} is ${
-                                                        isItemSelected ? "" : "not"
-                                                    } selected`;
-                                                },
-                                            }}
-                                            data-testid="workflow-table"
-                                        />
-                                    </SpaceBetween>
-                                </Container>
-                            ),
-                            isOptional: true,
-                        },
                         {
                             title: "Review and Upload",
                             content: (

@@ -120,15 +120,18 @@ def iter_Asset(body, item=None):
             prevVersions = []
         else:
             prevVersions = asset['versions']
-
-        asset['currentVersion']['previewLocation'] = asset['previewLocation']
+        if 'previewLocation' in asset:
+            asset['currentVersion']['previewLocation'] = asset['previewLocation']
         prevVersions.append(asset['currentVersion'])
         version = int(asset['currentVersion']['Version']) + 1
         asset['versions'] = prevVersions
-    asset['previewLocation'] = {
-        "Bucket": body['previewLocation']['Bucket'],
-        "Key": body['previewLocation']['Key']
-    }
+
+    if 'previewLocation' in asset:
+        asset['previewLocation'] = {
+            "Bucket": body['previewLocation']['Bucket'],
+            "Key": body['previewLocation']['Key']
+        }
+
     asset['assetLocation'] = {
         "Bucket": body['bucket'],
         "Key": body['key']

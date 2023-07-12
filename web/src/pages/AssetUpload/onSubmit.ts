@@ -342,18 +342,19 @@ function updateAssetDetail(assetDetail: AssetDetail) {
     assetDetail.assetType = getAssetType(assetDetail);
     assetDetail.key = getKeyPrefix(uuid, assetDetail);
     assetDetail.specifiedPipelines = [];
-    assetDetail.previewLocation = {
-        Bucket: config.bucket,
-        Key:
-            "previews" +
-            "/" +
-            uuid +
-            "/" +
-            assetDetail.assetId +
-            "." +
-            assetDetail.Preview?.name.split(".").pop(),
-    };
-
+    if (assetDetail.Preview) {
+        assetDetail.previewLocation = {
+            Bucket: config.bucket,
+            Key:
+                "previews" +
+                "/" +
+                uuid +
+                "/" +
+                assetDetail.assetId +
+                "." +
+                assetDetail.Preview?.name.split(".").pop(),
+        };
+    }
     assetDetail.assetName = assetDetail.assetId;
     assetDetail.assetId = uuid;
     return { uuid, prevAssetId };
