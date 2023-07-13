@@ -119,5 +119,5 @@ class InternalTreeNode<T> {
 export type ITreeNode<T> = InternalTreeNode<T> & T;
 export const TreeNode = InternalTreeNode as new <T>(
     props: T,
-    metadata?: Metadata<T>
+    metadata?: Metadata<T>,
 ) => ITreeNode<T>;

@@ -288,7 +288,7 @@ const VAMSAuth: React.FC<AuthProps> = (props) => {
                 setState({
                     email: user.getIdToken().decodePayload().email,
                     authenticated: true,
-                })
+                }),
             )
             .catch((e) => {
                 setState({ authenticated: false });

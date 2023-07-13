@@ -58,7 +58,7 @@ interface apiGatewayLambdaConfiguration {
 function attachFunctionToApi(
     scope: Construct,
     lambdaFunction: lambda.Function,
-    apiGatewayConfiguration: apiGatewayLambdaConfiguration
+    apiGatewayConfiguration: apiGatewayLambdaConfiguration,
 ) {
     const apig = new ApiGatewayV2LambdaConstruct(
         scope,
@@ -69,14 +69,14 @@ function attachFunctionToApi(
             routePath: apiGatewayConfiguration.routePath,
             methods: [apiGatewayConfiguration.method],
             api: apiGatewayConfiguration.api,
-        }
+        },
     );
 }
 
 export function apiBuilder(
     scope: Construct,
     api: ApiGatewayV2CloudFrontConstruct,
-    storageResources: storageResources
+    storageResources: storageResources,
 ) {
     //config resources
     const createConfigFunction = buildConfigService(scope, storageResources.s3.assetBucket);
@@ -90,7 +90,7 @@ export function apiBuilder(
     //Database Resources
     const createDatabaseFunction = buildCreateDatabaseLambdaFunction(
         scope,
-        storageResources.dynamo.databaseStorageTable
+        storageResources.dynamo.databaseStorageTable,
     );
     attachFunctionToApi(scope, createDatabaseFunction, {
         routePath: "/databases",
@@ -103,7 +103,7 @@ export function apiBuilder(
         storageResources.dynamo.databaseStorageTable,
         storageResources.dynamo.workflowStorageTable,
         storageResources.dynamo.pipelineStorageTable,
-        storageResources.dynamo.assetStorageTable
+        storageResources.dynamo.assetStorageTable,
     );
     attachFunctionToApi(scope, databaseService, {
         routePath: "/databases",
@@ -146,7 +146,7 @@ export function apiBuilder(
     //Comment Resources
     const addCommentFunction = buildAddCommentLambdaFunction(
         scope,
-        storageResources.dynamo.commentStorageTable
+        storageResources.dynamo.commentStorageTable,
     );
     attachFunctionToApi(scope, addCommentFunction, {
         routePath: "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
@@ -159,7 +159,7 @@ export function apiBuilder(
         scope,
         storageResources.dynamo.assetStorageTable,
         storageResources.dynamo.databaseStorageTable,
-        storageResources.s3.assetBucket
+        storageResources.s3.assetBucket,
     );
     attachFunctionToApi(scope, assetService, {
         routePath: "/database/{databaseId}/assets",
@@ -185,7 +185,7 @@ export function apiBuilder(
     const assetMetadataFunction = buildAssetMetadataFunction(
         scope,
         storageResources.s3.assetBucket,
-        storageResources.dynamo.assetStorageTable
+        storageResources.dynamo.assetStorageTable,
     );
     attachFunctionToApi(scope, assetMetadataFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/metadata",
@@ -196,7 +196,7 @@ export function apiBuilder(
     const assetColumnsFunction = buildAssetColumnsFunction(
         scope,
         storageResources.s3.assetBucket,
-        storageResources.dynamo.assetStorageTable
+        storageResources.dynamo.assetStorageTable,
     );
     attachFunctionToApi(scope, assetColumnsFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/columns",
@@ -208,7 +208,7 @@ export function apiBuilder(
         scope,
         storageResources.s3.assetBucket,
         storageResources.dynamo.databaseStorageTable,
-        storageResources.dynamo.assetStorageTable
+        storageResources.dynamo.assetStorageTable,
     );
     attachFunctionToApi(scope, uploadAssetFunction, {
         routePath: "/assets",
@@ -222,7 +222,7 @@ export function apiBuilder(
         storageResources.dynamo.databaseStorageTable,
         storageResources.dynamo.assetStorageTable,
         storageResources.dynamo.workflowExecutionStorageTable,
-        uploadAssetFunction
+        uploadAssetFunction,
     );
     attachFunctionToApi(scope, uploadAllAssetFunction, {
         routePath: "/assets/all",
@@ -233,7 +233,7 @@ export function apiBuilder(
     const assetDownloadFunction = buildDownloadAssetFunction(
         scope,
         storageResources.s3.assetBucket,
-        storageResources.dynamo.assetStorageTable
+        storageResources.dynamo.assetStorageTable,
     );
     attachFunctionToApi(scope, assetDownloadFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/download",
@@ -245,7 +245,7 @@ export function apiBuilder(
         scope,
         storageResources.s3.assetBucket,
         storageResources.dynamo.databaseStorageTable,
-        storageResources.dynamo.assetStorageTable
+        storageResources.dynamo.assetStorageTable,
     );
     attachFunctionToApi(scope, assetRevertFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/revert",
@@ -256,7 +256,7 @@ export function apiBuilder(
     //Pipeline Resources
     const enablePipelineFunction = buildEnablePipelineFunction(
         scope,
-        storageResources.dynamo.pipelineStorageTable
+        storageResources.dynamo.pipelineStorageTable,
     );
 
     const createPipelineFunction = buildCreatePipelineFunction(
@@ -265,7 +265,7 @@ export function apiBuilder(
         storageResources.s3.artefactsBucket,
         storageResources.s3.sagemakerBucket,
         storageResources.s3.assetBucket,
-        enablePipelineFunction
+        enablePipelineFunction,
     );
     attachFunctionToApi(scope, createPipelineFunction, {
         routePath: "/pipelines",
@@ -320,7 +320,7 @@ export function apiBuilder(
 
     const listWorkflowExecutionsFunction = buildListlWorkflowExecutionsFunction(
         scope,
-        storageResources.dynamo.workflowExecutionStorageTable
+        storageResources.dynamo.workflowExecutionStorageTable,
     );
     attachFunctionToApi(scope, listWorkflowExecutionsFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/workflows/{workflowId}/executions",
@@ -332,7 +332,7 @@ export function apiBuilder(
         scope,
         storageResources.dynamo.workflowStorageTable,
         storageResources.s3.assetBucket,
-        uploadAllAssetFunction
+        uploadAllAssetFunction,
     );
     attachFunctionToApi(scope, createWorkflowFunction, {
         routePath: "/workflows",
@@ -346,7 +346,7 @@ export function apiBuilder(
         storageResources.dynamo.pipelineStorageTable,
         storageResources.dynamo.assetStorageTable,
         storageResources.dynamo.workflowExecutionStorageTable,
-        storageResources.s3.assetBucket
+        storageResources.s3.assetBucket,
     );
     attachFunctionToApi(scope, runWorkflowFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/workflows/{workflowId}",
@@ -398,7 +398,7 @@ export function apiBuilder(
         metadataCrudFunctions[2],
         runWorkflowFunction,
         storageResources.s3.assetBucket,
-        storageResources.s3.stagingBucket
+        storageResources.s3.stagingBucket,
     );
     uploadAssetFunction.grantInvoke(uploadAssetWorkflowStateMachine);
     storageResources.s3.assetBucket.grantReadWrite(uploadAssetWorkflowStateMachine);
@@ -408,7 +408,7 @@ export function apiBuilder(
 
     const uploadAssetWorkflowFunction = buildUploadAssetWorkflowFunction(
         scope,
-        uploadAssetWorkflowStateMachine
+        uploadAssetWorkflowStateMachine,
     );
     attachFunctionToApi(scope, uploadAssetWorkflowFunction, {
         routePath: "/assets/uploadAssetWorkflow",

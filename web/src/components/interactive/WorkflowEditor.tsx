@@ -40,7 +40,7 @@ const onLoad = (reactFlowInstance: any) => {
 
 export const workflowPipelineToElements = (
     workflowPipelines: any,
-    databaseId: string | undefined
+    databaseId: string | undefined,
 ): Elements => {
     let yPos = 0;
     let xPos = 0;
@@ -120,7 +120,7 @@ export const workflowPipelineToElements = (
                 sourcePosition: Position.Bottom,
                 position: { x: 0, y: 0 },
             },
-        ]
+        ],
     );
 };
 

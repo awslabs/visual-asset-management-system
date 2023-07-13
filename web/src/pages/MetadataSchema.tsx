@@ -471,7 +471,7 @@ export const MetadataSchemaListDefinition = new ListDefinition({
             const response: any = await API.del(
                 "api",
                 `metadataschema/${item.databaseId}/${item.field}`,
-                {}
+                {},
             );
             return [true, response.message];
         } catch (error: any) {
@@ -519,7 +519,7 @@ async function uploadAssetToS3(
     file: File,
     key: string,
     metadata: { [k: string]: string },
-    progressCallback: (progress: ProgressCallbackArgs) => void
+    progressCallback: (progress: ProgressCallbackArgs) => void,
 ) {
     console.log("upload", key, file);
     return Storage.put(key, file, { metadata, progressCallback });
@@ -557,7 +557,7 @@ function ControlledListFileUpload() {
                             {},
                             (progress: ProgressCallbackArgs) => {
                                 console.log("progress", progress);
-                            }
+                            },
                         ).then((result: any) => {
                             console.log("result", result);
                         });
@@ -573,7 +573,7 @@ export default function MetadataSchema() {
     const { databaseId } = useParams();
     const navigate = useNavigate();
     const [databaseSelectModelOpen, setDatabaseSelectModelOpen] = useState(
-        databaseId === undefined
+        databaseId === undefined,
     );
 
     const [schemas, setSchemas] = useState<MetadataSchemaFields[]>([]);

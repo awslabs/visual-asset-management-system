@@ -38,10 +38,10 @@ export const samlSettings: SamlSettings = {
     // with your SAML identity provider.
     attributeMapping: {
         email: cognito.ProviderAttribute.other(
-            "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress"
+            "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
         ),
         fullname: cognito.ProviderAttribute.other(
-            "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name"
+            "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name",
         ),
     },
 };

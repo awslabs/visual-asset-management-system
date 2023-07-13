@@ -139,7 +139,7 @@ export function EditComp({
             const schemaItem = schema.schemas.find((x) => x.field === item.name);
             if (schemaItem && schemaItem.dependsOn) {
                 const controlDataItem = controlData.find((x: any) =>
-                    schemaItem.dependsOn.every((y: string) => x[y] === metadata[y])
+                    schemaItem.dependsOn.every((y: string) => x[y] === metadata[y]),
                 );
                 if (controlDataItem) {
                     currentValueInit = {

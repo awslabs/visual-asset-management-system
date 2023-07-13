@@ -314,9 +314,9 @@ export default function CreateConstraint({
                                                     const criteria = formState.criteria.filter(
                                                         (x) => {
                                                             return !selectedCriteria.find(
-                                                                (y) => y.id === x.id
+                                                                (y) => y.id === x.id,
                                                             );
-                                                        }
+                                                        },
                                                     );
 
                                                     setFormState({
@@ -383,13 +383,13 @@ export default function CreateConstraint({
                                                     expandToViewport={true}
                                                     selectedOption={
                                                         criteriaOperators.find(
-                                                            (option) => option.value === value
+                                                            (option) => option.value === value,
                                                         ) ?? null
                                                     }
                                                     onChange={(event) => {
                                                         setValue(
                                                             event.detail.selectedOption.value ??
-                                                                item.operator
+                                                                item.operator,
                                                         );
                                                     }}
                                                     options={criteriaOperators}
@@ -399,7 +399,7 @@ export default function CreateConstraint({
                                     },
                                     cell: (item) => {
                                         return criteriaOperators.find(
-                                            (option) => option.value === item.operator
+                                            (option) => option.value === item.operator,
                                         )?.label;
                                     },
                                 },

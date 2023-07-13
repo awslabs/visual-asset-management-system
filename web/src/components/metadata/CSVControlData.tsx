@@ -18,7 +18,7 @@ export const hashCode = (x: string) => {
 export function createPapaParseConfig(
     schema: SchemaContextData,
     setControlledLists: React.Dispatch<any>,
-    setRawControlData: React.Dispatch<any>
+    setRawControlData: React.Dispatch<any>,
 ) {
     const config: ParseRemoteConfig = {
         download: true,
@@ -61,7 +61,7 @@ export function createPapaParseConfig(
                 listsSorted.reduce((acc, x) => {
                     acc[x.field] = x;
                     return acc;
-                }, byField)
+                }, byField),
             );
             setRawControlData(results.data);
         },
@@ -73,20 +73,20 @@ export type HandleControlData = (
     url: string,
     schema: SchemaContextData,
     setControlledLists: React.Dispatch<any>,
-    setRawControlData: React.Dispatch<any>
+    setRawControlData: React.Dispatch<any>,
 ) => void;
 
 export const handleCSVControlData: HandleControlData = function handleCSVControlData(
     url: string,
     schema: SchemaContextData,
     setControlledLists: React.Dispatch<any>,
-    setRawControlData: React.Dispatch<any>
+    setRawControlData: React.Dispatch<any>,
 ) {
     // note: config has a callback with a side effect that calls setControlledLists
     const config: ParseRemoteConfig = createPapaParseConfig(
         schema,
         setControlledLists,
-        setRawControlData
+        setRawControlData,
     );
     Papa.parse(url, config);
 };

@@ -55,7 +55,7 @@ export default function ListPage(props) {
                 setReload(false);
                 setAllItems(
                     //@todo fix workflow delete return
-                    items.filter((item) => item.databaseId.indexOf("#deleted") === -1)
+                    items.filter((item) => item.databaseId.indexOf("#deleted") === -1),
                 );
             }
         };

@@ -57,7 +57,7 @@ export class LocationServiceConstruct extends Construct {
                     "geo:GetMapStyleDescriptor",
                 ],
                 resources: [cfnMap.attrArn, cfnMap_streets.attrArn],
-            })
+            }),
         );
 
         const cfnIndex = new aws_location.CfnPlaceIndex(scope, "MyCfnPlaceIndex", {
@@ -75,7 +75,7 @@ export class LocationServiceConstruct extends Construct {
                     "geo:GetPlace",
                 ],
                 resources: [cfnIndex.attrArn],
-            })
+            }),
         );
 
         // make cfn outputs

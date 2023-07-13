@@ -96,7 +96,7 @@ export class VAMS extends cdk.Stack {
                 userPoolId: cognitoResources.userPoolId,
                 username: providedAdminEmailAddress,
                 groupName: "super-admin",
-            }
+            },
         );
         userGroupAttachment.addDependency(cognitoUser);
         // initialize api gateway and bind it to /api route of cloudfront
@@ -145,7 +145,7 @@ export class VAMS extends cdk.Stack {
                     callbackUrls: callbackUrls,
                     logoutUrls: callbackUrls,
                     identityProviders: ["COGNITO", samlSettings.name],
-                }
+                },
             );
             customCognitoWebClientConfig.node.addDependency(website);
         }
@@ -184,7 +184,7 @@ export class VAMS extends cdk.Stack {
         const amplifyConfigFn = new AmplifyConfigLambdaConstruct(
             this,
             "AmplifyConfig",
-            amplifyConfigProps
+            amplifyConfigProps,
         );
 
         const assetBucketOutput = new cdk.CfnOutput(this, "AssetBucketNameOutput", {
@@ -237,7 +237,7 @@ export class VAMS extends cdk.Stack {
                     ],
                 },
             ],
-            true
+            true,
         );
 
         NagSuppressions.addResourceSuppressionsByPath(
@@ -249,7 +249,7 @@ export class VAMS extends cdk.Stack {
                     reason: "This requires use of a custom viewer certificate which should be provided by customers.",
                 },
             ],
-            true
+            true,
         );
 
         const refactorPaths = [
@@ -277,7 +277,7 @@ export class VAMS extends cdk.Stack {
                         reason: reason,
                     },
                 ],
-                true
+                true,
             );
         }
     }

@@ -243,7 +243,7 @@ export const containerUriPropType = function (props, propName) {
             return null;
         }
         return new Error(
-            `Invalid value for ${propName}. Enter a valid Amazon ECR image Uri ACCOUNT_NUMBER.dkr.ecr.REGION.amazonaws.com/IMAGE_NAME`
+            `Invalid value for ${propName}. Enter a valid Amazon ECR image Uri ACCOUNT_NUMBER.dkr.ecr.REGION.amazonaws.com/IMAGE_NAME`,
         );
     }
     return null;

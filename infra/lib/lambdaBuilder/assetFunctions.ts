@@ -15,7 +15,7 @@ export function buildAssetService(
     scope: Construct,
     assetStorageTable: dynamodb.Table,
     databaseStorageTable: dynamodb.Table,
-    assetStorageBucket: s3.Bucket
+    assetStorageBucket: s3.Bucket,
 ): lambda.Function {
     const name = "assetService";
     const assetService = new lambda.DockerImageFunction(scope, name, {
@@ -42,7 +42,7 @@ export function buildUploadAssetFunction(
     scope: Construct,
     assetStorageBucket: s3.Bucket,
     databaseStorageTable: dynamodb.Table,
-    assetStorageTable: dynamodb.Table
+    assetStorageTable: dynamodb.Table,
 ): lambda.Function {
     const name = "uploadAsset";
     const uploadAssetFunction = new lambda.DockerImageFunction(scope, name, {
@@ -69,7 +69,7 @@ export function buildUploadAllAssetsFunction(
     databaseStorageTable: dynamodb.Table,
     assetStorageTable: dynamodb.Table,
     workflowExecutionTable: dynamodb.Table,
-    uploadAssetLambdaFunction: lambda.Function
+    uploadAssetLambdaFunction: lambda.Function,
 ): lambda.Function {
     const name = "uploadAllAssets";
     const uploadAllAssetFunction = new lambda.DockerImageFunction(scope, name, {
@@ -97,7 +97,7 @@ export function buildUploadAllAssetsFunction(
 export function buildAssetMetadataFunction(
     scope: Construct,
     assetStorageBucket: s3.Bucket,
-    assetStorageTable: dynamodb.Table
+    assetStorageTable: dynamodb.Table,
 ) {
     const name = "metadata";
     const assetMetadataFunction = new lambda.DockerImageFunction(scope, name, {
@@ -120,7 +120,7 @@ export function buildAssetMetadataFunction(
 export function buildAssetColumnsFunction(
     scope: Construct,
     assetStorageBucket: s3.Bucket,
-    assetStorageTable: dynamodb.Table
+    assetStorageTable: dynamodb.Table,
 ) {
     const name = "assetColumns";
     const assetColumnsFunction = new lambda.DockerImageFunction(scope, name, {
@@ -143,7 +143,7 @@ export function buildAssetColumnsFunction(
 export function buildDownloadAssetFunction(
     scope: Construct,
     assetStorageBucket: s3.Bucket,
-    assetStorageTable: dynamodb.Table
+    assetStorageTable: dynamodb.Table,
 ) {
     const name = "downloadAsset";
     const downloadAssetFunction = new lambda.DockerImageFunction(scope, name, {
@@ -167,7 +167,7 @@ export function buildRevertAssetFunction(
     scope: Construct,
     assetStorageBucket: s3.Bucket,
     databaseStorageTable: dynamodb.Table,
-    assetStorageTable: dynamodb.Table
+    assetStorageTable: dynamodb.Table,
 ): lambda.Function {
     const name = "revertAsset";
     const revertAssetFunction = new lambda.DockerImageFunction(scope, name, {
@@ -190,7 +190,7 @@ export function buildRevertAssetFunction(
 
 export function buildUploadAssetWorkflowFunction(
     scope: Construct,
-    uploadAssetWorkflowStateMachine: sfn.StateMachine
+    uploadAssetWorkflowStateMachine: sfn.StateMachine,
 ): lambda.Function {
     const name = "upload_asset_workflow";
 

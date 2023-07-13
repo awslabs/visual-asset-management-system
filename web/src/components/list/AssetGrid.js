@@ -125,7 +125,7 @@ export default function AssetGrid(props) {
                         const filterList = filterBy.split(" ");
                         for (let i = 0; i < filterList.length; i++) {
                             const pipelines = asset?.specifiedPipelines.map((pipeline) =>
-                                pipeline?.name?.toLowerCase()
+                                pipeline?.name?.toLowerCase(),
                             );
                             for (let j = 0; j < pipelines.length; j++) {
                                 if (pipelines[j]?.indexOf(filterList[i]) !== -1) {
@@ -200,7 +200,7 @@ export default function AssetGrid(props) {
                     label: pipeline.pipelineId,
                     value: pipeline.pipelineId,
                     description: pipeline.description,
-                }))
+                })),
             );
         };
         if (pipelines.length === 0) {
@@ -405,7 +405,7 @@ export default function AssetGrid(props) {
                                     options={[{ label: <em>all</em>, value: null }].concat(
                                         assetData.map((row) => {
                                             return { label: row.assetId, value: row.assetId };
-                                        })
+                                        }),
                                     )}
                                     placeholder={`${Synonyms.Asset} Name`}
                                     selectedAriaLabel="Selected"
@@ -425,13 +425,13 @@ export default function AssetGrid(props) {
                                             ...new Set(
                                                 [
                                                     ...assetData.map(
-                                                        (asset) => asset.specifiedPipelines
+                                                        (asset) => asset.specifiedPipelines,
                                                     ),
-                                                ].map((row) => row.name)
+                                                ].map((row) => row.name),
                                             ),
                                         ].map((pipeline) => {
                                             return { label: pipeline, value: pipeline };
-                                        })
+                                        }),
                                     )}
                                     placeholder={`Pipeline`}
                                     selectedAriaLabel="Selected"

@@ -90,7 +90,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
 
         const originAccessIdentity = new cloudfront.OriginAccessIdentity(
             this,
-            "OriginAccessIdentity"
+            "OriginAccessIdentity",
         );
         siteBucket.grantRead(originAccessIdentity);
 
@@ -133,7 +133,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
                         override: true,
                     },
                 },
-            }
+            },
         );
 
         const cloudFrontDistribution = new cloudfront.Distribution(this, "WebAppDistribution", {

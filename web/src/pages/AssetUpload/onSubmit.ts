@@ -56,7 +56,7 @@ async function uploadAssetToS3(
     file: File,
     key: string,
     metadata: { [k: string]: string },
-    progressCallback: (progress: ProgresCallbackArgs) => void
+    progressCallback: (progress: ProgresCallbackArgs) => void,
 ) {
     console.log("upload", key, file);
     return Storage.put(key, file, { metadata, progressCallback });
@@ -127,7 +127,7 @@ export default function onSubmit({
                     setAssetUploadProgress({
                         value: (progress.loaded / progress.total) * 100,
                     });
-                }
+                },
             )
                 .then((res) => {
                     setAssetUploadProgress({
@@ -156,7 +156,7 @@ export default function onSubmit({
                             setPreviewUploadProgress({
                                 value: (progress.loaded / progress.total) * 100,
                             });
-                        }
+                        },
                     )
                         .then((res) => {
                             setPreviewUploadProgress({
@@ -193,7 +193,7 @@ export default function onSubmit({
                     },
                     executeWorkflowBody: {
                         workflowIds: selectedWorkflows.map(
-                            (wf: { workflowId: string }) => wf.workflowId
+                            (wf: { workflowId: string }) => wf.workflowId,
                         ),
                     },
                     updateMetadataBody: {

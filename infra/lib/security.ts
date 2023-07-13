@@ -46,7 +46,7 @@ export function requireTLSAddToResourcePolicy(bucket: s3.Bucket) {
             conditions: {
                 Bool: { "aws:SecureTransport": "false" },
             },
-        })
+        }),
     );
 }
 
@@ -76,6 +76,6 @@ export function suppressCdkNagErrorsByGrantReadWrite(scope: Construct) {
                 ],
             },
         ],
-        true
+        true,
     );
 }

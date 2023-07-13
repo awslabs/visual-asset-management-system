@@ -41,7 +41,7 @@ async function fillFormWithAssetMetadata(asset) {
 
     assetTransfer.items.add(new File([assetS3.Body], asset.assetLocation.Key.split("/").pop()));
     previewTransfer.items.add(
-        new File([previewS3.Body], asset.previewLocation.Key.split("/").pop())
+        new File([previewS3.Body], asset.previewLocation.Key.split("/").pop()),
     );
 
     values.Asset = assetTransfer.files[0]; //File
@@ -167,7 +167,7 @@ export default function CreateUpdateElement(props) {
                 if (formEntity?.propTypes[formPropName]) {
                     const validateResults = formEntity.propTypes[formPropName](
                         formValues,
-                        formPropName
+                        formPropName,
                     );
                     //if we find an error, return false and set error message for value
                     //otherwise, the value validates and we clear any previous
@@ -230,7 +230,7 @@ export default function CreateUpdateElement(props) {
                     setReadySubmit(false);
                     if (result[0] === false) {
                         setSubmitUpdateError(
-                            `Unable to ${actionStrings[actionType].lowerCase} ${singularName}. Error: ${result[1]}`
+                            `Unable to ${actionStrings[actionType].lowerCase} ${singularName}. Error: ${result[1]}`,
                         );
                     } else {
                         handleClose();
@@ -352,7 +352,7 @@ export default function CreateUpdateElement(props) {
                                                         : options
                                                         ? options.find(
                                                               (option) =>
-                                                                  option.value === formValues[id]
+                                                                  option.value === formValues[id],
                                                           )
                                                         : {
                                                               value: formValues[id],
@@ -374,7 +374,7 @@ export default function CreateUpdateElement(props) {
                                                         id,
                                                         detail.selectedOptions ||
                                                             detail.selectedOption ||
-                                                            detail.value
+                                                            detail.value,
                                                     );
                                                 }}
                                                 {...elementProps}

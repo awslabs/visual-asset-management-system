@@ -5,18 +5,18 @@
 
 .container {
     display: flex;
-    flex-direction: row; 
+    flex-direction: row;
     justify-content: flex-start;
 }
 
-.pfpContainer{
+.pfpContainer {
     margin-top: 10px;
     margin-right: 6px;
 }
 
 .singleCommentContainer {
     display: flex;
-    flex-direction: row; 
+    flex-direction: row;
     justify-content: flex-start;
     margin-bottom: -25px;
     margin-top: -15px;
@@ -24,7 +24,7 @@
 
 .singleNestedCommentContainer {
     display: flex;
-    flex-direction: row; 
+    flex-direction: row;
     justify-content: flex-start;
     margin-bottom: -25px;
     margin-top: -25px;
@@ -86,27 +86,30 @@
     border-left: 3px solid #000716;
     margin-top: -5px;
     height: 200vh;
-    position: fixed
-  }
+    position: fixed;
+}
 
 div.inflow {
-    width: 20px; 
+    width: 20px;
     float: right;
-    position: relative; 
+    position: relative;
     margin-right: 20px;
     margin-left: -30px;
 }
 
-div.positioner {position: absolute; right: 0;}
+div.positioner {
+    position: absolute;
+    right: 0;
+}
 
 div.fixed {
-    width: 0px; 
-    position: fixed; 
-    top: 60px; 
+    width: 0px;
+    position: fixed;
+    top: 60px;
     margin-left: 15px;
 }
 
-th, td {
+th,
+td {
     padding: 15px;
 }
-

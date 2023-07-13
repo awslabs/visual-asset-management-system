@@ -60,7 +60,7 @@ export default function CommentTableList(props) {
         filteredFilterColumns.reduce((acc, cur) => {
             acc[cur.name] = null;
             return acc;
-        }, {})
+        }, {}),
     );
     const [deleting, setDeleting] = useState(false);
     const [deleteResult, setDeleteResult] = useState({
@@ -238,16 +238,16 @@ export default function CommentTableList(props) {
                                                 document.getElementById("textFilterCapture");
                                             const textFilterInputElement =
                                                 textFilterCaptureElement.querySelectorAll(
-                                                    ":scope input"
+                                                    ":scope input",
                                                 )[0];
                                             return textFilterInputElement?.value;
-                                        })()
+                                        })(),
                                     )}
                                 </CellWrapper>
                             ),
                             sortingField,
                         };
-                    }
+                    },
                 )}
                 visibleColumns={filteredVisibleColumns}
                 items={items}
@@ -256,9 +256,7 @@ export default function CommentTableList(props) {
                 //@todo add aria pagination label
                 pagination={<Pagination {...paginationProps} />}
                 selectedItems={selectedItems}
-                onSelectionChange={({ detail }) =>
-                    onSelection(detail.selectedItems)
-                }
+                onSelectionChange={({ detail }) => onSelection(detail.selectedItems)}
                 filter={
                     <Grid
                         gridDefinition={[
@@ -280,7 +278,7 @@ export default function CommentTableList(props) {
                                     return {
                                         colspan: {
                                             default: String(
-                                                Math.floor(12 / (filterColumn.length + 1))
+                                                Math.floor(12 / (filterColumn.length + 1)),
                                             ),
                                         },
                                     };
@@ -302,7 +300,7 @@ export default function CommentTableList(props) {
                                             onChange={({ detail }) => {
                                                 handleFilterSelected(
                                                     filterColumn.name,
-                                                    detail?.selectedOption?.value
+                                                    detail?.selectedOption?.value,
                                                 );
                                             }}
                                             options={[
@@ -314,12 +312,12 @@ export default function CommentTableList(props) {
                                                 [
                                                     ...new Set(
                                                         allItems.map(
-                                                            (row) => row[filterColumn.name]
-                                                        )
+                                                            (row) => row[filterColumn.name],
+                                                        ),
                                                     ),
                                                 ].map((cellValue) => {
                                                     return { label: cellValue, value: cellValue };
-                                                })
+                                                }),
                                             )}
                                             placeholder={filterColumn.placeholder}
                                             selectedAriaLabel="Selected"

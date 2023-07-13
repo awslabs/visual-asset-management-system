@@ -44,7 +44,7 @@ function createToggleButton<T>(props: ButtonWithTreeLinesProps<T>) {
 }
 
 export const ButtonWithTreeLines = React.memo(function ButtonWithTreeLinesComp<T>(
-    props: ButtonWithTreeLinesProps<T>
+    props: ButtonWithTreeLinesProps<T>,
 ) {
     const { node, content, alwaysExpanded } = props;
     const leftPadLength = node.getPrefix().length

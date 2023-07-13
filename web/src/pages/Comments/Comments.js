@@ -9,13 +9,12 @@ import { fetchAllAssets, fetchDatabaseAssets } from "../../services/APIService";
 import CommentsList from "./CommentsList";
 import { useParams } from "react-router";
 import Synonyms from "../../synonyms";
-import "./Comments.css"
+import "./Comments.css";
 import { AssetListDefinitionCommentPage } from "../../components/list/list-definitions/AssetListDefinitionCommentPage";
 import CommentListPage from "../CommentListPage";
 
 export default function Assets() {
-
-    const [selectedItems, setSelectedItems] = React.useState([{ }]);
+    const [selectedItems, setSelectedItems] = React.useState([{}]);
     const navigate = useNavigate();
     const urlParams = useParams();
     return (

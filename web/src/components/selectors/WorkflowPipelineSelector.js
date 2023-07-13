@@ -31,7 +31,7 @@ const WorkflowPipelineSelector = (props) => {
                     items.reduce((acc, cur) => {
                         acc[cur.pipelineId] = cur;
                         return acc;
-                    }, {})
+                    }, {}),
                 );
             }
         };

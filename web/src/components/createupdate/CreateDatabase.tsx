@@ -100,8 +100,8 @@ export default function CreateDatabase({
                     (x) =>
                         formState.acl &&
                         x.value !== undefined &&
-                        formState.acl.indexOf(x.value) > -1
-                )
+                        formState.acl.indexOf(x.value) > -1,
+                ),
             );
             setLoadingGroups(false);
         });
@@ -204,7 +204,7 @@ export default function CreateDatabase({
                                 disabled={inProgress}
                                 onChange={({ detail }) =>
                                     setSelectedOptions(
-                                        detail.selectedOptions as MultiselectProps.Option[]
+                                        detail.selectedOptions as MultiselectProps.Option[],
                                     )
                                 }
                                 deselectAriaLabel={(e) => `Remove ${e.label}`}

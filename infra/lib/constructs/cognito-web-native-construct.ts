@@ -53,7 +53,7 @@ export class CognitoWebNativeConstruct extends Construct {
                     path.join(__dirname, "../../../backend/"),
                     {
                         cmd: ["backend.handlers.auth.pretokengen.lambda_handler"],
-                    }
+                    },
                 ),
                 timeout: Duration.minutes(2),
                 memorySize: 1000,
@@ -64,10 +64,10 @@ export class CognitoWebNativeConstruct extends Construct {
                     DATABASE_STORAGE_TABLE_NAME:
                         props.storageResources.dynamo.databaseStorageTable.tableName,
                 },
-            }
+            },
         );
         props.storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(
-            preTokenGeneration
+            preTokenGeneration,
         );
 
         const userPool = new cognito.UserPool(this, "UserPool", {
@@ -117,12 +117,12 @@ export class CognitoWebNativeConstruct extends Construct {
                     userPool: userPool,
                     name: props.samlSettings.name,
                     attributeMapping: props.samlSettings.attributeMapping,
-                }
+                },
             );
             supportedIdentityProviders.push(
                 cognito.UserPoolClientIdentityProvider.custom(
-                    userPoolIdentityProviderSaml.providerName
-                )
+                    userPoolIdentityProviderSaml.providerName,
+                ),
             );
 
             userPool.addDomain("UserPoolDomain", {
@@ -160,7 +160,7 @@ export class CognitoWebNativeConstruct extends Construct {
                         "cognito-identity.amazonaws.com:amr": "unauthenticated",
                     },
                 },
-                "sts:AssumeRoleWithWebIdentity"
+                "sts:AssumeRoleWithWebIdentity",
             ),
         });
         unauthenticatedRole.addToPolicy(
@@ -179,7 +179,7 @@ export class CognitoWebNativeConstruct extends Construct {
                     "cognito-sync:ListRecords",
                 ],
                 resources: ["*"],
-            })
+            }),
         );
 
         const authenticatedRole = new iam.Role(this, "DefaultAuthenticatedRole", {
@@ -193,7 +193,7 @@ export class CognitoWebNativeConstruct extends Construct {
                         "cognito-identity.amazonaws.com:amr": "authenticated",
                     },
                 },
-                "sts:AssumeRoleWithWebIdentity"
+                "sts:AssumeRoleWithWebIdentity",
             ),
         });
         authenticatedRole.addToPolicy(
@@ -223,7 +223,7 @@ export class CognitoWebNativeConstruct extends Construct {
                     "cognito-identity:ListTagsForResource",
                 ],
                 resources: ["*"],
-            })
+            }),
         );
         authenticatedRole.addToPolicy(
             new iam.PolicyStatement({
@@ -233,7 +233,7 @@ export class CognitoWebNativeConstruct extends Construct {
                     props.storageResources.s3.assetBucket.bucketArn,
                     props.storageResources.s3.assetBucket.bucketArn + "/*",
                 ],
-            })
+            }),
         );
 
         const defaultPolicy = new cognito.CfnIdentityPoolRoleAttachment(
@@ -245,7 +245,7 @@ export class CognitoWebNativeConstruct extends Construct {
                     unauthenticated: unauthenticatedRole.roleArn,
                     authenticated: authenticatedRole.roleArn,
                 },
-            }
+            },
         );
 
         // Assign Cfn Outputs

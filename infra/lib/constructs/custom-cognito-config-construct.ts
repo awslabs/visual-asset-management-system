@@ -57,14 +57,14 @@ export class CustomCognitoConfigConstruct extends Construct {
                         LogoutURLs: props.logoutUrls,
                     },
                     physicalResourceId: cdk.custom_resources.PhysicalResourceId.of(
-                        `${props.userPoolId}-${props.clientId}`
+                        `${props.userPoolId}-${props.clientId}`,
                     ),
                 },
                 policy: cdk.custom_resources.AwsCustomResourcePolicy.fromSdkCalls({
                     resources: cdk.custom_resources.AwsCustomResourcePolicy.ANY_RESOURCE,
                 }),
                 installLatestAwsSdk: false,
-            }
+            },
         );
 
         this.resource = resource;

@@ -114,9 +114,9 @@ export default function ControlledMetadata({
                                 setMetadata(meta);
                                 setItems(metaToTableRow(meta, data));
                             }
-                        }
+                        },
                     );
-                }
+                },
             );
         } else {
             apiget("api", `metadataschema/${databaseId}`, {}).then((data: SchemaContextData) => {

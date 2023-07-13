@@ -47,7 +47,7 @@ describe("Workflow Editor", () => {
                 <div style={{ width: "800px", height: "600px" }}>
                     <WorkflowEditor />
                 </div>
-            </WorkflowContext.Provider>
+            </WorkflowContext.Provider>,
         );
     });
 
@@ -80,7 +80,7 @@ describe("Workflow Editor", () => {
                 >
                     <WorkflowEditor />
                 </WorkflowContext.Provider>
-            </div>
+            </div>,
         );
     });
 

@@ -62,7 +62,7 @@ export function MapLocationSelectorModal2({
                     JSON.stringify({
                         ...input,
                         polygons: draw.getAll(),
-                    })
+                    }),
                 );
             }
             map.on("draw.create", updateArea);
@@ -78,7 +78,7 @@ export function MapLocationSelectorModal2({
                 }
             }
         },
-        [input, setJson]
+        [input, setJson],
     );
 
     return (
@@ -106,7 +106,7 @@ export function MapLocationSelectorModal2({
                                 ...input,
                                 loc: e.target.getCenter().toArray() as C,
                                 zoom: e.target.getZoom(),
-                            })
+                            }),
                         );
                     }}
                     onLoad={onMapLoad}
@@ -117,7 +117,7 @@ export function MapLocationSelectorModal2({
                                 ...input,
                                 loc: e.target.getCenter().toArray() as C,
                                 zoom: e.target.getZoom(),
-                            })
+                            }),
                         );
                     }}
                     style={{ width: "54vw", height: "80vh" }}
@@ -154,7 +154,7 @@ function LocationDetailCopy({ ll, initialZoom }: any) {
                         onClick={() => {
                             /* copy to clipboard implementation */
                             navigator.clipboard.writeText(
-                                [ll?.lat, ll?.lng, initialZoom].join("\t")
+                                [ll?.lat, ll?.lng, initialZoom].join("\t"),
                             );
                         }}
                     />

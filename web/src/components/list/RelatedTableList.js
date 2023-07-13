@@ -39,7 +39,7 @@ export default function RelatedTableList(props) {
         filteredFilterColumns.reduce((acc, cur) => {
             acc[cur.name] = null;
             return acc;
-        }, {})
+        }, {}),
     );
 
     //private functions
@@ -168,16 +168,16 @@ export default function RelatedTableList(props) {
                                             document.getElementById("textFilterCapture");
                                         const textFilterInputElement =
                                             textFilterCaptureElement.querySelectorAll(
-                                                ":scope input"
+                                                ":scope input",
                                             )[0];
                                         return textFilterInputElement?.value;
-                                    })()
+                                    })(),
                                 )}
                             </CellWrapper>
                         ),
                         sortingField,
                     };
-                }
+                },
             )}
             visibleColumns={filteredVisibleColumns}
             items={items}
@@ -223,7 +223,7 @@ export default function RelatedTableList(props) {
                                         onChange={({ detail }) => {
                                             handleFilterSelected(
                                                 filterColumn.name,
-                                                detail?.selectedOption?.value
+                                                detail?.selectedOption?.value,
                                             );
                                         }}
                                         options={[
@@ -234,11 +234,11 @@ export default function RelatedTableList(props) {
                                         ].concat(
                                             [
                                                 ...new Set(
-                                                    allItems.map((row) => row[filterColumn.name])
+                                                    allItems.map((row) => row[filterColumn.name]),
                                                 ),
                                             ].map((cellValue) => {
                                                 return { label: cellValue, value: cellValue };
-                                            })
+                                            }),
                                         )}
                                         placeholder={filterColumn.placeholder}
                                         selectedAriaLabel="Selected"

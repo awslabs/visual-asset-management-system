@@ -49,7 +49,7 @@ describe("CSVControlData", () => {
         const config: ParseRemoteConfig = createPapaParseConfig(
             schema,
             setControlledLists,
-            setRawControlData
+            setRawControlData,
         );
         const config2: ParseWorkerConfig = {
             worker: true,
@@ -61,7 +61,7 @@ describe("CSVControlData", () => {
         // read contents of cities.metadata.test.csv into a string
         const citiesMetadataTestCSV = fs.readFileSync(
             path.join(__dirname, "cities.metadata.test.csv"),
-            "utf8"
+            "utf8",
         );
 
         Papa.parse(citiesMetadataTestCSV, config2);

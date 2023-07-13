@@ -11,7 +11,7 @@ export const load = (key) => {
         return value && JSON.parse(value);
     } catch (e) {
         console.warn(
-            `⚠️ The ${key} value that is stored in localStorage is incorrect. Try to remove the value ${key} from localStorage and reload the page`
+            `⚠️ The ${key} value that is stored in localStorage is incorrect. Try to remove the value ${key} from localStorage and reload the page`,
         );
         return undefined;
     }

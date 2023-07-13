@@ -5,27 +5,19 @@
 
 import React, { useEffect, useState } from "react";
 
-import {
-    Box,
-    Tabs,
-    TextFilter,
-    Button,
-} from "@cloudscape-design/components";
+import { Box, Tabs, TextFilter, Button } from "@cloudscape-design/components";
 import ReactQuill from "react-quill";
 import PopulateComments from "./PopulateComments";
-import 'react-quill/dist/quill.snow.css';
+import "react-quill/dist/quill.snow.css";
 import { API } from "aws-amplify";
 import { generateUUID } from "../../common/utils/utils";
 import { fetchAllComments } from "../../services/APIService";
 import { modelFileFormats } from "../../common/constants/fileFormats";
 
-
 export default function CommentsList(props) {
-    const {
-        selectedItems,
-    } = props
+    const { selectedItems } = props;
 
-    const [value, setValue] = useState('');
+    const [value, setValue] = useState("");
     const [reload, setReload] = useState(true);
     const [displayedSelectedItems, setDisplayedSelectedItems] = useState([]);
     const [allItems, setAllItems] = useState([]);
@@ -54,7 +46,7 @@ export default function CommentsList(props) {
                 setReload(false);
                 setAllItems(
                     //@todo fix workflow delete return
-                    items.filter((item) => item.assetId.indexOf("#deleted") === -1)
+                    items.filter((item) => item.assetId.indexOf("#deleted") === -1),
                 );
             }
         };
@@ -63,21 +55,16 @@ export default function CommentsList(props) {
         }
     }, [reload, assetId, fetchAllComments]);
 
-
     var modules = {
         toolbar: [
-            ['bold', 'italic', 'underline', 'strike'],
-            [, { 'list': 'bullet' }],
-            ['link'],
-            ['clean']
+            ["bold", "italic", "underline", "strike"],
+            [, { list: "bullet" }],
+            ["link"],
+            ["clean"],
         ],
     };
 
-    var formats = [
-        'bold', 'italic', 'underline', 'strike',
-        'bullet',
-        'link'
-    ];
+    var formats = ["bold", "italic", "underline", "strike", "bullet", "link"];
 
     const addComment = (event) => {
         event.preventDefault();
@@ -86,13 +73,17 @@ export default function CommentsList(props) {
         const versionId = selectedItems[0].currentVersion.S3Version;
         const uuid = "x" + generateUUID();
         const assetVersionIdAndCommentId = `${versionId}:${uuid}`;
-        API.post("api", `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`, {
-            body: {
-                // ...formState,
-                // acl: selectedOptions.map((option) => option.value),
-                commentBody: value,
+        API.post(
+            "api",
+            `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
+            {
+                body: {
+                    // ...formState,
+                    // acl: selectedOptions.map((option) => option.value),
+                    commentBody: value,
+                },
             },
-        })
+        )
             .then((res) => {
                 console.log("create comment", res);
             })
@@ -105,7 +96,7 @@ export default function CommentsList(props) {
             });
     };
 
-    var disableComments = (selectedItems[0].assetId === undefined) ? true : false;
+    var disableComments = selectedItems[0].assetId === undefined ? true : false;
 
     return (
         <div>
@@ -116,7 +107,7 @@ export default function CommentsList(props) {
                             {
                                 label: "Comments",
                                 id: "first",
-                                content:
+                                content: (
                                     <div>
                                         <table className="commentSectionTable commentSectionTableBorder">
                                             <tbody>
@@ -137,7 +128,8 @@ export default function CommentsList(props) {
                                                         <div className="commentSectionAssetsData">
                                                             <PopulateComments
                                                                 selectedItems={selectedItems}
-                                                                allComments={allItems} />
+                                                                allComments={allItems}
+                                                            />
                                                         </div>
                                                     </td>
                                                 </tr>
@@ -154,10 +146,16 @@ export default function CommentsList(props) {
                                                                         id="commentInput"
                                                                         readOnly={disableComments}
                                                                         modules={modules}
-                                                                        formats={formats} />
+                                                                        formats={formats}
+                                                                    />
                                                                 </div>
                                                                 <div className="commentSectionSubmitButton">
-                                                                    <Button variant="primary" disabled={disableComments}>Submit</Button>
+                                                                    <Button
+                                                                        variant="primary"
+                                                                        disabled={disableComments}
+                                                                    >
+                                                                        Submit
+                                                                    </Button>
                                                                 </div>
                                                             </div>
                                                         </form>
@@ -166,6 +164,7 @@ export default function CommentsList(props) {
                                             </tbody>
                                         </table>
                                     </div>
+                                ),
                             },
                             {
                                 label: "Second tab",
@@ -177,15 +176,15 @@ export default function CommentsList(props) {
                                 label: "Third tab",
                                 id: "third",
                                 content: "Third tab content area",
-                                disabled: true
-                            }
+                                disabled: true,
+                            },
                         ]}
                         variant="container"
                     />
                 </div>
             </Box>
         </div>
-    )
+    );
 }
 
 // CommentsList.propTypes = {

@@ -9,7 +9,7 @@ import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 
 export function buildAddCommentLambdaFunction(
     scope: Construct,
-    commentStorageTable: dynamodb.Table
+    commentStorageTable: dynamodb.Table,
 ): lambda.Function {
     const name = "addComment";
     const addCommentFunction = new lambda.DockerImageFunction(scope, name, {

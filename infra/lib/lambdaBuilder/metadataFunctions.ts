@@ -11,17 +11,17 @@ import { storageResources } from "../storage-builder";
 
 export function buildMetadataFunctions(
     scope: Construct,
-    storageResources: storageResources
+    storageResources: storageResources,
 ): lambda.Function[] {
     return ["create", "read", "update", "delete"].map((f) =>
-        buildMetadataFunction(scope, storageResources, f)
+        buildMetadataFunction(scope, storageResources, f),
     );
 }
 
 export function buildMetadataFunction(
     scope: Construct,
     storageResources: storageResources,
-    name: string
+    name: string,
 ): lambda.Function {
     const fun = new lambda.DockerImageFunction(scope, name + "-metadata", {
         code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {

@@ -37,8 +37,8 @@ function GroupControList({
                     (x) =>
                         selectedGroupList &&
                         x.value !== undefined &&
-                        selectedGroupList.indexOf(x.value) > -1
-                )
+                        selectedGroupList.indexOf(x.value) > -1,
+                ),
             );
             setLoadingGroups(false);
         });

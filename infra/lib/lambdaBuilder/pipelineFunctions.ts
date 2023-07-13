@@ -19,7 +19,7 @@ export function buildCreatePipelineFunction(
     artefactsBucket: s3.Bucket,
     sagemakerBucket: s3.Bucket,
     assetBucket: s3.Bucket,
-    enablePipelineFunction: lambda.Function
+    enablePipelineFunction: lambda.Function,
 ): lambda.Function {
     const name = "createPipeline";
     const newPipelineLambdaRole = createRoleToAttachToLambdaPipelines(scope, assetBucket);
@@ -60,7 +60,7 @@ export function buildCreatePipelineFunction(
             // conditions: {
             //     "StringEquals": {"aws:ResourceTag/StackController": "VAMS"}
             // }
-        })
+        }),
     );
     createPipelineFunction.addToRolePolicy(
         new iam.PolicyStatement({
@@ -81,14 +81,14 @@ export function buildCreatePipelineFunction(
                 "arn:aws:iam::*:role/*NotebookIAMRole*",
                 "arn:aws:iam::*:policy/*NotebookIAMRolePolicy*",
             ],
-        })
+        }),
     );
     createPipelineFunction.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["iam:PassRole"],
             resources: [newPipelineLambdaRole.roleArn],
-        })
+        }),
     );
     createPipelineFunction.addToRolePolicy(
         new iam.PolicyStatement({
@@ -100,7 +100,7 @@ export function buildCreatePipelineFunction(
                 "ecr:TagResource",
             ],
             resources: ["*"],
-        })
+        }),
     );
     createPipelineFunction.addToRolePolicy(
         new iam.PolicyStatement({
@@ -115,7 +115,7 @@ export function buildCreatePipelineFunction(
                 "sagemaker:AddTags",
             ],
             resources: ["*"],
-        })
+        }),
     );
 
     createPipelineFunction.addToRolePolicy(
@@ -123,7 +123,7 @@ export function buildCreatePipelineFunction(
             effect: iam.Effect.ALLOW,
             actions: ["lambda:CreateFunction"],
             resources: ["*"],
-        })
+        }),
     );
     suppressCdkNagErrorsByGrantReadWrite(createPipelineFunction);
     return createPipelineFunction;
@@ -150,14 +150,14 @@ function createRoleToAttachToLambdaPipelines(scope: Construct, assetBucket: s3.B
         },
     });
     newPipelineLambdaRole.addManagedPolicy(
-        iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSLambdaBasicExecutionRole")
+        iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSLambdaBasicExecutionRole"),
     );
     return newPipelineLambdaRole;
 }
 
 export function buildPipelineService(
     scope: Construct,
-    storageResources: storageResources
+    storageResources: storageResources,
 ): lambda.Function {
     const name = "pipelineService";
     const pipelineService = new lambda.DockerImageFunction(scope, name, {
@@ -182,7 +182,7 @@ export function buildPipelineService(
             conditions: {
                 StringEquals: { "aws:ResourceTag/StackController": "VAMS" },
             },
-        })
+        }),
     );
     pipelineService.addToRolePolicy(
         new iam.PolicyStatement({
@@ -200,14 +200,14 @@ export function buildPipelineService(
                 "arn:aws:iam::*:role/*NotebookIAMRole*",
                 "arn:aws:iam::*:policy/*NotebookIAMRolePolicy*",
             ],
-        })
+        }),
     );
     pipelineService.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["ecr:DeleteRepository", "ecr:DescribeRepositories"],
             resources: ["*"],
-        })
+        }),
     );
     pipelineService.addToRolePolicy(
         new iam.PolicyStatement({
@@ -220,21 +220,21 @@ export function buildPipelineService(
                 "sagemaker:StopNotebookInstance",
             ],
             resources: ["*"],
-        })
+        }),
     );
     pipelineService.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["lambda:DeleteFunction"],
             resources: ["*"],
-        })
+        }),
     );
     return pipelineService;
 }
 
 export function buildEnablePipelineFunction(
     scope: Construct,
-    pipelineStorageTable: dynamodb.Table
+    pipelineStorageTable: dynamodb.Table,
 ) {
     const name = "enablePipeline";
     const enablePipelineFunction = new lambda.DockerImageFunction(scope, name, {

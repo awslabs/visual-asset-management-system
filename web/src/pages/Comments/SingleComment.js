@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { addColumnSortLabels } from "../../common/helpers/labels";
-import moment from 'moment';
+import moment from "moment";
 import Icon from "@cloudscape-design/components/icon";
 
 export default function SingleComment(props) {
@@ -11,7 +11,7 @@ export default function SingleComment(props) {
         nestedCommentBool,
         dateCreated,
         dateEdited,
-    } = props
+    } = props;
 
     var timeDisplay = moment(dateCreated).fromNow();
     if (nestedCommentBool) {
@@ -19,14 +19,18 @@ export default function SingleComment(props) {
             <>
                 <div className="singleNestedCommentContainer">
                     {/* Dangerously setting innerHTML bc comments are already stored with HTML tags */}
-                    <div className="singleNestedComment" dangerouslySetInnerHTML={{ __html: commentBody }}>
-                    </div>
+                    <div
+                        className="singleNestedComment"
+                        dangerouslySetInnerHTML={{ __html: commentBody }}
+                    ></div>
                     <div hidden={dateEdited === undefined} className="commentTimeAgoDiv">
-                        <p><em>(edited)</em></p>
+                        <p>
+                            <em>(edited)</em>
+                        </p>
                     </div>
                 </div>
             </>
-        )
+        );
     }
     return (
         <>
@@ -35,7 +39,9 @@ export default function SingleComment(props) {
                     <Icon name="user-profile" size="big" />
                 </div>
                 <div>
-                    <p><b>{commentOwnerUsername}</b></p>
+                    <p>
+                        <b>{commentOwnerUsername}</b>
+                    </p>
                 </div>
                 <div className="commentTimeAgoDiv">
                     <p>{timeDisplay}</p>
@@ -43,12 +49,16 @@ export default function SingleComment(props) {
             </div>
             <div className="container">
                 {/* Dangerously setting innerHTML bc comments are already stored with HTML tags */}
-                <div className="singleComment" dangerouslySetInnerHTML={{ __html: commentBody }}>
-                </div>
+                <div
+                    className="singleComment"
+                    dangerouslySetInnerHTML={{ __html: commentBody }}
+                ></div>
                 <div hidden={dateEdited === undefined} className="commentTimeAgoDiv">
-                    <p><em>(edited)</em></p>
+                    <p>
+                        <em>(edited)</em>
+                    </p>
                 </div>
             </div>
         </>
-    )
+    );
 }

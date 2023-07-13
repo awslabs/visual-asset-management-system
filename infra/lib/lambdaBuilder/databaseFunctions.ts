@@ -11,7 +11,7 @@ import { Duration } from "aws-cdk-lib";
 
 export function buildCreateDatabaseLambdaFunction(
     scope: Construct,
-    databaseStorageTable: dynamodb.Table
+    databaseStorageTable: dynamodb.Table,
 ): lambda.Function {
     const name = "createDatabase";
     const createDatabaseFunction = new lambda.DockerImageFunction(scope, name, {
@@ -33,7 +33,7 @@ export function buildDatabaseService(
     databaseStorageTable: dynamodb.Table,
     workflowStorageTable: dynamodb.Table,
     pipelineStorageTable: dynamodb.Table,
-    assetStorageTable: dynamodb.Table
+    assetStorageTable: dynamodb.Table,
 ): lambda.Function {
     const name = "databaseService";
     const databaseService = new lambda.DockerImageFunction(scope, name, {

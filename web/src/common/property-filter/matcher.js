@@ -20,7 +20,7 @@ export function buildMatcher(tokens, operation) {
         return (item) => {
             const keys = isFreeText ? Object.keys(item) : [propertyKey];
             const intermediate = keys.some((key) =>
-                isFreeText ? partial(value, item[key]) : exact(value, item[key])
+                isFreeText ? partial(value, item[key]) : exact(value, item[key]),
             );
             return negated ? not(intermediate) : intermediate;
         };
@@ -30,7 +30,7 @@ export function buildMatcher(tokens, operation) {
             return matchers.reduce(
                 (acc, matcher) =>
                     operation === "or" ? or(acc, matcher(item)) : and(acc, matcher(item)),
-                operation === "or" ? false : true
+                operation === "or" ? false : true,
             );
         };
     };

@@ -25,7 +25,7 @@ ReactDOM.render(
             </Suspense>
         </VAMSAuth>
     </React.StrictMode>,
-    document.getElementById("root")
+    document.getElementById("root"),
 );
 
 reportWebVitals();

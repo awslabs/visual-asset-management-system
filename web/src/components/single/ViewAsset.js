@@ -171,7 +171,7 @@ export default function ViewAsset() {
                 }
             };
             const element = document.querySelector(
-                "#view-edit-asset-right-column .visualizer-container"
+                "#view-edit-asset-right-column .visualizer-container",
             );
             element.removeEventListener("fullscreenchange", fullscreenChangeHandler);
 
@@ -362,7 +362,7 @@ export default function ViewAsset() {
                                                                 variant="loki"
                                                                 onClick={() => {
                                                                     navigator.clipboard.writeText(
-                                                                        downloadUrl
+                                                                        downloadUrl,
                                                                     );
                                                                 }}
                                                             >

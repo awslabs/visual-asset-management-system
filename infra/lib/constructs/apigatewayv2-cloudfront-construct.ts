@@ -61,7 +61,7 @@ export class ApiGatewayV2CloudFrontConstruct extends Construct {
             {
                 userPoolClients: [props.userPoolClient],
                 identitySource: ["$request.header.Authorization"],
-            }
+            },
         );
 
         // init api gateway
@@ -133,11 +133,11 @@ export class ApiGatewayV2CloudFrontConstruct extends Construct {
                     {
                         // required or CloudFront will strip all query strings off the request
                         queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.all(),
-                    }
+                    },
                 ),
                 allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
                 viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-            }
+            },
         );
     }
 }

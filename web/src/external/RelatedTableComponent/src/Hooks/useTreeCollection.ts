@@ -26,7 +26,7 @@ export interface UseTreeCollectionResult<T> extends UseCollectionResult<ITreeNod
 
 export const useTreeCollection = <T>(
     items: T[],
-    props: UseTreeCollection<T>
+    props: UseTreeCollection<T>,
 ): UseTreeCollectionResult<T> => {
     const { keyPropertyName, parentKeyPropertyName, columnDefinitions, ...collectionProps } = props;
     const [treeMap, setTreeMap] = useState<TreeMap<T>>(new Map());
@@ -40,7 +40,7 @@ export const useTreeCollection = <T>(
             items,
             treeMap,
             keyPropertyName,
-            parentKeyPropertyName
+            parentKeyPropertyName,
         );
         TreeUtility.sortTree(treeNodes, sortState, columnDefinitions);
         // only builds prefix after building and sorting the tree
@@ -74,13 +74,13 @@ export const useTreeCollection = <T>(
             filteringFunction: (
                 item: ITreeNode<T>,
                 filteringText: string,
-                filteringFields?: string[]
+                filteringFields?: string[],
             ) =>
                 TreeUtility.filteringFunction(
                     item,
                     filteringText,
                     filteringFields,
-                    collectionProps.filtering?.filteringFunction
+                    collectionProps.filtering?.filteringFunction,
                 ),
         },
     };

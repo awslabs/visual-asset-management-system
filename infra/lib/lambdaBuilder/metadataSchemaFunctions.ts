@@ -11,7 +11,7 @@ import { storageResources } from "../storage-builder";
 
 export function buildMetadataSchemaService(
     scope: Construct,
-    storageResources: storageResources
+    storageResources: storageResources,
 ): lambda.Function {
     const name = "metadataschema";
     const fn = new lambda.DockerImageFunction(scope, name, {
