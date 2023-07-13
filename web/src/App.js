@@ -55,7 +55,7 @@ function App() {
     }, [navigationOpen]);
 
     return (
-        <Authenticator components={components} loginMechanisms={["email"]} hideSignUp={true}>
+        <Authenticator components={components} loginMechanisms={["email"]}>
             {({ signOut, user }) => {
                 console.info("user", user);
                 const menuText =

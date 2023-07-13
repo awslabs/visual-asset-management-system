@@ -15,7 +15,6 @@ class AssetPreviewLocationModel(BaseModel):
 
 
 class UploadAssetModel(BaseModel):
-    isMultiFile: bool = False
     databaseId: str
     assetId: str
     assetName: str
@@ -25,8 +24,8 @@ class UploadAssetModel(BaseModel):
     description: str
     isDistributable: bool
     Comment: str
+    previewLocation: AssetPreviewLocationModel
     specifiedPipelines: list[str]
-    previewLocation: Optional[AssetPreviewLocationModel]
 
 
 class UpdateMetadataModel(BaseModel):

@@ -21,7 +21,6 @@ import addPipelinesImageSrc from "../resources/img/add_pipelines.png";
 import buildWorkflowsImageSrc from "../resources/img/build_workflows.png";
 import uploadAndManageImageSrc from "../resources/img/upload_and_manage.png";
 import visualize3dVrImageSrc from "../resources/img/visualize_3d_vr.png";
-import Synonyms from "../synonyms";
 
 const CarouselRadio = ({ id, setSlide, slide }) => {
     return (
@@ -106,13 +105,13 @@ const LandingPage = (props) => {
                         <Container>
                             <SpaceBetween size="xl">
                                 <Box variant="h2" padding="n">
-                                    Upload {Synonyms.Assets}
+                                    Upload Assets
                                 </Box>
                                 <Box variant="p">
                                     Start uploading and managing your digital assets to get started.
                                 </Box>
                                 <Button href="/upload" variant="primary">
-                                    Upload {Synonyms.Assets}
+                                    Upload Assets
                                 </Button>
                             </SpaceBetween>
                         </Container>
@@ -155,7 +154,7 @@ const LandingPage = (props) => {
                                                     <img
                                                         ref={firstCarouselImageEl}
                                                         src={uploadAndManageImageSrc}
-                                                        alt={`Upload & Manage ${Synonyms.Assets}`}
+                                                        alt="Upload & Manage Assets"
                                                     />
                                                 </div>
                                             </li>

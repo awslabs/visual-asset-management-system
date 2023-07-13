@@ -59,8 +59,6 @@ interface InlineLambdaProps {
      * Additional configuration needed for federated auth
      */
     federatedConfig?: AmplifyConfigFederatedIdentityProps;
-
-    stackName: string;
 }
 
 export interface AmplifyConfigLambdaConstructProps extends cdk.StackProps {
@@ -112,7 +110,6 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                     identityPoolId: props.identityPoolId,
                     api: props.api.url || "us-east-1",
                     federatedConfig: props.federatedConfig,
-                    stackName: props.stackName!,
                 })
             ),
             timeout: cdk.Duration.seconds(15),

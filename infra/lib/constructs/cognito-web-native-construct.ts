@@ -70,16 +70,16 @@ export class CognitoWebNativeConstruct extends Construct {
             preTokenGeneration
         );
 
-        const message =
-            "Hello, Thank you for registering with your instance of Visual Asset Management System! Your verification code is {####}";
         const userPool = new cognito.UserPool(this, "UserPool", {
-            selfSignUpEnabled: false,
+            selfSignUpEnabled: true,
             autoVerify: { email: true },
             userVerification: {
-                emailSubject: "Verify your email with Visual Asset Management System!",
-                emailBody: message,
+                emailSubject: "Verify your email the app!",
+                emailBody:
+                    "Hello {username}, Thanks for signing up to the app! Your verification code is {####}",
                 emailStyle: cognito.VerificationEmailStyle.CODE,
-                smsMessage: message,
+                smsMessage:
+                    "Hello {username}, Thanks for signing up to app! Your verification code is {####}",
             },
             passwordPolicy: {
                 minLength: 8,
@@ -228,12 +228,7 @@ export class CognitoWebNativeConstruct extends Construct {
         authenticatedRole.addToPolicy(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
-                actions: [
-                    "s3:PutObject",
-                    "s3:GetObject",
-                    "s3:CreateMultipartUpload",
-                    "s3:ListBucket",
-                ],
+                actions: ["s3:PutObject", "s3:GetObject"],
                 resources: [
                     props.storageResources.s3.assetBucket.bucketArn,
                     props.storageResources.s3.assetBucket.bucketArn + "/*",

@@ -7,10 +7,10 @@ import React from "react";
 import { Route, Routes } from "react-router-dom";
 import AppLayout from "@cloudscape-design/components/app-layout";
 import LandingPage from "./pages/LandingPage";
-import SearchPage from "./pages/search/SearchPage";
 import { Navigation } from "./layout/Navigation";
 import Databases from "./pages/Databases";
 import Assets from "./pages/Assets";
+import Comments from "./pages/Comments/Comments";
 import AssetUploadPage from "./pages/AssetUpload";
 import ViewAsset from "./components/single/ViewAsset";
 import Pipelines from "./pages/Pipelines";
@@ -18,9 +18,7 @@ import ViewPipeline from "./components/single/ViewPipeline";
 import Workflows from "./pages/Workflows";
 import CreateUpdateWorkflow from "./components/createupdate/CreateUpdateWorkflow";
 import Constraints from "./pages/auth/Constraints";
-import FinishUploadsPage from "./pages/FinishUploads";
 import MetadataSchema from "./pages/MetadataSchema";
-import ViewFile from "./components/single/ViewFile";
 
 interface RouteOption {
     path: string;
@@ -31,7 +29,6 @@ interface RouteOption {
 
 const routeTable: RouteOption[] = [
     { path: "/", Page: LandingPage, active: "/" },
-    { path: "/search", Page: SearchPage, active: "/" },
     { path: "/databases", Page: Databases, active: "/databases", roles: ["assets"] },
     { path: "/databases/:databaseId/assets", Page: Assets, active: "/assets", roles: ["assets"] },
     {
@@ -40,18 +37,6 @@ const routeTable: RouteOption[] = [
         active: "/assets",
         roles: ["assets"],
     },
-    {
-        path: "/databases/:databaseId/assets/:assetId/uploads",
-        Page: FinishUploadsPage,
-        active: "/assets",
-        roles: ["assets", "upload"],
-    },
-    {
-        path: "/databases/:databaseId/assets/:assetId/file",
-        Page: ViewFile,
-        active: "/assets",
-        roles: ["assets", "upload"],
-    },
     { path: "/assets/:assetId", Page: ViewAsset, active: "/assets", roles: ["assets"] },
     {
         path: "/upload/:databaseId",
@@ -59,6 +44,7 @@ const routeTable: RouteOption[] = [
         active: "/upload",
         roles: ["assets", "upload"],
     },
+    { path: "/comments", Page: Comments, active: "/comments" },
     { path: "/upload", Page: AssetUploadPage, active: "/upload", roles: ["assets", "upload"] },
     { path: "/visualizers/:pathViewType", Page: ViewAsset, active: "/assets", roles: ["assets"] },
     { path: "/assets", Page: Assets, active: "/assets", roles: ["assets"] },

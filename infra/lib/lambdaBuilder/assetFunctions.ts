@@ -38,32 +38,6 @@ export function buildAssetService(
     return assetService;
 }
 
-export function buildAssetFiles(
-    scope: Construct,
-    assetStorageTable: dynamodb.Table,
-    databaseStorageTable: dynamodb.Table,
-    assetStorageBucket: s3.Bucket
-): lambda.Function {
-    const name = "assetFiles";
-    const assetService = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.assets.${name}.lambda_handler`],
-        }),
-        timeout: Duration.minutes(15),
-        memorySize: 3008,
-        environment: {
-            ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
-        },
-    });
-    assetStorageTable.grantReadWriteData(assetService);
-    databaseStorageTable.grantReadWriteData(assetService);
-    assetStorageBucket.grantReadWrite(assetService);
-
-    suppressCdkNagErrorsByGrantReadWrite(scope);
-
-    return assetService;
-}
-
 export function buildUploadAssetFunction(
     scope: Construct,
     assetStorageBucket: s3.Bucket,

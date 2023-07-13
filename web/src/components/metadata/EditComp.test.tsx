@@ -39,8 +39,7 @@ describe("EditComp", () => {
             />
         );
 
-        //TODO: Make assertions
-        //expect(view).toMatchSnapshot();
+        expect(view).toMatchSnapshot();
     });
 
     it("renders textarea fields", () => {
@@ -73,8 +72,7 @@ describe("EditComp", () => {
             />
         );
 
-        //TODO: Make assertions
-        //expect(view).toMatchSnapshot();
+        expect(view).toMatchSnapshot();
     });
 
     it("renders inline controlled lists", () => {

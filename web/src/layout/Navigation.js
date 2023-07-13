@@ -25,7 +25,7 @@ let navItems = [
             { type: "link", text: Synonyms.Databases, href: "/databases" },
             { type: "link", text: Synonyms.Assets, href: "/assets" },
             { type: "link", text: `Upload ${Synonyms.Asset}`, href: "/upload" },
-            { type: "link", text: `Search`, href: "/search" },
+            { type: "link", text: Synonyms.Comments, href: "/comments" },
         ],
     },
     {
@@ -76,7 +76,7 @@ let navItems = [
     },
 ];
 
-const defaultOnFollowHandler = (ev) => {};
+const defaultOnFollowHandler = (ev) => { };
 
 export function Navigation({
     activeHref,
@@ -88,7 +88,7 @@ export function Navigation({
     let roles = [];
     try {
         roles = JSON.parse(user.signInUserSession.idToken.payload["vams:roles"]);
-    } catch (e) {}
+    } catch (e) { }
     return (
         <SideNavigation
             header={config.CUSTOMER_LOGO ? navHeader : null}

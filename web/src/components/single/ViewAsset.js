@@ -12,7 +12,6 @@ import {
     FormField,
     Grid,
     Header,
-    Link,
     SegmentedControl,
     SpaceBetween,
     Spinner,
@@ -20,35 +19,64 @@ import {
 
 import ControlledMetadata from "../metadata/ControlledMetadata";
 import ImgViewer from "../viewers/ImgViewer";
-import React, { Suspense, useEffect, useState } from "react";
+import React, { useEffect, useState, Suspense } from "react";
 import { useParams } from "react-router";
 import {
-    downloadAsset,
     fetchAsset,
-    fetchDatabaseWorkflows,
     fetchWorkflowExecutions,
+    fetchDatabaseWorkflows,
+    downloadAsset,
 } from "../../services/APIService";
 /**
  * No viewer yet for cad and archive file formats
  */
+import {
+    columnarFileFormats,
+    modelFileFormats,
+    presentationFileFormats,
+} from "../../common/constants/fileFormats";
 import AssetSelectorWithModal from "../selectors/AssetSelectorWithModal";
 import RelatedTableList from "../list/RelatedTableList";
 import { WorkflowExecutionListDefinition } from "../list/list-definitions/WorkflowExecutionListDefinition";
 import CreateUpdateAsset from "../createupdate/CreateUpdateAsset";
 import { actionTypes } from "../createupdate/form-definitions/types/FormDefinition";
 import WorkflowSelectorWithModal from "../selectors/WorkflowSelectorWithModal";
-import localforage from "localforage";
 import { ErrorBoundary } from "react-error-boundary";
 import Synonyms from "../../synonyms";
-import { UpdateAsset } from "../createupdate/UpdateAsset";
 
-const FolderViewer = React.lazy(() => import("../viewers/FolderViewer"));
+const ThreeDimensionalPlotter = React.lazy(() => import("../viewers/ThreeDimensionalPlotter"));
+const ColumnarViewer = React.lazy(() => import("../viewers/ColumnarViewer"));
+const HTMLViewer = React.lazy(() => import("../viewers/HTMLViewer"));
+const ModelViewer = React.lazy(() => import("../viewers/ModelViewer"));
+const checkFileFormat = (asset) => {
+    let filetype;
+    if (asset?.generated_artifacts?.gltf?.Key) {
+        filetype = asset?.generated_artifacts?.gltf?.Key.split(".").pop();
+    } else {
+        filetype = asset.assetType;
+    }
+
+    filetype = filetype.toLowerCase();
+    if (modelFileFormats.includes(filetype) || modelFileFormats.includes("." + filetype)) {
+        return "model";
+    }
+    if (columnarFileFormats.includes(filetype) || columnarFileFormats.includes("." + filetype)) {
+        return "plot";
+    }
+    if (
+        presentationFileFormats.includes(filetype) ||
+        presentationFileFormats.includes("." + filetype)
+    ) {
+        return "html";
+    }
+    return "preview";
+};
 
 export default function ViewAsset() {
     const { databaseId, assetId, pathViewType } = useParams();
 
     const [reload, setReload] = useState(true);
-    const [viewType, setViewType] = useState("preview");
+    const [viewType, setViewType] = useState(null);
     const [asset, setAsset] = useState({});
 
     const [viewerOptions, setViewerOptions] = useState([]);
@@ -60,7 +88,6 @@ export default function ViewAsset() {
     const [loading, setLoading] = useState(true);
     const [allItems, setAllItems] = useState([]);
     const [workflowOpen, setWorkflowOpen] = useState(false);
-    const [containsIncompleteUploads, setContainsIncompleteUploads] = useState(false);
 
     // error state
     const [assetDownloadError, setAssetDownloadError] = useState("");
@@ -120,20 +147,6 @@ export default function ViewAsset() {
                 setLoading(false);
                 setReload(false);
             }
-            localforage.getItem(assetId).then((value) => {
-                if (value) {
-                    console.log("Reading from localforage:", value);
-                    for (let i = 0; i < value.Asset.length; i++) {
-                        if (
-                            value.Asset[i].status !== "Completed" &&
-                            value.Asset[i].loaded !== value.Asset[i].total
-                        ) {
-                            setContainsIncompleteUploads(true);
-                            break;
-                        }
-                    }
-                }
-            });
         };
         if (reload) {
             getData();
@@ -236,10 +249,34 @@ export default function ViewAsset() {
                 if (item !== false) {
                     console.log(item);
                     setAsset(item);
-                    setViewerOptions([
-                        { text: "Folder", id: "folder" },
-                        { text: "Preview", id: "preview" },
-                    ]);
+
+                    const defaultViewType = checkFileFormat(item);
+                    console.log("default view type", defaultViewType);
+                    const newViewerOptions = [{ text: "Preview", id: "preview" }];
+                    if (defaultViewType === "plot") {
+                        newViewerOptions.push({ text: "Plot", id: "plot" });
+                        newViewerOptions.push({ text: "Column", id: "column" });
+                    } else if (defaultViewType === "model") {
+                        newViewerOptions.push({ text: "Model", id: "model" });
+                    } else if (defaultViewType === "html") {
+                        newViewerOptions.push({ text: "HTML", id: "html" });
+                    }
+                    setViewerOptions(newViewerOptions);
+                    if (!window.location.hash) setViewType(defaultViewType);
+                    else {
+                        if (window.location.hash === "#preview") {
+                            setViewType("preview");
+                        }
+                        if (window.location.hash === "#model") {
+                            setViewType("model");
+                        } else if (window.location.hash === "#plot") {
+                            setViewType("plot");
+                        } else if (window.location.hash === "#column") {
+                            setViewType("column");
+                        } else if (window.location.hash === "#html") {
+                            setViewType("html");
+                        }
+                    }
                 }
             }
         };
@@ -342,17 +379,6 @@ export default function ViewAsset() {
                                                     </SpaceBetween>
                                                 </div>
                                             )}
-                                            {containsIncompleteUploads && (
-                                                <>
-                                                    <h5>Finish Incomplete uploads</h5>
-                                                    <Link
-                                                        href={`/databases/${databaseId}/assets/${assetId}/uploads`}
-                                                    >
-                                                        {" "}
-                                                        Finish Incomplete uploads{" "}
-                                                    </Link>
-                                                </>
-                                            )}
                                             <FormField errorText={assetDownloadError}></FormField>
                                         </Container>
                                     </div>
@@ -404,14 +430,30 @@ export default function ViewAsset() {
                                                                     }
                                                                 />
                                                             )}
-                                                        {asset.assetId && asset.databaseId && (
-                                                            <FolderViewer
-                                                                assetId={asset?.assetId}
-                                                                databaseId={asset?.databaseId}
-                                                                assetName={asset?.assetName}
-                                                                isDistributable={
-                                                                    asset?.isDistributable
+                                                        {viewType === "model" && (
+                                                            <ModelViewer
+                                                                assetKey={
+                                                                    asset?.generated_artifacts?.gltf
+                                                                        ?.Key ||
+                                                                    asset?.assetLocation?.Key
                                                                 }
+                                                                className="visualizer-container-canvas"
+                                                            />
+                                                        )}
+                                                        {viewType === "plot" && (
+                                                            <ThreeDimensionalPlotter
+                                                                assetKey={asset?.assetLocation?.Key}
+                                                                className="visualizer-container-canvas"
+                                                            />
+                                                        )}
+                                                        {viewType === "column" && (
+                                                            <ColumnarViewer
+                                                                assetKey={asset?.assetLocation?.Key}
+                                                            />
+                                                        )}
+                                                        {viewType === "html" && (
+                                                            <HTMLViewer
+                                                                assetKey={asset?.assetLocation?.Key}
                                                             />
                                                         )}
                                                     </div>
@@ -526,17 +568,18 @@ export default function ViewAsset() {
                             </ErrorBoundary>
                         </SpaceBetween>
                     </Box>
-                    {asset && (
-                        <UpdateAsset
-                            asset={asset}
-                            isOpen={openUpdateAsset}
-                            onClose={() => handleOpenUpdateAsset(false)}
-                            onComplete={() => {
-                                handleOpenUpdateAsset(false);
-                                window.location.reload(true);
-                            }}
-                        />
-                    )}
+                    <CreateUpdateAsset
+                        open={openUpdateAsset}
+                        setOpen={setOpenUpdateAsset}
+                        setReload={setReload}
+                        databaseId={databaseId}
+                        assetId={assetId}
+                        actionType={actionTypes.UPDATE}
+                        asset={asset}
+                        setAsset={(a) => {
+                            setViewType("preview");
+                        }}
+                    />
                     <WorkflowSelectorWithModal
                         assetId={assetId}
                         databaseId={databaseId}

@@ -209,17 +209,27 @@ export const fetchAsset = async ({ databaseId, assetId }, api = API) => {
     }
 };
 
-export const fetchAssetFiles = async ({ databaseId, assetId }, api = API) => {
+/**
+ * Returns array of all comments the current user can access for all databases, or false if error.
+ * @returns {Promise<boolean|{message}|any>}
+ */
+export const fetchAllComments = async ({ assetId }, api = API) => {
     try {
-        let response;
-        console.log("Calling API to get files");
-        if (databaseId && assetId) {
-            response = await api.get(
-                "api",
-                `database/${databaseId}/assets/${assetId}/listFiles`,
-                {}
-            );
-            if (response) return response;
+        let response = await api.get("api", `comments/assets/${assetId}`, {});
+        let items = [];
+        const init = { queryStringParameters: { startingToken: null } };
+        if (response.message) {
+            if (response.message.Items) {
+                items = items.concat(response.message.Items);
+                while (response.message.NextToken) {
+                    init["queryStringParameters"]["startingToken"] = response.message.NextToken;
+                    response = await api.get("api", `comments/assets/${assetId}`, init);
+                    items = items.concat(response.message.Items);
+                }
+                return items;
+            } else {
+                return response.message;
+            }
         } else {
             return false;
         }
