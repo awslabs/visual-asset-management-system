@@ -56,7 +56,7 @@ export class ApiGatewayV2LambdaConstruct extends Construct {
         // add lambda integration
         const lambdaFnIntegration = new apigwIntegrations.HttpLambdaIntegration(
             "lint-" + name,
-            props.lambdaFn,
+            props.lambdaFn
         );
 
         // add route to the api gateway

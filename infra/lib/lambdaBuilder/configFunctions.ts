@@ -10,7 +10,7 @@ import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 export function buildConfigService(
     scope: Construct,
-    assetStorageBucket: s3.Bucket,
+    assetStorageBucket: s3.Bucket
 ): lambda.Function {
     const name = "configService";
     const assetService = new lambda.DockerImageFunction(scope, name, {

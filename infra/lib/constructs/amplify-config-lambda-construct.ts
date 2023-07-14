@@ -110,7 +110,7 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                     identityPoolId: props.identityPoolId,
                     api: props.api.url || "us-east-1",
                     federatedConfig: props.federatedConfig,
-                }),
+                })
             ),
             timeout: cdk.Duration.seconds(15),
         });
@@ -121,7 +121,7 @@ export class AmplifyConfigLambdaConstruct extends Construct {
         // add lambda integration
         const lambdaFnIntegration = new apigwIntegrations.HttpLambdaIntegration(
             "AmplifyConfigLambdaIntegration",
-            lambdaFn,
+            lambdaFn
         );
 
         // add route to the api gateway

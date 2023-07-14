@@ -58,7 +58,7 @@ describe("ListPageNoDatabase", () => {
                 fetchAllElements={fetchAllElements}
                 fetchElements={fetchAllElements}
                 onCreateCallback={jest.fn()}
-            />,
+            />
         );
 
         await act(async () => {

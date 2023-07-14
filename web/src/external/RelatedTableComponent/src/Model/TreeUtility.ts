@@ -11,7 +11,7 @@ export class TreeUtility {
         items: T[],
         treeMap: TreeMap<T>,
         keyPropertyName: string,
-        parentKeyPropertyName: string,
+        parentKeyPropertyName: string
     ): ITreeNode<T>[] => {
         const staleNodeKeys = new Set<string>(Array.from(treeMap.keys()));
         const treeNodes = items
@@ -22,7 +22,7 @@ export class TreeUtility {
                     item,
                     treeMap,
                     keyPropertyName,
-                    parentKeyPropertyName,
+                    parentKeyPropertyName
                 );
             })
             .map((node) => TreeUtility.prepareNode(node, treeMap, keyPropertyName))
@@ -36,7 +36,7 @@ export class TreeUtility {
         item: T,
         treeMap: TreeMap<T>,
         keyPropertyName: string,
-        parentKeyPropertyName: string,
+        parentKeyPropertyName: string
     ): ITreeNode<T> => {
         const key = (item as any)[keyPropertyName];
         let node = treeMap.get(key);
@@ -56,7 +56,7 @@ export class TreeUtility {
         node: ITreeNode<T>,
         treeMap: TreeMap<T>,
         keyPropertyName: string,
-        parentKeyPropertyName: string,
+        parentKeyPropertyName: string
     ) => {
         const parentKey = (node as any)[parentKeyPropertyName];
         if (parentKey) {
@@ -73,7 +73,7 @@ export class TreeUtility {
     public static prepareNode = <T>(
         node: ITreeNode<T>,
         treeMap: TreeMap<T>,
-        keyPropertyName: string,
+        keyPropertyName: string
     ): ITreeNode<T> => {
         const key = (node as any)[keyPropertyName];
         const isVisible = node.getParent()
@@ -83,7 +83,7 @@ export class TreeUtility {
         node.setStatus(
             node.hasChildren || node.getChildren().length > 0
                 ? ExpandableTableNodeStatus.normal
-                : ExpandableTableNodeStatus.emptyChildren,
+                : ExpandableTableNodeStatus.emptyChildren
         );
         treeMap.set(key, node);
         return node;
@@ -92,7 +92,7 @@ export class TreeUtility {
     public static cleanupTree = <T>(
         keyPropertyName: string,
         treeMap: TreeMap<T>,
-        staleNodeKeys: Set<string>,
+        staleNodeKeys: Set<string>
     ) => {
         staleNodeKeys.forEach((key) => {
             const node = treeMap.get(key);
@@ -105,7 +105,7 @@ export class TreeUtility {
     public static removeNode = <T>(
         node: ITreeNode<T>,
         keyPropertyName: string,
-        treeMap: TreeMap<T>,
+        treeMap: TreeMap<T>
     ) => {
         const key = (node as any)[keyPropertyName];
 
@@ -117,7 +117,7 @@ export class TreeUtility {
         }
 
         node.getChildren().forEach((child) =>
-            TreeUtility.removeNode(child, keyPropertyName, treeMap),
+            TreeUtility.removeNode(child, keyPropertyName, treeMap)
         );
         node.removeAllChildren();
         treeMap.delete(key);
@@ -132,7 +132,7 @@ export class TreeUtility {
     private static recursiveBuildTreePrefix = <T>(
         node: ITreeNode<T>,
         index: number,
-        parentLastChildPath: boolean[],
+        parentLastChildPath: boolean[]
     ) => {
         const isLastChild = node.getParent()
             ? node.getParent()!.getChildren().length - 1 === index
@@ -142,8 +142,8 @@ export class TreeUtility {
             TreeUtility.recursiveBuildTreePrefix(
                 child,
                 childIndex,
-                parentLastChildPath.concat([isLastChild]),
-            ),
+                parentLastChildPath.concat([isLastChild])
+            )
         );
         return node;
     };
@@ -166,7 +166,7 @@ export class TreeUtility {
     public static expandOrCollapseChildren = <T>(
         node: ITreeNode<T>,
         treeMap: TreeMap<T>,
-        keyPropertyName: string,
+        keyPropertyName: string
     ) => {
         node.getChildren().forEach((child: ITreeNode<T>) => {
             const key = (child as any)[keyPropertyName];
@@ -189,8 +189,8 @@ export class TreeUtility {
         customFilteringFunction?: (
             item: ITreeNode<T>,
             filteringText: string,
-            filteringFields?: string[],
-        ) => boolean,
+            filteringFields?: string[]
+        ) => boolean
     ): boolean => {
         if (filteringText.length === 0) {
             return item.isVisible();
@@ -203,7 +203,7 @@ export class TreeUtility {
             const fields = filteringFields || Object.keys(item);
             const lowFilteringText = filteringText.toLowerCase();
             filterMatched = fields.some(
-                (key) => String(item[key]).toLowerCase().indexOf(lowFilteringText) > -1,
+                (key) => String(item[key]).toLowerCase().indexOf(lowFilteringText) > -1
             );
         }
 
@@ -211,7 +211,7 @@ export class TreeUtility {
             const childrenFiltered = item
                 .getChildren()
                 .map((child) =>
-                    TreeUtility.filteringFunction(child, filteringText, filteringFields),
+                    TreeUtility.filteringFunction(child, filteringText, filteringFields)
                 )
                 .find((found) => found);
             return typeof childrenFiltered !== "undefined";
@@ -222,12 +222,12 @@ export class TreeUtility {
     public static sortTree = <T>(
         tree: ITreeNode<T>[],
         sortState: TableProps.SortingState<T>,
-        columnsDefinitions: ReadonlyArray<TableProps.ColumnDefinition<T>>,
+        columnsDefinitions: ReadonlyArray<TableProps.ColumnDefinition<T>>
     ) => {
         const { sortingColumn } = sortState;
         if (sortingColumn && sortingColumn.sortingField && columnsDefinitions) {
             const columnDefinition = columnsDefinitions.find(
-                (column) => column.sortingField === sortingColumn.sortingField,
+                (column) => column.sortingField === sortingColumn.sortingField
             )!;
             const direction = sortState.isDescending ? -1 : 1;
             const comparator =
@@ -235,7 +235,7 @@ export class TreeUtility {
                 TreeUtility.defaultComparator(sortState.sortingColumn.sortingField as keyof T);
 
             tree.sort((a: T, b: T) => comparator(a, b) * direction).forEach((node) =>
-                TreeUtility.sortTree(node.getChildren(), sortState, columnsDefinitions),
+                TreeUtility.sortTree(node.getChildren(), sortState, columnsDefinitions)
             );
         }
     };

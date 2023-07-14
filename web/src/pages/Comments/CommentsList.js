@@ -46,7 +46,7 @@ export default function CommentsList(props) {
                 setReload(false);
                 setAllItems(
                     //@todo fix workflow delete return
-                    items.filter((item) => item.assetId.indexOf("#deleted") === -1),
+                    items.filter((item) => item.assetId.indexOf("#deleted") === -1)
                 );
             }
         };
@@ -82,7 +82,7 @@ export default function CommentsList(props) {
                     // acl: selectedOptions.map((option) => option.value),
                     commentBody: value,
                 },
-            },
+            }
         )
             .then((res) => {
                 console.log("create comment", res);

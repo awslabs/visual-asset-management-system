@@ -196,7 +196,7 @@ const UploadForm = () => {
                                             label={`${Synonyms.Asset} Name`}
                                             constraintText="All lower case, no special chars or spaces except - and _ only letters for first character min 4 and max 64."
                                             errorText={validateEntityIdAsYouType(
-                                                assetDetail.assetId,
+                                                assetDetail.assetId
                                             )}
                                         >
                                             <Input
@@ -221,7 +221,7 @@ const UploadForm = () => {
                                                                 (assetDetail.isDistributable ===
                                                                 true
                                                                     ? "Yes"
-                                                                    : "No") === o.label,
+                                                                    : "No") === o.label
                                                         )
                                                         .pop() || null
                                                 }
@@ -241,7 +241,7 @@ const UploadForm = () => {
                                         <FormField
                                             label={Synonyms.Database}
                                             errorText={validateNonZeroLengthTextAsYouType(
-                                                assetDetail.databaseId,
+                                                assetDetail.databaseId
                                             )}
                                         >
                                             <DatabaseSelector
@@ -261,7 +261,7 @@ const UploadForm = () => {
                                             label="Description"
                                             constraintText="Minimum 4 characters"
                                             errorText={validateNonZeroLengthTextAsYouType(
-                                                assetDetail.description,
+                                                assetDetail.description
                                             )}
                                         >
                                             <Textarea
@@ -280,7 +280,7 @@ const UploadForm = () => {
                                             label="Comment"
                                             constraintText="Minimum 4 characters"
                                             errorText={validateNonZeroLengthTextAsYouType(
-                                                assetDetail.Comment,
+                                                assetDetail.Comment
                                             )}
                                         >
                                             <Input
@@ -391,7 +391,7 @@ const UploadForm = () => {
                                                     } selected`,
                                                 itemSelectionLabel: ({ selectedItems }, item) => {
                                                     const isItemSelected = selectedItems.filter(
-                                                        (i) => i.name === item.name,
+                                                        (i) => i.name === item.name
                                                     ).length;
                                                     return `${item.name} is ${
                                                         isItemSelected ? "" : "not"

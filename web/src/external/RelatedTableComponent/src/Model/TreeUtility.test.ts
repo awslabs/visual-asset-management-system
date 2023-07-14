@@ -66,7 +66,7 @@ describe("TreeUtility", () => {
             items,
             new Map() as TreeMap<any>,
             "id",
-            "parentId",
+            "parentId"
         );
         TreeUtility.sortTree(newNodes, {} as any, []);
         nodes = TreeUtility.flatTree(TreeUtility.buildTreePrefix(newNodes));
@@ -81,7 +81,7 @@ describe("TreeUtility", () => {
             items,
             new Map() as TreeMap<any>,
             "id",
-            "parentId",
+            "parentId"
         );
         TreeUtility.sortTree(treeNodes, {} as any, []);
 
@@ -117,7 +117,7 @@ describe("TreeUtility", () => {
         newItems.splice(parentIndex, 1, newParentItem);
 
         const newNodes = TreeUtility.flatTree(
-            TreeUtility.buildTreeNodes(newItems, treeMap, "id", "parentId"),
+            TreeUtility.buildTreeNodes(newItems, treeMap, "id", "parentId")
         );
         const parentNode = newNodes.find((item) => item.name === "Parent");
         expect(parentNode).toBeDefined();
@@ -133,7 +133,7 @@ describe("TreeUtility", () => {
         newItems.splice(parentIndex, 1);
 
         const newNodes = TreeUtility.flatTree(
-            TreeUtility.buildTreeNodes(newItems, treeMap, "id", "parentId"),
+            TreeUtility.buildTreeNodes(newItems, treeMap, "id", "parentId")
         );
         expect(newNodes.length).toEqual(2);
         expect(treeMap.size).toEqual(2);
@@ -141,13 +141,13 @@ describe("TreeUtility", () => {
 
     it("filtering function by name", () => {
         const nodesFiltered = nodes.filter((node) =>
-            TreeUtility.filteringFunction(node, "Great Grand Child", ["name"]),
+            TreeUtility.filteringFunction(node, "Great Grand Child", ["name"])
         );
         expect(nodesFiltered.length).toEqual(6);
     });
     it("filtering function by all columns", () => {
         const nodesFiltered = nodes.filter((node) =>
-            TreeUtility.filteringFunction(node, "Great Grand Child"),
+            TreeUtility.filteringFunction(node, "Great Grand Child")
         );
         expect(nodesFiltered.length).toEqual(6);
     });
@@ -159,8 +159,8 @@ describe("TreeUtility", () => {
                 node,
                 "Great Grand Child",
                 undefined,
-                customFilteringFunction,
-            ),
+                customFilteringFunction
+            )
         );
         expect(nodesFiltered.length).toEqual(6);
     });
@@ -174,7 +174,7 @@ describe("TreeUtility", () => {
                     sortingField: "name",
                 },
             },
-            columnsDefinitions,
+            columnsDefinitions
         );
         expect(sortedNodes.length).toEqual(6);
         expect(sortedNodes[0].name).toEqual("Child");
@@ -187,7 +187,7 @@ describe("TreeUtility", () => {
                     sortingField: "priority",
                 },
             },
-            columnsDefinitions,
+            columnsDefinitions
         );
         expect(sortedNodes[0].name).toEqual("Child");
         expect(sortedNodes[5].name).toEqual("Great Grand Child");
@@ -203,7 +203,7 @@ describe("TreeUtility", () => {
                     sortingField: "priority",
                 },
             },
-            columnsDefinitions,
+            columnsDefinitions
         );
         expect(sortedNodes.length).toEqual(6);
         expect(sortedNodes[0].name).toEqual("Great Grand Child");

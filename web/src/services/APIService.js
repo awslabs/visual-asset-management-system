@@ -14,7 +14,7 @@ export const downloadAsset = async ({ databaseId, assetId, config }, api = API) 
         const response = await api.post(
             "api",
             `/database/${databaseId}/assets/${assetId}/download`,
-            config || config.body,
+            config || config.body
         );
         if (response.message) {
             if (
@@ -46,7 +46,7 @@ export const deleteElement = async ({ deleteRoute, elementId, item }, api = API)
             deleteRoute
                 .replace("{databaseId}", item?.databaseId)
                 .replace(`{${elementId}}`, item[elementId]),
-            {},
+            {}
         );
         if (response.message) {
             console.log(response.message);
@@ -69,7 +69,7 @@ export const runWorkflow = async ({ databaseId, assetId, workflowId }, api = API
         const response = await api.post(
             "api",
             `database/${databaseId}/assets/${assetId}/workflows/${workflowId}`,
-            {},
+            {}
         );
         if (response.message) {
             if (
@@ -440,7 +440,7 @@ export const fetchWorkflowExecutions = async ({ databaseId, assetId, workflowId 
             response = await api.get(
                 "api",
                 `database/${databaseId}/assets/${assetId}/workflows/${workflowId}/executions`,
-                {},
+                {}
             );
             if (response.message) {
                 if (response.message.Items) {

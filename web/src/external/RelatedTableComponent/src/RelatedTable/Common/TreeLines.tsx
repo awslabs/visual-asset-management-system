@@ -142,7 +142,7 @@ const createLinesSvg = (directions: Dir[], theme: Theme, index: number) => {
 export function createPrefixLines<T>(
     node: ITreeNode<T>,
     theme: Theme,
-    alwaysExpanded: boolean = false,
+    alwaysExpanded: boolean = false
 ) {
     const prefixSequence: JSX.Element[] = [];
     node.getPrefix().forEach((prefix, index) => {
@@ -154,21 +154,21 @@ export function createPrefixLines<T>(
                 prefixSequence.splice(
                     index,
                     0,
-                    ...createLinesSvg([Dir.Top, Dir.Right], theme, index),
+                    ...createLinesSvg([Dir.Top, Dir.Right], theme, index)
                 );
                 break;
             case TreeLineModes.ChildOfMiddleChild:
                 prefixSequence.splice(
                     index,
                     0,
-                    ...createLinesSvg([Dir.Top, Dir.Bottom], theme, index),
+                    ...createLinesSvg([Dir.Top, Dir.Bottom], theme, index)
                 );
                 break;
             case TreeLineModes.MiddleChild:
                 prefixSequence.splice(
                     index,
                     0,
-                    ...createLinesSvg([Dir.Top, Dir.Bottom, Dir.Right], theme, index),
+                    ...createLinesSvg([Dir.Top, Dir.Bottom, Dir.Right], theme, index)
                 );
                 break;
             default:
@@ -179,7 +179,7 @@ export function createPrefixLines<T>(
         prefixSequence.splice(
             prefixSequence.length - 1,
             0,
-            ...createLinesSvg([Dir.LittleBottom], theme, node.getPrefix().length || 1),
+            ...createLinesSvg([Dir.LittleBottom], theme, node.getPrefix().length || 1)
         );
     }
     return prefixSequence;

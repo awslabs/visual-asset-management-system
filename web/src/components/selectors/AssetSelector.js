@@ -69,7 +69,7 @@ const AssetSelector = (props) => {
                 if (pathViewType) {
                     const assetId = detail.selectedOption.value;
                     const databaseId = allItems.find(
-                        (item) => item.assetId === assetId,
+                        (item) => item.assetId === assetId
                     )?.databaseId;
                     window.location = `/databases/${databaseId}/assets/${assetId}#${pathViewType}`;
                 } else {

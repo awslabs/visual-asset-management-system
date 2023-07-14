@@ -18,7 +18,7 @@ export function buildUploadAssetWorkflow(
     updateMetadataFunction: lambda.Function,
     executeWorkflowFunction: lambda.Function,
     assetBucket: s3.Bucket,
-    stagingBucket?: s3.IBucket,
+    stagingBucket?: s3.IBucket
 ): sfn.StateMachine {
     const callUploadAssetLambdaTask = new tasks.LambdaInvoke(scope, "Upload Asset Task", {
         lambdaFunction: uploadAssetFunction,

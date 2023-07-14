@@ -15,7 +15,7 @@ interface AuthFunctions {
 }
 export function buildAuthFunctions(
     scope: Construct,
-    storageResources: storageResources,
+    storageResources: storageResources
 ): AuthFunctions {
     return {
         groups: buildAuthFunction(scope, storageResources, "groups"),
@@ -26,7 +26,7 @@ export function buildAuthFunctions(
 export function buildAuthFunction(
     scope: Construct,
     storageResources: storageResources,
-    name: string,
+    name: string
 ): lambda.Function {
     const fun = new lambda.DockerImageFunction(scope, name, {
         code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {

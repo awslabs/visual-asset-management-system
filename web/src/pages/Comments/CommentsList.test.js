@@ -20,7 +20,7 @@ test("Should be able to leave a comment with an asset selected", () => {
                     assetId: "testId",
                 },
             ]}
-        />,
+        />
     );
     const submitButton = screen.getByText("Submit");
     const quillInput = document.getElementById("commentInput");
@@ -56,7 +56,7 @@ test("Should render a test comment correctly", async () => {
                     assetName: "Test_asset",
                 },
             ]}
-        />,
+        />
     );
     // wait for fetchAllComments to be called
     await new Promise((r) => setTimeout(r, 2000));

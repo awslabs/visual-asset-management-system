@@ -73,7 +73,7 @@ describe("Group Permissions Table", () => {
                             permission: "test",
                         },
                     ]}
-                />,
+                />
             );
             await promise;
         });

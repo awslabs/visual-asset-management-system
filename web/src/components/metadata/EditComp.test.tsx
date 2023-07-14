@@ -36,7 +36,7 @@ describe("EditComp", () => {
                 }}
                 currentValue={""}
                 metadata={metadata}
-            />,
+            />
         );
 
         expect(view).toMatchSnapshot();
@@ -69,7 +69,7 @@ describe("EditComp", () => {
                 }}
                 currentValue={""}
                 metadata={metadata}
-            />,
+            />
         );
 
         expect(view).toMatchSnapshot();
@@ -102,7 +102,7 @@ describe("EditComp", () => {
                 }}
                 currentValue={""}
                 metadata={metadata}
-            />,
+            />
         );
 
         const wrapper = createWrapper(view.container);
@@ -143,7 +143,7 @@ describe("EditComp", () => {
                 }}
                 currentValue={""}
                 metadata={metadata}
-            />,
+            />
         );
 
         const wrapper = createWrapper();
@@ -184,7 +184,7 @@ describe("EditComp", () => {
                 }}
                 currentValue={""}
                 metadata={metadata}
-            />,
+            />
         );
 
         const wrapper = createWrapper();
@@ -219,7 +219,7 @@ describe("EditComp", () => {
                 }}
                 currentValue={""}
                 metadata={metadata}
-            />,
+            />
         );
 
         const wrapper = createWrapper(view.container);

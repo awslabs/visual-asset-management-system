@@ -25,7 +25,7 @@ const AssetFilesUploadGroup = (props) => {
                     controlName={"Asset"}
                     fileFormats={modelFileFormats
                         .concat(
-                            columnarFileFormats.concat(cadFileFormats.concat(archiveFileFormats)),
+                            columnarFileFormats.concat(cadFileFormats.concat(archiveFileFormats))
                         )
                         .join(",")}
                 />

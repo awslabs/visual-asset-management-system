@@ -56,7 +56,7 @@ describe("ControlledMetadata", () => {
         });
         citiesMetadataTestCSV = fs.readFileSync(
             path.join(__dirname, "cities.metadata.test.csv"),
-            "utf8",
+            "utf8"
         );
         controlledListData = Promise.resolve(citiesMetadataTestCSV);
         storageget = jest.fn(() => {
@@ -76,7 +76,7 @@ describe("ControlledMetadata", () => {
                     assetId="456"
                     apiget={get}
                     storageget={storageget}
-                />,
+                />
             );
             await schemas;
             await controlledListData;
@@ -99,7 +99,7 @@ describe("ControlledMetadata", () => {
                         country_name: "United States",
                         state_name: "California",
                     }}
-                />,
+                />
             );
             await schemas;
             await controlledListData;

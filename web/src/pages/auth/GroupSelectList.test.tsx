@@ -21,7 +21,7 @@ describe("GroupSelectList", () => {
                 description="a description"
                 fetchGroups={jest.fn(() => promise)}
                 errorText={() => null}
-            />,
+            />
         );
         const wrapper = createWrapper(container);
         await act(async () => {

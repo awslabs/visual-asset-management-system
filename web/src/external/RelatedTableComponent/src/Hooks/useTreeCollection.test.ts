@@ -43,7 +43,7 @@ describe("useTreeCollection", () => {
                 selection: {
                     trackBy: "entityId",
                 },
-            }),
+            })
         );
 
         rerender();
@@ -60,7 +60,7 @@ describe("useTreeCollection", () => {
                 selection: {
                     trackBy: "entityId",
                 },
-            }),
+            })
         );
 
         expect(result.current.items[0].isExpanded()).toEqual(true);
@@ -81,7 +81,7 @@ describe("useTreeCollection", () => {
                 selection: {
                     trackBy: "entityId",
                 },
-            }),
+            })
         );
 
         expect(result.current.items[0].isExpanded()).toEqual(true);

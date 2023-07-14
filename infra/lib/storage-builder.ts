@@ -35,7 +35,7 @@ export interface storageResources {
 }
 export function storageResourcesBuilder(
     scope: Construct,
-    staging_bucket?: string,
+    staging_bucket?: string
 ): storageResources {
     // dynamodb contributorInsightsEnabled
     const dynamodbDefaultProps: Partial<dynamodb.TableProps> = {
@@ -203,7 +203,7 @@ export function storageResourcesBuilder(
                 name: "sk",
                 type: dynamodb.AttributeType.STRING,
             },
-        },
+        }
     );
 
     const metadataStorageTable = new dynamodb.Table(scope, "MetadataStorageTable", {

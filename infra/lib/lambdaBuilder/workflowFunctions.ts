@@ -14,7 +14,7 @@ import { suppressCdkNagErrorsByGrantReadWrite } from "../security";
 import { storageResources } from "../storage-builder";
 export function buildWorkflowService(
     scope: Construct,
-    storageResources: storageResources,
+    storageResources: storageResources
 ): lambda.Function {
     const name = "workflowService";
     const workflowService = new lambda.DockerImageFunction(scope, name, {
@@ -40,7 +40,7 @@ export function buildWorkflowService(
                 "states:UpdateStateMachine",
             ],
             resources: ["*"],
-        }),
+        })
     );
     return workflowService;
 }
@@ -60,7 +60,7 @@ export function buildRunProcessingJobFunction(scope: Construct): lambda.Function
 
 export function buildListlWorkflowExecutionsFunction(
     scope: Construct,
-    workflowExecutionStorageTable: dynamodb.Table,
+    workflowExecutionStorageTable: dynamodb.Table
 ): lambda.Function {
     const name = "listExecutions";
     const listAllWorkflowsFunction = new lambda.DockerImageFunction(scope, name, {
@@ -79,7 +79,7 @@ export function buildListlWorkflowExecutionsFunction(
             effect: iam.Effect.ALLOW,
             actions: ["states:DescribeExecution"],
             resources: ["*"],
-        }),
+        })
     );
     return listAllWorkflowsFunction;
 }
@@ -88,7 +88,7 @@ export function buildCreateWorkflowFunction(
     scope: Construct,
     workflowStorageTable: dynamodb.Table,
     assetStorageBucket: s3.Bucket,
-    uploadAllAssetFunction: lambda.Function,
+    uploadAllAssetFunction: lambda.Function
 ): lambda.Function {
     const role = buildWorkflowRole(scope, assetStorageBucket, uploadAllAssetFunction);
     const name = "createWorkflow";
@@ -114,14 +114,14 @@ export function buildCreateWorkflowFunction(
                 "states:UpdateStateMachine",
             ],
             resources: ["*"],
-        }),
+        })
     );
     createWorkflowFunction.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["iam:PassRole"],
             resources: ["arn:aws:iam::*:role/*VAMS*"],
-        }),
+        })
     );
     suppressCdkNagErrorsByGrantReadWrite(createWorkflowFunction);
     return createWorkflowFunction;
@@ -133,7 +133,7 @@ export function buildRunWorkflowFunction(
     pipelineStorageTable: dynamodb.Table,
     assetStorageTable: dynamodb.Table,
     workflowExecutionStorageTable: dynamodb.Table,
-    assetStorageBucket: s3.Bucket,
+    assetStorageBucket: s3.Bucket
 ): lambda.Function {
     const name = "executeWorkflow";
     const runWorkflowFunction = new lambda.DockerImageFunction(scope, name, {
@@ -160,7 +160,7 @@ export function buildRunWorkflowFunction(
             effect: iam.Effect.ALLOW,
             actions: ["states:StartExecution", "states:DescribeStateMachine"],
             resources: ["*"],
-        }),
+        })
     );
     return runWorkflowFunction;
 }
@@ -168,7 +168,7 @@ export function buildRunWorkflowFunction(
 export function buildWorkflowRole(
     scope: Construct,
     assetStorageBucket: s3.Bucket,
-    uploadAllAssetFunction: lambda.Function,
+    uploadAllAssetFunction: lambda.Function
 ): iam.Role {
     const createWorkflowPolicy = new iam.PolicyDocument({
         statements: [
@@ -244,7 +244,7 @@ export function buildWorkflowRole(
         assumedBy: new iam.CompositePrincipal(
             new iam.ServicePrincipal("lambda.amazonaws.com"),
             new iam.ServicePrincipal("sagemaker.amazonaws.com"),
-            new iam.ServicePrincipal("states.amazonaws.com"),
+            new iam.ServicePrincipal("states.amazonaws.com")
         ),
         description: "VAMS Workflow IAM Role.",
         inlinePolicies: {

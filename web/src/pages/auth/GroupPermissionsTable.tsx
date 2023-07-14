@@ -131,7 +131,7 @@ export default function GroupPermissionsTable({
                                 <Select
                                     selectedOption={
                                         options.find(
-                                            (x) => x.value === (currentValue ?? item.permission),
+                                            (x) => x.value === (currentValue ?? item.permission)
                                         ) ?? null
                                     }
                                     options={options}

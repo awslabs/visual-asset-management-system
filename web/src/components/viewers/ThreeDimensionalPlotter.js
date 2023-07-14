@@ -87,7 +87,7 @@ const buildScatterPlot = ({ dimensions, labels, scene }) => {
         linesWidth,
         position,
         rotation,
-        highlight,
+        highlight
     ) {
         const stepw = (2 * width) / linesWidth,
             steph = (2 * height) / linesHeight;
@@ -113,7 +113,7 @@ const buildScatterPlot = ({ dimensions, labels, scene }) => {
         const line = MeshBuilder.CreateLineSystem(
             "linesystem",
             { lines: verts, updatable: false },
-            scatterPlot.scene,
+            scatterPlot.scene
         );
         if (hightlight) {
             line.color = new Color4(0.2, 0.2, 0.2, 0.5);
@@ -160,7 +160,7 @@ const buildScatterPlot = ({ dimensions, labels, scene }) => {
             { width: 4000, height: 4000 },
             scatterPlot.scene,
             true,
-            DynamicTexture.TRILINEAR_SAMPLINGMODE,
+            DynamicTexture.TRILINEAR_SAMPLINGMODE
         );
         planeTexture.drawText(
             text,
@@ -169,7 +169,7 @@ const buildScatterPlot = ({ dimensions, labels, scene }) => {
             "bold 1024px monospace",
             "white",
             "transparent",
-            true,
+            true
         );
 
         const material = new StandardMaterial("outputplane", scatterPlot.scene);
@@ -218,8 +218,8 @@ const buildScatterPlot = ({ dimensions, labels, scene }) => {
                     new Vector3(
                         points[i].x * (this.dimensions.width / this._b),
                         points[i].y * (this.dimensions.height / this._a),
-                        points[i].z * (this.dimensions.depth / this._c),
-                    ),
+                        points[i].z * (this.dimensions.depth / this._c)
+                    )
                 );
             }
         }
@@ -234,7 +234,7 @@ const buildScatterPlot = ({ dimensions, labels, scene }) => {
                 particle.position = new Vector3(
                     convertedPoints[i].x / 5 + 450,
                     convertedPoints[i].y / 5 + 450,
-                    convertedPoints[i].z / 5 + 450,
+                    convertedPoints[i].z / 5 + 450
                 );
                 particle.color = new Color4(0, 1, 0, 1);
             };
@@ -295,7 +295,7 @@ const buildScatterPlot = ({ dimensions, labels, scene }) => {
         scatterPlot._b,
         scatterPlot._a,
         new Vector3(0, 0, 0),
-        Vector3.Zero(),
+        Vector3.Zero()
     );
     scatterPlot.addGrid(
         scatterPlot._depth,
@@ -304,7 +304,7 @@ const buildScatterPlot = ({ dimensions, labels, scene }) => {
         scatterPlot._c,
         new Vector3(0, 0, 0),
         new Vector3(Math.PI / 2, 0, 0),
-        true,
+        true
     );
     scatterPlot.addGrid(
         scatterPlot._height,
@@ -312,7 +312,7 @@ const buildScatterPlot = ({ dimensions, labels, scene }) => {
         scatterPlot._c,
         scatterPlot._a,
         new Vector3(0, 0, 0),
-        new Vector3(0, Math.PI / 2),
+        new Vector3(0, Math.PI / 2)
     );
 
     scatterPlot.addLabel(scatterPlot._width, scatterPlot.labelsInfo.x, "x");
@@ -434,7 +434,7 @@ export default function ThreeDimensionalPlotter(props) {
             Math.PI / 3,
             1350,
             Vector3.Zero(),
-            scene,
+            scene
         );
         arcCamera.setTarget(new Vector3(0, 0, 0));
         arcCamera.speed = 0.4;
@@ -477,7 +477,7 @@ export default function ThreeDimensionalPlotter(props) {
                 1.41,
                 950,
                 Vector3.Zero(),
-                scene,
+                scene
             );
         camera2.attachControl(canvas, true);
 

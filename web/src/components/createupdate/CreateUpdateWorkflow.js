@@ -129,7 +129,7 @@ export default function CreateUpdateWorkflow(props) {
         } else if (!verifyStringMaxLength(workflowDescription, 256)) {
             setWorkflowIDError("");
             setWorkflowDescriptionError(
-                "Invalid prop description. Value exceeds maximum length of 256.",
+                "Invalid prop description. Value exceeds maximum length of 256."
             );
             setActiveTab("details");
         } else if (workflowPipelines.length === 0 || workflowPipelines[0] === null) {
@@ -309,7 +309,7 @@ export default function CreateUpdateWorkflow(props) {
                                                                     value={workflowIdNew}
                                                                     onChange={(event) =>
                                                                         setWorkflowIDNew(
-                                                                            event.detail.value,
+                                                                            event.detail.value
                                                                         )
                                                                     }
                                                                 />
@@ -328,7 +328,7 @@ export default function CreateUpdateWorkflow(props) {
                                                                     value={workflowDescription}
                                                                     onChange={(event) =>
                                                                         setWorkflowDescription(
-                                                                            event.detail.value,
+                                                                            event.detail.value
                                                                         )
                                                                     }
                                                                 />
@@ -377,7 +377,7 @@ export default function CreateUpdateWorkflow(props) {
                                                                                     </td>
                                                                                 </tr>
                                                                             );
-                                                                        },
+                                                                        }
                                                                     )}
                                                                 </tbody>
                                                                 <tfoot>

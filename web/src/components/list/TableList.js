@@ -57,7 +57,7 @@ export default function TableList(props) {
         filteredFilterColumns.reduce((acc, cur) => {
             acc[cur.name] = null;
             return acc;
-        }, {}),
+        }, {})
     );
     const [deleting, setDeleting] = useState(false);
     const [deleteResult, setDeleteResult] = useState({
@@ -234,16 +234,16 @@ export default function TableList(props) {
                                                 document.getElementById("textFilterCapture");
                                             const textFilterInputElement =
                                                 textFilterCaptureElement.querySelectorAll(
-                                                    ":scope input",
+                                                    ":scope input"
                                                 )[0];
                                             return textFilterInputElement?.value;
-                                        })(),
+                                        })()
                                     )}
                                 </CellWrapper>
                             ),
                             sortingField,
                         };
-                    },
+                    }
                 )}
                 visibleColumns={filteredVisibleColumns}
                 items={items}
@@ -272,7 +272,7 @@ export default function TableList(props) {
                                     return {
                                         colspan: {
                                             default: String(
-                                                Math.floor(12 / (filterColumn.length + 1)),
+                                                Math.floor(12 / (filterColumn.length + 1))
                                             ),
                                         },
                                     };
@@ -294,7 +294,7 @@ export default function TableList(props) {
                                             onChange={({ detail }) => {
                                                 handleFilterSelected(
                                                     filterColumn.name,
-                                                    detail?.selectedOption?.value,
+                                                    detail?.selectedOption?.value
                                                 );
                                             }}
                                             options={[
@@ -306,12 +306,12 @@ export default function TableList(props) {
                                                 [
                                                     ...new Set(
                                                         allItems.map(
-                                                            (row) => row[filterColumn.name],
-                                                        ),
+                                                            (row) => row[filterColumn.name]
+                                                        )
                                                     ),
                                                 ].map((cellValue) => {
                                                     return { label: cellValue, value: cellValue };
-                                                }),
+                                                })
                                             )}
                                             placeholder={filterColumn.placeholder}
                                             selectedAriaLabel="Selected"
