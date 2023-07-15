@@ -28,6 +28,7 @@ class UploadAssetModel(BaseModel):
     specifiedPipelines: list[str]
     previewLocation: Optional[AssetPreviewLocationModel]
 
+
 class UpdateMetadataModel(BaseModel):
     version: str
     metadata: Dict[str, str]

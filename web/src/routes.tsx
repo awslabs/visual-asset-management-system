@@ -21,6 +21,7 @@ import Constraints from "./pages/auth/Constraints";
 import FinishUploadsPage from "./pages/FinishUploads";
 import MetadataSchema from "./pages/MetadataSchema";
 import ViewFile from "./components/single/ViewFile";
+import AssetDownloadsPage from "./pages/AssetDownload";
 
 interface RouteOption {
     path: string;
@@ -37,6 +38,12 @@ const routeTable: RouteOption[] = [
     {
         path: "/databases/:databaseId/assets/:assetId",
         Page: ViewAsset,
+        active: "/assets",
+        roles: ["assets"],
+    },
+    {
+        path: "/databases/:databaseId/assets/:assetId/download",
+        Page: AssetDownloadsPage,
         active: "/assets",
         roles: ["assets"],
     },

@@ -8,7 +8,7 @@ import {
     Box,
     BreadcrumbGroup,
     Button,
-    Container,
+    Container, ExpandableSection,
     FormField,
     Grid,
     Header,
@@ -41,7 +41,7 @@ import localforage from "localforage";
 import { ErrorBoundary } from "react-error-boundary";
 import Synonyms from "../../synonyms";
 import { UpdateAsset } from "../createupdate/UpdateAsset";
-import {FileManager} from "../filemanager/FIleManager";
+import {FileManager} from "../filemanager/FileManager";
 
 const FolderViewer = React.lazy(() => import("../viewers/FolderViewer"));
 
@@ -269,11 +269,158 @@ export default function ViewAsset() {
                             <Grid gridDefinition={[{ colspan: 4 }]}>
                                 <h1>{asset?.assetName}</h1>
                             </Grid>
-                            <Grid
-                                gridDefinition={[
-                                    { colspan: viewerMode === "collapse" ? 4 : 12 },
-                                    { colspan: viewerMode === "collapse" ? 8 : 0 },
-                                ]}
+                            <div id="view-edit-asset-right-column" className={viewerMode}>
+                                {/*<SpaceBetween direction="vertical" size="m">*/}
+                                {/*    <Container*/}
+                                {/*        header={*/}
+                                {/*            <Grid*/}
+                                {/*                gridDefinition={[*/}
+                                {/*                    { colspan: 3 },*/}
+                                {/*                    { colspan: 9 },*/}
+                                {/*                ]}*/}
+                                {/*            >*/}
+                                {/*                <Box margin={{ bottom: "m" }}>*/}
+                                {/*                    <Header variant="h2">Visualizer</Header>*/}
+                                {/*                </Box>*/}
+                                {/*                <SegmentedControl*/}
+                                {/*                    label="Visualizer Control"*/}
+                                {/*                    options={viewerOptions}*/}
+                                {/*                    selectedId={viewType}*/}
+                                {/*                    onChange={changeViewType}*/}
+                                {/*                    className="visualizer-segment-control"*/}
+                                {/*                />*/}
+                                {/*            </Grid>*/}
+                                {/*        }*/}
+                                {/*    >*/}
+                                {/*        <Suspense*/}
+                                {/*            fallback={*/}
+                                {/*                <div className="visualizer-container">*/}
+                                {/*                    <div className="visualizer-container-spinner">*/}
+                                {/*                        <Spinner />*/}
+                                {/*                    </div>*/}
+                                {/*                </div>*/}
+                                {/*            }*/}
+                                {/*        >*/}
+                                {/*            <div className="visualizer-container">*/}
+                                {/*                <div className="visualizer-container-canvases">*/}
+                                {/*                    {viewType === "preview" &&*/}
+                                {/*                        asset?.previewLocation?.Key && (*/}
+                                {/*                            <ImgViewer*/}
+                                {/*                                assetKey={*/}
+                                {/*                                    asset?.generated_artifacts*/}
+                                {/*                                        ?.preview?.Key ||*/}
+                                {/*                                    asset.previewLocation.Key*/}
+                                {/*                                }*/}
+                                {/*                                altAssetKey={*/}
+                                {/*                                    asset.previewLocation.Key*/}
+                                {/*                                }*/}
+                                {/*                            />*/}
+                                {/*                        )}*/}
+                                {/*                    {asset.assetId && asset.databaseId && (*/}
+                                {/*                        <FolderViewer*/}
+                                {/*                            assetId={asset?.assetId}*/}
+                                {/*                            databaseId={asset?.databaseId}*/}
+                                {/*                            assetName={asset?.assetName}*/}
+                                {/*                            isDistributable={*/}
+                                {/*                                asset?.isDistributable*/}
+                                {/*                            }*/}
+                                {/*                        />*/}
+                                {/*                    )}*/}
+                                {/*                </div>*/}
+
+                                {/*                <div className="visualizer-footer">*/}
+                                {/*                    <a*/}
+                                {/*                        title="View Collapsed"*/}
+                                {/*                        onClick={() =>*/}
+                                {/*                            changeViewerMode("collapse")*/}
+                                {/*                        }*/}
+                                {/*                        className={*/}
+                                {/*                            viewerMode === "collapse"*/}
+                                {/*                                ? "selected"*/}
+                                {/*                                : ""*/}
+                                {/*                        }*/}
+                                {/*                    >*/}
+                                {/*                        <svg*/}
+                                {/*                            xmlns="http://www.w3.org/2000/svg"*/}
+                                {/*                            height="24px"*/}
+                                {/*                            viewBox="0 0 24 24"*/}
+                                {/*                            width="24px"*/}
+                                {/*                            fill="#000000"*/}
+                                {/*                        >*/}
+                                {/*                            <path*/}
+                                {/*                                d="M0 0h24v24H0V0z"*/}
+                                {/*                                fill="none"*/}
+                                {/*                            />*/}
+                                {/*                            <path d="M19 11h-8v6h8v-6zm-2 4h-4v-2h4v2zm4-12H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V4.98C23 3.88 22.1 3 21 3zm0 16.02H3V4.97h18v14.05z" />*/}
+                                {/*                        </svg>*/}
+                                {/*                    </a>*/}
+                                {/*                    <a*/}
+                                {/*                        title="View Wide"*/}
+                                {/*                        onClick={() => changeViewerMode("wide")}*/}
+                                {/*                        className={*/}
+                                {/*                            viewerMode === "wide"*/}
+                                {/*                                ? "selected"*/}
+                                {/*                                : ""*/}
+                                {/*                        }*/}
+                                {/*                    >*/}
+                                {/*                        <svg*/}
+                                {/*                            xmlns="http://www.w3.org/2000/svg"*/}
+                                {/*                            enableBackground="new 0 0 24 24"*/}
+                                {/*                            height="24px"*/}
+                                {/*                            viewBox="0 0 24 24"*/}
+                                {/*                            width="24px"*/}
+                                {/*                            fill="#000000"*/}
+                                {/*                        >*/}
+                                {/*                            <g>*/}
+                                {/*                                <rect*/}
+                                {/*                                    fill="none"*/}
+                                {/*                                    height="24"*/}
+                                {/*                                    width="24"*/}
+                                {/*                                />*/}
+                                {/*                            </g>*/}
+                                {/*                            <g>*/}
+                                {/*                                <g>*/}
+                                {/*                                    <path d="M2,4v16h20V4H2z M20,18H4V6h16V18z" />*/}
+                                {/*                                </g>*/}
+                                {/*                            </g>*/}
+                                {/*                        </svg>*/}
+                                {/*                    </a>*/}
+                                {/*                    <a*/}
+                                {/*                        title="View Fullscreen"*/}
+                                {/*                        onClick={() =>*/}
+                                {/*                            changeViewerMode("fullscreen")*/}
+                                {/*                        }*/}
+                                {/*                        className={*/}
+                                {/*                            viewerMode === "fullscreen"*/}
+                                {/*                                ? "selected"*/}
+                                {/*                                : ""*/}
+                                {/*                        }*/}
+                                {/*                    >*/}
+                                {/*                        <svg*/}
+                                {/*                            xmlns="http://www.w3.org/2000/svg"*/}
+                                {/*                            height="24px"*/}
+                                {/*                            viewBox="0 0 24 24"*/}
+                                {/*                            width="24px"*/}
+                                {/*                            fill="#000000"*/}
+                                {/*                        >*/}
+                                {/*                            <path*/}
+                                {/*                                d="M0 0h24v24H0V0z"*/}
+                                {/*                                fill="none"*/}
+                                {/*                            />*/}
+                                {/*                            <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z" />*/}
+                                {/*                        </svg>*/}
+                                {/*                    </a>*/}
+                                {/*                </div>*/}
+                                {/*            </div>*/}
+                                {/*        </Suspense>*/}
+                                {/*    </Container>*/}
+                                {/*</SpaceBetween>*/}
+                                {
+                                    asset?.assetName && <FileManager assetName={asset?.assetName}> </FileManager>
+                                }
+                            </div>
+                            <ExpandableSection
+                                headerText={"Asset Details"}
                             >
                                 {viewerMode === "collapse" && (
                                     <div id="view-edit-asset-left-column">
@@ -358,174 +505,34 @@ export default function ViewAsset() {
                                         </Container>
                                     </div>
                                 )}
-                                <div id="view-edit-asset-right-column" className={viewerMode}>
-                                    {/*<SpaceBetween direction="vertical" size="m">*/}
-                                    {/*    <Container*/}
-                                    {/*        header={*/}
-                                    {/*            <Grid*/}
-                                    {/*                gridDefinition={[*/}
-                                    {/*                    { colspan: 3 },*/}
-                                    {/*                    { colspan: 9 },*/}
-                                    {/*                ]}*/}
-                                    {/*            >*/}
-                                    {/*                <Box margin={{ bottom: "m" }}>*/}
-                                    {/*                    <Header variant="h2">Visualizer</Header>*/}
-                                    {/*                </Box>*/}
-                                    {/*                <SegmentedControl*/}
-                                    {/*                    label="Visualizer Control"*/}
-                                    {/*                    options={viewerOptions}*/}
-                                    {/*                    selectedId={viewType}*/}
-                                    {/*                    onChange={changeViewType}*/}
-                                    {/*                    className="visualizer-segment-control"*/}
-                                    {/*                />*/}
-                                    {/*            </Grid>*/}
-                                    {/*        }*/}
-                                    {/*    >*/}
-                                    {/*        <Suspense*/}
-                                    {/*            fallback={*/}
-                                    {/*                <div className="visualizer-container">*/}
-                                    {/*                    <div className="visualizer-container-spinner">*/}
-                                    {/*                        <Spinner />*/}
-                                    {/*                    </div>*/}
-                                    {/*                </div>*/}
-                                    {/*            }*/}
-                                    {/*        >*/}
-                                    {/*            <div className="visualizer-container">*/}
-                                    {/*                <div className="visualizer-container-canvases">*/}
-                                    {/*                    {viewType === "preview" &&*/}
-                                    {/*                        asset?.previewLocation?.Key && (*/}
-                                    {/*                            <ImgViewer*/}
-                                    {/*                                assetKey={*/}
-                                    {/*                                    asset?.generated_artifacts*/}
-                                    {/*                                        ?.preview?.Key ||*/}
-                                    {/*                                    asset.previewLocation.Key*/}
-                                    {/*                                }*/}
-                                    {/*                                altAssetKey={*/}
-                                    {/*                                    asset.previewLocation.Key*/}
-                                    {/*                                }*/}
-                                    {/*                            />*/}
-                                    {/*                        )}*/}
-                                    {/*                    {asset.assetId && asset.databaseId && (*/}
-                                    {/*                        <FolderViewer*/}
-                                    {/*                            assetId={asset?.assetId}*/}
-                                    {/*                            databaseId={asset?.databaseId}*/}
-                                    {/*                            assetName={asset?.assetName}*/}
-                                    {/*                            isDistributable={*/}
-                                    {/*                                asset?.isDistributable*/}
-                                    {/*                            }*/}
-                                    {/*                        />*/}
-                                    {/*                    )}*/}
-                                    {/*                </div>*/}
-
-                                    {/*                <div className="visualizer-footer">*/}
-                                    {/*                    <a*/}
-                                    {/*                        title="View Collapsed"*/}
-                                    {/*                        onClick={() =>*/}
-                                    {/*                            changeViewerMode("collapse")*/}
-                                    {/*                        }*/}
-                                    {/*                        className={*/}
-                                    {/*                            viewerMode === "collapse"*/}
-                                    {/*                                ? "selected"*/}
-                                    {/*                                : ""*/}
-                                    {/*                        }*/}
-                                    {/*                    >*/}
-                                    {/*                        <svg*/}
-                                    {/*                            xmlns="http://www.w3.org/2000/svg"*/}
-                                    {/*                            height="24px"*/}
-                                    {/*                            viewBox="0 0 24 24"*/}
-                                    {/*                            width="24px"*/}
-                                    {/*                            fill="#000000"*/}
-                                    {/*                        >*/}
-                                    {/*                            <path*/}
-                                    {/*                                d="M0 0h24v24H0V0z"*/}
-                                    {/*                                fill="none"*/}
-                                    {/*                            />*/}
-                                    {/*                            <path d="M19 11h-8v6h8v-6zm-2 4h-4v-2h4v2zm4-12H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V4.98C23 3.88 22.1 3 21 3zm0 16.02H3V4.97h18v14.05z" />*/}
-                                    {/*                        </svg>*/}
-                                    {/*                    </a>*/}
-                                    {/*                    <a*/}
-                                    {/*                        title="View Wide"*/}
-                                    {/*                        onClick={() => changeViewerMode("wide")}*/}
-                                    {/*                        className={*/}
-                                    {/*                            viewerMode === "wide"*/}
-                                    {/*                                ? "selected"*/}
-                                    {/*                                : ""*/}
-                                    {/*                        }*/}
-                                    {/*                    >*/}
-                                    {/*                        <svg*/}
-                                    {/*                            xmlns="http://www.w3.org/2000/svg"*/}
-                                    {/*                            enableBackground="new 0 0 24 24"*/}
-                                    {/*                            height="24px"*/}
-                                    {/*                            viewBox="0 0 24 24"*/}
-                                    {/*                            width="24px"*/}
-                                    {/*                            fill="#000000"*/}
-                                    {/*                        >*/}
-                                    {/*                            <g>*/}
-                                    {/*                                <rect*/}
-                                    {/*                                    fill="none"*/}
-                                    {/*                                    height="24"*/}
-                                    {/*                                    width="24"*/}
-                                    {/*                                />*/}
-                                    {/*                            </g>*/}
-                                    {/*                            <g>*/}
-                                    {/*                                <g>*/}
-                                    {/*                                    <path d="M2,4v16h20V4H2z M20,18H4V6h16V18z" />*/}
-                                    {/*                                </g>*/}
-                                    {/*                            </g>*/}
-                                    {/*                        </svg>*/}
-                                    {/*                    </a>*/}
-                                    {/*                    <a*/}
-                                    {/*                        title="View Fullscreen"*/}
-                                    {/*                        onClick={() =>*/}
-                                    {/*                            changeViewerMode("fullscreen")*/}
-                                    {/*                        }*/}
-                                    {/*                        className={*/}
-                                    {/*                            viewerMode === "fullscreen"*/}
-                                    {/*                                ? "selected"*/}
-                                    {/*                                : ""*/}
-                                    {/*                        }*/}
-                                    {/*                    >*/}
-                                    {/*                        <svg*/}
-                                    {/*                            xmlns="http://www.w3.org/2000/svg"*/}
-                                    {/*                            height="24px"*/}
-                                    {/*                            viewBox="0 0 24 24"*/}
-                                    {/*                            width="24px"*/}
-                                    {/*                            fill="#000000"*/}
-                                    {/*                        >*/}
-                                    {/*                            <path*/}
-                                    {/*                                d="M0 0h24v24H0V0z"*/}
-                                    {/*                                fill="none"*/}
-                                    {/*                            />*/}
-                                    {/*                            <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z" />*/}
-                                    {/*                        </svg>*/}
-                                    {/*                    </a>*/}
-                                    {/*                </div>*/}
-                                    {/*            </div>*/}
-                                    {/*        </Suspense>*/}
-                                    {/*    </Container>*/}
-                                    {/*</SpaceBetween>*/}
-                                    <FileManager> </FileManager>
-                                </div>
-                            </Grid>
-                            <RelatedTableList
-                                allItems={allItems}
-                                loading={loading}
-                                listDefinition={WorkflowExecutionListDefinition}
-                                databaseId={databaseId}
-                                setReload={setReload}
-                                parentId={"workflowId"}
-                                HeaderControls={WorkflowHeaderControls}
-                            />
-                            <ErrorBoundary
-                                fallback={
-                                    <div>
-                                        Metadata failed to load due to an error. Contact your VAMS
-                                        administrator for help.
-                                    </div>
-                                }
+                            </ExpandableSection>
+                            <ExpandableSection
+                                headerText={"Metadata"}
                             >
-                                <ControlledMetadata databaseId={databaseId} assetId={assetId} />
-                            </ErrorBoundary>
+                                <ErrorBoundary
+                                    fallback={
+                                        <div>
+                                            Metadata failed to load due to an error. Contact your VAMS
+                                            administrator for help.
+                                        </div>
+                                    }
+                                >
+                                    <ControlledMetadata databaseId={databaseId} assetId={assetId} />
+                                </ErrorBoundary>
+                            </ExpandableSection>
+                            <ExpandableSection
+                                headerText={"Workflows"}
+                            >
+                                <RelatedTableList
+                                    allItems={allItems}
+                                    loading={loading}
+                                    listDefinition={WorkflowExecutionListDefinition}
+                                    databaseId={databaseId}
+                                    setReload={setReload}
+                                    parentId={"workflowId"}
+                                    HeaderControls={WorkflowHeaderControls}
+                                />
+                            </ExpandableSection>
                         </SpaceBetween>
                     </Box>
                     {asset && (

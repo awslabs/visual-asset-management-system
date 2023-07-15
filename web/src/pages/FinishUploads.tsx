@@ -1,8 +1,8 @@
 import { Box, Grid, Link, SpaceBetween, TextContent } from "@cloudscape-design/components";
 import Header from "@cloudscape-design/components/header";
-import React, { useEffect, useState } from "react";
+import React, {useEffect, useRef, useState} from "react";
 import { AssetDetail } from "./AssetUpload";
-import { useParams } from "react-router";
+import {useLocation, useParams} from "react-router";
 import localforage from "localforage";
 import { FileUploadTable, FileUploadTableItem } from "./AssetUpload/FileUploadTable";
 import { createAssetUploadPromises, executeUploads } from "./AssetUpload/onSubmit";
@@ -213,6 +213,7 @@ const FinishUploads = () => {
 };
 
 export default function FinishUploadsPage() {
+    const { state } = useLocation()
     return (
         <Box padding={{ top: false ? "s" : "m", horizontal: "l" }}>
             <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
