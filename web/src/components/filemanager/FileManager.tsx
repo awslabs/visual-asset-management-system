@@ -9,6 +9,8 @@ import Icon from "@cloudscape-design/components/icon";
 import {fetchAssetFiles} from "../../services/APIService";
 import {useNavigate, useParams} from "react-router";
 import { Storage }from "aws-amplify"
+import {AssetDetail} from "../../pages/AssetUpload";
+import localforage from "localforage";
 
 export interface FileTree {
     name: string,
@@ -20,6 +22,7 @@ export interface FileTree {
 }
 
 export interface FileManagerStateValues {
+    assetDetail: AssetDetail,
     fileTree: FileTree
     galleryRoot: string
     actionsRoot: string
@@ -35,6 +38,7 @@ export interface FileManagerStateValues {
 type FileManagerState = FileManagerStateValues
 
 type AssetFileManagerContextType = {
+    assetDetail: AssetDetail
     state: FileManagerState;
     dispatch: any;
 };
@@ -211,9 +215,31 @@ function fileManagerReducer(state: FileManagerState, action: FileManagerAction):
                 ...state,
                 upload: {
                     shouldNavigate: true,
-                    fileTree: action.payload.key
+                    fileTree: action.payload.key,
                 }
             };
+        case "UPDATE_ASSET_DETAIL":
+            console.log("UPDATE_ASSET_DETAIL", action.payload)
+            return {
+                ...state,
+                assetDetail: {
+                    ...action.payload,
+                    assetId: action.payload.assetId,
+                    key: action.payload.assetLocation['Key'],
+                    databaseId: action.payload.databaseId,
+                    Asset: []
+                }
+            }
+        case "UPDATE_ASSET_FILES":
+            console.log("UPDATE_ASSET_DETAIL", action.payload)
+            return {
+                ...state,
+                assetDetail: {
+                    ...state.assetDetail,
+                    Asset: action.payload
+                }
+            }
+
         case "RESET_DOWNLOAD":
             console.log("RESET_DOWNLOAD", action.payload)
             if(!state) {
@@ -237,6 +263,7 @@ function fileManagerReducer(state: FileManagerState, action: FileManagerAction):
         case "FETCH_SUCCESS":
             console.log("FETCH_SUCCESS", action.payload)
             return {
+                ...state,
                 fileTree: action.payload,
                 galleryRoot: "/",
                 actionsRoot: "/"
@@ -474,13 +501,14 @@ function FileTreeWrapper() {
 }
 
 
-export function FileManager({assetName}: {assetName: string}) {
-    console.log(assetName)
+export function FileManager({asset}: {asset: AssetDetail}) {
+    console.log(asset)
     const {databaseId, assetId} = useParams()
     const navigate  = useNavigate()
     const initialState = {
+            assetDetail: asset,
             fileTree: {
-                name: assetName,
+                name: asset.assetName!,
                 relativePath: "/",
                 keyPrefix: "/",
                 level: 0,
@@ -502,7 +530,6 @@ export function FileManager({assetName}: {assetName: string}) {
                 dispatch({ type: 'FETCH_ERROR', payload: ""});
             }
         };
-
         fetchData();
     }, [databaseId, assetId]);
 
@@ -512,7 +539,7 @@ export function FileManager({assetName}: {assetName: string}) {
             dispatch({type: "RESET_DOWNLOAD", payload: null})
         }
         if(state.upload && state.upload.shouldNavigate) {
-            navigate("uploads", { state: {'fileTree': state.upload.fileTree} })
+            navigate("uploads", { state: {'fileTree': state.upload.fileTree, 'assetDetail': state.assetDetail} })
             dispatch({type: "RESET_UPLOAD", payload: null})
         }
         return () => {
@@ -532,7 +559,7 @@ export function FileManager({assetName}: {assetName: string}) {
             }
         >
             {   state &&
-                <AssetFileManagerContext.Provider value={{state, dispatch}}>
+                <AssetFileManagerContext.Provider value={{assetDetail: asset, state, dispatch}}>
                     <FileManagerControl/>
                     <FileTreeWrapper />
                 </AssetFileManagerContext.Provider>

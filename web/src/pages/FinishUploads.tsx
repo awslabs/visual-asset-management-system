@@ -1,13 +1,14 @@
-import { Box, Grid, Link, SpaceBetween, TextContent } from "@cloudscape-design/components";
+import {Box, Grid, Link, SpaceBetween, TextContent} from "@cloudscape-design/components";
 import Header from "@cloudscape-design/components/header";
 import React, {useEffect, useRef, useState} from "react";
-import { AssetDetail } from "./AssetUpload";
+import {AssetDetail} from "./AssetUpload";
 import {useLocation, useParams} from "react-router";
 import localforage from "localforage";
-import { FileUploadTable, FileUploadTableItem } from "./AssetUpload/FileUploadTable";
-import { createAssetUploadPromises, executeUploads } from "./AssetUpload/onSubmit";
+import {FileUploadTable, FileUploadTableItem} from "./AssetUpload/FileUploadTable";
+import {createAssetUploadPromises, executeUploads} from "./AssetUpload/onSubmit";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
 import Synonyms from "../synonyms";
+import {FileInfo, MultiFileSelect} from "../components/multifile/MultiFileSelect";
 
 export async function verifyPermission(fileHandle: any, readWrite: any) {
     const options = {};
@@ -27,39 +28,63 @@ export async function verifyPermission(fileHandle: any, readWrite: any) {
     return false;
 }
 
-const FinishUploads = () => {
-    const [assetDetail, setAssetDetail] = useState<AssetDetail | null>(null);
-    const [fileUploadTableItems, setFileUploadTableItems] = useState<FileUploadTableItem[]>([]);
+interface FinishUploadsProps {
+    asset: AssetDetail
+    uploadItems: FileUploadTableItem[]
+}
+
+const mergeItems = (items: FileUploadTableItem[], newItems: FileUploadTableItem[]): FileUploadTableItem[] => {
+    if (!items) {
+        return newItems;
+    } else if (!newItems) {
+        return items;
+    } else {
+        const mergedItems = items.map((item) => {
+            const newItem = newItems.find((newItem) => newItem.relativePath === item.relativePath);
+            if (newItem) {
+                return {
+                    ...item,
+                    ...newItem,
+                };
+            }
+            return item;
+        });
+        return mergedItems;
+    }
+}
+
+const FinishUploads = ({asset, uploadItems}: FinishUploadsProps) => {
+    const [assetDetail, setAssetDetail] = useState<AssetDetail>(asset);
+    const [fileUploadTableItems, setFileUploadTableItems] = useState<FileUploadTableItem[]>(mergeItems(asset.Asset || [], uploadItems || []));
     const [reuploadClicked, setReuploadClicked] = useState(false);
-    const { assetId } = useParams();
+    const {assetId} = useParams();
 
     const get_completed_items = (items: FileUploadTableItem[]) => {
         return items.filter((item) => item.status === "Completed");
     };
 
     useEffect(() => {
-        if (assetId) {
-            localforage.getItem<AssetDetail>(assetId).then((assetDetail) => {
-                setAssetDetail(assetDetail);
-                if (assetDetail?.Asset) {
-                    setFileUploadTableItems(assetDetail.Asset);
-                }
-                console.log("local asset found");
-            });
-        }
-    }, [assetId]);
-    useEffect(() => {
-        if (assetDetail && assetDetail.assetId && fileUploadTableItems.length > 0) {
+
+        if (assetDetail && assetDetail.assetId) {
+            const updatedItems = mergeItems(assetDetail.Asset || [], uploadItems || []);
+            setFileUploadTableItems(updatedItems);
             //@ts-ignore
             setAssetDetail((assetDetail) => {
-                return { ...assetDetail, Asset: fileUploadTableItems };
+                return {
+                    ...assetDetail,
+                    Asset: uploadItems,
+                    isMultiFile: assetDetail?.isMultiFile || updatedItems.length > 0
+                };
             });
             localforage
-                .setItem(assetDetail.assetId, { ...assetDetail, Asset: fileUploadTableItems })
-                .then(() => {})
-                .catch((error) => {});
+                .setItem(assetDetail.assetId, {...assetDetail, Asset: updatedItems})
+                .then(() => {
+                    console.log("local asset saved", assetDetail)
+                })
+                .catch((error) => {
+                });
         }
-    }, [fileUploadTableItems]);
+    }, [uploadItems]);
 
     const getUpdatedItemAfterProgress = (
         item: FileUploadTableItem,
@@ -107,7 +132,7 @@ const FinishUploads = () => {
     const fileUploadComplete = (index: number, event: any) => {
         setFileUploadTableItems((prevState) => {
             return prevState.map((item) =>
-                item.index === index ? { ...item, status: "Completed", progress: 100 } : item
+                item.index === index ? {...item, status: "Completed", progress: 100} : item
             );
         });
     };
@@ -115,7 +140,7 @@ const FinishUploads = () => {
     const fileUploadError = (index: number, event: any) => {
         setFileUploadTableItems((prevState) => {
             return prevState.map((item) =>
-                item.index === index ? { ...item, status: "Failed" } : item
+                item.index === index ? {...item, status: "Failed"} : item
             );
         });
     };
@@ -123,22 +148,16 @@ const FinishUploads = () => {
     const moveToQueued = (index: number) => {
         setFileUploadTableItems((prevState) => {
             return prevState.map((item) =>
-                item.index === index ? { ...item, status: "Queued" } : item
+                item.index === index ? {...item, status: "Queued"} : item
             );
         });
     };
 
     const onRetry = () => {
         console.log("Calling on retry");
-        let handle;
-        if (assetDetail && assetDetail.Asset && assetDetail.Asset.length === 1) {
-            handle = assetDetail.Asset[0].handle;
-        } else {
-            handle = assetDetail?.DirectoryHandle;
-        }
-        verifyPermission(handle, true).then((result: boolean) => {
+
             if (
-                result &&
+                // result &&
                 assetDetail &&
                 assetDetail.key &&
                 assetDetail.assetId &&
@@ -171,7 +190,7 @@ const FinishUploads = () => {
                     return Promise.reject(err);
                 });
             }
-        });
+        //});
     };
     return (
         <>
@@ -212,19 +231,42 @@ const FinishUploads = () => {
     );
 };
 
-export default function FinishUploadsPage() {
-    const { state } = useLocation()
-    return (
-        <Box padding={{ top: false ? "s" : "m", horizontal: "l" }}>
-            <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
-                <div>
-                    <TextContent>
-                        <Header variant="h1">Finish Pending Uploads </Header>
-                    </TextContent>
+const convertToFileUploadTableItems = (fileInfo: FileInfo[]): FileUploadTableItem[] => {
+    return fileInfo.map((file, index) => {
+        return {
+            index: index,
+            name: file.path,
+            size: 0,
+            status: "Queued",
+            progress: 0,
+            loaded: 0,
+            total: 0,
+            startedAt: 0,
+            handle: file.handle,
+            relativePath: file.path
+        };
+    });
+}
 
-                    <FinishUploads />
-                </div>
-            </Grid>
+export default function FinishUploadsPage() {
+    const {state} = useLocation()
+    const [fileUploadTableItems, setFileUploadTableItems] = useState<FileUploadTableItem[]>([]);
+    return (
+        <Box padding={{top: false ? "s" : "m", horizontal: "l"}}>
+            <SpaceBetween size={"s"} direction={"vertical"}>
+                <Grid gridDefinition={[{colspan: {default: 12}}]}>
+                    <div>
+                        <TextContent>
+                            <Header variant="h1"> Pending Uploads </Header>
+                        </TextContent>
+                        <FinishUploads uploadItems={fileUploadTableItems} asset={state.assetDetail}/>
+                    </div>
+                </Grid>
+                <h1> Add more files </h1>
+                <MultiFileSelect onChange={(fileSelection) => {
+                    setFileUploadTableItems(convertToFileUploadTableItems(fileSelection))
+                }}/>
+            </SpaceBetween>
         </Box>
     );
 }

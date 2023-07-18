@@ -61,7 +61,7 @@ function FolderUpload(props) {
          * For some reason the guide mentioned at the MDN docs doesn't work.
          * I found this from the stackoverflow answer mentioned at https://stackoverflow.com/a/5849341
          */
-        <FormField label={props.label} description={description} errorText={props.errorText}>
+        <FormField label={props.label} description={props.description || description} errorText={props.errorText}>
             <Grid gridDefinition={[{ colspan: { default: 6 } }, { colspan: { default: 6 } }]}>
                 {props.multiFile ? (
                     <Button
