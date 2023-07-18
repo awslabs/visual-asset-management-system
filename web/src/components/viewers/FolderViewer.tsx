@@ -53,7 +53,7 @@ export default function FolderViewer({
             if (!components || components.length === 0) {
                 console.log("components length is 0");
                 rootChildren.push({
-                    name: filePath.relativePath || filePath.key,
+                    name: filePath.relativePath || filePath.key.split("/").pop()!,
                     isOpen: true,
                     key: filePath.key,
                 });

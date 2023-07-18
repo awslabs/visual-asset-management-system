@@ -137,6 +137,7 @@ function searchReducer(state: any, action: any) {
 }
 
 function SearchPage(props: SearchPageProps) {
+    const [useMapView, setUseMapView] = useState(false);
     const [state, dispatch] = useReducer(searchReducer, {
         query: { tokens: [], operation: "AND" },
         loading: false,
@@ -150,7 +151,7 @@ function SearchPage(props: SearchPageProps) {
             value: "asset",
             label: Synonyms.Assets,
         },
-        view: "mapview",
+        view: "listview",
     });
 
     return (
@@ -163,14 +164,15 @@ function SearchPage(props: SearchPageProps) {
                 )}
                 <ColumnLayout columns={2}>
                     <SearchPropertyFilter state={state} dispatch={dispatch} />
-                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                    { useMapView && <div style={{display: "flex", justifyContent: "flex-end"}}>
                         <SearchPageSegmentedControl
                             selectedId={state.view}
                             onchange={(selectedId: string) =>
-                                dispatch({ type: "set-view", view: selectedId })
+                                dispatch({type: "set-view", view: selectedId})
                             }
                         />
                     </div>
+                    }
                 </ColumnLayout>
                 <Grid>
                     {state.view === "mapview" ? (

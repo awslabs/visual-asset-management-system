@@ -31,7 +31,6 @@ const update = async (
     setComplete: (complete: boolean) => void,
     onComplete: () => void
 ) => {
-    console.log("Updating asset");
     let uploadBody = Object.assign({}, updatedAsset);
     uploadBody.bucket = updatedAsset.assetLocation.Bucket;
     uploadBody.key = updatedAsset.assetLocation.Key;
@@ -39,7 +38,6 @@ const update = async (
 
     let isError = false;
     if (files && files.length > 0) {
-        console.log(files[0].name.split(".").pop());
         const newKey =
             "previews" +
             "/" +
@@ -49,14 +47,12 @@ const update = async (
             "." +
             files[0].name.split(".").pop();
 
-        console.log(newKey);
         await Storage.put(newKey, files[0], {
             resumable: true,
             customPrefix: {
                 public: "",
             },
             progressCallback(progress) {
-                console.log(`Uploaded: ${progress.loaded}/${progress.total}`);
                 setProgress(Math.floor((progress.loaded / progress.total) * 100));
             },
             errorCallback: (err) => {
@@ -65,7 +61,6 @@ const update = async (
                 setError({ isError: true, message: err });
             },
             completeCallback: (event) => {
-                console.log(`Successfully uploaded ${event.key}`);
                 setComplete(true);
             },
         });
@@ -75,14 +70,12 @@ const update = async (
         };
     }
     const body: Partial<UploadAssetWorkflowApi> = { uploadAssetBody: uploadBody };
-    console.log(body);
 
     if (!isError) {
         return API.post("api", "assets/uploadAssetWorkflow", {
             "Content-type": "application/json",
             body,
         }).then(() => {
-            console.log("Calling API");
         });
     }
 };
@@ -91,7 +84,6 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     const [progress, setProgress] = useState(0);
     const [error, setError] = useState({ isError: false, message: "" });
     const [complete, setComplete] = useState(false);
-    console.log(asset);
     useEffect(() => {
         return () => {
             setAssetDetail(asset);
