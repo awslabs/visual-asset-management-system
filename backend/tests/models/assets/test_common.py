@@ -103,6 +103,7 @@ def test_step_function_input_required(only_required):
     assert result.executeWorkflowBody is None
     assert result.uploadAssetBody is not None
 
+
 def test_without_preview(without_preview):
     result = GetUploadAssetWorkflowStepFunctionInput(without_preview)
     assert result.updateMetadataBody is None
