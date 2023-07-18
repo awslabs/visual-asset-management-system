@@ -164,15 +164,16 @@ function SearchPage(props: SearchPageProps) {
                 )}
                 <ColumnLayout columns={2}>
                     <SearchPropertyFilter state={state} dispatch={dispatch} />
-                    { useMapView && <div style={{display: "flex", justifyContent: "flex-end"}}>
-                        <SearchPageSegmentedControl
-                            selectedId={state.view}
-                            onchange={(selectedId: string) =>
-                                dispatch({type: "set-view", view: selectedId})
-                            }
-                        />
-                    </div>
-                    }
+                    {useMapView && (
+                        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                            <SearchPageSegmentedControl
+                                selectedId={state.view}
+                                onchange={(selectedId: string) =>
+                                    dispatch({ type: "set-view", view: selectedId })
+                                }
+                            />
+                        </div>
+                    )}
                 </ColumnLayout>
                 <Grid>
                     {state.view === "mapview" ? (

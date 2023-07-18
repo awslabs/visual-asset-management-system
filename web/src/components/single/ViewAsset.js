@@ -233,15 +233,13 @@ export default function ViewAsset() {
                 const item = await fetchAsset({ databaseId: databaseId, assetId: assetId });
                 if (item !== false) {
                     setAsset(item);
-                    if(item.previewLocation) {
+                    if (item.previewLocation) {
                         setViewerOptions([
                             { text: "Folder", id: "folder" },
                             { text: "Preview", id: "preview" },
                         ]);
                     } else {
-                        setViewerOptions([
-                            { text: "Folder", id: "folder" },
-                        ]);
+                        setViewerOptions([{ text: "Folder", id: "folder" }]);
                     }
                 }
             }

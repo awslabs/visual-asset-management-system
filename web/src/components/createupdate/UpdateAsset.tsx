@@ -75,8 +75,7 @@ const update = async (
         return API.post("api", "assets/uploadAssetWorkflow", {
             "Content-type": "application/json",
             body,
-        }).then(() => {
-        });
+        }).then(() => {});
     }
 };
 export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
