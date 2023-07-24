@@ -91,7 +91,6 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     const [progress, setProgress] = useState(0);
     const [error, setError] = useState({ isError: false, message: "" });
     const [complete, setComplete] = useState(false);
-    console.log(asset);
     useEffect(() => {
         return () => {
             setAssetDetail(asset);

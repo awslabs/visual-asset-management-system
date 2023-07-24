@@ -20,34 +20,34 @@ import {
 
 import ControlledMetadata from "../metadata/ControlledMetadata";
 import ImgViewer from "../viewers/ImgViewer";
-import React, {createContext, Suspense, useEffect, useState} from "react";
-import { useParams } from "react-router";
+import React, {createContext, Suspense, useEffect, useReducer, useState} from "react";
+import {useParams} from "react-router";
 import {
     downloadAsset,
     fetchAsset,
     fetchDatabaseWorkflows,
     fetchWorkflowExecutions,
 } from "../../services/APIService";
+import {AssetDetailContextType, assetDetailReducer, AssetDetailContext} from "../../context/AssetDetailContext"
 /**
  * No viewer yet for cad and archive file formats
  */
 import AssetSelectorWithModal from "../selectors/AssetSelectorWithModal";
 import RelatedTableList from "../list/RelatedTableList";
-import { WorkflowExecutionListDefinition } from "../list/list-definitions/WorkflowExecutionListDefinition";
+import {WorkflowExecutionListDefinition} from "../list/list-definitions/WorkflowExecutionListDefinition";
 import WorkflowSelectorWithModal from "../selectors/WorkflowSelectorWithModal";
 import localforage from "localforage";
-import { ErrorBoundary } from "react-error-boundary";
+import {ErrorBoundary} from "react-error-boundary";
 import Synonyms from "../../synonyms";
-import { UpdateAsset } from "../createupdate/UpdateAsset";
+import {UpdateAsset} from "../createupdate/UpdateAsset";
 import {FileManager} from "../filemanager/FileManager";
 import {AssetDetail} from "../../pages/AssetUpload";
 import {FileUploadTableItem} from "../../pages/AssetUpload/FileUploadTable";
 
 export default function ViewAsset() {
-    const { databaseId, assetId, pathViewType } = useParams();
+    const {databaseId, assetId, pathViewType} = useParams();
 
-    const [assetDetail, setAssetDetail] = useState<AssetDetail>();
-    const AssetDetailContext = createContext<AssetDetail | undefined>(undefined);
+    const [state, dispatch] = useReducer(assetDetailReducer, {} as AssetDetail)
     const [reload, setReload] = useState(true);
     const [asset, setAsset] = useState<any>({});
     const [openUpdateAsset, setOpenUpdateAsset] = useState(false);
@@ -84,7 +84,7 @@ export default function ViewAsset() {
     useEffect(() => {
         const getData = async () => {
             setLoading(true);
-            const items = await fetchDatabaseWorkflows({ databaseId: databaseId });
+            const items = await fetchDatabaseWorkflows({databaseId: databaseId});
             if (items !== false && Array.isArray(items)) {
                 const newRows = [];
                 for (let i = 0; i < items.length; i++) {
@@ -126,11 +126,11 @@ export default function ViewAsset() {
     useEffect(() => {
         const getData = async () => {
             if (databaseId && assetId) {
-                const item = await fetchAsset({ databaseId: databaseId, assetId: assetId });
+                const item = await fetchAsset({databaseId: databaseId, assetId: assetId});
                 if (item !== false) {
                     setAsset(item);
                 }
-                if(assetId) {
+                if (assetId) {
                     localforage.getItem(assetId).then((value: any) => {
                         if (value && value.Asset) {
                             console.log("Reading from localforage:", value);
@@ -143,19 +143,32 @@ export default function ViewAsset() {
                                     break;
                                 }
                             }
-                            setAssetDetail(value)
+                            dispatch({type: 'SET_ASSET_DETAIL', payload: {
+                                    isMultiFile: value.isMultiFile,
+                                    assetId: assetId,
+                                    assetName: value.assetName,
+                                    databaseId: databaseId,
+                                    description: value.description,
+                                    bucket: value.assetLocation['Bucket'] || value.bucket,
+                                    key: value.assetLocation['Key'] || value.key,
+                                    assetType: value.assetType,
+                                    isDistributable: value.isDistributable,
+                                    Asset: value.Asset
+                                }})
                         } else {
-                            setAssetDetail({
-                                isMultiFile: item.isMultiFile,
-                                assetId: assetId,
-                                assetName: item.assetName,
-                                databaseId: databaseId,
-                                description: item.description,
-                                bucket: item.assetLocation['Bucket'],
-                                key: item.assetLocation['Key'],
-                                assetType: item.assetType,
-                                isDistributable: item.isDistributable,
-                                Asset: []
+                            dispatch({
+                                type: 'SET_ASSET_DETAIL', payload: {
+                                    isMultiFile: item.isMultiFile,
+                                    assetId: assetId,
+                                    assetName: item.assetName,
+                                    databaseId: databaseId,
+                                    description: item.description,
+                                    bucket: item.assetLocation['Bucket'],
+                                    key: item.assetLocation['Key'],
+                                    assetType: item.assetType,
+                                    isDistributable: item.isDistributable,
+                                    Asset: []
+                                }
                             })
                         }
                     });
@@ -170,28 +183,31 @@ export default function ViewAsset() {
     // @ts-ignore
     // @ts-ignore
     return (
-        <>
+        <AssetDetailContext.Provider value={{state, dispatch}}>
             {assetId && (
                 <>
-                    <Box padding={{ top: "s", horizontal: "l" }}>
+                    <Box padding={{top: "s", horizontal: "l"}}>
                         <SpaceBetween direction="vertical" size="l">
                             <BreadcrumbGroup
                                 items={[
-                                    { text: Synonyms.Databases, href: "/databases/" },
+                                    {text: Synonyms.Databases, href: "/databases/"},
                                     {
                                         text: databaseId,
                                         href: "/databases/" + databaseId + "/assets/",
                                     },
-                                    { text: asset?.assetName, href: "" },
+                                    {text: asset?.assetName, href: ""},
                                 ]}
                                 ariaLabel="Breadcrumbs"
                             />
-                            <Grid gridDefinition={[{ colspan: 4 }]}>
+                            <Grid gridDefinition={[{colspan: 4}]}>
                                 <h1>{asset?.assetName}</h1>
                             </Grid>
                             <div id="view-edit-asset-right-column">
                                 {
-                                    assetDetail && <FileManager asset={assetDetail} />
+                                    state && state.assetName &&
+                                    <>
+                                        <FileManager assetName={state.assetName}/>
+                                    </>
                                 }
                             </div>
                             <ExpandableSection
@@ -253,7 +269,7 @@ export default function ViewAsset() {
                                         </div>
                                     }
                                 >
-                                    { databaseId && <ControlledMetadata databaseId={databaseId} assetId={assetId} /> }
+                                    {databaseId && <ControlledMetadata databaseId={databaseId} assetId={assetId}/>}
                                 </ErrorBoundary>
                             </ExpandableSection>
                             <ExpandableSection
@@ -291,6 +307,6 @@ export default function ViewAsset() {
                     />
                 </>
             )}
-        </>
+        </AssetDetailContext.Provider>
     );
 }

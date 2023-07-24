@@ -1,6 +1,6 @@
 import {Box, Grid, Link, SpaceBetween, TextContent} from "@cloudscape-design/components";
 import Header from "@cloudscape-design/components/header";
-import React, {useEffect, useRef, useState} from "react";
+import React, {useContext, useEffect, useRef, useState} from "react";
 import {AssetDetail} from "./AssetUpload";
 import {useLocation, useParams} from "react-router";
 import localforage from "localforage";
@@ -9,6 +9,7 @@ import {createAssetUploadPromises, executeUploads} from "./AssetUpload/onSubmit"
 import ProgressBar from "@cloudscape-design/components/progress-bar";
 import Synonyms from "../synonyms";
 import {FileInfo, MultiFileSelect} from "../components/multifile/MultiFileSelect";
+import {AssetDetailContext, AssetDetailContextType} from "../context/AssetDetailContext";
 
 export async function verifyPermission(fileHandle: any, readWrite: any) {
     const options = {};
@@ -29,7 +30,7 @@ export async function verifyPermission(fileHandle: any, readWrite: any) {
 }
 
 interface FinishUploadsProps {
-    asset: AssetDetail
+    assetDetailState: AssetDetail
     uploadItems: FileUploadTableItem[]
 }
 
@@ -53,11 +54,11 @@ const mergeItems = (items: FileUploadTableItem[], newItems: FileUploadTableItem[
     }
 }
 
-const FinishUploads = ({asset, uploadItems}: FinishUploadsProps) => {
-    const [assetDetail, setAssetDetail] = useState<AssetDetail>(asset);
-    const [fileUploadTableItems, setFileUploadTableItems] = useState<FileUploadTableItem[]>(mergeItems(asset.Asset || [], uploadItems || []));
+const FinishUploads = ({assetDetailState, uploadItems}: FinishUploadsProps) => {
+
+    const [fileUploadTableItems, setFileUploadTableItems] = useState<FileUploadTableItem[]>(mergeItems(assetDetailState.Asset || [], uploadItems || []));
     const [reuploadClicked, setReuploadClicked] = useState(false);
-    const {assetId} = useParams();
+    const [assetDetail, setAssetDetail] = useState(assetDetailState)
 
     const get_completed_items = (items: FileUploadTableItem[]) => {
         return items.filter((item) => item.status === "Completed");
@@ -67,15 +68,16 @@ const FinishUploads = ({asset, uploadItems}: FinishUploadsProps) => {
 
         if (assetDetail && assetDetail.assetId) {
             const updatedItems = mergeItems(assetDetail.Asset || [], uploadItems || []);
+            console.log("merged updated items ", updatedItems)
             setFileUploadTableItems(updatedItems);
             //@ts-ignore
             setAssetDetail((assetDetail) => {
-                return {
-                    ...assetDetail,
-                    Asset: uploadItems,
-                    isMultiFile: assetDetail?.isMultiFile || updatedItems.length > 0
-                };
-            });
+                    return {
+                        ...assetDetail,
+                        Asset: updatedItems,
+                        isMultiFile: assetDetail?.isMultiFile || updatedItems.length > 0
+                    }
+                });
             localforage
                 .setItem(assetDetail.assetId, {...assetDetail, Asset: updatedItems})
                 .then(() => {
@@ -83,8 +85,8 @@ const FinishUploads = ({asset, uploadItems}: FinishUploadsProps) => {
                 })
                 .catch((error) => {
                 });
-        }
-    }, [uploadItems]);
+        }1
+    }, [uploadItems, assetDetail]);
 
     const getUpdatedItemAfterProgress = (
         item: FileUploadTableItem,
@@ -158,20 +160,20 @@ const FinishUploads = ({asset, uploadItems}: FinishUploadsProps) => {
 
             if (
                 // result &&
-                assetDetail &&
-                assetDetail.key &&
-                assetDetail.assetId &&
-                assetDetail.databaseId &&
+                assetDetailState &&
+                assetDetailState.key &&
+                assetDetailState.assetId &&
+                assetDetailState.databaseId &&
                 fileUploadTableItems
             ) {
                 setReuploadClicked(true);
                 const uploads = createAssetUploadPromises(
-                    assetDetail.isMultiFile,
+                    assetDetailState.isMultiFile,
                     fileUploadTableItems,
-                    assetDetail.key,
+                    assetDetailState.key,
                     {
-                        assetId: assetDetail.assetId,
-                        databaseId: assetDetail.databaseId,
+                        assetId: assetDetailState.assetId,
+                        databaseId: assetDetailState.databaseId,
                     },
                     moveToQueued,
                     (index: number, progress: any) => {
@@ -194,33 +196,33 @@ const FinishUploads = ({asset, uploadItems}: FinishUploadsProps) => {
     };
     return (
         <>
-            {assetDetail?.Asset && (
+            {assetDetailState?.Asset && (
                 <SpaceBetween direction="vertical" size="l">
                     <Box variant="awsui-key-label">
                         Upload Progress for {Synonyms.Asset}
                         <Link
-                            href={`/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`}
+                            href={`/databases/${assetDetailState.databaseId}/assets/${assetDetailState.assetId}`}
                             target="_blank"
                         >
-                            {` ${assetDetail.assetName}`}
+                            {` ${assetDetailState.assetName}`}
                         </Link>
                     </Box>
                     <ProgressBar
                         status={
-                            get_completed_items(assetDetail.Asset).length ==
-                            assetDetail.Asset.length
+                            get_completed_items(assetDetailState.Asset).length ==
+                            assetDetailState.Asset.length
                                 ? "success"
                                 : "in-progress"
                         }
                         value={
-                            (get_completed_items(assetDetail.Asset).length /
-                                assetDetail.Asset.length) *
+                            (get_completed_items(assetDetailState.Asset).length /
+                                assetDetailState.Asset.length) *
                             100
                         }
                         label="Overall Upload Progress"
                     />
                     <FileUploadTable
-                        allItems={assetDetail?.Asset}
+                        allItems={assetDetailState?.Asset}
                         onRetry={onRetry}
                         resume={!reuploadClicked}
                         showCount={true}
@@ -250,6 +252,9 @@ const convertToFileUploadTableItems = (fileInfo: FileInfo[]): FileUploadTableIte
 
 export default function FinishUploadsPage() {
     const {state} = useLocation()
+    const { assetDetailState  } = state
+    console.log(state)
+
     const [fileUploadTableItems, setFileUploadTableItems] = useState<FileUploadTableItem[]>([]);
     return (
         <Box padding={{top: false ? "s" : "m", horizontal: "l"}}>
@@ -259,7 +264,7 @@ export default function FinishUploadsPage() {
                         <TextContent>
                             <Header variant="h1"> Pending Uploads </Header>
                         </TextContent>
-                        <FinishUploads uploadItems={fileUploadTableItems} asset={state.assetDetail}/>
+                        <FinishUploads uploadItems={fileUploadTableItems} assetDetailState={assetDetailState} />
                     </div>
                 </Grid>
                 <h1> Add more files </h1>
