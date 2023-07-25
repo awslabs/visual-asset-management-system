@@ -151,7 +151,10 @@ def delete_asset(databaseId, assetId, queryParameters):
     if item:
         print("Deleting asset: ", item)
         if "assetLocation" in item:
-            archive_file(item['assetLocation'])
+            if item['isMultiFile']:
+                archive_multi_file(item['assetLocation'])
+            else:
+                archive_file(item['assetLocation'])
         if "previewLocation" in item:
             archive_file(item['previewLocation'])
         item['databaseId'] = databaseId + "#deleted"
@@ -166,6 +169,48 @@ def delete_asset(databaseId, assetId, queryParameters):
         response['message'] = "Asset deleted"
     return response
 
+def archive_multi_file(location):
+    s3 = boto3.client('s3')
+    bucket = ""
+    prefix = ""
+    if "Bucket" in location:
+        bucket = location['Bucket']
+    if "Key" in location:
+        prefix = location['Key']
+    if len(bucket) == 0 or len(prefix) == 0:
+        return 
+    print('Archiving folder with multiple files')
+
+    paginator = s3.get_paginator('list_objects_v2')
+    files = []
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page['Contents']:
+            files.append(obj['Key'])
+    
+    for key in files:
+        source = {
+            'Bucket': bucket,
+            'Key': key
+        }
+        try:
+            response = s3.copy(
+                source, bucket, key,
+                ExtraArgs={
+                    'StorageClass': 'GLACIER',
+                    'MetadataDirective': 'COPY'
+                }
+            )
+            print("S3 response: ", response)
+
+        except s3.exceptions.InvalidObjectState as ios:
+            print("S3 object already archived: ", key)
+            print(ios)
+
+        except botocore.exceptions.ClientError as e:
+            # TODO: Most likely an error when the key doesnt exist
+            print("Error occurred: ", e)
+
+    return
 
 def archive_file(location):
     s3 = boto3.client('s3')
