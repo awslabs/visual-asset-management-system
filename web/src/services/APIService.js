@@ -212,7 +212,6 @@ export const fetchAsset = async ({ databaseId, assetId }, api = API) => {
 export const fetchAssetFiles = async ({ databaseId, assetId }, api = API) => {
     try {
         let response;
-        console.log("Calling API to get files");
         if (databaseId && assetId) {
             response = await api.get(
                 "api",

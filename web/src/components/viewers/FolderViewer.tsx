@@ -48,10 +48,7 @@ export default function FolderViewer({
             const components = filePath.relativePath.split("/");
 
             const fileName = components.pop()!; // Extract the file name
-            console.log("components are ");
-            console.log(components);
             if (!components || components.length === 0) {
-                console.log("components length is 0");
                 rootChildren.push({
                     name: filePath.relativePath || filePath.key.split("/").pop()!,
                     isOpen: true,
@@ -74,19 +71,16 @@ export default function FolderViewer({
             }
         }
         root.children = rootChildren;
-        console.log(root);
         return root;
     };
     useEffect(() => {
         const fetchAssetData = async () => {
             const fileList = await fetchAssetFiles({ databaseId, assetId });
-            console.log(fileList);
             return convertFileListToDataSet(fileList);
         };
 
         if (reload) {
             fetchAssetData().then((newTreeState) => {
-                console.log("Updating tree state to ", newTreeState);
                 setTreeState(newTreeState);
             });
             setReload(false);
@@ -95,12 +89,10 @@ export default function FolderViewer({
 
     //@ts-ignore
     const onNameClick = ({ defaultOnClick, nodeData }) => {
-        console.log("Clicked on ", nodeData);
         defaultOnClick();
         let root = treeState;
         let parents = [assetId];
         for (let i = 0; i < nodeData.path.length; i++) {
-            console.log(nodeData.path[i]);
             const p = nodeData.path[i];
             if (root.children) {
                 // @ts-ignore

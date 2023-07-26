@@ -67,13 +67,6 @@ let navItems = [
             },
         ],
     },
-    {
-        type: "divider",
-    },
-    {
-        type: "link",
-        text: config.CUSTOMER_NAME || "Visual Asset Management System(VAMS)",
-    },
 ];
 
 const defaultOnFollowHandler = (ev) => {};
