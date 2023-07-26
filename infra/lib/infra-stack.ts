@@ -261,7 +261,8 @@ export class VAMS extends cdk.Stack {
             `/${props.stackName}/pipelineService`,
             `/${props.stackName}/workflowService`,
             `/${props.stackName}/listExecutions`,
-            `/${props.stackName}/ndxng`,
+            `/${props.stackName}/idxa`,
+            `/${props.stackName}/idxm`,
         ];
         for (const path of refactorPaths) {
             const reason = `Intention is to refactor this model away moving forward 

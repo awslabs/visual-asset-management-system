@@ -3,7 +3,10 @@
 from decimal import Decimal
 import json
 from unittest.mock import Mock
-from backend.handlers.indexing.streams import lambda_handler, AOSSIndexAssetMetadata
+from backend.handlers.indexing.streams \
+    import lambda_handler_m as lambda_handler, \
+    lambda_handler_a, \
+    AOSSIndexAssetMetadata, MetadataTable
 
 
 example_event = {
@@ -286,3 +289,102 @@ def test_lambda_handler_delete_records():
     index.delete_item.assert_called_once()
     index.delete_item.assert_called_with(
         example_event_delete_records['Records'][0]["dynamodb"]['Keys']['assetId']['S'])
+
+
+def test_make_prefixes():
+    assert [
+        "one/two/three",
+        "one/two/",
+        "one/",
+        ] == MetadataTable.generate_prefixes("one/two/three")
+
+
+def test_make_prefixes2():
+    assert [
+        "one/",
+        "one/two/",
+        "one/two/three",
+        ] == MetadataTable.generate_prefixes2("one/two/three")
+
+
+def test_index_handler_asset_remove():
+    assetId = 'x9ac611fd-4930-457d-9288-b2f95c391af5'
+    remove_event = {
+        'Records': [
+            {
+                'eventID': '4632eec4faa504159db149ab3707bdbc',
+                'eventName': 'REMOVE',
+                'eventVersion': '1.1',
+                'eventSource': 'aws:dynamodb',
+                'awsRegion': 'us-east-1',
+                'dynamodb': {
+                    'ApproximateCreationDateTime': 1690329932.0,
+                    'Keys': {
+                        'assetId': {'S': assetId},
+                        'databaseId': {'S': 'databaseId'}
+                    },
+                    'SequenceNumber': '809000400000000011511207996',
+                    'SizeBytes': 59,
+                    'StreamViewType': 'NEW_IMAGE'
+                },
+                'eventSourceARN': 'arn:aws:dynamodb:...',
+            }
+        ]
+    }
+
+    lambda_handler_mock = Mock()
+    index = Mock()
+    lambda_handler_mock.return_value = index
+    index.process_item = Mock()
+    index.delete_item = Mock()
+    index.delete_item_by_query = Mock()
+
+    lambda_handler_a(remove_event, {},
+                     index=lambda_handler_mock)
+
+    index.process_item.assert_not_called()
+    index.delete_item.assert_not_called()
+    index.delete_item_by_query.assert_called_with(assetId)
+
+
+def test_lambda_handler_asset_insert():
+    insert_event = {
+        'Records': [
+            {
+                'eventID': '',
+                'eventName': 'INSERT',
+                'eventVersion': '1.1',
+                'eventSource': 'aws:dynamodb',
+                'awsRegion': 'us-east-1',
+                'dynamodb': {
+                    'ApproximateCreationDateTime': 1690329933.0,
+                    'Keys': {
+                        'assetId': {
+                            'S': 'x9ac611fd-4930-457d-9288-b2f95c391af5'
+                        },
+                        'databaseId': {'S': 'databaseId#deleted'}
+                    },
+                    'NewImage': {},
+                    'SequenceNumber': '808335800000000011440875000',
+                    'SizeBytes': 653,
+                    'StreamViewType': 'NEW_IMAGE'
+                },
+                'eventSourceARN': 'arn:aws:dynamodb:us-east-1:...',
+            }
+        ]
+    }
+
+    lambda_handler_mock = Mock()
+    index = Mock()
+    lambda_handler_mock.return_value = index
+    index.process_item = Mock()
+    index.delete_item = Mock()
+    index.delete_item_by_query = Mock()
+
+    lambda_handler_a(insert_event, {},
+                     index=lambda_handler_mock)
+
+    # ignore this event
+    index.process_item.assert_not_called()
+    index.delete_item.assert_not_called()
+    index.delete_item_by_query.assert_not_called()
