@@ -62,6 +62,7 @@ interface FileUploadTableProps {
     resume: boolean;
     columnDefinitions?: typeof FileUploadTableColumnDefinitions;
     showCount?: boolean;
+
 }
 
 /**
@@ -269,6 +270,7 @@ export const FileUploadTable = ({
                         <CollectionPreferences
                             {...collectionPreferencesProps}
                             preferences={preferences}
+                            contentDisplayPreference={{options: []}}
                             //@ts-ignore
                             onConfirm={({ detail }) => setPreferences(detail)}
                         />
