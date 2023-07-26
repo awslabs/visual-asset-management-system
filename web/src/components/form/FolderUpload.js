@@ -15,7 +15,6 @@ import { Grid } from "@cloudscape-design/components";
 import FormField from "@cloudscape-design/components/form-field";
 
 function FolderUpload(props) {
-
     const handleFileListChange = (directoryHandle, fileHandles) => {
         if (props.onSelect) {
             props.onSelect(directoryHandle, fileHandles);

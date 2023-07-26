@@ -111,22 +111,24 @@ export default function ControlledMetadata({
             if (prefix) {
                 path += `?prefix=${prefix}`;
             }
-            apiget("api", path, {}).then(({ metadata: start }: MetadataApi) => {
-                apiget("api", `metadataschema/${databaseId}`, {}).then(
-                    (data: SchemaContextData) => {
-                        setSchema(data);
-                        if (data.schemas.length > 0) {
-                            const meta = data.schemas.reduce((acc, x) => {
-                                acc[x.field] = start[x.field] || "";
-                                return acc;
-                            }, start);
-                            console.log("metadata in init", meta);
-                            setMetadata(meta);
-                            setItems(metaToTableRow(meta, data));
-                        }
-                    }
-                ).catch((error) => console.error(error));
-            }).catch((error) => console.error(error));
+            apiget("api", path, {})
+                .then(({ metadata: start }: MetadataApi) => {
+                    apiget("api", `metadataschema/${databaseId}`, {})
+                        .then((data: SchemaContextData) => {
+                            setSchema(data);
+                            if (data.schemas.length > 0) {
+                                const meta = data.schemas.reduce((acc, x) => {
+                                    acc[x.field] = start[x.field] || "";
+                                    return acc;
+                                }, start);
+                                console.log("metadata in init", meta);
+                                setMetadata(meta);
+                                setItems(metaToTableRow(meta, data));
+                            }
+                        })
+                        .catch((error) => console.error(error));
+                })
+                .catch((error) => console.error(error));
         } else {
             apiget("api", `metadataschema/${databaseId}`, {}).then((data: SchemaContextData) => {
                 setSchema(data);

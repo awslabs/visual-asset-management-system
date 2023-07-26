@@ -50,7 +50,7 @@ export default function ViewAsset() {
     const [reload, setReload] = useState(true);
     const [viewType, setViewType] = useState("folder");
     const [asset, setAsset] = useState({});
-    const [deleteFromCache, setDeleteFromCache] = useState(false)
+    const [deleteFromCache, setDeleteFromCache] = useState(false);
     const [viewerOptions, setViewerOptions] = useState([]);
     const [viewerMode, setViewerMode] = useState("collapse");
     const [downloadUrl, setDownloadUrl] = useState(null);
@@ -132,7 +132,7 @@ export default function ViewAsset() {
                         }
                     }
                     //all downloads are complete. Can delete asset from browser cache
-                    setDeleteFromCache(true)
+                    setDeleteFromCache(true);
                 }
             });
         };
@@ -142,12 +142,15 @@ export default function ViewAsset() {
     }, [reload, assetId, databaseId]);
 
     useEffect(() => {
-        if(deleteFromCache) {
-            localforage.removeItem(assetId).then(function() {
-                console.log('Removed item from localstorage', assetId);
-            }).catch(function(err) {
-                 console.log(err);
-            });
+        if (deleteFromCache) {
+            localforage
+                .removeItem(assetId)
+                .then(function () {
+                    console.log("Removed item from localstorage", assetId);
+                })
+                .catch(function (err) {
+                    console.log(err);
+                });
         }
     }, [deleteFromCache]);
 
@@ -415,16 +418,18 @@ export default function ViewAsset() {
                                                                     }
                                                                 />
                                                             )}
-                                                        {viewType === "folder" && asset.assetId && asset.databaseId && (
-                                                            <FolderViewer
-                                                                assetId={asset?.assetId}
-                                                                databaseId={asset?.databaseId}
-                                                                assetName={asset?.assetName}
-                                                                isDistributable={
-                                                                    asset?.isDistributable
-                                                                }
-                                                            />
-                                                        )}
+                                                        {viewType === "folder" &&
+                                                            asset.assetId &&
+                                                            asset.databaseId && (
+                                                                <FolderViewer
+                                                                    assetId={asset?.assetId}
+                                                                    databaseId={asset?.databaseId}
+                                                                    assetName={asset?.assetName}
+                                                                    isDistributable={
+                                                                        asset?.isDistributable
+                                                                    }
+                                                                />
+                                                            )}
                                                     </div>
 
                                                     <div className="visualizer-footer">

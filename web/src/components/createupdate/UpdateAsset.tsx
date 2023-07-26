@@ -1,15 +1,15 @@
-import {FileUpload, Modal, Select, SpaceBetween} from "@cloudscape-design/components";
+import { FileUpload, Modal, Select, SpaceBetween } from "@cloudscape-design/components";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import FormField from "@cloudscape-design/components/form-field";
 import Synonyms from "../../synonyms";
 import Input from "@cloudscape-design/components/input";
-import {useEffect, useState} from "react";
-import {OptionDefinition} from "@cloudscape-design/components/internal/components/option/interfaces";
-import {Storage, API} from "aws-amplify";
-import {AssetDetail} from "../../pages/AssetUpload";
+import { useEffect, useState } from "react";
+import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
+import { Storage, API } from "aws-amplify";
+import { AssetDetail } from "../../pages/AssetUpload";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
-import {UploadAssetWorkflowApi} from "../../pages/AssetUpload/onSubmit";
+import { UploadAssetWorkflowApi } from "../../pages/AssetUpload/onSubmit";
 
 interface UpdateAssetProps {
     asset: any;
@@ -19,8 +19,8 @@ interface UpdateAssetProps {
 }
 
 const isDistributableOptions: OptionDefinition[] = [
-    {label: "Yes", value: "true"},
-    {label: "No", value: "false"},
+    { label: "Yes", value: "true" },
+    { label: "No", value: "false" },
 ];
 
 const update = async (
@@ -28,7 +28,7 @@ const update = async (
     files: File[],
     setProgress: (progress: number) => void,
     setError: (error: { isError: boolean; message: string }) => void,
-    setComplete: (complete: boolean) => void,
+    setComplete: (complete: boolean) => void
 ) => {
     let uploadBody = Object.assign({}, updatedAsset);
     uploadBody.bucket = updatedAsset.assetLocation.Bucket;
@@ -58,40 +58,40 @@ const update = async (
                 setProgress(Math.floor((progress.loaded / progress.total) * 100));
             },
             errorCallback: (err) => {
-                setError({isError: true, message: err});
+                setError({ isError: true, message: err });
             },
             completeCallback: (event) => {
-                const body: Partial<UploadAssetWorkflowApi> = {uploadAssetBody: uploadBody};
+                const body: Partial<UploadAssetWorkflowApi> = { uploadAssetBody: uploadBody };
                 return API.post("api", "assets/uploadAssetWorkflow", {
                     "Content-type": "application/json",
                     body,
                 })
                     .then((res) => {
-                        setComplete(true)
+                        setComplete(true);
                     })
                     .catch((err) => {
-                        setError({isError: true, message: err})
-                    })
+                        setError({ isError: true, message: err });
+                    });
             },
         });
     } else {
-        const body: Partial<UploadAssetWorkflowApi> = {uploadAssetBody: uploadBody};
+        const body: Partial<UploadAssetWorkflowApi> = { uploadAssetBody: uploadBody };
         API.post("api", "assets/uploadAssetWorkflow", {
             "Content-type": "application/json",
             body,
         })
             .then((res) => {
-                setComplete(true)
+                setComplete(true);
             })
             .catch((err) => {
-                setError({isError: true, message: err})
-            })
+                setError({ isError: true, message: err });
+            });
     }
 };
-export const UpdateAsset = ({asset, ...props}: UpdateAssetProps) => {
+export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     const [assetDetail, setAssetDetail] = useState(asset);
     const [progress, setProgress] = useState(0);
-    const [error, setError] = useState({isError: false, message: ""});
+    const [error, setError] = useState({ isError: false, message: "" });
     const [complete, setComplete] = useState(false);
     useEffect(() => {
         return () => {
@@ -116,13 +116,7 @@ export const UpdateAsset = ({asset, ...props}: UpdateAssetProps) => {
                         <Button
                             variant="primary"
                             onClick={() =>
-                                update(
-                                    assetDetail,
-                                    value,
-                                    setProgress,
-                                    setError,
-                                    setComplete,
-                                )
+                                update(assetDetail, value, setProgress, setError, setComplete)
                             }
                         >
                             Update Asset
@@ -169,7 +163,7 @@ export const UpdateAsset = ({asset, ...props}: UpdateAssetProps) => {
                                 )
                                 .pop() || null
                         }
-                        onChange={({detail}) => {
+                        onChange={({ detail }) => {
                             setAssetDetail((assetDetail: any) => ({
                                 ...assetDetail,
                                 isDistributable: detail.selectedOption.label === "Yes",
@@ -182,7 +176,7 @@ export const UpdateAsset = ({asset, ...props}: UpdateAssetProps) => {
                 </FormField>
                 <FormField label="Preview">
                     <FileUpload
-                        onChange={({detail}) => setValue(detail.value)}
+                        onChange={({ detail }) => setValue(detail.value)}
                         value={value}
                         i18nStrings={{
                             uploadButtonText: (e) => (e ? "Choose files" : "Choose file"),
