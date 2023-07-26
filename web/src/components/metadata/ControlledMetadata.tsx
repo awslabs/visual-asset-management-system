@@ -125,8 +125,8 @@ export default function ControlledMetadata({
                             setItems(metaToTableRow(meta, data));
                         }
                     }
-                );
-            });
+                ).catch((error) => console.error(error));
+            }).catch((error) => console.error(error));
         } else {
             apiget("api", `metadataschema/${databaseId}`, {}).then((data: SchemaContextData) => {
                 setSchema(data);

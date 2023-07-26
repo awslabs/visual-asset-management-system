@@ -48,9 +48,9 @@ export default function ViewAsset() {
     const { databaseId, assetId, pathViewType } = useParams();
 
     const [reload, setReload] = useState(true);
-    const [viewType, setViewType] = useState("preview");
+    const [viewType, setViewType] = useState("folder");
     const [asset, setAsset] = useState({});
-
+    const [deleteFromCache, setDeleteFromCache] = useState(false)
     const [viewerOptions, setViewerOptions] = useState([]);
     const [viewerMode, setViewerMode] = useState("collapse");
     const [downloadUrl, setDownloadUrl] = useState(null);
@@ -121,22 +121,35 @@ export default function ViewAsset() {
             }
             localforage.getItem(assetId).then((value) => {
                 if (value) {
+                    //console.log("Reading from localforage:", value);
                     for (let i = 0; i < value.Asset.length; i++) {
                         if (
                             value.Asset[i].status !== "Completed" &&
                             value.Asset[i].loaded !== value.Asset[i].total
                         ) {
                             setContainsIncompleteUploads(true);
-                            break;
+                            return;
                         }
                     }
+                    //all downloads are complete. Can delete asset from browser cache
+                    setDeleteFromCache(true)
                 }
             });
         };
         if (reload) {
             getData();
         }
-    }, [reload, assetId, databaseId, asset]);
+    }, [reload, assetId, databaseId]);
+
+    useEffect(() => {
+        if(deleteFromCache) {
+            localforage.removeItem(assetId).then(function() {
+                console.log('Removed item from localstorage', assetId);
+            }).catch(function(err) {
+                 console.log(err);
+            });
+        }
+    }, [deleteFromCache]);
 
     const changeViewerMode = (mode) => {
         if (mode === "fullscreen" && viewerMode === "fullscreen") {
@@ -232,15 +245,12 @@ export default function ViewAsset() {
             if (databaseId && assetId) {
                 const item = await fetchAsset({ databaseId: databaseId, assetId: assetId });
                 if (item !== false) {
+                    //console.log(item);
                     setAsset(item);
-                    if (item.previewLocation) {
-                        setViewerOptions([
-                            { text: "Folder", id: "folder" },
-                            { text: "Preview", id: "preview" },
-                        ]);
-                    } else {
-                        setViewerOptions([{ text: "Folder", id: "folder" }]);
-                    }
+                    setViewerOptions([
+                        { text: "Folder", id: "folder" },
+                        { text: "Preview", id: "preview", disabled: !item.previewLocation },
+                    ]);
                 }
             }
         };
@@ -405,7 +415,7 @@ export default function ViewAsset() {
                                                                     }
                                                                 />
                                                             )}
-                                                        {asset.assetId && asset.databaseId && (
+                                                        {viewType === "folder" && asset.assetId && asset.databaseId && (
                                                             <FolderViewer
                                                                 assetId={asset?.assetId}
                                                                 databaseId={asset?.databaseId}

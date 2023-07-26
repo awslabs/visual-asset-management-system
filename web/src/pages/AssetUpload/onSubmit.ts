@@ -38,7 +38,6 @@ export class UploadAssetWorkflowApi {
 }
 
 class OnSubmitProps {
-    selectedWorkflows!: any;
     metadata!: Metadata;
     assetDetail!: AssetDetail;
     setFreezeWizardButtons!: (x: boolean) => void;
@@ -190,7 +189,6 @@ export interface UploadExecutionProps {
     setPreviewUploadProgress: (x: ProgressBarProps) => void;
     uuid: string;
     prevAssetId?: string;
-    selectedWorkflows: any;
     metadata: Metadata;
     setExecStatus: (x: ExecStatusType | ((x: ExecStatusType) => ExecStatusType)) => void;
     execStatus: ExecStatusType;
@@ -205,7 +203,6 @@ async function performUploads({
     setPreviewUploadProgress,
     uuid,
     prevAssetId,
-    selectedWorkflows,
     metadata,
     setExecStatus,
     execStatus,
@@ -288,9 +285,7 @@ async function performUploads({
                     isMultiFile: assetDetail.isMultiFile,
                 },
                 executeWorkflowBody: {
-                    workflowIds: selectedWorkflows.map(
-                        (wf: { workflowId: string }) => wf.workflowId
-                    ),
+                    workflowIds: [],
                 },
                 updateMetadataBody: {
                     version: "1",
@@ -364,7 +359,6 @@ export default function onSubmit({
     assetDetail,
     setFreezeWizardButtons,
     metadata,
-    selectedWorkflows,
     execStatus,
     setExecStatus,
     setShowUploadAndExecProgress,
@@ -396,7 +390,6 @@ export default function onSubmit({
                 setPreviewUploadProgress,
                 uuid,
                 prevAssetId,
-                selectedWorkflows,
                 metadata,
                 setExecStatus,
                 execStatus,

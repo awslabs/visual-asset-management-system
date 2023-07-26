@@ -51,6 +51,7 @@ const FileUploadTableColumnDefinitions = [
                 {item.status}{" "}
             </StatusIndicator>
         ),
+        sortingField: "status",
         isRowHeader: true,
     },
 ];
