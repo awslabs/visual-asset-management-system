@@ -103,7 +103,6 @@ export default function ViewAsset() {
                         assetId: assetId,
                         workflowId: workflowId,
                     });
-                    console.log("subItems:", subItems);
                     if (subItems !== false && Array.isArray(subItems)) {
                         for (let j = 0; j < subItems.length; j++) {
                             const newParentRowChild = Object.assign({}, subItems[j]);
@@ -122,7 +121,6 @@ export default function ViewAsset() {
             }
             localforage.getItem(assetId).then((value) => {
                 if (value) {
-                    console.log("Reading from localforage:", value);
                     for (let i = 0; i < value.Asset.length; i++) {
                         if (
                             value.Asset[i].status !== "Completed" &&
@@ -234,12 +232,15 @@ export default function ViewAsset() {
             if (databaseId && assetId) {
                 const item = await fetchAsset({ databaseId: databaseId, assetId: assetId });
                 if (item !== false) {
-                    console.log(item);
                     setAsset(item);
-                    setViewerOptions([
-                        { text: "Folder", id: "folder" },
-                        { text: "Preview", id: "preview" },
-                    ]);
+                    if (item.previewLocation) {
+                        setViewerOptions([
+                            { text: "Folder", id: "folder" },
+                            { text: "Preview", id: "preview" },
+                        ]);
+                    } else {
+                        setViewerOptions([{ text: "Folder", id: "folder" }]);
+                    }
                 }
             }
         };
