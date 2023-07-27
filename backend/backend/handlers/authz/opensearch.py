@@ -49,6 +49,9 @@ class AuthEntities:
             group_permission = [p for p in claim['groupPermissions'] if p['groupId'] in groups]
 
             predicates = []
+            if len(group_permission) == 0:
+                continue
+            
             for criteria in claim['criteria']:
 
                 if criteria['operator'] == "contains":

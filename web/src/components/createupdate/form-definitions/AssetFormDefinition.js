@@ -156,14 +156,14 @@ export const AssetFormDefinition = new FormDefinition({
                 elementProps: {},
             }),
         }),
-        new ControlDefinition({
-            label: "Upload Files",
-            id: "uploadFiles",
-            constraintText: "Required.",
-            elementDefinition: new ElementDefinition({
-                formElement: AssetFilesUploadGroup,
-                elementProps: {},
-            }),
-        }),
+        // new ControlDefinition({
+        //     label: "Upload Files",
+        //     id: "uploadFiles",
+        //     constraintText: "Required.",
+        //     elementDefinition: new ElementDefinition({
+        //         formElement: AssetFilesUploadGroup,
+        //         elementProps: {},
+        //     }),
+        // }),
     ],
 });

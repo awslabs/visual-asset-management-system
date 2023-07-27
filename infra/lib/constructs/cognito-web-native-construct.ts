@@ -70,16 +70,16 @@ export class CognitoWebNativeConstruct extends Construct {
             preTokenGeneration
         );
 
+        const message =
+            "Hello, Thank you for registering with your instance of Visual Asset Management System! Your verification code is {####}";
         const userPool = new cognito.UserPool(this, "UserPool", {
-            selfSignUpEnabled: true,
+            selfSignUpEnabled: false,
             autoVerify: { email: true },
             userVerification: {
-                emailSubject: "Verify your email the app!",
-                emailBody:
-                    "Hello {username}, Thanks for signing up to the app! Your verification code is {####}",
+                emailSubject: "Verify your email with Visual Asset Management System!",
+                emailBody: message,
                 emailStyle: cognito.VerificationEmailStyle.CODE,
-                smsMessage:
-                    "Hello {username}, Thanks for signing up to app! Your verification code is {####}",
+                smsMessage: message,
             },
             passwordPolicy: {
                 minLength: 8,

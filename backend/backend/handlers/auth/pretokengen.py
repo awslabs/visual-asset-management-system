@@ -78,6 +78,10 @@ def lambda_handler(event, context):
     if 'custom:groups' in event['request']['userAttributes']:
         groups = event['request']['userAttributes']['custom:groups']
         claims_to_save = parse_group_list(groups)
+        claims_to_save = claims_to_save | set(event['request']['groupConfiguration']['groupsToOverride'])
+        remember_observed_claims(claims_to_save)
+    else:
+        claims_to_save = set(event['request']['groupConfiguration']['groupsToOverride'])
         remember_observed_claims(claims_to_save)
 
     roles = determine_vams_roles(event)

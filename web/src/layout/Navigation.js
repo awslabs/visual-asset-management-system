@@ -25,6 +25,7 @@ let navItems = [
             { type: "link", text: Synonyms.Databases, href: "/databases" },
             { type: "link", text: Synonyms.Assets, href: "/assets" },
             { type: "link", text: `Upload ${Synonyms.Asset}`, href: "/upload" },
+            { type: "link", text: `Search`, href: "/search" },
         ],
     },
     {
@@ -66,13 +67,6 @@ let navItems = [
                 href: "/metadataschema/create",
             },
         ],
-    },
-    {
-        type: "divider",
-    },
-    {
-        type: "link",
-        text: config.CUSTOMER_NAME || "Visual Asset Management System(VAMS)",
     },
 ];
 
