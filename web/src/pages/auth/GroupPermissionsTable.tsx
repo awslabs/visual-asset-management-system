@@ -8,6 +8,7 @@ import { useState } from "react";
 import { generateUUID } from "../../common/utils/utils";
 import GroupSelectList from "./GroupSelectList";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
+import { Input } from "@cloudscape-design/components";
 
 export interface GroupPermission {
     id: string;
@@ -32,7 +33,7 @@ export default function GroupPermissionsTable({
         const permission = {
             id: generateUUID(),
             groupId: "",
-            permission: "",
+            permission: "Access",
         };
 
         let tmp = permissions;
@@ -42,21 +43,6 @@ export default function GroupPermissionsTable({
 
         setPermissions([...tmp, permission]);
     };
-
-    const options: OptionDefinition[] = [
-        {
-            value: "Read",
-            description: "View assets only",
-        },
-        {
-            value: "Edit",
-            description: "View and modify assets",
-        },
-        {
-            value: "Admin",
-            description: "View, modify, delete, share",
-        },
-    ];
 
     return (
         <Table
@@ -101,14 +87,11 @@ export default function GroupPermissionsTable({
                     editConfig: {
                         editingCell: (item, { currentValue, setValue }) => {
                             return (
-                                <GroupSelectList
-                                    selectedGroup={currentValue}
-                                    setSelectedGroup={(group) => setValue(group)}
-                                    label="Group"
-                                    description="Select a group"
-                                    disabled={false}
-                                    errorText={() => null}
-                                    fetchGroups={fetchGroups}
+                                <Input
+                                    value={currentValue}
+                                    onChange={({ detail }) => {
+                                        setValue(detail.value);
+                                    }}
                                 />
                             );
                         },
@@ -118,28 +101,13 @@ export default function GroupPermissionsTable({
                     id: "permission",
                     header: "Permission",
                     cell: (item: GroupPermission) => {
-                        const o = options.find((x) => x.value === item.permission);
+                        // const o = options.find((x) => x.value === item.permission);
                         return (
                             <>
-                                {o?.value}: <i>{o?.description}</i>
+                                {/* {o?.value}: <i>{o?.description}</i> */}
+                                Access: Upload, View, Modify, Delete
                             </>
                         );
-                    },
-                    editConfig: {
-                        editingCell: (item, { currentValue, setValue }) => {
-                            return (
-                                <Select
-                                    selectedOption={
-                                        options.find(
-                                            (x) => x.value === (currentValue ?? item.permission)
-                                        ) ?? null
-                                    }
-                                    options={options}
-                                    onChange={({ detail }) => setValue(detail.selectedOption.value)}
-                                    expandToViewport={true}
-                                />
-                            );
-                        },
                     },
                 },
             ]}
