@@ -217,7 +217,6 @@ export default function ViewAsset() {
         setOpenUpdateAsset(mode);
     };
 
-
     useEffect(() => {
         const getData = async () => {
             if (databaseId && assetId) {
