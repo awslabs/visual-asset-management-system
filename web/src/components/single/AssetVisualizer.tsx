@@ -6,6 +6,7 @@ const ThreeDimensionalPlotter = React.lazy(() => import("../viewers/ThreeDimensi
 const ColumnarViewer = React.lazy(() => import("../viewers/ColumnarViewer"));
 const HTMLViewer = React.lazy(() => import("../viewers/HTMLViewer"));
 const ModelViewer = React.lazy(() => import("../viewers/ModelViewer"));
+const PointCloudViewer = React.lazy(() => import("../viewers/PointCloudViewer"));
 const FolderViewer = React.lazy(() => import("../viewers/FolderViewer"));
 
 interface AssetVisualizerPropTypes {
@@ -48,6 +49,15 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                         <ModelViewer
                             assetKey={
                                 props.asset?.generated_artifacts?.gltf?.Key ||
+                                props.asset?.assetLocation?.Key
+                            }
+                            className="visualizer-container-canvas"
+                        />
+                    )}
+                    {props.viewType === "pc" && (
+                        <PointCloudViewer
+                            assetKey={
+                                props.asset?.generated_artifacts?.laz?.Key ||
                                 props.asset?.assetLocation?.Key
                             }
                             className="visualizer-container-canvas"
