@@ -17,6 +17,9 @@ def lambda_handler(event, context):
         body = validate_body(event)
         databaseId = event['pathParameters']['databaseId']
         assetId = event['pathParameters']['assetId']
+        if ('queryStringParameters' in event and 'prefix' in event['queryStringParameters']):
+            assetId = event['queryStringParameters']['prefix']
+
         claims_and_roles = request_to_claims(event)
 
         if "super-admin" in claims_and_roles['roles']:

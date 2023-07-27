@@ -15,8 +15,6 @@ import { Grid } from "@cloudscape-design/components";
 import FormField from "@cloudscape-design/components/form-field";
 
 function FolderUpload(props) {
-    const [description, setDescription] = useState("");
-
     const handleFileListChange = (directoryHandle, fileHandles) => {
         if (props.onSelect) {
             props.onSelect(directoryHandle, fileHandles);
@@ -48,8 +46,11 @@ function FolderUpload(props) {
     };
 
     const handleFileSelection = async () => {
-        const handles = await window.showOpenFilePicker();
-        const fileHandles = [{ path: handles[0].name, handle: handles[0] }];
+        const handles = await window.showOpenFilePicker({ multiple: true });
+        const fileHandles = [];
+        for (let i = 0; i < handles.length; i++) {
+            fileHandles.push({ path: handles[i].name, handle: handles[i] });
+        }
         return { handles, fileHandles };
     };
 
@@ -58,7 +59,7 @@ function FolderUpload(props) {
          * For some reason the guide mentioned at the MDN docs doesn't work.
          * I found this from the stackoverflow answer mentioned at https://stackoverflow.com/a/5849341
          */
-        <FormField label={props.label} description={description} errorText={props.errorText}>
+        <FormField label={props.label} description={props.description} errorText={props.errorText}>
             <Grid gridDefinition={[{ colspan: { default: 6 } }, { colspan: { default: 6 } }]}>
                 {props.multiFile ? (
                     <Button
@@ -68,7 +69,6 @@ function FolderUpload(props) {
                             handleDirectorySelection().then((fileSelectionResult) => {
                                 console.log(fileSelectionResult);
                                 const { directoryHandle, fileHandles } = fileSelectionResult;
-                                setDescription(`Total Files to Upload: ${fileHandles.length}`);
                                 handleFileListChange(directoryHandle, fileHandles);
                             });
                         }}
@@ -84,7 +84,6 @@ function FolderUpload(props) {
                                 handleFileSelection().then((fileSelectionResult) => {
                                     console.log(fileSelectionResult);
                                     const { directoryHandle, fileHandles } = fileSelectionResult;
-                                    setDescription(`Total Files to Upload: ${fileHandles.length}`);
                                     handleFileListChange(directoryHandle, fileHandles);
                                 });
                             }}

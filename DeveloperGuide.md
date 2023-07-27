@@ -236,8 +236,8 @@ The CDK deployment deploys the VAMS stack into your account. The components that
 1. [Jupyter Notebook](https://docs.aws.amazon.com/dlami/latest/devguide/setup-jupyter.html) is created one per pipeline
 1. [Sagemaker](https://docs.aws.amazon.com/sagemaker/latest/dg/processing-job.html) Processing jobs are created per pipeline execution
 1. [Cognito User Pool](https://docs.aws.amazon.com/cognito/) for authentication
-
-![ARCHITECTURE](./VAMS_Architecture.jpg)
+1. [Open Search Collection](https://aws.amazon.com/opensearch-service/features/serverless/) for searching the assets using metadata
+   ![ARCHITECTURE](./VAMS_Architecture.jpg)
 
 # API Schema:
 
@@ -311,7 +311,13 @@ k
 
 ## MetadataStorageTable
 
-Attributes are driven by user input. No predetermined fields aside from the partition and sort keys.
+| Field       | Data Type | Description                                  |
+| ----------- | --------- | -------------------------------------------- |
+| asset_id    | String    | Asset identifier for this workflow execution |
+| database_id | String    | Database to which the asset belongs          |
+
+Attributes are driven by user input. No predetermined fields aside from the partition and sort key.
+From rel 1.4 onwards, when you add metadata on a file / folder, the s3 key prefix of the file/folder is used as the asset key in the metadata table
 
 # Updating Backend
 

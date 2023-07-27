@@ -28,7 +28,7 @@ class AssetPreprocessingBody {
     isMultiFile: boolean = false;
 }
 
-class UploadAssetWorkflowApi {
+export class UploadAssetWorkflowApi {
     assetPreprocessingBody?: AssetPreprocessingBody;
     uploadAssetBody!: AssetDetail;
     updateMetadataBody!: MetadataApi;
@@ -38,7 +38,6 @@ class UploadAssetWorkflowApi {
 }
 
 class OnSubmitProps {
-    selectedWorkflows!: any;
     metadata!: Metadata;
     assetDetail!: AssetDetail;
     setFreezeWizardButtons!: (x: boolean) => void;
@@ -93,6 +92,7 @@ function getUploadTaskPromise(
 }
 
 export function createAssetUploadPromises(
+    isMultiFile: boolean,
     files: FileUploadTableItem[],
     keyPrefix: string,
     metadata: { [k: string]: string },
@@ -106,7 +106,7 @@ export function createAssetUploadPromises(
     // A promise begins executing right after creation, hence I am returning a function that returns a promise
     // so these promises can then be executed sequentially to track progress
 
-    if (files.length === 1) {
+    if (!isMultiFile) {
         uploads.push(
             async () =>
                 await files[0].handle.getFile().then((f: File) => {
@@ -189,7 +189,6 @@ export interface UploadExecutionProps {
     setPreviewUploadProgress: (x: ProgressBarProps) => void;
     uuid: string;
     prevAssetId?: string;
-    selectedWorkflows: any;
     metadata: Metadata;
     setExecStatus: (x: ExecStatusType | ((x: ExecStatusType) => ExecStatusType)) => void;
     execStatus: ExecStatusType;
@@ -204,13 +203,13 @@ async function performUploads({
     setPreviewUploadProgress,
     uuid,
     prevAssetId,
-    selectedWorkflows,
     metadata,
     setExecStatus,
     execStatus,
 }: UploadExecutionProps) {
     if (assetDetail.Asset && assetDetail.assetId && assetDetail.databaseId && assetDetail.key) {
         const uploads = createAssetUploadPromises(
+            assetDetail.isMultiFile,
             assetDetail.Asset,
             assetDetail.key,
             {
@@ -286,9 +285,7 @@ async function performUploads({
                     isMultiFile: assetDetail.isMultiFile,
                 },
                 executeWorkflowBody: {
-                    workflowIds: selectedWorkflows.map(
-                        (wf: { workflowId: string }) => wf.workflowId
-                    ),
+                    workflowIds: [],
                 },
                 updateMetadataBody: {
                     version: "1",
@@ -340,18 +337,19 @@ function updateAssetDetail(assetDetail: AssetDetail) {
     assetDetail.assetType = getAssetType(assetDetail);
     assetDetail.key = getKeyPrefix(uuid, assetDetail);
     assetDetail.specifiedPipelines = [];
-    assetDetail.previewLocation = {
-        Bucket: config.bucket,
-        Key:
-            "previews" +
-            "/" +
-            uuid +
-            "/" +
-            assetDetail.assetId +
-            "." +
-            assetDetail.Preview?.name.split(".").pop(),
-    };
-
+    if (assetDetail.Preview) {
+        assetDetail.previewLocation = {
+            Bucket: config.bucket,
+            Key:
+                "previews" +
+                "/" +
+                uuid +
+                "/" +
+                assetDetail.assetId +
+                "." +
+                assetDetail.Preview?.name.split(".").pop(),
+        };
+    }
     assetDetail.assetName = assetDetail.assetId;
     assetDetail.assetId = uuid;
     return { uuid, prevAssetId };
@@ -361,7 +359,6 @@ export default function onSubmit({
     assetDetail,
     setFreezeWizardButtons,
     metadata,
-    selectedWorkflows,
     execStatus,
     setExecStatus,
     setShowUploadAndExecProgress,
@@ -393,7 +390,6 @@ export default function onSubmit({
                 setPreviewUploadProgress,
                 uuid,
                 prevAssetId,
-                selectedWorkflows,
                 metadata,
                 setExecStatus,
                 execStatus,

@@ -8,6 +8,7 @@ import * as path from "path";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import { storageResources } from "../storage-builder";
+import * as cdk from "aws-cdk-lib";
 
 export function buildMetadataFunctions(
     scope: Construct,
@@ -38,5 +39,49 @@ export function buildMetadataFunction(
     storageResources.dynamo.metadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
+    return fun;
+}
+
+export function buildMetadataIndexingFunction(
+    scope: Construct,
+    storageResources: storageResources,
+    aossEndpoint: string
+): lambda.Function {
+    const fun = new lambda.DockerImageFunction(scope, "ndxng", {
+        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
+            cmd: ["backend.handlers.indexing.streams.lambda_handler"],
+        }),
+        timeout: Duration.minutes(15),
+        memorySize: 3008,
+        environment: {
+            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+            ASSET_BUCKET_NAME: storageResources.s3.assetBucket.bucketName,
+            AOSS_ENDPOINT_PARAM: aossEndpoint,
+        },
+    });
+
+    // add access to read the parameter store param aossEndpoint
+    fun.role?.addToPrincipalPolicy(
+        new cdk.aws_iam.PolicyStatement({
+            actions: ["ssm:GetParameter"],
+            resources: [
+                `arn:aws:ssm:${cdk.Stack.of(scope).region}:${
+                    cdk.Stack.of(scope).account
+                }:parameter${aossEndpoint}`,
+            ],
+        })
+    );
+
+    storageResources.dynamo.metadataStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
+    storageResources.s3.assetBucket.grantRead(fun);
+
+    // trigger the lambda from the dynamodb db streams
+    storageResources.dynamo.metadataStorageTable.grantStreamRead(fun);
+    storageResources.dynamo.assetStorageTable.grantStreamRead(fun);
+
     return fun;
 }

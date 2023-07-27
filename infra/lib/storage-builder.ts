@@ -151,6 +151,7 @@ export function storageResourcesBuilder(
             name: "assetId",
             type: dynamodb.AttributeType.STRING,
         },
+        stream: dynamodb.StreamViewType.NEW_IMAGE,
     });
 
     const databaseStorageTable = new dynamodb.Table(scope, "DatabaseStorageTable", {
@@ -223,6 +224,7 @@ export function storageResourcesBuilder(
             name: "assetId",
             type: dynamodb.AttributeType.STRING,
         },
+        stream: dynamodb.StreamViewType.NEW_IMAGE,
     });
 
     const metadataSchemaStorageTable = new dynamodb.Table(scope, "MetadataSchemaStorageTable", {
