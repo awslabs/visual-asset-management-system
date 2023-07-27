@@ -112,7 +112,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
             footer={
                 <Box float="right">
                     <SpaceBetween direction="horizontal" size="xs">
-                        <Button variant="link">Cancel</Button>
+                        <Button variant="link" onClick={() => props.onClose()}>Cancel</Button>
                         <Button
                             variant="primary"
                             onClick={() =>
