@@ -217,32 +217,6 @@ export default function ViewAsset() {
         setOpenUpdateAsset(mode);
     };
 
-    const handleAssetDownload = async (event) => {
-        event.preventDefault();
-        setDownloadUrl(null);
-        setAssetDownloadError("");
-        // note: the "version" parameter is not used by the frontend, but available via API
-        const config = {
-            body: {
-                databaseId: databaseId,
-                assetId: assetId,
-            },
-        };
-        const result = await downloadAsset({
-            databaseId: databaseId,
-            assetId: assetId,
-            config: config,
-        });
-        if (result !== false && Array.isArray(result)) {
-            if (result[0] === false) {
-                setAssetDownloadError(`Unable to download ${Synonyms.asset}. ${result[1]}`);
-            } else {
-                setAssetDownloadError("");
-                setDownloadUrl(result[1]);
-            }
-        }
-    };
-
     useEffect(() => {
         const getData = async () => {
             if (databaseId && assetId) {
@@ -319,43 +293,6 @@ export default function ViewAsset() {
                                             <>{asset?.currentVersion?.Version}</>
                                             <h5>Date Modified</h5>
                                             {asset?.currentVersion?.DateModified}
-                                            {!downloadUrl && (
-                                                <div style={{ marginTop: "20px" }}>
-                                                    <Button
-                                                        variant="primary"
-                                                        onClick={handleAssetDownload}
-                                                        disabled={asset?.isDistributable !== true}
-                                                    >
-                                                        Generate Download Link
-                                                    </Button>
-                                                </div>
-                                            )}
-                                            {downloadUrl && (
-                                                <div style={{ marginTop: "20px" }}>
-                                                    <SpaceBetween direction="horizontal" size="xs">
-                                                        <>
-                                                            <Button
-                                                                iconName="copy"
-                                                                variant="loki"
-                                                                onClick={() => {
-                                                                    navigator.clipboard.writeText(
-                                                                        downloadUrl
-                                                                    );
-                                                                }}
-                                                            >
-                                                                Copy Link
-                                                            </Button>
-                                                            <Button
-                                                                variant={"primary"}
-                                                                href={downloadUrl}
-                                                                external
-                                                            >
-                                                                Download
-                                                            </Button>
-                                                        </>
-                                                    </SpaceBetween>
-                                                </div>
-                                            )}
                                             {containsIncompleteUploads && (
                                                 <>
                                                     <h5>Finish Incomplete uploads</h5>
