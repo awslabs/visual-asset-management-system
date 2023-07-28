@@ -28,7 +28,7 @@ export function buildAssetService(
         environment: {
             DATABASE_STORAGE_TABLE_NAME: databaseStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
-            S3_ASSET_VISUALIZER_BUCKET: assetVisualizerStorageBucket.bucketName
+            S3_ASSET_VISUALIZER_BUCKET: assetVisualizerStorageBucket.bucketName,
         },
     });
     assetStorageTable.grantReadWriteData(assetService);
@@ -171,7 +171,7 @@ export function buildAssetColumnsFunction(
 
 export function buildFetchVisualizerAssetFunction(
     scope: Construct,
-    assetVisualizerStorageBucket: s3.Bucket,
+    assetVisualizerStorageBucket: s3.Bucket
 ): lambda.Function {
     const name = "fetchVisualizerAsset";
     const fetchVisualizerAssetFunction = new lambda.DockerImageFunction(scope, name, {

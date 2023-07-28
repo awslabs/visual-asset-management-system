@@ -10,7 +10,11 @@ import { WorkflowContext } from "../../context/WorkflowContex";
 /**
  * No viewer yet for cad and archive file formats
  */
-import { columnarFileFormats, modelFileFormats, pcFileFormats } from "../../common/constants/fileFormats";
+import {
+    columnarFileFormats,
+    modelFileFormats,
+    pcFileFormats,
+} from "../../common/constants/fileFormats";
 import Synonyms from "../../synonyms";
 
 const AssetSelector = (props) => {

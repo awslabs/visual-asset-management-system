@@ -455,13 +455,13 @@ Since VAMS assets are stored in S3, the processing jobs model suits 3d assets ma
 
 ### Visualizer Pipeline - Visualizer Pipeline Execution Through VAMS Pipeline
 
-Visualizer pipelines to generate preview files for certain types of files like points clouds, are implemented outside of the regular VAMS pipeline at this time. Until these get fully integrated as part of the regular VAMS pipeline design, these pipelines are triggered primarily through a S3 Event Notification on uploading new asset files to VAMS. 
+Visualizer pipelines to generate preview files for certain types of files like points clouds, are implemented outside of the regular VAMS pipeline at this time. Until these get fully integrated as part of the regular VAMS pipeline design, these pipelines are triggered primarily through a S3 Event Notification on uploading new asset files to VAMS.
 
-If you wish to trigger these pipelines additionally/manually through VAMS pipeline, you can setup a new VAMS pipeline using the table below. You will need to lookup the lambda function name in the AWS console based on the base deployment name listed. 
+If you wish to trigger these pipelines additionally/manually through VAMS pipeline, you can setup a new VAMS pipeline using the table below. You will need to lookup the lambda function name in the AWS console based on the base deployment name listed.
 
-| Visualizer Pipeline   | Input/Output File Types Supported | Base Lambda Function Name   |
-| :-------------------- | :-------------------------------- | :-------------------------- |
-| Point Clouds          | LAS, LAZ, E57                     | executeVisualizerPCPipeline |
+| Visualizer Pipeline | Input/Output File Types Supported | Base Lambda Function Name   |
+| :------------------ | :-------------------------------- | :-------------------------- |
+| Point Clouds        | LAS, LAZ, E57                     | executeVisualizerPCPipeline |
 
 # Testing API
 

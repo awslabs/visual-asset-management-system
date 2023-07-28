@@ -8,10 +8,9 @@ import * as path from "path";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
-import * as sns from 'aws-cdk-lib/aws-sns';
+import * as sns from "aws-cdk-lib/aws-sns";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
-
 
 export function buildExecuteVisualizerPCPipelineFunction(
     scope: Construct,
@@ -45,7 +44,7 @@ export function buildOpenPipelineFunction(
     assetVisualizerBucket: s3.Bucket,
     pipelineStateMachine: sfn.StateMachine,
     vpc: ec2.Vpc,
-    pipelineSubnets: ec2.ISubnet[],
+    pipelineSubnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "openPipeline";
     const vpcSubnets = vpc.selectSubnets({
@@ -123,7 +122,7 @@ export function buildPipelineEndFunction(
         securityGroups: pipelineSecurityGroups,
         environment: {
             SOURCE_BUCKET_NAME: assetBucket.bucketName,
-            DEST_BUCKET_NAME: assetVisualizerBucket.bucketName
+            DEST_BUCKET_NAME: assetVisualizerBucket.bucketName,
         },
     });
 

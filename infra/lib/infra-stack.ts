@@ -52,20 +52,26 @@ export class VAMS extends cdk.Stack {
             type: "String",
             description:
                 "Email address for login and where your password is sent to. You will be sent a temporary password for the turbine to authenticate to Cognito.",
-            default: providedAdminEmailAddress
+            default: providedAdminEmailAddress,
         });
 
         ///Setup optional pipelines
         //Point Cloud (PC) Visualizer Preview Pipeline
-        const pipelineActivated_PCVisualizer = (process.env.PIPELINEACTIVATE_PCViISUALIZER|| scope.node.tryGetContext("pipelineActivatePCVisualizer")) === 'true';
+        const pipelineActivated_PCVisualizer =
+            (process.env.PIPELINEACTIVATE_PCViISUALIZER ||
+                scope.node.tryGetContext("pipelineActivatePCVisualizer")) === "true";
         console.log("PIPELINE_ACTIVATED_PCVISUALIZER 👉", pipelineActivated_PCVisualizer);
 
-        const pipelineActivatePCVisualizer_CDKParam = new cdk.CfnParameter(this, " pipelineActivatedPCVisualizer", {
-            type: "String",
-            description:
-              "Parameter for whether the Point Cloud (PC) Visualizer Pipeline is activated as part of this deployment",
-            default: pipelineActivated_PCVisualizer
-          });    
+        const pipelineActivatePCVisualizer_CDKParam = new cdk.CfnParameter(
+            this,
+            " pipelineActivatedPCVisualizer",
+            {
+                type: "String",
+                description:
+                    "Parameter for whether the Point Cloud (PC) Visualizer Pipeline is activated as part of this deployment",
+                default: pipelineActivated_PCVisualizer,
+            }
+        );
 
         const webAppBuildPath = "../web/build";
 
@@ -135,24 +141,33 @@ export class VAMS extends cdk.Stack {
 
         api.addBehaviorToCloudFrontDistribution(website.cloudFrontDistribution);
 
-       ///Optional Pipeline Constructs
-       //Point Cloud (PC) Visualizer Preview Pipeline
-       if(pipelineActivated_PCVisualizer)
-       {
-           const visualizerPipelineNetwork = new VpcSecurityGroupGatewayVisualizerPipelineConstruct(this, "VisualizerPipelineNetwork", {
-               ...props
-             });
-         
-             const visualizerPipeline = new VisualizationPipelineConstruct(this, "VisualizerPipeline", {
-               ...props,
-               assetBucket: storageResources.s3.assetBucket,
-               assetVisualizerBucket: storageResources.s3.assetVisualizerBucket,
-               vpc: visualizerPipelineNetwork.vpc,
-               visualizerPipelineSubnets: visualizerPipelineNetwork.subnets.pipeline,
-               visualizerPipelineSecurityGroups: [visualizerPipelineNetwork.securityGroups.pipeline]
-             });    
-       }
+        ///Optional Pipeline Constructs
+        //Point Cloud (PC) Visualizer Preview Pipeline
+        if (pipelineActivated_PCVisualizer) {
+            const visualizerPipelineNetwork =
+                new VpcSecurityGroupGatewayVisualizerPipelineConstruct(
+                    this,
+                    "VisualizerPipelineNetwork",
+                    {
+                        ...props,
+                    }
+                );
 
+            const visualizerPipeline = new VisualizationPipelineConstruct(
+                this,
+                "VisualizerPipeline",
+                {
+                    ...props,
+                    assetBucket: storageResources.s3.assetBucket,
+                    assetVisualizerBucket: storageResources.s3.assetVisualizerBucket,
+                    vpc: visualizerPipelineNetwork.vpc,
+                    visualizerPipelineSubnets: visualizerPipelineNetwork.subnets.pipeline,
+                    visualizerPipelineSecurityGroups: [
+                        visualizerPipelineNetwork.securityGroups.pipeline,
+                    ],
+                }
+            );
+        }
 
         /**
          * When using federated identities, this list of callback urls must include
@@ -224,16 +239,20 @@ export class VAMS extends cdk.Stack {
             amplifyConfigProps
         );
 
-       //Outputs
+        //Outputs
         const assetBucketOutput = new cdk.CfnOutput(this, "AssetBucketNameOutput", {
             value: storageResources.s3.assetBucket.bucketName,
             description: "S3 bucket for asset storage",
         });
 
-        const assetVisualizerBucketOutput = new cdk.CfnOutput(this, "AssetVisualizerBucketNameOutput", {
-            value: storageResources.s3.assetVisualizerBucket.bucketName,
-            description: "S3 bucket for visualization asset storage",
-          });
+        const assetVisualizerBucketOutput = new cdk.CfnOutput(
+            this,
+            "AssetVisualizerBucketNameOutput",
+            {
+                value: storageResources.s3.assetVisualizerBucket.bucketName,
+                description: "S3 bucket for visualization asset storage",
+            }
+        );
 
         const artefactsBucketOutput = new cdk.CfnOutput(this, "artefactsBucketOutput", {
             value: storageResources.s3.artefactsBucket.bucketName,
