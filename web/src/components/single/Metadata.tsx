@@ -5,7 +5,7 @@
 
 import React, { useEffect, useState } from "react";
 import { API } from "aws-amplify";
-import { Button, Header, Table, Input } from "@cloudscape-design/components";
+import { Button, Header, Table, Input, Box, SpaceBetween } from "@cloudscape-design/components";
 
 export class MetadataApi {
     version!: string;
@@ -123,6 +123,32 @@ const MetadataTable = ({ assetId, databaseId, store, prefix, initialState }: Met
             });
     }, [loading, items, initialState, databaseId, assetId]);
 
+    const addItems = () => {
+        const next = [...items];
+        next.unshift({
+            idx: -1,
+            name: null,
+            description: null,
+            type: "string",
+        });
+        for (let i = 0; i < next.length; i++) {
+            next[i].idx = i;
+        }
+        setItems(next);
+    };
+
+    const AddButton = () => {
+        return (
+            <Button
+                onClick={addItems}
+                disabled={items.filter((x) => x.name === null || x.description === null).length > 0}
+                variant="primary"
+            >
+                Add Field
+            </Button>
+        );
+    };
+
     const HeaderControls = () => {
         return (
             <div
@@ -132,27 +158,7 @@ const MetadataTable = ({ assetId, databaseId, store, prefix, initialState }: Met
                     position: "absolute",
                 }}
             >
-                <Button
-                    onClick={() => {
-                        const next = [...items];
-                        next.unshift({
-                            idx: -1,
-                            name: null,
-                            description: null,
-                            type: "string",
-                        });
-                        for (let i = 0; i < next.length; i++) {
-                            next[i].idx = i;
-                        }
-                        setItems(next);
-                    }}
-                    disabled={
-                        items.filter((x) => x.name === null || x.description === null).length > 0
-                    }
-                    variant="primary"
-                >
-                    Add Row
-                </Button>
+                <AddButton />
             </div>
         );
     };
@@ -189,7 +195,14 @@ const MetadataTable = ({ assetId, databaseId, store, prefix, initialState }: Met
                 header={
                     <>
                         <HeaderControls />
-                        <Header counter={items.length + ""}>Metadata</Header>
+                        <Header
+                            counter={
+                                items.length +
+                                (items.length > 1 || items.length === 0 ? " fields" : " field")
+                            }
+                        >
+                            Metadata
+                        </Header>
                     </>
                 }
                 loading={loading}
@@ -210,6 +223,14 @@ const MetadataTable = ({ assetId, databaseId, store, prefix, initialState }: Met
                     await _store(databaseId, assetId, tableRowToMeta(next), prefix);
                 }}
                 items={items}
+                empty={
+                    <Box margin={{ vertical: "xs" }} textAlign="center" color="inherit">
+                        <SpaceBetween size="m">
+                            <b>No fields</b>
+                            <AddButton />
+                        </SpaceBetween>
+                    </Box>
+                }
                 columnDefinitions={[
                     {
                         id: "name",
