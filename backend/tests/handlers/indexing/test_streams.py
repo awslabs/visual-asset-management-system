@@ -3,10 +3,14 @@
 from decimal import Decimal
 import json
 from unittest.mock import Mock
+import datetime
+from dateutil.tz import tzutc
+
 from backend.handlers.indexing.streams \
     import lambda_handler_m as lambda_handler, \
     lambda_handler_a, \
-    AOSSIndexAssetMetadata, MetadataTable
+    AOSSIndexAssetMetadata, MetadataTable, \
+    handle_s3_event_record
 
 
 example_event = {
@@ -118,8 +122,11 @@ example_event_delete_records = {
 
 def test_determined_field_type():
 
-    assert "geo_point_and_polygon" == AOSSIndexAssetMetadata._determine_field_type(
-        example_event["Records"][0]["dynamodb"]["NewImage"]["location"]["S"])
+    assert "geo_point_and_polygon" == \
+        AOSSIndexAssetMetadata._determine_field_type(
+            example_event["Records"][0]
+                         ["dynamodb"]
+                         ["NewImage"]["location"]["S"])
     assert "json" == AOSSIndexAssetMetadata._determine_field_type(
         json.dumps({"a": "b"}))
     assert "date" == AOSSIndexAssetMetadata._determine_field_type("2023-06-28")
@@ -139,17 +146,29 @@ def test_determined_field_type():
 
 def test_determine_field_name():
 
-    assert [("str_business_line", "Musical Instruments")] == AOSSIndexAssetMetadata._determine_field_name(
+    assert [
+        ("str_business_line", "Musical Instruments")
+    ] == AOSSIndexAssetMetadata._determine_field_name(
         "Business Line", "Musical Instruments")
-    assert [("num_example_number", 123)] == AOSSIndexAssetMetadata._determine_field_name(
+    assert [
+        ("num_example_number", 123)
+    ] == AOSSIndexAssetMetadata._determine_field_name(
         "Example Number", "123")
-    assert [("num_example_number", 123)] == AOSSIndexAssetMetadata._determine_field_name(
+    assert [
+        ("num_example_number", 123)
+    ] == AOSSIndexAssetMetadata._determine_field_name(
         "Example Number", Decimal("123"))
-    assert [("num_example_number", 123.53)] == AOSSIndexAssetMetadata._determine_field_name(
+    assert [
+        ("num_example_number", 123.53)
+    ] == AOSSIndexAssetMetadata._determine_field_name(
         "Example Number", Decimal("123.53"))
-    assert [("bool_example_boolean", True)] == AOSSIndexAssetMetadata._determine_field_name(
+    assert [
+        ("bool_example_boolean", True)
+    ] == AOSSIndexAssetMetadata._determine_field_name(
         "Example Boolean", "true")
-    assert [("bool_example_boolean", False)] == AOSSIndexAssetMetadata._determine_field_name(
+    assert [
+        ("bool_example_boolean", False)
+    ] == AOSSIndexAssetMetadata._determine_field_name(
         "Example Boolean", "false")
     assert [
         ("gp_location", {
@@ -159,14 +178,18 @@ def test_determine_field_name():
         ("gs_location", {
             "type": "polygon",
             "coordinates": [[
-                [-91.2056920994444, 30.565357807147976], [-91.2141893376036,
-                                                          30.562992834836322], [-91.21676425825763, 30.559814812515683],
-                [-91.21440391432446, 30.55663668610957], [-91.2024734486266,
-                                                          30.559593086143792], [-91.2056920994444, 30.565357807147976]
+                [-91.2056920994444, 30.565357807147976],
+                [-91.2141893376036, 30.562992834836322],
+                [-91.21676425825763, 30.559814812515683],
+                [-91.21440391432446, 30.55663668610957],
+                [-91.2024734486266, 30.559593086143792],
+                [-91.2056920994444, 30.565357807147976],
             ]]
         })
     ] == AOSSIndexAssetMetadata._determine_field_name(
-        "location", example_event["Records"][0]["dynamodb"]["NewImage"]["location"]["S"])
+        "location",
+        example_event["Records"][0]["dynamodb"]["NewImage"]["location"]["S"]
+    )
 
 
 def test_deserializer():
@@ -191,10 +214,12 @@ def test_deserializer():
         'gs_location': {
             "type": "polygon",
             "coordinates": [[
-                [-91.2056920994444, 30.565357807147976], [-91.2141893376036,
-                                                          30.562992834836322], [-91.21676425825763, 30.559814812515683],
-                [-91.21440391432446, 30.55663668610957], [-91.2024734486266,
-                                                          30.559593086143792], [-91.2056920994444, 30.565357807147976]
+                [-91.2056920994444, 30.565357807147976],
+                [-91.2141893376036, 30.562992834836322],
+                [-91.21676425825763, 30.559814812515683],
+                [-91.21440391432446, 30.55663668610957],
+                [-91.2024734486266, 30.559593086143792],
+                [-91.2056920994444, 30.565357807147976]
             ]]
         },
         'str_databaseid': 'asdf'
@@ -246,7 +271,9 @@ def test_lambda_handler():
         }
         return record | fields
 
-    lambda_handler(example_event, {}, index=lambda_handler_mock, s3index=s3index_fn,
+    lambda_handler(example_event, {},
+                   index=lambda_handler_mock,
+                   s3index=s3index_fn,
                    get_asset_fields_fn=get_asset_fields_fn)
 
     expected = example_event["Records"][0]
@@ -288,7 +315,8 @@ def test_lambda_handler_delete_records():
     index.process_item.assert_not_called()
     index.delete_item.assert_called_once()
     index.delete_item.assert_called_with(
-        example_event_delete_records['Records'][0]["dynamodb"]['Keys']['assetId']['S'])
+        (example_event_delete_records['Records']
+            [0]["dynamodb"]['Keys']['assetId']['S']))
 
 
 def test_make_prefixes():
@@ -388,3 +416,163 @@ def test_lambda_handler_asset_insert():
     index.process_item.assert_not_called()
     index.delete_item.assert_not_called()
     index.delete_item_by_query.assert_not_called()
+
+
+def test_lambda_handler_s3_missing_records():
+    key = 'x3436ba89-d832-4486-a6d5-606fc18a8691/test-folder/5.txt'
+    event = {
+        'Records': [{
+            'eventVersion': '2.1',
+            'eventSource': 'aws:s3',
+            'awsRegion': 'us-east-1',
+            'eventTime': '2023-07-27T21:03:36.669Z',
+            'eventName': 'ObjectCreated:CompleteMultipartUpload',
+            'userIdentity': {'principalId': '...'},
+            'requestParameters': {'sourceIPAddress': '#ip address#'},
+            'responseElements': {
+                'x-amz-request-id': '...',
+                'x-amz-id-2': '...'
+            },
+            's3': {
+                's3SchemaVersion': '1.0',
+                'configurationId': '...',
+                'bucket': {
+                    'name': 'vams-dev-us-east-1-assetbucket...',
+                    'ownerIdentity': {'principalId': '...'},
+                    'arn': 'arn:aws:s3:::vams-dev-us-east-1-assetbucket...'
+                },
+                'object': {
+                    'key': key,
+                    'size': 1024,
+                    'eTag': '...-1',
+                    'versionId': '...',
+                    'sequencer': '...'
+                }
+            }
+        }]
+    }
+
+    databaseId = "mydatabaseid"
+
+    s3 = Mock()
+    s3.head_object = Mock(return_value={
+        'Metadata': {
+            'assetid': 'x3436ba89-d832-4486-a6d5-606fc18a8691',
+            'databaseid': databaseId
+        }
+    })
+    metadata_fn = Mock()
+    metadata_fn.get_metadata = Mock(return_value=None)
+    metadata_fact_fn = Mock(return_value=metadata_fn)
+    get_asset_fields_fn = Mock(return_value=None)
+    sleep_fn = Mock()
+
+    try:
+        handle_s3_event_record(
+            event['Records'][0],
+            s3=s3,
+            metadata_fn=metadata_fact_fn,
+            get_asset_fields_fn=get_asset_fields_fn,
+            sleep_fn=sleep_fn
+        )
+    except Exception:
+        pass
+
+    s3.head_object.assert_called_with(**{
+        'Bucket': 'vams-dev-us-east-1-assetbucket...',
+        'Key': 'x3436ba89-d832-4486-a6d5-606fc18a8691/test-folder/5.txt'
+    })
+
+    metadata_fn.get_metadata.assert_called_with(
+        databaseId, 'x3436ba89-d832-4486-a6d5-606fc18a8691')
+    assert sleep_fn.call_count == 120
+
+
+def test_lambda_handler_s3():
+    key = 'x3436ba89-d832-4486-a6d5-606fc18a8691/test-folder/5.txt'
+    event = {
+        'Records': [{
+            'eventVersion': '2.1',
+            'eventSource': 'aws:s3',
+            'awsRegion': 'us-east-1',
+            'eventTime': '2023-07-27T21:03:36.669Z',
+            'eventName': 'ObjectCreated:CompleteMultipartUpload',
+            'userIdentity': {'principalId': '...'},
+            'requestParameters': {'sourceIPAddress': '#ip address#'},
+            'responseElements': {
+                'x-amz-request-id': '...',
+                'x-amz-id-2': '...'
+            },
+            's3': {
+                's3SchemaVersion': '1.0',
+                'configurationId': '...',
+                'bucket': {
+                    'name': 'vams-dev-us-east-1-assetbucket...',
+                    'ownerIdentity': {'principalId': '...'},
+                    'arn': 'arn:aws:s3:::vams-dev-us-east-1-assetbucket...'
+                },
+                'object': {
+                    'key': key,
+                    'size': 1024,
+                    'eTag': '...-1',
+                    'versionId': '...',
+                    'sequencer': '...'
+                }
+            }
+        }]
+    }
+
+    s3 = Mock()
+    databaseId = "mydatabaseid"
+    asset_record = {
+        "assetName": "blah",
+        "assetId": "x3436ba89-d832-4486-a6d5-606fc18a8691"
+    }
+    s3.head_object = Mock(return_value={
+        'Metadata': {
+            'assetid': 'x3436ba89-d832-4486-a6d5-606fc18a8691',
+            'databaseid': databaseId
+        },
+        'LastModified': datetime.datetime(
+            2023, 7, 27, 21, 3, 37, tzinfo=tzutc()),
+        'ETag': "theetag",
+    })
+    metadata_fn = Mock()
+    metadata_fn.get_metadata = Mock(return_value={})
+    metadata_fact_fn = Mock(return_value=metadata_fn)
+    get_asset_fields_fn = Mock(return_value=asset_record)
+    sleep_fn = Mock()
+
+    s3index = Mock()
+    s3index.process_single_s3_object = Mock()
+    s3index_fn = Mock(return_value=s3index)
+
+    handle_s3_event_record(
+        event['Records'][0],
+        s3=s3,
+        metadata_fn=metadata_fact_fn,
+        get_asset_fields_fn=get_asset_fields_fn,
+        s3index_fn=s3index_fn,
+        sleep_fn=sleep_fn
+    )
+
+    s3.head_object.assert_called_with(**{
+        'Bucket': 'vams-dev-us-east-1-assetbucket...',
+        'Key': 'x3436ba89-d832-4486-a6d5-606fc18a8691/test-folder/5.txt'
+    })
+
+    assert sleep_fn.call_count == 0
+    metadata_fn.get_metadata.assert_called_with(
+        databaseId,
+        'x3436ba89-d832-4486-a6d5-606fc18a8691')
+
+    s3index.process_single_s3_object.assert_called_with(
+        databaseId,
+        'x3436ba89-d832-4486-a6d5-606fc18a8691',
+        {
+            "Key": 'x3436ba89-d832-4486-a6d5-606fc18a8691/test-folder/5.txt',
+            'LastModified': datetime.datetime(2023, 7, 27, 21, 3, 37,
+                                              tzinfo=tzutc()),
+            'ETag': 'theetag',
+        },
+    )

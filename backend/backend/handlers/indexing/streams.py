@@ -5,14 +5,9 @@ import json
 import boto3
 import os
 import traceback
-from backend.logging.logger import safeLogger
-from backend.common.dynamodb import to_update_expr
-# from backend.handlers.metadata.read import get_metadata_with_prefix
-from boto3.dynamodb.conditions import Key, Attr
-from aws_lambda_powertools.utilities.typing import LambdaContext
-from aws_lambda_powertools.utilities.data_classes import APIGatewayProxyEvent
 from decimal import Decimal
 from urllib.parse import urlparse
+import time
 
 import re
 
@@ -39,7 +34,6 @@ from boto3.dynamodb.types import TypeDeserializer
 #
 # movies = """
 #   { "index" : { "_index" : "my-dsl-index", "_id" : "2" } }
-#   { "title" : "Interstellar", "director" : "Christopher Nolan", "year" : "2014"}
 #   { "create" : { "_index" : "my-dsl-index", "_id" : "3" } }
 #   { "title" : "Star Trek Beyond", "director" : "Justin Lin", "year" : "2015"}
 #   { "update" : {"_id" : "3", "_index" : "my-dsl-index" } }
@@ -61,7 +55,6 @@ class MetadataTable():
 
     def __init__(self, table):
         self.table = table
-        pass
 
     @staticmethod
     def from_env(env=os.environ):
@@ -117,7 +110,7 @@ class MetadataTable():
             }
         )
         if "Item" not in resp:
-            return {}
+            return None
         return resp['Item']
 
 
@@ -155,15 +148,18 @@ class AOSSIndexS3Objects():
 
     def _get_s3_object_keys_generator(self, prefix):
         paginator = self.s3client.get_paginator('list_objects')
-        page_iterator = paginator.paginate(Bucket=self.bucketName, Prefix=prefix)
+        page_iterator = paginator.paginate(Bucket=self.bucketName,
+                                           Prefix=prefix)
         for page in page_iterator:
             for obj in page.get('Contents', []):
                 yield obj
 
     @staticmethod
     def _metadata_and_s3_object_to_opensearch(s3object, metadata):
-        s3object['LastModified'] = s3object['LastModified'].strftime("%Y-%m-%d")
-        del s3object['Owner']
+        s3object['LastModified'] = s3object['LastModified'].strftime(
+            "%Y-%m-%d")
+        if 'Owner' in s3object:
+            del s3object['Owner']
         s3object['fileext'] = s3object['Key'].split('.')[-1]
 
         print("s3object", s3object)
@@ -193,6 +189,26 @@ class AOSSIndexS3Objects():
 
         return result.get('Item')
 
+    def process_single_s3_object(self, databaseId, assetId,
+                                 s3object, asset_fields=None):
+        if asset_fields is None:
+            asset_fields = self.get_asset_fields(databaseId, assetId)
+        metadata = self.metadataTable.get_metadata_with_prefix(
+            databaseId, assetId, s3object.get("Key"))
+        metadata = metadata | asset_fields
+
+        # enables delete by assetId
+        if "assetId" in metadata and "/" in metadata['assetId']:
+            metadata['assetId'] = metadata['assetId'].split("/")[0]
+
+        aosrecord = self._metadata_and_s3_object_to_opensearch(
+            s3object, metadata)
+        self.aosclient.index(
+            index="assets1236",
+            body=aosrecord,
+            id=s3object['Key'],
+        )
+
     def process_item(self, databaseId, assetIdOrPrefix):
         prefix = None
         assetId = assetIdOrPrefix
@@ -209,21 +225,8 @@ class AOSSIndexS3Objects():
             print("prefix is None", databaseId, assetIdOrPrefix)
 
         for s3object in self._get_s3_object_keys_generator(assetIdOrPrefix):
-            metadata = self.metadataTable.get_metadata_with_prefix(
-                databaseId, assetId, s3object.get("Key"))
-            metadata = metadata | asset_fields
-
-            # enables delete by assetId
-            if "assetId" in metadata and "/" in metadata['assetId']:
-                metadata['assetId'] = metadata['assetId'].split("/")[0]
-
-            aosrecord = self._metadata_and_s3_object_to_opensearch(
-                s3object, metadata)
-            self.aosclient.index(
-                index="assets1236",
-                body=aosrecord,
-                id=s3object['Key'],
-            )
+            self.process_single_s3_object(databaseId, assetId,
+                                          s3object, asset_fields)
 
 
 class AOSSIndexAssetMetadata():
@@ -272,18 +275,20 @@ class AOSSIndexAssetMetadata():
         # regex that matches int or float
         num = re.compile(r"^\d+$|^\d+\.\d+$")
 
-        if isinstance(data, Decimal) or isinstance(data, float) or isinstance(data, int):
+        if isinstance(data, Decimal) or isinstance(data, float) \
+           or isinstance(data, int):
             return "num"
 
         if j.match(data):
 
             try:
                 j = json.loads(data)
-                if "loc" in j and "polygons" in j and "FeatureCollection" == j["polygons"].get("type"):
+                if "loc" in j and "polygons" in j \
+                        and "FeatureCollection" == j["polygons"].get("type"):
                     return "geo_point_and_polygon"
 
                 return "json"
-            except:
+            except Exception:
                 pass
 
         if dt.match(data):
@@ -314,7 +319,8 @@ class AOSSIndexAssetMetadata():
                 }),
                 ("gs_{name}".format(name=field_name), {
                     "type": "polygon",
-                    "coordinates": j['polygons']['features'][0]['geometry']['coordinates']
+                    "coordinates": j['polygons']['features'][0]
+                                    ['geometry']['coordinates']
                 }),
             ]
 
@@ -330,14 +336,16 @@ class AOSSIndexAssetMetadata():
                     return float(data)
                 else:
                     return int(data)
-            elif data_type == "num" and (isinstance(data, float) or isinstance(data, int)):
+            elif data_type == "num" and (isinstance(data, float)
+                                         or isinstance(data, int)):
                 return data
             elif data_type == "bool":
                 return data == "true"
             else:
                 return data
 
-        return [("{data_type}_{name}".format(name=field_name, data_type=data_type), _data_conv())]
+        return [("{data_type}_{name}".format(
+            name=field_name, data_type=data_type), _data_conv())]
 
     @staticmethod
     def _process_item(item):
@@ -345,7 +353,8 @@ class AOSSIndexAssetMetadata():
         result = {
             x: y
             for k, v in item["dynamodb"]["NewImage"].items()
-            for x, y in AOSSIndexAssetMetadata._determine_field_name(k, deserialize(v))
+            for x, y in AOSSIndexAssetMetadata._determine_field_name(
+                            k, deserialize(v))
         }
         result['_rectype'] = 'asset'
         return result
@@ -392,8 +401,9 @@ class AOSSIndexAssetMetadata():
             for item in ids
         ]
 
+
 def get_asset_fields(keys):
-    # 'Keys': {'assetId': {'S': 'xe46db27e-89f2-4602-9bde-e1596c5a43a2'}, 'databaseId': {'S': 'exxon'}},
+    # 'Keys': {'assetId': {'S': '...'}, 'databaseId': {'S': '...'}},
     client = boto3.client("dynamodb")
 
     # this allows us to get the asset fields when the provided key
@@ -419,12 +429,12 @@ def get_asset_fields(keys):
 
 
 def lambda_handler_a(event, context,
-                   index=AOSSIndexAssetMetadata.from_env,
-                   s3index=AOSSIndexS3Objects.from_env,
-                   get_asset_fields_fn=get_asset_fields):
+                     index=AOSSIndexAssetMetadata.from_env,
+                     s3index=AOSSIndexS3Objects.from_env,
+                     get_asset_fields_fn=get_asset_fields):
 
     print("asset table event", event)
-    # we need to catch delete events here and delete by query on aoss. 
+    # we need to catch delete events here and delete by query on aoss.
     client = index()
 
     if event.get("eventName") == "REMOVE":
@@ -432,16 +442,78 @@ def lambda_handler_a(event, context,
 
     if 'Records' not in event:
         return
-    
+
     for record in event['Records']:
         if record['eventName'] == 'REMOVE':
-            client.delete_item_by_query(record['dynamodb']['Keys']['assetId']['S'])
+            client.delete_item_by_query(
+                record['dynamodb']['Keys']['assetId']['S'])
+
+
+def handle_s3_event_record(record,
+                           s3=boto3.client("s3"),
+                           metadata_fn=MetadataTable.from_env,
+                           get_asset_fields_fn=get_asset_fields,
+                           s3index_fn=AOSSIndexS3Objects.from_env,
+                           sleep_fn=time.sleep):
+
+    if not record.get("eventName", "").startswith("ObjectCreated:"):
+        return
+
+    metadata = metadata_fn()
+
+    head_result = s3.head_object(
+        Bucket=record['s3']['bucket']['name'],
+        Key=record['s3']['object']['key'],
+    )
+
+    databaseId = head_result['Metadata']['databaseid']
+    assetId = head_result['Metadata']['assetid']
+
+    # see if records exist for the asset and metadata tables
+    metadata_record = None
+    attempt = 0
+    while metadata_record is None and attempt < 60:
+        metadata_record = metadata.get_metadata(databaseId, assetId)
+        attempt += 1
+        if metadata_record is None:
+            print("metadata record not available yet")
+            sleep_fn(1)
+
+    asset_record = None
+    attempt = 0
+    while asset_record is None and attempt < 60:
+        asset_record = get_asset_fields_fn({
+            "databaseId": {"S": databaseId},
+            "assetId": {"S": assetId}
+        })
+        attempt += 1
+        if asset_record is None:
+            print("asset record not available yet")
+            sleep_fn(1)
+
+    if asset_record is None:
+        raise Exception("unable to get asset records after 1 minute")
+
+    if metadata_record is None:
+        raise Exception("unable to get metadata records after 1 minute")
+
+    s3index = s3index_fn()
+
+    s3index.process_single_s3_object(
+        databaseId,
+        assetId,
+        {
+            "Key": record['s3']['object']['key'],
+            "LastModified": head_result['LastModified'],
+            "ETag": head_result['ETag'],
+        },
+    )
 
 
 def lambda_handler_m(event, context,
-                   index=AOSSIndexAssetMetadata.from_env,
-                   s3index=AOSSIndexS3Objects.from_env,
-                   get_asset_fields_fn=get_asset_fields):
+                     index=AOSSIndexAssetMetadata.from_env,
+                     s3index=AOSSIndexS3Objects.from_env,
+                     get_asset_fields_fn=get_asset_fields):
 
     print("the event", event)
     client = index()
@@ -458,6 +530,11 @@ def lambda_handler_m(event, context,
 
     for record in event['Records']:
         print("record", record)
+
+        if record.get("eventSource") == "aws:s3":
+            handle_s3_event_record(record)
+            continue
+
         if record['eventName'] == 'REMOVE':
             client.delete_item(record['dynamodb']['Keys']['assetId']['S'])
             continue
@@ -475,7 +552,8 @@ def lambda_handler_m(event, context,
         print("with asset fields", record)
 
         try:
-            # if this is metadata at a s3 key prefix rather than an asset, just index the items with that prefix as files
+            # if this is metadata at a s3 key prefix rather than an asset,
+            # just index the items with that prefix as files
             if "/" in record['dynamodb']['Keys']['assetId']['S']:
                 print("indexing s3 objects only")
                 s3index().process_item(
