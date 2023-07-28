@@ -49,20 +49,26 @@ export class VAMS extends cdk.Stack {
             type: "String",
             description:
                 "Email address for login and where your password is sent to. You will be sent a temporary password for the turbine to authenticate to Cognito.",
-            default: providedAdminEmailAddress
+            default: providedAdminEmailAddress,
         });
 
         ///Setup optional pipelines
         //Point Cloud (PC) Pipeline
-        const pipelineActivated_PCVisualizer = (process.env.PIPELINEACTIVATE_PCViISUALIZER|| scope.node.tryGetContext("pipelineActivatePCVisualizer")) === 'true';
+        const pipelineActivated_PCVisualizer =
+            (process.env.PIPELINEACTIVATE_PCViISUALIZER ||
+                scope.node.tryGetContext("pipelineActivatePCVisualizer")) === "true";
         console.log("PIPELINE_ACTIVATED_PCVISUALIZER 👉", pipelineActivated_PCVisualizer);
 
-        const pipelineActivatePCVisualizer_CDKParam = new cdk.CfnParameter(this, " pipelineActivatedPCVisualizer", {
-            type: "String",
-            description:
-              "Parameter for whether the Point Cloud (PC) Visualizer Pipeline is activated as part of this deployment",
-            default: pipelineActivated_PCVisualizer
-          });    
+        const pipelineActivatePCVisualizer_CDKParam = new cdk.CfnParameter(
+            this,
+            " pipelineActivatedPCVisualizer",
+            {
+                type: "String",
+                description:
+                    "Parameter for whether the Point Cloud (PC) Visualizer Pipeline is activated as part of this deployment",
+                default: pipelineActivated_PCVisualizer,
+            }
+        );
 
         const webAppBuildPath = "../web/build";
 
@@ -132,10 +138,8 @@ export class VAMS extends cdk.Stack {
 
         api.addBehaviorToCloudFrontDistribution(website.cloudFrontDistribution);
 
-
         //Placeholder for Optional Pipeline Construct Deployment
-        if(pipelineActivated_PCVisualizer)
-        {
+        if (pipelineActivated_PCVisualizer) {
             //TBD
         }
 
