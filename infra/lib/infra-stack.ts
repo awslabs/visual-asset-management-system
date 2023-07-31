@@ -58,13 +58,13 @@ export class VAMS extends cdk.Stack {
         ///Setup optional pipelines
         //Point Cloud (PC) Visualizer Preview Pipeline
         const pipelineActivated_PCVisualizer =
-            (process.env.PIPELINEACTIVATE_PCViISUALIZER ||
+            (process.env.PIPELINEACTIVATE_PCVISUALIZER ||
                 scope.node.tryGetContext("pipelineActivatePCVisualizer")) === "true";
         console.log("PIPELINE_ACTIVATED_PCVISUALIZER 👉", pipelineActivated_PCVisualizer);
 
         const pipelineActivatePCVisualizer_CDKParam = new cdk.CfnParameter(
             this,
-            " pipelineActivatedPCVisualizer",
+            "pipelineActivatedPCVisualizer",
             {
                 type: "String",
                 description:
