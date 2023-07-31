@@ -153,8 +153,12 @@ def delete_asset(databaseId, assetId, queryParameters):
     if item:
         print("Deleting asset: ", item)
         if "assetLocation" in item:
-            archive_file(item['assetLocation'])
-            delete_assetVisualizer_files(item['assetLocation'])
+            if item['isMultiFile']:
+                archive_multi_file(item['assetLocation'])
+                delete_assetVisualizer_files(item['assetLocation'])
+            else:
+                archive_file(item['assetLocation'])
+                delete_assetVisualizer_files(item['assetLocation'])
         if "previewLocation" in item:
             archive_file(item['previewLocation'])
         item['databaseId'] = databaseId + "#deleted"
@@ -168,6 +172,50 @@ def delete_asset(databaseId, assetId, queryParameters):
         response['statusCode'] = 200
         response['message'] = "Asset deleted"
     return response
+
+
+def archive_multi_file(location):
+    s3 = boto3.client('s3')
+    bucket = ""
+    prefix = ""
+    if "Bucket" in location:
+        bucket = location['Bucket']
+    if "Key" in location:
+        prefix = location['Key']
+    if len(bucket) == 0 or len(prefix) == 0:
+        return
+    print('Archiving folder with multiple files')
+
+    paginator = s3.get_paginator('list_objects_v2')
+    files = []
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page['Contents']:
+            files.append(obj['Key'])
+
+    for key in files:
+        source = {
+            'Bucket': bucket,
+            'Key': key
+        }
+        try:
+            response = s3.copy(
+                source, bucket, key,
+                ExtraArgs={
+                    'StorageClass': 'GLACIER',
+                    'MetadataDirective': 'COPY'
+                }
+            )
+            print("S3 response: ", response)
+
+        except s3.exceptions.InvalidObjectState as ios:
+            print("S3 object already archived: ", key)
+            print(ios)
+
+        except botocore.exceptions.ClientError as e:
+            # TODO: Most likely an error when the key doesnt exist
+            print("Error occurred: ", e)
+
+    return
 
 
 def archive_file(location):
@@ -469,6 +517,7 @@ def delete_handler(response, pathParameters, queryParameters):
     print(response)
     return response
 
+
 def delete_assetVisualizer_files(assetLocation):
     s3 = boto3.client('s3')
 
@@ -476,24 +525,19 @@ def delete_assetVisualizer_files(assetLocation):
     if "Key" in assetLocation:
         key = assetLocation['Key']
 
-    if  len(key)==0:
+    if len(key) == 0:
         return
-    
-    #Check if key does not end in file extension of E57, LAS, or LAZ
-    #Return as visualizer files only exists for these file extension types
-    #if not key.endswith(".e57") and not key.endswith(".las") and not key.endswith(".laz"):
-    #    return
-    
-    #Add the folder deliminiator to the end of the key
+
+    # Add the folder deliminiator to the end of the key
     key = key + '/'
 
     print("Deleting Temporary Asset Visualizer Files Under Folder: ", s3_assetVisualizer_bucket, ":", key)
 
     try:
-        #Get all assets in assetVisualizer bucket (unversioned, temporary files for the web visualizers) for deletion
-        #Use assetLocation key as root folder key for assetVisualizerFiles
+        # Get all assets in assetVisualizer bucket (unversioned, temporary files for the web visualizers) for deletion
+        # Use assetLocation key as root folder key for assetVisualizerFiles
         assetVisualizerBucketFilesDeleted = []
-        paginator = s3.get_paginator('list_objects')
+        paginator = s3.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=s3_assetVisualizer_bucket, Prefix=key):
             for item in page['Contents']:
                 assetVisualizerBucketFilesDeleted.append(item['Key'])
@@ -505,6 +549,7 @@ def delete_assetVisualizer_files(assetLocation):
         print("Error: ", e)
 
     return
+
 
 def lambda_handler(event, context):
     print(event)
