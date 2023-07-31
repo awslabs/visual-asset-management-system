@@ -155,6 +155,7 @@ def delete_asset(databaseId, assetId, queryParameters):
         if "assetLocation" in item:
             if item['isMultiFile']:
                 archive_multi_file(item['assetLocation'])
+                delete_assetVisualizer_files(item['assetLocation'])
             else:
                 archive_file(item['assetLocation'])
                 delete_assetVisualizer_files(item['assetLocation'])
@@ -527,11 +528,6 @@ def delete_assetVisualizer_files(assetLocation):
     if len(key) == 0:
         return
 
-    # Check if key does not end in file extension of E57, LAS, or LAZ
-    # Return as visualizer files only exists for these file extension types
-    # if not key.endswith(".e57") and not key.endswith(".las") and not key.endswith(".laz"):
-    #    return
-
     # Add the folder deliminiator to the end of the key
     key = key + '/'
 
@@ -541,7 +537,7 @@ def delete_assetVisualizer_files(assetLocation):
         # Get all assets in assetVisualizer bucket (unversioned, temporary files for the web visualizers) for deletion
         # Use assetLocation key as root folder key for assetVisualizerFiles
         assetVisualizerBucketFilesDeleted = []
-        paginator = s3.get_paginator('list_objects')
+        paginator = s3.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=s3_assetVisualizer_bucket, Prefix=key):
             for item in page['Contents']:
                 assetVisualizerBucketFilesDeleted.append(item['Key'])
