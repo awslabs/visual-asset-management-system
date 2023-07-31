@@ -56,7 +56,7 @@ export class VpcSecurityGroupGatewayVisualizerPipelineConstruct extends Construc
             removalPolicy: cdk.RemovalPolicy.RETAIN,
         });
 
-        const cidrRange: string = "10.0.0.0/16"; // 4096
+        const cidrRange = "10.0.0.0/16"; // 4096
 
         this.vpc = new ec2.Vpc(this, "Vpc", {
             ipAddresses: ec2.IpAddresses.cidr(cidrRange),
