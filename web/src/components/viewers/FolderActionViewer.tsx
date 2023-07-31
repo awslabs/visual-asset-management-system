@@ -1,7 +1,7 @@
 import { Header } from "@cloudscape-design/components";
 import Button from "@cloudscape-design/components/button";
 import Container from "@cloudscape-design/components/container";
-import { Storage } from "@aws-amplify/storage";
+import { Storage } from "aws-amplify";
 import { useEffect, useState } from "react";
 import ColumnLayout from "@cloudscape-design/components/column-layout";
 import { useNavigate, useParams } from "react-router";
