@@ -576,3 +576,122 @@ def test_lambda_handler_s3():
             'ETag': 'theetag',
         },
     )
+
+
+def test_delete_s3_object():
+
+    key = 'x7737811f-e3c0-436b-855a-744fd299901c/' + \
+          'test-folder/subfolder1f/subfolder2/5.txt'
+    bucket = 'vams-dev-us-east-1-assetbucket1...'
+    example_event = {
+        'eventVersion': '2.1',
+        'eventSource': 'aws:s3',
+        'awsRegion': 'us-east-1',
+        'eventTime': '2023-07-31T13:49:24.945Z',
+        'eventName': 'ObjectRemoved:DeleteMarkerCreated',
+        's3': {
+            's3SchemaVersion': '1.0',
+            'configurationId': '...',
+            'bucket': {
+                'name': bucket,
+                'ownerIdentity': {'principalId': 'A1RI5Y2VF5PE69'},
+                'arn': 'arn:aws:s3:::vams-dev-us-east-1-assetbucket...',
+            },
+            'object': {
+                'key': key,
+                'eTag': 'd41d8cd98f00b204e9800998ecf8427e',
+            }
+        }
+    }
+
+    s3 = Mock()
+
+    get_asset_fields_fn = Mock(side_effect=Exception("didn't expect call"))
+    sleep_fn = Mock()
+
+    s3index = Mock()
+    s3index.delete_item = Mock()
+    s3index_fn = Mock(return_value=s3index)
+
+    handle_s3_event_record(
+        example_event,
+        s3=s3,
+        metadata_fn=Mock(),
+        get_asset_fields_fn=get_asset_fields_fn,
+        s3index_fn=s3index_fn,
+        sleep_fn=sleep_fn
+    )
+
+    s3index.delete_item.assert_called_with(key)
+
+
+def test_object_copied_to_glacier():
+    assetId = "x7737811f-e3c0-436b-855a-744fd299901c"
+    key = '{Key}/test-folder/subfolder1f/subfolder2/5.txt'.format(
+        Key=assetId)
+    bucket = 'vams-dev-us-east-1-assetbucket1...'
+    example_event = {
+        'eventVersion': '2.1',
+        'eventSource': 'aws:s3',
+        'awsRegion': 'us-east-1',
+        'eventTime': '2023-07-31T18:26:33.895Z',
+        'eventName': 'ObjectCreated:Copy',
+        'userIdentity': {
+            'principalId': 'AWS:...:vams-dev-us-east-1-assetService...'
+        },
+        'requestParameters': {
+            'sourceIPAddress': '...'
+        },
+        'responseElements': {
+            'x-amz-request-id': '...',
+            'x-amz-id-2': '...'
+        },
+        's3': {
+            's3SchemaVersion': '1.0',
+            'configurationId': '...',
+            'bucket': {
+                'name': bucket,
+                'ownerIdentity': {'principalId': '...'},
+                'arn': 'arn:aws:s3:::vams-dev-us-east-1-assetbucket...'
+            },
+            'object': {
+                'key': key,
+                'size': 1024,
+                'eTag': 'dc87e6561fce52a5226125e4e6907d38',
+                'versionId': '...',
+                'sequencer': '...'
+            }
+        }
+    }
+
+    head_response_mock = {
+        'Metadata': {
+            'assetid': assetId,
+            'databaseid': 'databaseId',
+            'vams-status': 'deleted',
+        },
+        'ETag': '"..."',
+        'LastModified': datetime.datetime(
+            2023, 7, 31, 18, 26, 34, tzinfo=tzutc()),
+        'StorageClass': 'GLACIER'
+    }
+
+    s3index = Mock()
+    s3index.delete_item = Mock()
+    s3index.process_single_s3_object = Mock()
+    s3index_fn = Mock(return_value=s3index)
+
+    s3 = Mock()
+    s3.head_object = Mock(return_value=head_response_mock)
+
+    handle_s3_event_record(
+        example_event,
+        s3=s3,
+        metadata_fn=Mock(),
+        get_asset_fields_fn=Mock(),
+        s3index_fn=s3index_fn,
+        sleep_fn=Mock()
+    )
+
+    s3index.process_single_s3_object.assert_not_called()
+    s3index.delete_item.assert_called_with(key)

@@ -11,7 +11,7 @@ import time
 
 import re
 
-from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
+from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth, NotFoundError
 from boto3.dynamodb.types import TypeDeserializer
 
 #
@@ -209,6 +209,15 @@ class AOSSIndexS3Objects():
             id=s3object['Key'],
         )
 
+    def delete_item(self, key):
+        try:
+            return self.aosclient.delete(
+                index="assets1236",
+                id=key,
+            )
+        except NotFoundError:
+            print("caught not found error on ", key, "likely already deleted.")
+
     def process_item(self, databaseId, assetIdOrPrefix):
         prefix = None
         assetId = assetIdOrPrefix
@@ -374,10 +383,15 @@ class AOSSIndexAssetMetadata():
             raise e
 
     def delete_item(self, assetId):
-        return self.client.delete(
-            index="assets1236",
-            id=assetId,
-        )
+        try:
+            return self.client.delete(
+                index="assets1236",
+                id=assetId,
+            )
+        except NotFoundError:
+            print("caught not found error on opensearch asset record",
+                  assetId, "likely already deleted.")
+            return None
 
     def delete_item_by_query(self, assetId):
         results = self.client.search(
@@ -449,6 +463,15 @@ def lambda_handler_a(event, context,
                 record['dynamodb']['Keys']['assetId']['S'])
 
 
+def handle_s3_event_record_removed(record, s3, s3index_fn):
+    if not record.get("eventName", "").startswith("ObjectRemoved:"):
+        print("not an object removed event", record)
+        return
+
+    s3index = s3index_fn()
+    s3index.delete_item(record.get("s3", {}).get("object", {}).get("key", ""))
+
+
 def handle_s3_event_record(record,
                            s3=boto3.client("s3"),
                            metadata_fn=MetadataTable.from_env,
@@ -456,7 +479,10 @@ def handle_s3_event_record(record,
                            s3index_fn=AOSSIndexS3Objects.from_env,
                            sleep_fn=time.sleep):
 
+    handle_s3_event_record_removed(record, s3, s3index_fn)
+
     if not record.get("eventName", "").startswith("ObjectCreated:"):
+        print("not an object created event", record)
         return
 
     metadata = metadata_fn()
@@ -468,6 +494,15 @@ def handle_s3_event_record(record,
 
     databaseId = head_result['Metadata']['databaseid']
     assetId = head_result['Metadata']['assetid']
+    deleted = head_result['Metadata'].get('vams-status')
+
+    # s3 objects are marked with vams-status=deleted in their s3 metadata
+    # by calls to delete assets in assetService.py
+    if deleted == 'deleted':
+        s3index = s3index_fn()
+        s3index.delete_item(
+            record.get("s3", {}).get("object", {}).get("key", ""))
+        return
 
     # see if records exist for the asset and metadata tables
     metadata_record = None
