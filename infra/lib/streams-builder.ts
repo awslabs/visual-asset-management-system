@@ -8,11 +8,12 @@ import { storageResources } from "./storage-builder";
 import { buildMetadataIndexingFunction } from "./lambdaBuilder/metadataFunctions";
 import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as s3 from "aws-cdk-lib/aws-s3";
+import * as s3n from "aws-cdk-lib/aws-s3-notifications";
 import { NagSuppressions } from "cdk-nag";
 import { OpensearchServerlessConstruct } from "./constructs/opensearch-serverless";
 import { Stack } from "aws-cdk-lib";
 import { CognitoWebNativeConstruct } from "./constructs/cognito-web-native-construct";
-import * as ssm from "aws-cdk-lib/aws-ssm";
 import { buildSearchFunction } from "./lambdaBuilder/searchFunctions";
 import { attachFunctionToApi } from "./api-builder";
 import * as apigwv2 from "@aws-cdk/aws-apigatewayv2-alpha";
@@ -30,7 +31,25 @@ export function streamsBuilder(
     const indexingFunction = buildMetadataIndexingFunction(
         scope,
         storage,
-        aoss.endpointSSMParameterName()
+        aoss.endpointSSMParameterName(),
+        "m"
+    );
+
+    const assetIndexingFunction = buildMetadataIndexingFunction(
+        scope,
+        storage,
+        aoss.endpointSSMParameterName(),
+        "a"
+    );
+
+    storage.s3.assetBucket.addEventNotification(
+        s3.EventType.OBJECT_CREATED,
+        new s3n.LambdaDestination(indexingFunction)
+    );
+
+    storage.s3.assetBucket.addEventNotification(
+        s3.EventType.OBJECT_REMOVED,
+        new s3n.LambdaDestination(indexingFunction)
     );
 
     indexingFunction.addEventSource(
@@ -38,8 +57,14 @@ export function streamsBuilder(
             startingPosition: lambda.StartingPosition.TRIM_HORIZON,
         })
     );
+    assetIndexingFunction.addEventSource(
+        new eventsources.DynamoEventSource(storage.dynamo.assetStorageTable, {
+            startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+        })
+    );
 
     aoss.grantCollectionAccess(indexingFunction);
+    aoss.grantCollectionAccess(assetIndexingFunction);
 
     const searchFun = buildSearchFunction(scope, aoss.endpointSSMParameterName(), aoss, storage);
     attachFunctionToApi(scope, searchFun, {

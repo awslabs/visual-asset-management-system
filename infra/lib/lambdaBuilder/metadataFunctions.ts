@@ -45,11 +45,12 @@ export function buildMetadataFunction(
 export function buildMetadataIndexingFunction(
     scope: Construct,
     storageResources: storageResources,
-    aossEndpoint: string
+    aossEndpoint: string,
+    handlerType: "a" | "m"
 ): lambda.Function {
-    const fun = new lambda.DockerImageFunction(scope, "ndxng", {
+    const fun = new lambda.DockerImageFunction(scope, "idx" + handlerType, {
         code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: ["backend.handlers.indexing.streams.lambda_handler"],
+            cmd: [`backend.handlers.indexing.streams.lambda_handler_${handlerType}`],
         }),
         timeout: Duration.minutes(15),
         memorySize: 3008,

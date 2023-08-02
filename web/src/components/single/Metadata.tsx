@@ -169,6 +169,11 @@ const MetadataTable = ({ assetId, databaseId, store, prefix, initialState }: Met
             if (value === undefined || value === null) {
                 return;
             }
+            if (reqs.indexOf("no-underscore-prefix") > -1) {
+                if (value.indexOf("_") === 0) {
+                    return "Field name must not start with underscore";
+                }
+            }
             if (reqs.indexOf("non-empty") > -1) {
                 if (value.length < 1) {
                     return "Field must not be empty";
@@ -242,7 +247,11 @@ const MetadataTable = ({ assetId, databaseId, store, prefix, initialState }: Met
                             ariaLabel: "Name",
                             editIconAriaLabel: "editable",
                             errorIconAriaLabel: "Name Error",
-                            validation: validationFunction("name", ["non-empty", "unique"]),
+                            validation: validationFunction("name", [
+                                "non-empty",
+                                "unique",
+                                "no-underscore-prefix",
+                            ]),
                             editingCell: (item, { currentValue, setValue }) => {
                                 return (
                                     <Input

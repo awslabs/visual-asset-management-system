@@ -152,11 +152,11 @@ def delete_asset(databaseId, assetId, queryParameters):
         print("Deleting asset: ", item)
         if "assetLocation" in item:
             if item['isMultiFile']:
-                archive_multi_file(item['assetLocation'])
+                archive_multi_file(item['assetLocation'], databaseId, assetId)
             else:
-                archive_file(item['assetLocation'])
+                archive_file(item['assetLocation'], databaseId, assetId)
         if "previewLocation" in item:
-            archive_file(item['previewLocation'])
+            archive_file(item['previewLocation'], databaseId, assetId)
         item['databaseId'] = databaseId + "#deleted"
         table.put_item(
             Item=item
@@ -169,7 +169,8 @@ def delete_asset(databaseId, assetId, queryParameters):
         response['message'] = "Asset deleted"
     return response
 
-def archive_multi_file(location):
+
+def archive_multi_file(location, databaseId, assetId):
     s3 = boto3.client('s3')
     bucket = ""
     prefix = ""
@@ -188,18 +189,8 @@ def archive_multi_file(location):
             files.append(obj['Key'])
     
     for key in files:
-        source = {
-            'Bucket': bucket,
-            'Key': key
-        }
         try:
-            response = s3.copy(
-                source, bucket, key,
-                ExtraArgs={
-                    'StorageClass': 'GLACIER',
-                    'MetadataDirective': 'COPY'
-                }
-            )
+            response = move_to_glacier_and_mark_deleted(bucket, key, databaseId, assetId)
             print("S3 response: ", response)
 
         except s3.exceptions.InvalidObjectState as ios:
@@ -212,7 +203,7 @@ def archive_multi_file(location):
 
     return
 
-def archive_file(location):
+def archive_file(location, databaseId, assetId):
     s3 = boto3.client('s3')
 
     bucket = ""
@@ -226,19 +217,8 @@ def archive_file(location):
         return
     print("Archiving item: ", bucket, ":", key)
 
-    source = {
-        'Bucket': bucket,
-        'Key': key
-    }
-
     try:
-        response = s3.copy(
-            source, bucket, key,
-            ExtraArgs={
-                'StorageClass': 'GLACIER',
-                'MetadataDirective': 'COPY'
-            }
-        )
+        response = move_to_glacier_and_mark_deleted(bucket, key, databaseId, assetId)
         print("S3 response: ", response)
 
     except s3.exceptions.InvalidObjectState as ios:
@@ -250,6 +230,24 @@ def archive_file(location):
         print("Error occurred: ", e)
     return
 
+
+def move_to_glacier_and_mark_deleted(bucket, key, assetId, databaseId):
+    s3 = boto3.client('s3')
+    return s3.copy_object(
+        CopySource={
+            "Bucket": bucket,
+            "Key": key,
+        },
+        Bucket=bucket,
+        Key=key,
+        MetadataDirective='REPLACE',
+        Metadata={
+            "assetid": assetId,
+            "databaseid": databaseId,
+            "vams-status": "deleted",
+        },
+        StorageClass='GLACIER',
+    )
 
 def set_pagination_info(queryParameters):
     if 'maxItems' not in queryParameters:

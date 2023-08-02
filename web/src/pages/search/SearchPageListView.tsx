@@ -118,12 +118,16 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                         options: [
                             {
                                 label: "All columns",
-                                options: columnDefinitions.map(
-                                    (columnDefinition: TableProps.ColumnDefinition<string>) => ({
-                                        id: columnDefinition.id,
-                                        label: columnDefinition.header,
-                                    })
-                                ),
+                                options: columnDefinitions
+                                    .map(
+                                        (
+                                            columnDefinition: TableProps.ColumnDefinition<string>
+                                        ) => ({
+                                            id: columnDefinition.id,
+                                            label: columnDefinition.header,
+                                        })
+                                    )
+                                    .sort((a: any, b: any) => a.label.localeCompare(b.label)),
                             },
                         ],
                     }}
