@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from decimal import Decimal
 import json
+from os import path
 from unittest.mock import Mock
 import datetime
 from dateutil.tz import tzutc
@@ -254,7 +255,7 @@ def test_deserialize_null_values():
     assert result == {'_rectype': 'asset'}
 
 
-def test_lambda_handler():
+def test_lambda_handler_private_fields_not_indexed():
 
     lambda_handler_mock = Mock()
     index = Mock()
@@ -268,6 +269,44 @@ def test_lambda_handler():
         fields = {
             "assetName": "epic story",
             "description": "a long time ago"
+        }
+        return record | fields
+
+    event_fixture = None
+    with open(path.join(
+        "tests", "handlers", "indexing", "test_streams_fixtures",
+        "example_event.json"
+    ), "r") as fh:
+        event_fixture = json.load(fh)
+
+    lambda_handler(event_fixture, {},
+                   index=lambda_handler_mock,
+                   s3index=s3index_fn,
+                   get_asset_fields_fn=get_asset_fields_fn)
+
+    lambda_handler_mock.assert_called_once()
+    index.process_item.assert_called_once()
+
+    fixture_path = path.join(
+        "tests", "handlers", "indexing", "test_streams_fixtures",
+        "test_lambda_handler_private_fields_not_indexed_expected.json")
+    with open(fixture_path, "r") as fh:
+        index.process_item.assert_called_with(json.load(fh))
+
+
+def test_lambda_handler():
+    lambda_handler_mock = Mock()
+    index = Mock()
+    lambda_handler_mock.return_value = index
+    index.process_item = Mock()
+
+    s3index_mock = Mock()
+    s3index_fn = Mock(return_value=s3index_mock)
+
+    def get_asset_fields_fn(record):
+        fields = {
+            "assetName": "epic story",
+            "description": "a long time ago",
         }
         return record | fields
 
@@ -286,7 +325,6 @@ def test_lambda_handler():
 
 
 def test_lambda_handler_delete():
-
     lambda_handler_mock = Mock()
     index = Mock()
     lambda_handler_mock.return_value = index

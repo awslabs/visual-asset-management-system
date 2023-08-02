@@ -11,7 +11,8 @@ import time
 
 import re
 
-from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth, NotFoundError
+from opensearchpy import OpenSearch, \
+    RequestsHttpConnection, AWSV4SignerAuth, NotFoundError
 from boto3.dynamodb.types import TypeDeserializer
 
 #
@@ -100,6 +101,11 @@ class MetadataTable():
                 if "Item" in resp:
                     result = result | resp['Item']
 
+        # remove keys that start with underscores
+        for key in list(result.keys()):
+            if key.startswith('_'):
+                del result[key]
+
         return result
 
     def get_metadata(self, databaseId, assetId):
@@ -111,6 +117,12 @@ class MetadataTable():
         )
         if "Item" not in resp:
             return None
+
+        # remove keys that start with underscores
+        for key in list(resp['Item'].keys()):
+            if key.startswith('_'):
+                del resp['Item'][key]
+
         return resp['Item']
 
 
@@ -432,13 +444,22 @@ def get_asset_fields(keys):
             }
         }
 
-    result = client.get_item(
-        TableName=os.environ.get("ASSET_STORAGE_TABLE_NAME"),
-        Key=keys,
-        AttributesToGet=[
-            'assetName', "description", "assetType"
-        ],
-    )
+    attempts = 0
+    result = {}
+    while result.get("Item") is None and attempts < 60:
+        attempts += 1
+        result = client.get_item(
+            TableName=os.environ.get("ASSET_STORAGE_TABLE_NAME"),
+            Key=keys,
+            AttributesToGet=[
+                'assetName', "description", "assetType"
+            ],
+        )
+
+        if result.get("Item") is None:
+            print("asset record is empty on attempt", attempts, "for keys", keys)
+            time.sleep(1)
+
     return result.get('Item')
 
 
@@ -585,6 +606,11 @@ def lambda_handler_m(event, context,
         record['dynamodb']['NewImage'] = record['dynamodb']['NewImage'] | \
             asset_fields
         print("with asset fields", record)
+
+        # remove keys that start with underscores
+        for k in list(record['dynamodb']['NewImage'].keys()):
+            if k.startswith("_"):
+                del record['dynamodb']['NewImage'][k]
 
         try:
             # if this is metadata at a s3 key prefix rather than an asset,
