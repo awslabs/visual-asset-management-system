@@ -1,0 +1,10 @@
+{
+    "extends": "@tsconfig/node18",
+    "compilerOptions": {
+        "outDir": "./dist/lib",
+        "inlineSourceMap": true,
+        "inlineSources": true,
+        "experimentalDecorators": true
+    },
+    "exclude": ["cdk.out", "build", "node_modules", "dist"]
+}

@@ -1,9 +1,8 @@
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from "react";
 import ListDefinition from "./types/ListDefinition";
 import { Link } from "@cloudscape-design/components";
 import ColumnDefinition from "./types/ColumnDefinition";

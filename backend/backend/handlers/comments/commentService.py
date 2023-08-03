@@ -1,4 +1,4 @@
-#  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -7,48 +7,48 @@ import json
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from backend.common.validators import validate
+from typing import List
 
-dynamodb = boto3.resource('dynamodb')
-dynamodb_client = boto3.client('dynamodb')
+dynamodb = boto3.resource("dynamodb")
+dynamodb_client = boto3.client("dynamodb")
 response = {
-    'statusCode': 200,
-    'body': '',
-    'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Credentials': True,
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type',
-            'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
-    }
+    "statusCode": 200,
+    "body": "",
+    "headers": {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Credentials": True,
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Allow-Methods": "OPTIONS,POST,GET",
+    },
 }
 comment_database = None
-unitTest = {
-    "body": {
-        "assetId": "Unit_Test"
-    }
-}
-unitTest['body'] = json.dumps(unitTest['body'])
 
 try:
     comment_database = os.environ["COMMENT_STORAGE_TABLE_NAME"]
 except:
     print("Failed Loading Comment Storage Environment Variables")
-    response['body']['message'] = "Failed Loading Comment Storage Environment Variables"
+    response["body"]["message"] = "Failed Loading Comment Storage Environment Variables"
 
-def get_all_comments(queryParams, showDeleted=False):
-    '''
-    Function to get all of the comments from the database
-    '''
+
+def get_all_comments(queryParams: dict, showDeleted=False) -> dict:
+    """
+    Gets all of the comments from the database
+    NOTE: This is not currently used, but could be helpful to populate the comments section when the page first loads and no asset is selected
+    :param queryParams: pagination information
+    :param showDeleted: boolean storing if deleted comments should be returned
+    :returns: all comments in the database
+    """
     deserializer = TypeDeserializer()
 
-    paginator = dynamodb_client.get_paginator('scan')
+    paginator = dynamodb_client.get_paginator("scan")
     operator = "NOT_CONTAINS"
     if showDeleted:
         operator = "CONTAINS"
     filter = {
         "assetId": {
             "AttributeValueList": [{"S": "#deleted"}],
-            "ComparisonOperator": f"{operator}"
+            "ComparisonOperator": f"{operator}",
         }
     }
 
@@ -56,291 +56,362 @@ def get_all_comments(queryParams, showDeleted=False):
         TableName=comment_database,
         ScanFilter=filter,
         PaginationConfig={
-            'MaxItems': int(queryParams['maxItems']),
-            'PageSize': int(queryParams['pageSize']),
-            'StartingToken': queryParams['startingToken']
-        }
+            "MaxItems": int(queryParams["maxItems"]),
+            "PageSize": int(queryParams["pageSize"]),
+            "StartingToken": queryParams["startingToken"],
+        },
     ).build_full_result()
 
     print("Fetching results")
     result = {}
     items = []
-    for item in pageIterator['Items']:
-        deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
+    for item in pageIterator["Items"]:
+        deserialized_document = {
+            k: deserializer.deserialize(v) for k, v in item.items()
+        }
         items.append(deserialized_document)
-    result['Items'] = items
-
-    if 'NextToken' in pageIterator:
-        result['NextToken'] = pageIterator['NextToken']
+    result["Items"] = items
+    if "NextToken" in pageIterator:
+        result["NextToken"] = pageIterator["NextToken"]
     return result
 
-def get_comments(assetId, showDeleted=False):
-    '''
-    Gets all of the comments associated with a specific assetId
-    (all comments for the specific asset)
-    '''
+
+def get_comments(assetId: str, showDeleted=False) -> dict:
+    """
+    Gets all of the comments associated with a specific asset (using assetId)
+    :param assetId: id of the asset to get comments for
+    :param showDeleted: boolean storing if deleted comments should be returned
+    :returns: dictionary with all comments for specific asset
+    """
     table = dynamodb.Table(comment_database)
 
-    # if showDeleted:
-    #     as = assetId + "#deleted"
     response = table.query(
-        KeyConditionExpression=Key('assetId').eq(assetId),
+        KeyConditionExpression=Key("assetId").eq(assetId),
         ScanIndexForward=False,
-        Limit=1000
+        Limit=1000,
     )
-    return response['Items']
+    return response["Items"]
 
-def get_comments_version(assetId, assetVersionId, showDeleted=False):
-    '''
-    Get all of the comments for a specific assetId versionId pair
-    (all comments for a specific version of an asset)
-    '''
+
+def get_comments_version(assetId: str, assetVersionId: str, showDeleted=False) -> dict:
+    """
+    Gets all of the comments for a specific assetId versionId pair (all comments for a specific version of an asset)
+    :param assetId: id of the asset to get comments for
+    :param assetVersionId: id of the version to get comments for
+    :param showDeleted: boolean storing if deleted comments should be returned
+    :returns: dictionary with all comments for a specific version of an asset
+    """
     table = dynamodb.Table(comment_database)
-
-    # if showDeleted:
-    #     as = assetId + "#deleted"
 
     # Queries partition key (assetId) and queries sort keys that begin_with the desired asset version
     response = table.query(
-        KeyConditionExpression=Key('assetId').eq(assetId) & Key('assetVersionId:commentId').begins_with(assetVersionId),
+        KeyConditionExpression=Key("assetId").eq(assetId)
+        & Key("assetVersionId:commentId").begins_with(assetVersionId),
         ScanIndexForward=False,
-        Limit=1000
+        Limit=1000,
     )
-    print(response['Items'])
-    return response['Items']
+    return response["Items"]
 
 
-def get_single_comment(assetId, assetVersionIdAndcommentId, showDeleted=False):
-    '''
+def get_single_comment(
+    assetId: str, assetVersionIdAndCommentId: str, showDeleted=False
+) -> dict:
+    """
     Gets a specific comment from the assetId and the assetVersionId:commentId
-    '''
+    :param assetId: id of the asset to get comments for
+    :param assetVersionIdAndCommentId: id of the version to get comments for and the unique comment Id
+    :param showDeleted: boolean storing if deleted comments should be returned
+    :returns: dictionary with the specific comment
+    """
     print("Getting single comment")
     table = dynamodb.Table(comment_database)
-    # if showDeleted:
-    #     databaseId = databaseId + "#deleted"
-    response = table.get_item(Key={'assetId': assetId, 'assetVersionId:commentId': assetVersionIdAndcommentId})
-    return response.get('Item', {})
+
+    response = table.get_item(
+        Key={"assetId": assetId, "assetVersionId:commentId": assetVersionIdAndCommentId}
+    )
+    return response.get("Item", {})
 
 
-def delete_comment(assetId, assetVersionIdAndcommentId, queryParameters):
-    '''
-    Deletes a specific comment from the database
-    (actually just adds #deleted tag)
-    '''
-    response = {
-        'statusCode': 404,
-        'message': 'Record not found'
-    }
+def delete_comment(assetId: str, assetVersionIdAndCommentId: str, event: dict) -> dict:
+    """
+    Deletes a specific comment from the database (actually just adds #deleted tag)
+    :param assetId: id of the asset the comment is attached to
+    :param assetVersionIdAndCommmentId: id of the version the comment is attached to and unique identifier for the comment
+    :returns: Http response object (statusCode, headers, body)
+    """
+    response = {"statusCode": 404, "message": "Record not found"}
     table = dynamodb.Table(comment_database)
     if "#deleted" in assetId:
         return response
-    item = get_single_comment(assetId, assetVersionIdAndcommentId)
+    item = get_single_comment(assetId, assetVersionIdAndCommentId)
     if item:
-        print("Deleting asset: ", item)
-        item['assetId'] = assetId + "#deleted"
-        table.put_item(
-            Item=item
-        )
-        response = table.delete_item(Key={'assetId': assetId, 'assetVersionId:commentId': assetVersionIdAndcommentId})
-        # update assetCount after successful deletion of an asset
-        print(result)
-        response['statusCode'] = 200
-        response['message'] = "Asset deleted"
+        print("Got comment:")
+        print(item)
+        print("Verifying user")
+
+        api_call_user_id = event["requestContext"]["authorizer"]["jwt"]["claims"]["sub"]
+        comment_user_id = item["commentOwnerID"]
+        if api_call_user_id != comment_user_id:
+            print("invalid user")
+            response["statusCode"] = 401
+            response["message"] = "Unauthorized"
+            return response
+
+        print("Deleting comment")
+        item["assetId"] = assetId + "#deleted"
+
+        # Delete the old comment from the table
+        try:
+            table.delete_item(
+                Key={
+                    "assetId": assetId,
+                    "assetVersionId:commentId": assetVersionIdAndCommentId,
+                }
+            )
+        except:
+            print(e)
+            response["statusCode"] = 400
+            response["message"] = e
+            return response
+
+        # Create a new comment with #deleted appended to the assetId
+        try:
+            table.put_item(Item=item)
+        except Exception as e:
+            print(e)
+            response["statusCode"] = 400
+            response["message"] = e
+            return response
+
+        response["statusCode"] = 200
+        response["message"] = "Comment deleted"
     return response
 
-def set_pagination_info(queryParameters):
-    '''
-    Sets the pagination infor from the query parameters
-    '''
-    if 'maxItems' not in queryParameters:
-        queryParameters['maxItems'] = 100
-        queryParameters['pageSize'] = 100
-    else:
-        queryParameters['pageSize'] = queryParameters['maxItems']
-    if 'startingToken' not in queryParameters:
-        queryParameters['startingToken'] = None
 
-def get_handler(response, pathParameters, queryParameters):
-    '''
-    Function to handle the request and route it to the right function
-    '''
+def set_pagination_info(queryParameters: dict):
+    """
+    Sets the pagination infor from the query parameters
+    :param queryParameters: dictionary containing pagination info
+    """
+    if "maxItems" not in queryParameters:
+        queryParameters["maxItems"] = 100
+        queryParameters["pageSize"] = 100
+    else:
+        queryParameters["pageSize"] = queryParameters["maxItems"]
+    if "startingToken" not in queryParameters:
+        queryParameters["startingToken"] = None
+
+
+def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> dict:
+    """
+    Function to handle the get request and route it to the right function
+    :param response: dictionary holding information about the response
+    :param pathParameters: dictionary holding information about the path (like versionId and/or assetId)
+    :param queryParameters: dictionary holding pagination information
+    :returns: Http response object (statusCode, headers, body) with comments stored in the body (if successful)
+    """
     showDeleted = False
 
-    if 'showDeleted' in queryParameters:
-        showDeleted = queryParameters['showDeleted']
+    if "showDeleted" in queryParameters:
+        showDeleted = queryParameters["showDeleted"]
 
-    if 'assetVersionId:commentId' not in pathParameters:
+    if "assetVersionId:commentId" not in pathParameters:
         # if we have an assetVersionId and assetId, call get_comments_version
-        if 'assetVersionId' in pathParameters and 'assetId' in pathParameters:
+        if "assetVersionId" in pathParameters and "assetId" in pathParameters:
             print("Validating parameters")
-            (valid, message) = validate({
-                'assetId': {
-                    'value': pathParameters['assetId'],
-                    'validator': 'ID'
-                }
-            })
+            (valid, message) = validate(
+                {"assetId": {"value": pathParameters["assetId"], "validator": "ID"}}
+            )
             if not valid:
                 print(message)
-                response['body'] = json.dumps({"message": message})
-                response['statusCode'] = 400
+                response["body"] = json.dumps({"message": message})
+                response["statusCode"] = 400
                 return response
 
-            print("Listing comments for asset:", pathParameters['assetId'], "and version", pathParameters['assetVersionId'])
-            response['body'] = json.dumps({"message": get_comments_version(
-                                                                            pathParameters['assetId'], 
-                                                                            pathParameters['assetVersionId'],
-                                                                            showDeleted
-                                                                        )})
+            print(
+                "Listing comments for asset:",
+                pathParameters["assetId"],
+                "and version",
+                pathParameters["assetVersionId"],
+            )
+            response["body"] = json.dumps(
+                {
+                    "message": get_comments_version(
+                        pathParameters["assetId"],
+                        pathParameters["assetVersionId"],
+                        showDeleted,
+                    )
+                }
+            )
             print(response)
             return response
 
         # if we just have assetId, call get_comments
-        if 'assetId' in pathParameters:
+        if "assetId" in pathParameters:
             print("Validating parameters")
-            (valid, message) = validate({
-                'assetId': {
-                    'value': pathParameters['assetId'],
-                    'validator': 'ID'
-                }
-            })
+            (valid, message) = validate(
+                {"assetId": {"value": pathParameters["assetId"], "validator": "ID"}}
+            )
             if not valid:
                 print(message)
-                response['body'] = json.dumps({"message": message})
-                response['statusCode'] = 400
+                response["body"] = json.dumps({"message": message})
+                response["statusCode"] = 400
                 return response
 
-            print("Listing comments for asset:", pathParameters['assetId'])
-            response['body'] = json.dumps({"message": get_comments(
-                                                                    pathParameters['assetId'],
-                                                                    showDeleted
-                                                                )})
+            print("Listing comments for asset:", pathParameters["assetId"])
+            response["body"] = json.dumps(
+                {"message": get_comments(pathParameters["assetId"], showDeleted)}
+            )
             print(response)
             return response
         else:
             # if we have nothing, call get_all_comments
             print("Listing All Comments")
-            response['body'] = json.dumps({"message": get_all_comments(
-                                                                        queryParameters,
-                                                                        showDeleted
-                                                                    )})
+            response["body"] = json.dumps(
+                {"message": get_all_comments(queryParameters, showDeleted)}
+            )
             print(response)
             return response
     else:
         # error, no assetId in call
-        if 'assetId' not in pathParameters:
+        if "assetId" not in pathParameters:
             message = "No asset ID in API Call"
-            response['body'] = json.dumps({"message": message})
-            response['statusCode'] = 400
+            response["body"] = json.dumps({"message": message})
+            response["statusCode"] = 400
             print(response)
             return response
 
         print("Validating parameters")
 
-        split_arr = pathParameters["assetVersionId:commentId"].split(':')
+        split_arr = pathParameters["assetVersionId:commentId"].split(":")
         print("Validating parameters")
-        (valid, message) = validate({
-            'assetId': {
-                'value': pathParameters['assetId'],
-                'validator': 'ID'
-            },
-            'commentId': {
-                'value': split_arr[1],
-                'validator': 'ID'
+        (valid, message) = validate(
+            {
+                "assetId": {"value": pathParameters["assetId"], "validator": "ID"},
+                "commentId": {"value": split_arr[1], "validator": "ID"},
             }
-        })
+        )
 
         if not valid:
             print(message)
-            response['body'] = json.dumps({"message": message})
-            response['statusCode'] = 400
+            response["body"] = json.dumps({"message": message})
+            response["statusCode"] = 400
             return response
 
-        print("Getting comment with assetId", pathParameters['assetId'], "and assetVersionId:commentId", pathParameters['assetVersionId:commentId'])
-        response['body'] = json.dumps({"message": get_single_comment(
-                                                                    pathParameters['assetId'], 
-                                                                    pathParameters['assetVersionId:commentId'],
-                                                                    showDeleted
-                                                                )})
+        print(
+            "Getting comment with assetId",
+            pathParameters["assetId"],
+            "and assetVersionId:commentId",
+            pathParameters["assetVersionId:commentId"],
+        )
+        response["body"] = json.dumps(
+            {
+                "message": get_single_comment(
+                    pathParameters["assetId"],
+                    pathParameters["assetVersionId:commentId"],
+                    showDeleted,
+                )
+            }
+        )
         print(response)
         return response
 
 
-def delete_handler(response, pathParameters, queryParameters):
-    if 'assetId' not in pathParameters:
+def delete_handler(response: dict, pathParameters: dict, event: dict) -> dict:
+    """
+    Function to handle the delete request and route it to the right function
+    :param response: dictionary holding information about the response
+    :param pathParameters: dictionary holding information about the path (like versionId and/or assetId)
+    :param event: Lambda event dictionary
+    :returns: Http response object (statusCode, headers, body)
+    """
+    if "assetId" not in pathParameters:
         message = "No asset ID in API Call"
-        response['body'] = json.dumps({"message": message})
-        response['statusCode'] = 400
+        response["body"] = json.dumps({"message": message})
+        response["statusCode"] = 400
         print(response)
         return response
-    if 'assetId' not in pathParameters:
-        message = "No asset ID in API Call"
-        response['body'] = json.dumps({"message": message})
-        response['statusCode'] = 400
+    if "assetVersionId:commentId" not in pathParameters:
+        message = "No assetVersionId:commentId in API Call"
+        response["body"] = json.dumps({"message": message})
+        response["statusCode"] = 400
         print(response)
         return response
 
     print("Validating parameters")
-    (valid, message) = validate({
-        'databaseId': {
-            'value': pathParameters['databaseId'],
-            'validator': 'ID'
-        },
-        'assetId': {
-            'value': pathParameters['assetId'],
-            'validator': 'ID'
-        },
-    })
+    split_arr = pathParameters["assetVersionId:commentId"].split(":")
+    (valid, message) = validate(
+        {
+            "assetId": {"value": pathParameters["assetId"], "validator": "ID"},
+            "commentId": {"value": split_arr[1], "validator": "ID"},
+        }
+    )
     if not valid:
         print(message)
-        response['body'] = json.dumps({"message": message})
-        response['statusCode'] = 400
+        response["body"] = json.dumps({"message": message})
+        response["statusCode"] = 400
         return response
 
-    print("Deleting Asset: ", pathParameters['assetVersionId:commentId'])
-    result = delete_comment(pathParameters['assetId'], pathParameters['assetVersionId:commentId'], queryParameters)
-    response['body'] = json.dumps({"message": result['message']})
-    response['statusCode'] = result['statusCode']
+    print(
+        "Deleting comment for assetId:",
+        pathParameters["assetId"],
+        "and versionId:commentId:",
+        pathParameters["assetVersionId:commentId"],
+    )
+    result = delete_comment(
+        pathParameters["assetId"], pathParameters["assetVersionId:commentId"], event
+    )
+    response["body"] = json.dumps({"message": result["message"]})
+    response["statusCode"] = result["statusCode"]
     print(response)
     return response
 
 
-def lambda_handler(event, context):
+def lambda_handler(event: dict, context: dict) -> dict:
+    """
+    Lambda handler for the API calls directed to commentService
+    :param event: Lambda event dictionary
+    :param context: lambda context dictionary
+    :returns: Http response object (statusCode, headers, body)
+    """
     print(event)
     response = {
-        'statusCode': 200,
-        'body': '',
-        'headers': {
-            'Content-Type': 'application/json',
-                'Access-Control-Allow-Credentials': True,
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type',
-                'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
-        }
+        "statusCode": 200,
+        "body": "",
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Credentials": True,
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Allow-Methods": "OPTIONS,POST,GET",
+        },
     }
-    pathParameters = event.get('pathParameters', {})
-    queryParameters = event.get('queryStringParameters', {})
+    pathParameters = event.get("pathParameters", {})
+    queryParameters = event.get("queryStringParameters", {})
 
     set_pagination_info(queryParameters)
 
     try:
         # route the api call based on tags
-        httpMethod = event['requestContext']['http']['method']
+        httpMethod = event["requestContext"]["http"]["method"]
         print(httpMethod)
 
-        if httpMethod == 'GET':
+        if httpMethod == "GET":
             return get_handler(response, pathParameters, queryParameters)
-        if httpMethod == 'DELETE':
-            return delete_handler(response, pathParameters, queryParameters)
+        if httpMethod == "DELETE":
+            return delete_handler(response, pathParameters, event)
 
     except Exception as e:
-        response['statusCode'] = 500
+        response["statusCode"] = 500
         print("Error!", e.__class__, "occurred.")
         try:
             print(e)
-            response['body'] = json.dumps({"message": str(e)})
+            response["body"] = json.dumps({"message": str(e)})
         except:
             print("Can't Read Error")
-            response['body'] = json.dumps({"message": "An unexpected error occurred while executing the request"})
+            response["body"] = json.dumps(
+                {"message": "An unexpected error occurred while executing the request"}
+            )
         return response
 
 

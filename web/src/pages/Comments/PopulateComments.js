@@ -1,56 +1,48 @@
-import React, { useEffect, useState } from "react";
+/*
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
-import { ExpandableSection } from "@cloudscape-design/components";
-import "react-quill/dist/quill.snow.css";
-import SingleComment from "./SingleComment";
-import moment from "moment";
+import VersionComments from "./VersionComments";
 
 export default function PopulateComments(props) {
-    const { selectedItems, allComments } = props;
+    const { loading, showLoading, userId, selectedItems, allComments, setReload } = props;
 
     // sort the comments so that the most recent comment appears at the bottom of the list
     allComments.sort(function (a, b) {
         return new Date(a.dateCreated) - new Date(b.dateCreated);
     });
 
-    var previousOwnerId = undefined;
-    var previousCommentTime = undefined;
-    var nestedCommentBool = false;
     return (
-        <>
+        <div data-testid="expandableSectionDiv">
             {selectedItems.map((item) => {
-                if (item.assetId == null) {
-                    return;
+                if (item.assetId != null) {
+                    // shallow copy of the item.versions array
+                    let allVersions = [...item.versions];
+                    allVersions.push(item.currentVersion);
+                    return allVersions.map((version, index) => {
+                        // filter comments and only return comments for this versionId
+                        const comments = allComments.filter(
+                            (comment) =>
+                                comment["assetVersionId:commentId"].split(":")[0] ===
+                                version.S3Version
+                        );
+                        return (
+                            <VersionComments
+                                key={version.S3Version}
+                                loading={loading}
+                                showLoading={showLoading}
+                                userId={userId}
+                                setReload={setReload}
+                                defaultExpanded={allVersions.length - 1 === index}
+                                version={version}
+                                comments={comments}
+                            ></VersionComments>
+                        );
+                    });
                 }
-                return (
-                    <ExpandableSection
-                        defaultExpanded
-                        key={item.assetId}
-                        headerText={item.assetName}
-                    >
-                        {allComments.map((comment) => {
-                            nestedCommentBool =
-                                comment.commentOwnerID === previousOwnerId &&
-                                moment(comment.dateCreated).diff(previousCommentTime, "minutes") <
-                                    10;
-                            previousOwnerId = comment.commentOwnerID;
-                            previousCommentTime = comment.dateCreated;
-                            const key = comment["assetVersionId:commentId"].split(":")[1];
-                            return (
-                                <SingleComment
-                                    key={key}
-                                    commentBody={comment.commentBody}
-                                    commentOwnerID={comment.commentOwnerID}
-                                    nestedCommentBool={nestedCommentBool}
-                                    commentOwnerUsername={comment.commentOwnerUsername}
-                                    dateCreated={comment.dateCreated}
-                                    dateEdited={comment.dateEdited}
-                                />
-                            );
-                        })}
-                    </ExpandableSection>
-                );
+                return <></>;
             })}
-        </>
+        </div>
     );
 }

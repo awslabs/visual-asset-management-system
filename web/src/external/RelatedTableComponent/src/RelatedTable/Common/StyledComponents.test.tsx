@@ -14,7 +14,7 @@ describe("StyledComponents", () => {
             expect(container).toMatchInlineSnapshot(`
                 <div>
                   <div
-                    class="sc-gueYoa hfiXMU"
+                    class="sc-gEvEer hLJpaz"
                   />
                 </div>
             `);
@@ -27,7 +27,7 @@ describe("StyledComponents", () => {
             expect(container).toMatchInlineSnapshot(`
                 <div>
                   <div
-                    class="sc-beqWaB hZsRqR"
+                    class="sc-aXZVg jFLCgA"
                     height="1"
                   />
                 </div>

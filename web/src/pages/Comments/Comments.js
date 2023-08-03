@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -39,17 +39,8 @@ export default function Assets() {
                     fetchElements={fetchDatabaseAssets}
                 />
             </div>
-            <div className="inflow">
-                <div className="positioner">
-                    <div className="fixed vl"></div>
-                </div>
-            </div>
             <div className="commentSectionContainer">
-                <CommentsList
-                    key={selectedItems}
-                    selectedItems={selectedItems}
-                    setSelectedItems={setSelectedItems}
-                />
+                <CommentsList selectedItems={selectedItems} setSelectedItems={setSelectedItems} />
             </div>
         </div>
     );

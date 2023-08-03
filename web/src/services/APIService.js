@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -210,7 +210,7 @@ export const fetchAsset = async ({ databaseId, assetId }, api = API) => {
 };
 
 /**
- * Returns array of all comments the current user can access for all databases, or false if error.
+ * Returns array of all the comments that are attached to a given assetId
  * @returns {Promise<boolean|{message}|any>}
  */
 export const fetchAllComments = async ({ assetId }, api = API) => {
@@ -236,6 +236,30 @@ export const fetchAllComments = async ({ assetId }, api = API) => {
     } catch (error) {
         console.log(error);
         return error?.message;
+    }
+};
+
+/**
+ * Deletes the given comment from the database
+ * @returns {Promise<boolean|{message}|any>}
+ */
+export const deleteComment = async ({ assetId, assetVersionIdAndCommentId }, api = API) => {
+    try {
+        let response = await api.del(
+            "api",
+            `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
+            {}
+        );
+        if (response.message) {
+            console.log(response.message);
+            return [true, response.message];
+        } else {
+            console.log(response);
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
     }
 };
 

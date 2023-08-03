@@ -1,11 +1,9 @@
 import * as lambda from "aws-cdk-lib/aws-lambda";
-import * as s3 from "aws-cdk-lib/aws-s3";
 import * as path from "path";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../security";
-import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 
 export function buildAddCommentLambdaFunction(
     scope: Construct,
@@ -24,6 +22,25 @@ export function buildAddCommentLambdaFunction(
     });
     commentStorageTable.grantReadWriteData(addCommentFunction);
     return addCommentFunction;
+}
+
+export function buildEditCommentLambdaFunction(
+    scope: Construct,
+    commentStorageTable: dynamodb.Table
+): lambda.Function {
+    const name = "editComment";
+    const editCommentFunction = new lambda.DockerImageFunction(scope, name, {
+        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
+            cmd: ["backend.handlers.comments.editComment.lambda_handler"],
+        }),
+        timeout: Duration.minutes(15),
+        memorySize: 3008,
+        environment: {
+            COMMENT_STORAGE_TABLE_NAME: commentStorageTable.tableName,
+        },
+    });
+    commentStorageTable.grantReadWriteData(editCommentFunction);
+    return editCommentFunction;
 }
 
 export function buildCommentService(

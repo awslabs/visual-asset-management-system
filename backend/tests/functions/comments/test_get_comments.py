@@ -1,290 +1,124 @@
-import json
+# import json
+# import pytest
 import backend.handlers.comments.commentService as commentService
-from tests.functions.comments.conftest import generate_comment
-
-
-def generate_get_single_event():
-    """
-    generates an event mocking what the API sends when it attempts to get a single comment
-    """
-    return {
-        "requestContext": {
-            "http": {"method": "GET"},
-            "authorizer": {
-                "jwt": {
-                    "claims": {
-                        "sub": "test_sub",
-                        "email": "test_email@amazon.com",
-                    }
-                }
-            },
-        },
-        "pathParameters": {
-            "assetId": "x5f695ed7-1076-4f29-89e6-bffc7c6f3d7d",
-            "assetVersionId:commentId": "zRwqtjAfexK6GZ.7_1vnEzsxUHcJ49T8:xebcaa59a-b53a-4998-a66e-b2bab933085f",
-        },
-    }
-
-
-def generate_get_one_asset_event():
-    """
-    generates an event mocking what the API sends when it attempts to get all comments for a single asset
-    """
-    return {
-        "requestContext": {
-            "http": {"method": "GET"},
-            "authorizer": {
-                "jwt": {
-                    "claims": {
-                        "sub": "test_sub",
-                        "email": "test_email@amazon.com",
-                    }
-                }
-            },
-        },
-        "pathParameters": {
-            "assetId": "x5f695ed7-1076-4f29-89e6-bffc7c6f3d7d",
-        },
-    }
-
-
-def generate_get_one_version_event():
-    """
-    generates an event mocking what the API sends when it attempts to get all comments for a single asset
-    """
-    return {
-        "requestContext": {
-            "http": {"method": "GET"},
-            "authorizer": {
-                "jwt": {
-                    "claims": {
-                        "sub": "test_sub",
-                        "email": "test_email@amazon.com",
-                    }
-                }
-            },
-        },
-        "pathParameters": {
-            "assetId": "x5f695ed7-1076-4f29-89e6-bffc7c6f3d7d",
-            "assetVersionId": "zRwqtjAfexK6GZ.7_1vnEzsxUHcJ49T8",
-        },
-    }
-
-
-def generate_get_all_event():
-    """
-    generates an event mocking what the API sends when it attempts to get all comments for a single asset
-    """
-    return {
-        "requestContext": {
-            "http": {"method": "GET"},
-            "authorizer": {
-                "jwt": {
-                    "claims": {
-                        "sub": "test_sub",
-                        "email": "test_email@amazon.com",
-                    }
-                }
-            },
-        },
-        "pathParameters": {},
-    }
-
-
-def test_get_single_comment(comments_table):
-    """
-    Testing reading a single comment (using assetId and assetVersionId:commentId)
-    """
-    event = generate_get_single_event()
-    # Generate the testing comment
-    test_comment = generate_comment()
-    # Add the testing comment to the table
-    comments_table.put_item(Item=test_comment)
-    # Get the testing comment from the table
-    response = comments_table.get_item(
-        Key={
-            "assetId": test_comment["assetId"],
-            "assetVersionId:commentId": test_comment["assetVersionId:commentId"],
-        }
-    )
-    # make sure the testing comment was added succesfully
-    assert response["Item"] == test_comment
-
-    response = commentService.lambda_handler(event, None)
-    response_body = json.loads(response["body"])
-    assert response_body["message"] == test_comment
-
-
-def test_get_all_asset_comments(comments_table):
-    """
-    Testing reading all comments for one asset (using assetId)
-    """
-    event = generate_get_one_asset_event()
-    # Generate two seperate comments for testing
-    test_valid_comment = generate_comment()
-    test_valid_comment_2 = generate_comment()
-    test_valid_comment_2[
-        "assetVersionId:commentId"
-    ] = "zKwqtjAfexK6GZ.7_1vnEzsxUHcJ49T8:xfdabb4f3-353a-4b98-a66e-b2bab933085f"
-    # Generate a third comment with a different assetId that should not be returned by the function
-    test_invalid_comment = generate_comment()
-    test_invalid_comment["assetId"] = "x7f695ed7-1076-4f29-89e6-bffc7c6f3d7d"
-    # Add the testing comment to the table
-    comments_table.put_item(Item=test_valid_comment)
-    comments_table.put_item(Item=test_valid_comment_2)
-    comments_table.put_item(Item=test_invalid_comment)
-    # Get the testing comments from the table
-    response = comments_table.get_item(
-        Key={
-            "assetId": test_valid_comment["assetId"],
-            "assetVersionId:commentId": test_valid_comment["assetVersionId:commentId"],
-        }
-    )
-    # make sure the testing comments were added succesfully
-    assert response["Item"] == test_valid_comment
-    response = comments_table.get_item(
-        Key={
-            "assetId": test_valid_comment_2["assetId"],
-            "assetVersionId:commentId": test_valid_comment_2[
-                "assetVersionId:commentId"
-            ],
-        }
-    )
-    assert response["Item"] == test_valid_comment_2
-    response = comments_table.get_item(
-        Key={
-            "assetId": test_invalid_comment["assetId"],
-            "assetVersionId:commentId": test_invalid_comment[
-                "assetVersionId:commentId"
-            ],
-        }
-    )
-    assert response["Item"] == test_invalid_comment
-
-    response = commentService.lambda_handler(event, None)
-    response_body = json.loads(response["body"])
-    print(response_body["message"][0])
-    # make sure only two comments were returned
-    assert len(response_body["message"]) == 2
-    # make sure only the expected comments were returned
-    assert test_valid_comment in response_body["message"]
-    assert test_valid_comment_2 in response_body["message"]
-    assert test_invalid_comment not in response_body["message"]
-
-
-def test_get_all_version_comments(comments_table):
-    """
-    Testing reading all comments for one asset (using assetId)
-    """
-    event = generate_get_one_version_event()
-    # Generate two seperate comments for testing
-    test_valid_comment = generate_comment()
-    test_valid_comment_2 = generate_comment()
-    test_valid_comment_2[
-        "assetVersionId:commentId"
-    ] = "zRwqtjAfexK6GZ.7_1vnEzsxUHcJ49T8:x44caa59a-b53a-4998-a66e-b2bab933085f"
-    # Generate a third comment with a different assetId that should not be returned by the function
-    test_invalid_comment = generate_comment()
-    test_invalid_comment[
-        "assetVersionId:commentId"
-    ] = "zKwqtjAfexK6GZ.7_1vnEzsxUHcJ49T8:xfdabb4f3-353a-4b98-a66e-b2bab933085f"
-    # Add the testing comment to the table
-    comments_table.put_item(Item=test_valid_comment)
-    comments_table.put_item(Item=test_valid_comment_2)
-    comments_table.put_item(Item=test_invalid_comment)
-    # Get the testing comments from the table
-    response = comments_table.get_item(
-        Key={
-            "assetId": test_valid_comment["assetId"],
-            "assetVersionId:commentId": test_valid_comment["assetVersionId:commentId"],
-        }
-    )
-    # make sure the testing comments were added succesfully
-    assert response["Item"] == test_valid_comment
-    response = comments_table.get_item(
-        Key={
-            "assetId": test_valid_comment_2["assetId"],
-            "assetVersionId:commentId": test_valid_comment_2[
-                "assetVersionId:commentId"
-            ],
-        }
-    )
-    assert response["Item"] == test_valid_comment_2
-    response = comments_table.get_item(
-        Key={
-            "assetId": test_invalid_comment["assetId"],
-            "assetVersionId:commentId": test_invalid_comment[
-                "assetVersionId:commentId"
-            ],
-        }
-    )
-    assert response["Item"] == test_invalid_comment
-
-    response = commentService.lambda_handler(event, None)
-    response_body = json.loads(response["body"])
-    print(response_body["message"][0])
-    # make sure only 2 comments were returned
-    assert len(response_body["message"]) == 2
-    # make sure only the expected comments were returned
-    assert test_valid_comment in response_body["message"]
-    assert test_valid_comment_2 in response_body["message"]
-    assert test_invalid_comment not in response_body["message"]
+from tests.conftest import TestComment
 
 
 def test_get_all_comments(comments_table):
     """
-    Testing reading all comments for one asset (using assetId)
+    Testing the get_all_comments function from commentService that should return all comments in the db
+    :param comments_table: mocked dynamoDB commentStorageTable
     """
-    event = generate_get_all_event()
     # Generate two seperate comments for testing
-    test_valid_comment = generate_comment()
-    test_valid_comment_2 = generate_comment()
-    test_valid_comment_2[
-        "assetVersionId:commentId"
-    ] = "zRwqtjAfexK6GZ.7_1vnEzsxUHcJ49T8:x44caa59a-b53a-4998-a66e-b2bab933085f"
-    # Generate a third comment with a different assetId that should not be returned by the function
-    test_valid_comment_3 = generate_comment()
-    test_valid_comment_3[
-        "assetVersionId:commentId"
-    ] = "zKwqtjAfexK6GZ.7_1vnEzsxUHcJ49T8:xfdabb4f3-353a-4b98-a66e-b2bab933085f"
+    test_valid_comment = TestComment().get_comment()
+    test_valid_comment_2 = TestComment(
+        asset_version_id_and_comment_id="test-version-id:test-comment-id-2"
+    ).get_comment()
+    # Generate a third comment with different everything that should also be returned by the function
+    test_valid_comment_3 = TestComment(
+        asset_id="test-id-2",
+        asset_version_id_and_comment_id="test-version-id-2:test-comment-id-3",
+    ).get_comment()
     # Add the testing comment to the table
     comments_table.put_item(Item=test_valid_comment)
     comments_table.put_item(Item=test_valid_comment_2)
     comments_table.put_item(Item=test_valid_comment_3)
-    # Get the testing comments from the table
-    response = comments_table.get_item(
-        Key={
-            "assetId": test_valid_comment["assetId"],
-            "assetVersionId:commentId": test_valid_comment["assetVersionId:commentId"],
-        }
-    )
-    # make sure the testing comments were added succesfully
-    assert response["Item"] == test_valid_comment
-    response = comments_table.get_item(
-        Key={
-            "assetId": test_valid_comment_2["assetId"],
-            "assetVersionId:commentId": test_valid_comment_2[
-                "assetVersionId:commentId"
-            ],
-        }
-    )
-    assert response["Item"] == test_valid_comment_2
-    response = comments_table.get_item(
-        Key={
-            "assetId": test_valid_comment_3["assetId"],
-            "assetVersionId:commentId": test_valid_comment_3[
-                "assetVersionId:commentId"
-            ],
-        }
-    )
-    assert response["Item"] == test_valid_comment_3
 
-    response = commentService.lambda_handler(event, None)
-    response_body = json.loads(response["body"])
-    print(response_body["message"]["Items"])
-    # make sure all 3 comments were returned
-    assert len(response_body["message"]["Items"]) == 3
-    # make sure all expected comments were returned
-    assert test_valid_comment in response_body["message"]["Items"]
-    assert test_valid_comment_2 in response_body["message"]["Items"]
-    assert test_valid_comment_3 in response_body["message"]["Items"]
+    # call get all comments function
+    query_params = {}
+    commentService.set_pagination_info(query_params)
+    response = commentService.get_all_comments(query_params)
+    assert test_valid_comment in response["Items"]
+    assert test_valid_comment_2 in response["Items"]
+    assert test_valid_comment_3 in response["Items"]
+
+
+def test_get_comments_asset(comments_table):
+    """
+    Testing the get_comments function that should get all comments from the db with the given asset id
+    :param comments_table: mocked dynamoDB commentStorageTable
+    """
+    # Generate two seperate comments for testing
+    test_valid_comment = TestComment(asset_id="test-id").get_comment()
+    test_valid_comment_2 = TestComment(
+        asset_id="test-id", asset_version_id_and_comment_id="test-version-id-2"
+    ).get_comment()
+    # Generate a third comment with a different assetId that should not be returned by the function
+    test_invalid_comment = TestComment(asset_id="invalid-test-id").get_comment()
+    # Add the testing comment to the table
+    comments_table.put_item(Item=test_valid_comment)
+    comments_table.put_item(Item=test_valid_comment_2)
+    comments_table.put_item(Item=test_invalid_comment)
+
+    response = commentService.get_comments("test-id")
+    print(response)
+
+    # make sure only two comments were returned
+    assert len(response) == 2
+    # make sure only the expected comments were returned
+    assert test_valid_comment in response
+    assert test_valid_comment_2 in response
+    assert test_invalid_comment not in response
+
+
+def test_get_comments_version(comments_table):
+    """
+    Testing the get_comments_version function that should get
+    all comments with a given asset id and assetVersionId from db
+    :param comments_table: mocked dynamoDB commentStorageTable
+    """
+    test_valid_comment = TestComment(
+        asset_id="test-id",
+        asset_version_id_and_comment_id="test-version-id:test-comment-id",
+    ).get_comment()
+    test_valid_comment_2 = TestComment(
+        asset_id="test-id",
+        asset_version_id_and_comment_id="test-version-id:test-comment-id-2",
+    ).get_comment()
+    # Generate a third comment with a different versionId that should not be returned by the function
+    test_invalid_comment = TestComment(
+        asset_id="test-id",
+        asset_version_id_and_comment_id="invalid-test-version-id:test-comment-id-3",
+    ).get_comment()
+    # Generate a fourth comment with a different assetId
+    # but the same versionId that should not be returned by the function
+    test_invalid_comment_2 = TestComment(
+        asset_id="test-id-2",
+        asset_version_id_and_comment_id="test-version-id:test-comment-id-4",
+    ).get_comment()
+    # Add the testing comment to the table
+    comments_table.put_item(Item=test_valid_comment)
+    comments_table.put_item(Item=test_valid_comment_2)
+    comments_table.put_item(Item=test_invalid_comment)
+    comments_table.put_item(Item=test_invalid_comment_2)
+
+    response = commentService.get_comments_version("test-id", "test-version-id")
+    # make sure only 2 comments were returned
+    assert len(response) == 2
+    # make sure only the expected comments were returned
+    assert test_valid_comment in response
+    assert test_valid_comment_2 in response
+    assert test_invalid_comment not in response
+    assert test_invalid_comment_2 not in response
+
+
+def test_get_single_comment(comments_table):
+    """
+    Testing the get_single_comment function that should return the comment with the given assetId
+    and assetVersionId:commentId pair from db
+    :param comments_table: mocked dynamoDB commentStorageTable
+    """
+    # Generate a testing comment
+    test_valid_comment = TestComment(
+        asset_id="test-id",
+        asset_version_id_and_comment_id="test-version-id:test-comment-id",
+    ).get_comment()
+    # Add the testing comment to the table
+    comments_table.put_item(Item=test_valid_comment)
+
+    response = commentService.get_single_comment(
+        "test-id", "test-version-id:test-comment-id"
+    )
+    print(response)
+
+    assert test_valid_comment == response

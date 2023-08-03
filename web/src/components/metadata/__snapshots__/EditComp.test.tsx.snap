@@ -6,11 +6,11 @@ Object {
   "baseElement": <body>
     <div>
       <div
-        class="awsui_root_2rhyz_1mdn9_93 awsui_input-container_2rhyz_1mdn9_220"
+        class="awsui_root_2rhyz_w519p_93 awsui_input-container_2rhyz_w519p_220"
       >
         <input
           autocomplete="on"
-          class="awsui_input_2rhyz_1mdn9_97"
+          class="awsui_input_2rhyz_w519p_97"
           type="text"
           value="value1"
         />
@@ -19,11 +19,11 @@ Object {
   </body>,
   "container": <div>
     <div
-      class="awsui_root_2rhyz_1mdn9_93 awsui_input-container_2rhyz_1mdn9_220"
+      class="awsui_root_2rhyz_w519p_93 awsui_input-container_2rhyz_w519p_220"
     >
       <input
         autocomplete="on"
-        class="awsui_input_2rhyz_1mdn9_97"
+        class="awsui_input_2rhyz_w519p_97"
         type="text"
         value="value1"
       />
@@ -89,11 +89,11 @@ Object {
   "baseElement": <body>
     <div>
       <span
-        class="awsui_root_qk1j1_14w5r_93"
+        class="awsui_root_qk1j1_1x0fp_93"
       >
         <textarea
           autocomplete="on"
-          class="awsui_textarea_qk1j1_14w5r_97"
+          class="awsui_textarea_qk1j1_1x0fp_97"
           rows="3"
         >
           value1
@@ -103,11 +103,11 @@ Object {
   </body>,
   "container": <div>
     <span
-      class="awsui_root_qk1j1_14w5r_93"
+      class="awsui_root_qk1j1_1x0fp_93"
     >
       <textarea
         autocomplete="on"
-        class="awsui_textarea_qk1j1_14w5r_97"
+        class="awsui_textarea_qk1j1_1x0fp_97"
         rows="3"
       >
         value1

@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -19,7 +19,6 @@ import {
 } from "@cloudscape-design/components";
 import { EmptyState } from "../../common/common-components";
 import ListDefinition from "./list-definitions/types/ListDefinition";
-import UpdateAssetsCommentsDisplay from "../../pages/Comments/CommentsList";
 
 export default function CommentTableList(props) {
     //props
@@ -109,31 +108,34 @@ export default function CommentTableList(props) {
                     />
                 ),
                 filteringFunction: (item, filteringText) => {
+                    const filteringTextLowerCase = filteringText.toLowerCase();
+                    if (filteringTextLowerCase == "") {
+                        return true;
+                    }
+
                     for (let i = 0; i < filteredFilterColumns.length; i++) {
                         const filterColumnName = filteredFilterColumns[i].name;
-                        if (activeFilters[filterColumnName] !== null) {
-                            if (item[filterColumnName] !== activeFilters[filterColumnName])
-                                return false;
+                        if (
+                            activeFilters[filterColumnName] !== null &&
+                            item[filterColumnName] !== activeFilters[filterColumnName]
+                        ) {
+                            return false;
                         }
                     }
 
-                    const filteringTextLowerCase = filteringText.toLowerCase();
-                    if (filteringTextLowerCase !== "") {
-                        for (let i = 0; i < filteredVisibleColumns.length; i++) {
-                            const visibleColumnName = filteredVisibleColumns[i];
-                            if (
-                                item[visibleColumnName] !== undefined &&
-                                item[visibleColumnName]
-                                    ?.toString()
-                                    .toLowerCase()
-                                    .indexOf(filteringTextLowerCase) !== -1
-                            ) {
-                                return true;
-                            }
+                    for (let i = 0; i < filteredVisibleColumns.length; i++) {
+                        const visibleColumnName = filteredVisibleColumns[i];
+                        if (
+                            item[visibleColumnName] !== undefined &&
+                            item[visibleColumnName]
+                                .toString()
+                                .toLowerCase()
+                                .indexOf(filteringTextLowerCase) !== -1
+                        ) {
+                            return true;
                         }
-                        return false;
                     }
-                    return true;
+                    return false;
                 },
             },
             pagination: { pageSize: 15 },

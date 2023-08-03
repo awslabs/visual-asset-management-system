@@ -35,6 +35,7 @@ import {
 } from "./lambdaBuilder/assetFunctions";
 import {
     buildAddCommentLambdaFunction,
+    buildEditCommentLambdaFunction,
     buildCommentService,
 } from "./lambdaBuilder/commentFunctions";
 import {
@@ -125,7 +126,6 @@ export function apiBuilder(
         scope,
         storageResources.dynamo.commentStorageTable,
         storageResources.dynamo.assetStorageTable
-        // storageResources.s3.assetBucket,
     );
     attachFunctionToApi(scope, commentService, {
         routePath: "/comments/assets/{assetId}",
@@ -142,6 +142,11 @@ export function apiBuilder(
         method: apigwv2.HttpMethod.GET,
         api: api.apiGatewayV2,
     });
+    attachFunctionToApi(scope, commentService, {
+        routePath: "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
+        method: apigwv2.HttpMethod.DELETE,
+        api: api.apiGatewayV2,
+    });
 
     //Comment Resources
     const addCommentFunction = buildAddCommentLambdaFunction(
@@ -151,6 +156,16 @@ export function apiBuilder(
     attachFunctionToApi(scope, addCommentFunction, {
         routePath: "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
         method: apigwv2.HttpMethod.POST,
+        api: api.apiGatewayV2,
+    });
+
+    const editCommentFunction = buildEditCommentLambdaFunction(
+        scope,
+        storageResources.dynamo.commentStorageTable
+    );
+    attachFunctionToApi(scope, editCommentFunction, {
+        routePath: "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
+        method: apigwv2.HttpMethod.PUT,
         api: api.apiGatewayV2,
     });
 

@@ -1,106 +1,130 @@
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from "react";
-
-import { Box, Tabs, TextFilter, Button } from "@cloudscape-design/components";
+import LoadingIcons from "react-loading-icons";
+import { useEffect, useState } from "react";
+import { Box, Tabs, TextFilter, Button, TextContent } from "@cloudscape-design/components";
 import ReactQuill from "react-quill";
-import PopulateComments from "./PopulateComments";
 import "react-quill/dist/quill.snow.css";
+import PopulateComments from "./PopulateComments";
 import { API } from "aws-amplify";
 import { generateUUID } from "../../common/utils/utils";
 import { fetchAllComments } from "../../services/APIService";
-import { modelFileFormats } from "../../common/constants/fileFormats";
+import { Auth } from "aws-amplify";
 
 export default function CommentsList(props) {
     const { selectedItems } = props;
 
     const [value, setValue] = useState("");
-    const [reload, setReload] = useState(true);
+    const [reload, setReload] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [displayItemsWhileLoading, setDisplayItemsWhileLoading] = useState(false);
     const [displayedSelectedItems, setDisplayedSelectedItems] = useState([]);
     const [allItems, setAllItems] = useState([]);
+    const [userId, setUserId] = useState("");
 
-    if (selectedItems != displayedSelectedItems) {
+    if (selectedItems !== displayedSelectedItems) {
         setDisplayedSelectedItems(selectedItems);
         setReload(true);
     }
 
-    var selectedItem = displayedSelectedItems[0];
-    var assetId;
-    if (selectedItem === undefined) {
-        assetId = undefined;
-    } else {
-        assetId = selectedItem.assetId;
-    }
+    const selectedItem = displayedSelectedItems[0];
+    const assetId = selectedItem?.assetId;
 
     useEffect(() => {
+        const getUserId = async () => {
+            try {
+                let user = await Auth.currentUserInfo();
+                setUserId(user.attributes.sub);
+            } catch {
+                setUserId("");
+            }
+        };
         const getData = async () => {
+            if (!displayItemsWhileLoading) {
+                setAllItems([]);
+            }
+
             let items;
             if (assetId) {
+                setLoading(true);
                 items = await fetchAllComments({ assetId: assetId });
             }
 
             if (items !== false && Array.isArray(items)) {
+                setLoading(false);
                 setReload(false);
-                setAllItems(
-                    //@todo fix workflow delete return
-                    items.filter((item) => item.assetId.indexOf("#deleted") === -1)
-                );
+                setDisplayItemsWhileLoading(false);
+                setAllItems(items.filter((item) => item.assetId.indexOf("#deleted") === -1));
             }
         };
         if (reload) {
+            getUserId();
             getData();
         }
-    }, [reload, assetId, fetchAllComments]);
+    }, [reload, assetId, displayItemsWhileLoading]);
 
-    var modules = {
+    // modules for Quill (which types of formatting are allowed)
+    let modules = {
         toolbar: [
             ["bold", "italic", "underline", "strike"],
-            [, { list: "bullet" }],
+            [{ list: "ordered" }, { list: "bullet" }],
             ["link"],
             ["clean"],
         ],
     };
 
-    var formats = ["bold", "italic", "underline", "strike", "bullet", "link"];
+    let formats = ["bold", "italic", "underline", "strike", "list", "bullet", "link"];
 
-    const addComment = (event) => {
+    // Add a comment to the database based on the event that is passed to the function
+    const addComment = async (event) => {
+        // prevent page from reloading
         event.preventDefault();
         setValue("");
         const assetId = selectedItems[0].assetId;
         const versionId = selectedItems[0].currentVersion.S3Version;
         const uuid = "x" + generateUUID();
         const assetVersionIdAndCommentId = `${versionId}:${uuid}`;
-        API.post(
-            "api",
-            `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
-            {
-                body: {
-                    // ...formState,
-                    // acl: selectedOptions.map((option) => option.value),
-                    commentBody: value,
-                },
-            }
-        )
-            .then((res) => {
-                console.log("create comment", res);
-            })
-            .catch((err) => {
-                console.log("create comment error", err);
-            })
-            .finally(() => {
-                console.log("finally");
-                setReload(true);
-            });
+        // call the API to post the comment
+        let response;
+        setDisplayItemsWhileLoading(true);
+        setLoading(true);
+        try {
+            response = await API.post(
+                "api",
+                `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
+                {
+                    body: {
+                        commentBody: value,
+                    },
+                }
+            );
+            console.log(response);
+        } catch (e) {
+            console.log("create comment error");
+            console.log(e);
+        } finally {
+            setReload(true);
+        }
     };
 
-    var disableComments = selectedItems[0].assetId === undefined ? true : false;
+    const showLoading = (keepItemsDisplayed) => {
+        setDisplayItemsWhileLoading(keepItemsDisplayed);
+        setLoading(true);
+    };
 
+    // if no asset is selected, disable the textbox and submit button
+    var disableComments = selectedItems[0].assetId === undefined ? true : false;
     return (
         <div>
             <Box padding={{ top: "m", horizontal: "l" }}>
+                <div className="commentsHeader">
+                    <TextContent>
+                        <h1>Comments</h1>
+                    </TextContent>
+                </div>
                 <div className="commentSectionDiv">
                     <Tabs
                         tabs={[
@@ -113,52 +137,71 @@ export default function CommentsList(props) {
                                             <tbody>
                                                 <tr>
                                                     <td>
-                                                        <TextFilter
-                                                        // filteringText={filteringText}
-                                                        // filteringPlaceholder="Find instances"
-                                                        // filteringAriaLabel="Filter instances"
-                                                        // onChange={({ detail }) =>
-                                                        //     setFilteringText(detail.filteringText)
-                                                        // }
-                                                        />
+                                                        <TextFilter />
                                                     </td>
                                                 </tr>
                                                 <tr className="commentSectionAssetsContainerTable">
                                                     <td>
                                                         <div className="commentSectionAssetsData">
                                                             <PopulateComments
+                                                                loading={loading}
+                                                                showLoading={showLoading}
+                                                                userId={userId}
                                                                 selectedItems={selectedItems}
                                                                 allComments={allItems}
+                                                                setReload={setReload}
                                                             />
+                                                            <div
+                                                                className="center"
+                                                                hidden={
+                                                                    !loading ||
+                                                                    displayItemsWhileLoading
+                                                                }
+                                                            >
+                                                                <LoadingIcons.SpinningCircles
+                                                                    className="center"
+                                                                    fill="#000716"
+                                                                />
+                                                            </div>
                                                         </div>
                                                     </td>
                                                 </tr>
                                                 <tr>
                                                     <td className="commentSectionTableBorder">
-                                                        <form onSubmit={addComment}>
-                                                            <div className="container">
-                                                                {/* Documentation: https://github.com/zenoamaro/react-quill */}
-                                                                <div className="commentSectionTextBoxContainer">
-                                                                    <ReactQuill
-                                                                        theme="snow"
-                                                                        value={value}
-                                                                        onChange={setValue}
-                                                                        id="commentInput"
-                                                                        readOnly={disableComments}
-                                                                        modules={modules}
-                                                                        formats={formats}
-                                                                    />
+                                                        <div>
+                                                            <form onSubmit={addComment}>
+                                                                <div className="container">
+                                                                    {/* Documentation: https://github.com/zenoamaro/react-quill */}
+                                                                    <div className="commentSectionTextBoxContainer">
+                                                                        <ReactQuill
+                                                                            theme="snow"
+                                                                            value={value}
+                                                                            onChange={setValue}
+                                                                            id="commentInput"
+                                                                            readOnly={
+                                                                                disableComments
+                                                                            }
+                                                                            modules={modules}
+                                                                            formats={formats}
+                                                                        />
+                                                                    </div>
+                                                                    <div className="commentSectionSubmitButton">
+                                                                        <Button
+                                                                            variant="primary"
+                                                                            disabled={
+                                                                                disableComments ||
+                                                                                value.replace(
+                                                                                    /(<([^>]+)>)/gi,
+                                                                                    ""
+                                                                                ) === ""
+                                                                            }
+                                                                        >
+                                                                            Submit
+                                                                        </Button>
+                                                                    </div>
                                                                 </div>
-                                                                <div className="commentSectionSubmitButton">
-                                                                    <Button
-                                                                        variant="primary"
-                                                                        disabled={disableComments}
-                                                                    >
-                                                                        Submit
-                                                                    </Button>
-                                                                </div>
-                                                            </div>
-                                                        </form>
+                                                            </form>
+                                                        </div>
                                                     </td>
                                                 </tr>
                                             </tbody>
@@ -186,17 +229,3 @@ export default function CommentsList(props) {
         </div>
     );
 }
-
-// CommentsList.propTypes = {
-//     singularName: PropTypes.string.isRequired,
-//     singularNameTitleCase: PropTypes.string.isRequired,
-//     pluralName: PropTypes.string.isRequired,
-//     pluralNameTitleCase: PropTypes.string.isRequired,
-//     listDefinition: PropTypes.instanceOf(ListDefinition).isRequired,
-//     CreateNewElement: PropTypes.func,
-//     fetchElements: PropTypes.func.isRequired,
-//     fetchAllElements: PropTypes.func,
-//     onCreateCallback: PropTypes.func,
-//     isRelatedTable: PropTypes.bool,
-//     editEnabled: PropTypes.bool,
-// };
