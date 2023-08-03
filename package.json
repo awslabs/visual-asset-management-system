@@ -1,5 +1,5 @@
 {
-    "name": "@amzn/project-root",
+    "name": "project-root",
     "version": "1.3.0",
     "license": "Apache-2.0",
     "scripts": {
@@ -14,7 +14,6 @@
         "lint": "eslint web/src infra/lib infra/bin infra/test"
     },
     "devDependencies": {
-        "@amzn/pipelines": "*",
         "@typescript-eslint/eslint-plugin": "^5.57.0",
         "@typescript-eslint/parser": "^5.57.0",
         "eslint": "^8.37.0",
@@ -23,9 +22,6 @@
         "standard-version": "^9.3.2"
     },
     "dependencies": {
-        "minimist": "^1.2.7",
-        "pytest": "^1.0.0",
-        "poetry": "0.6.28",
-        "react-scripts": "5.0.1"
+        "minimist": "^1.2.7"
     }
 }

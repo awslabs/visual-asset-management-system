@@ -46,7 +46,7 @@ def test_edit_comment(comments_table, edit_event):
     ).get_comment()
 
     comments_table.put_item(Item=test_valid_comment)
-    editComment.lambda_handler(asset_id, asset_version_id_and_comment_id, edit_event)
+    editComment.lambda_handler(edit_event, None)
 
     response = comments_table.get_item(
         Key={
@@ -74,9 +74,7 @@ def test_edit_comment_not_exist(comments_table, edit_event):
     asset_id = "test-id"
     asset_version_id_and_comment_id = "test-version-id:test-comment-id"
 
-    response = editComment.edit_comment(
-        asset_id, asset_version_id_and_comment_id, edit_event
-    )
+    response = editComment.edit_comment(asset_id, asset_version_id_and_comment_id, edit_event)
     assert response["statusCode"] == 404
 
 
@@ -97,8 +95,6 @@ def test_edit_comment_wrong_owner(comments_table, edit_event):
 
     comments_table.put_item(Item=test_unowned_comment)
 
-    response = editComment.edit_comment(
-        asset_id, asset_version_id_and_comment_id, edit_event
-    )
+    response = editComment.edit_comment(asset_id, asset_version_id_and_comment_id, edit_event)
     assert response["statusCode"] == 401
     assert response["message"] == "Unauthorized"
