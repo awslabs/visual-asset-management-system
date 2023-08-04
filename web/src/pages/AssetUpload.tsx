@@ -6,29 +6,27 @@
 import { createContext, Dispatch, useContext, useEffect, useReducer, useState } from "react";
 import {
     Box,
+    Button,
     ColumnLayout,
+    Container,
+    FormField,
     Grid,
+    Header,
+    Input,
     Modal,
+    ProgressBarProps,
     Select,
+    SpaceBetween,
+    StatusIndicatorProps,
     Textarea,
     TextContent,
     Toggle,
+    Wizard,
 } from "@cloudscape-design/components";
 import { useLocation, useNavigate, useParams } from "react-router";
-import Container from "@cloudscape-design/components/container";
-import Header from "@cloudscape-design/components/header";
-import SpaceBetween from "@cloudscape-design/components/space-between";
-import Button from "@cloudscape-design/components/button";
-
-import Wizard from "@cloudscape-design/components/wizard";
-
-import FormField from "@cloudscape-design/components/form-field";
-import Input from "@cloudscape-design/components/input";
 import DatabaseSelector from "../components/selectors/DatabaseSelector";
 import { previewFileFormats } from "../common/constants/fileFormats";
 import { Metadata } from "../components/single/Metadata";
-import { ProgressBarProps } from "@cloudscape-design/components/progress-bar";
-import { StatusIndicatorProps } from "@cloudscape-design/components/status-indicator";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
 import { validateNonZeroLengthTextAsYouType } from "./AssetUpload/validations";
 import { DisplayKV, FileUpload } from "./AssetUpload/components";
@@ -162,7 +160,6 @@ const assetDetailReducer = (
     assetDetailState: AssetDetail,
     assetDetailAction: AssetDetailAction
 ): AssetDetail => {
-    console.log(assetDetailAction);
     switch (assetDetailAction.type) {
         case "UPDATE_ASSET_ID":
             return {
@@ -250,7 +247,6 @@ const assetDetailReducer = (
         default:
             return assetDetailState;
     }
-    return assetDetailState;
 };
 
 type AssetDetailContextType = {
@@ -417,7 +413,6 @@ const AssetMetadataInfo = ({
                     initialState={metadata}
                     store={(databaseId, assetId, record) => {
                         return new Promise((resolve) => {
-                            console.log("resolve promise", resolve);
                             setMetadata(record);
                             resolve(null);
                         });
@@ -445,7 +440,6 @@ const getFilesFromFileHandles = async (fileHandles: any[]) => {
             total: file.size,
         });
     }
-    console.log(fileUploadTableItems);
     return fileUploadTableItems;
 };
 
@@ -585,24 +579,16 @@ const AssetUploadReview = ({
 const UploadForm = () => {
     const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
     const { assetDetailState, assetDetailDispatch } = assetDetailContext;
-
     const [activeStepIndex, setActiveStepIndex] = useState(0);
-
     const [metadata, setMetadata] = useState<Metadata>({});
-
     const [fileUploadTableItems, setFileUploadTableItems] = useState<FileUploadTableItem[]>([]);
-
     const [freezeWizardButtons, setFreezeWizardButtons] = useState(false);
-
     const [showUploadAndExecProgress, setShowUploadAndExecProgress] = useState(false);
-
     const [uploadExecutionProps, setUploadExecutionProps] = useState<UploadExecutionProps>();
-
     const [previewUploadProgress, setPreviewUploadProgress] = useState<ProgressBarProps>({
         value: 0,
         status: "in-progress",
     });
-
     const [isCancelVisible, setCancelVisible] = useState(false);
 
     useEffect(() => {
@@ -615,7 +601,7 @@ const UploadForm = () => {
                 })
                 .then(() => {})
                 .catch(() => {
-                    console.log("Error setting item in localforage");
+                    console.error("Error setting item in localforage");
                 });
         }
     }, [fileUploadTableItems]);
@@ -724,7 +710,6 @@ const UploadForm = () => {
                     }}
                     onNavigate={({ detail }) => {
                         setActiveStepIndex(detail.requestedStepIndex);
-                        console.log("detail on navigate", detail);
                     }}
                     activeStepIndex={activeStepIndex}
                     onSubmit={onSubmit({
@@ -753,7 +738,8 @@ const UploadForm = () => {
                             content: (
                                 <AssetMetadataInfo metadata={metadata} setMetadata={setMetadata} />
                             ),
-                            isOptional: true,
+                            // Making this mandatory for now until form validation is implemented.
+                            isOptional: false,
                         },
                         {
                             title: "Select Files to upload",
