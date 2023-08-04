@@ -8,7 +8,7 @@ import { StatusIndicatorProps } from "@cloudscape-design/components/status-indic
 
 import { API, Storage, Cache } from "aws-amplify";
 import { Metadata, MetadataApi } from "../../components/single/Metadata";
-import { AssetDetail } from "../AssetUpload";
+import { AssetDetail } from "./AssetUploadPage";
 import { generateUUID } from "../../common/utils/utils";
 import { FileUploadTableItem } from "./FileUploadTable";
 

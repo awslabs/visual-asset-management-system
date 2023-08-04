@@ -1,7 +1,7 @@
 import { Box, Grid, Link, SpaceBetween, TextContent } from "@cloudscape-design/components";
 import Header from "@cloudscape-design/components/header";
 import React, { useEffect, useState } from "react";
-import { AssetDetail } from "./AssetUpload";
+import { AssetDetail } from "./AssetUpload/AssetUploadPage";
 import { useParams } from "react-router";
 import localforage from "localforage";
 import { FileUploadTable, FileUploadTableItem } from "./AssetUpload/FileUploadTable";

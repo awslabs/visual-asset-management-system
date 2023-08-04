@@ -24,18 +24,18 @@ import {
     Wizard,
 } from "@cloudscape-design/components";
 import { useLocation, useNavigate, useParams } from "react-router";
-import DatabaseSelector from "../components/selectors/DatabaseSelector";
-import { previewFileFormats } from "../common/constants/fileFormats";
-import { Metadata } from "../components/single/Metadata";
+import DatabaseSelector from "../../components/selectors/DatabaseSelector";
+import { previewFileFormats } from "../../common/constants/fileFormats";
+import { Metadata } from "../../components/single/Metadata";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
-import { validateNonZeroLengthTextAsYouType } from "./AssetUpload/validations";
-import { DisplayKV, FileUpload } from "./AssetUpload/components";
-import ProgressScreen from "./AssetUpload/ProgressScreen";
-import ControlledMetadata from "../components/metadata/ControlledMetadata";
-import Synonyms from "../synonyms";
-import onSubmit, { onUploadRetry, UploadExecutionProps } from "./AssetUpload/onSubmit";
-import FolderUpload from "../components/form/FolderUpload";
-import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./AssetUpload/FileUploadTable";
+import { validateNonZeroLengthTextAsYouType } from "./validations";
+import { DisplayKV, FileUpload } from "./components";
+import ProgressScreen from "./ProgressScreen";
+import ControlledMetadata from "../../components/metadata/ControlledMetadata";
+import Synonyms from "../../synonyms";
+import onSubmit, { onUploadRetry, UploadExecutionProps } from "./onSubmit";
+import FolderUpload from "../../components/form/FolderUpload";
+import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUploadTable";
 import localforage from "localforage";
 
 const previewFileFormatsStr = previewFileFormats.join(", ");

@@ -9,7 +9,7 @@ import StatusIndicator, {
     StatusIndicatorProps,
 } from "@cloudscape-design/components/status-indicator";
 import { FileUploadTable, FileUploadTableItem } from "./FileUploadTable";
-import { AssetDetail } from "../AssetUpload";
+import { AssetDetail } from "./AssetUploadPage";
 import Synonyms from "../../synonyms";
 
 class ProgressScreenProps {

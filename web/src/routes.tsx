@@ -11,7 +11,7 @@ import SearchPage from "./pages/search/SearchPage";
 import { Navigation } from "./layout/Navigation";
 import Databases from "./pages/Databases";
 import Assets from "./pages/Assets";
-import AssetUploadPage from "./pages/AssetUpload";
+import AssetUploadPage from "./pages/AssetUpload/AssetUploadPage";
 import ViewAsset from "./components/single/ViewAsset";
 import Pipelines from "./pages/Pipelines";
 import ViewPipeline from "./components/single/ViewPipeline";
