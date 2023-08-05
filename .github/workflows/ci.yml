@@ -22,6 +22,8 @@ jobs:
 
             - name: Setup node for the whole package
               uses: actions/setup-node@v3
+              with:
+                  node-version: 18.17.0
 
             - name: Clone automated security helper
               uses: actions/checkout@v2
