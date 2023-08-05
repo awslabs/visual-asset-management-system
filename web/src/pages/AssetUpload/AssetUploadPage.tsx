@@ -3,263 +3,32 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { createContext, Dispatch, useContext, useEffect, useReducer, useState } from "react";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router";
 import {
     Box,
     Button,
-    ColumnLayout,
-    Container,
-    FormField,
     Grid,
     Header,
-    Input,
     Modal,
     ProgressBarProps,
-    Select,
     SpaceBetween,
     StatusIndicatorProps,
-    Textarea,
     TextContent,
-    Toggle,
     Wizard,
 } from "@cloudscape-design/components";
-import { useLocation, useNavigate, useParams } from "react-router";
-import DatabaseSelector from "../../components/selectors/DatabaseSelector";
-import { previewFileFormats } from "../../common/constants/fileFormats";
-import { Metadata } from "../../components/single/Metadata";
-import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
-import { validateNonZeroLengthTextAsYouType } from "./validations";
-import { DisplayKV, FileUpload } from "./components";
+import localforage from "localforage";
 import ProgressScreen from "./ProgressScreen";
-import ControlledMetadata from "../../components/metadata/ControlledMetadata";
 import Synonyms from "../../synonyms";
 import onSubmit, { onUploadRetry, UploadExecutionProps } from "./onSubmit";
-import FolderUpload from "../../components/form/FolderUpload";
-import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUploadTable";
-import localforage from "localforage";
+import { AssetUploadProvider, useAssetUploadState } from "./state";
+import { AssetPrimaryInfo } from "./AssetPrimaryInfo";
+import { AssetUploadReview } from "./AssetUploadReview";
+import { AssetFileInfo } from "./AssetFileInfo";
+import { AssetMetadataInfo } from "./AssetMetadataInfo";
 
-const previewFileFormatsStr = previewFileFormats.join(", ");
-
-export class AssetDetail {
-    isMultiFile: boolean = false;
-    assetId?: string;
-    assetName?: string;
-    databaseId?: string;
-    description?: string;
-    bucket?: string;
-    key?: string;
-    assetType?: string;
-    isDistributable?: boolean;
-    Comment?: string;
-    specifiedPipelines?: string[];
-    previewLocation?: {
-        Bucket?: string;
-        Key?: string;
-    };
-    Asset?: FileUploadTableItem[];
-    DirectoryHandle?: any;
-    Preview?: File;
-}
-
-type UpdateAssetIdAction = {
-    type: "UPDATE_ASSET_ID";
-    payload: string;
-};
-
-type UpdateAssetDatabaseAction = {
-    type: "UPDATE_ASSET_DATABASE";
-    payload: string;
-};
-
-type UpdateAssetDistributableAction = {
-    type: "UPDATE_ASSET_DISTRIBUTABLE";
-    payload: boolean;
-};
-
-type UpdateAssetDescription = {
-    type: "UPDATE_ASSET_DESCRIPTION";
-    payload: string;
-};
-
-type UpdateAssetComment = {
-    type: "UPDATE_ASSET_COMMENT";
-    payload: string;
-};
-
-type UpdateAssetType = {
-    type: "UPDATE_ASSET_TYPE";
-    payload: string;
-};
-
-type UpdateAssetPipelines = {
-    type: "UPDATE_ASSET_PIPELINES";
-    payload: string[];
-};
-
-type UpdateAssetPreviewLocation = {
-    type: "UPDATE_ASSET_PREVIEW_LOCATION";
-    payload: {
-        Bucket?: string;
-        Key?: string;
-    };
-};
-
-type UpdateAssetPreview = {
-    type: "UPDATE_ASSET_PREVIEW";
-    payload: File;
-};
-
-type UpdateAssetDirectoryHandle = {
-    type: "UPDATE_ASSET_DIRECTORY_HANDLE";
-    payload: any;
-};
-
-type UpdateAssetFiles = {
-    type: "UPDATE_ASSET_FILES";
-    payload: FileUploadTableItem[];
-};
-
-type UpdateAssetName = {
-    type: "UPDATE_ASSET_NAME";
-    payload: string;
-};
-
-type UpdateAssetBucket = {
-    type: "UPDATE_ASSET_BUCKET";
-    payload: string;
-};
-
-type UpdateAssetKey = {
-    type: "UPDATE_ASSET_KEY";
-    payload: string;
-};
-
-type UpdateAssetIsMultiFile = {
-    type: "UPDATE_ASSET_IS_MULTI_FILE";
-    payload: boolean;
-};
-
-type AssetDetailAction =
-    | UpdateAssetIdAction
-    | UpdateAssetDatabaseAction
-    | UpdateAssetDistributableAction
-    | UpdateAssetDescription
-    | UpdateAssetComment
-    | UpdateAssetType
-    | UpdateAssetPipelines
-    | UpdateAssetPreviewLocation
-    | UpdateAssetPreview
-    | UpdateAssetDirectoryHandle
-    | UpdateAssetFiles
-    | UpdateAssetName
-    | UpdateAssetBucket
-    | UpdateAssetKey
-    | UpdateAssetIsMultiFile;
-
-const assetDetailReducer = (
-    assetDetailState: AssetDetail,
-    assetDetailAction: AssetDetailAction
-): AssetDetail => {
-    switch (assetDetailAction.type) {
-        case "UPDATE_ASSET_ID":
-            return {
-                ...assetDetailState,
-                assetId: assetDetailAction.payload,
-            };
-        case "UPDATE_ASSET_DATABASE":
-            return {
-                ...assetDetailState,
-                databaseId: assetDetailAction.payload,
-            };
-        case "UPDATE_ASSET_DISTRIBUTABLE":
-            return {
-                ...assetDetailState,
-                isDistributable: assetDetailAction.payload,
-            };
-        case "UPDATE_ASSET_DESCRIPTION":
-            return {
-                ...assetDetailState,
-                description: assetDetailAction.payload,
-            };
-
-        case "UPDATE_ASSET_COMMENT":
-            return {
-                ...assetDetailState,
-                Comment: assetDetailAction.payload,
-            };
-
-        case "UPDATE_ASSET_TYPE":
-            return {
-                ...assetDetailState,
-                assetType: assetDetailAction.payload,
-            };
-
-        case "UPDATE_ASSET_PIPELINES":
-            return {
-                ...assetDetailState,
-                specifiedPipelines: assetDetailAction.payload,
-            };
-
-        case "UPDATE_ASSET_PREVIEW_LOCATION":
-            return {
-                ...assetDetailState,
-                previewLocation: assetDetailAction.payload,
-            };
-        case "UPDATE_ASSET_PREVIEW":
-            return {
-                ...assetDetailState,
-                Preview: assetDetailAction.payload,
-            };
-
-        case "UPDATE_ASSET_DIRECTORY_HANDLE":
-            return {
-                ...assetDetailState,
-                DirectoryHandle: assetDetailAction.payload,
-            };
-
-        case "UPDATE_ASSET_FILES":
-            return {
-                ...assetDetailState,
-                Asset: assetDetailAction.payload,
-            };
-
-        case "UPDATE_ASSET_NAME":
-            return {
-                ...assetDetailState,
-                assetName: assetDetailAction.payload,
-            };
-
-        case "UPDATE_ASSET_BUCKET":
-            return {
-                ...assetDetailState,
-                bucket: assetDetailAction.payload,
-            };
-        case "UPDATE_ASSET_KEY":
-            return {
-                ...assetDetailState,
-                key: assetDetailAction.payload,
-            };
-        case "UPDATE_ASSET_IS_MULTI_FILE":
-            return {
-                ...assetDetailState,
-                isMultiFile: assetDetailAction.payload,
-            };
-        default:
-            return assetDetailState;
-    }
-};
-
-type AssetDetailContextType = {
-    assetDetailState: AssetDetail;
-    assetDetailDispatch: Dispatch<AssetDetailAction>;
-};
-
-const AssetDetailContext = createContext<AssetDetailContextType | undefined>(undefined);
-
-const isDistributableOptions: OptionDefinition[] = [
-    { label: "Yes", value: "true" },
-    { label: "No", value: "false" },
-];
+import type { FileUploadTableItem } from "./types";
+import type { Metadata } from "../../components/single/Metadata";
 
 const CancelButtonModal = ({
     onDismiss,
@@ -292,293 +61,9 @@ const CancelButtonModal = ({
     );
 };
 
-const AssetPrimaryInfo = () => {
-    const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
-    const { assetDetailState, assetDetailDispatch } = assetDetailContext;
-
-    return (
-        <Container header={<Header variant="h2">{Synonyms.Asset} Details</Header>}>
-            <SpaceBetween direction="vertical" size="l">
-                <FormField label={`${Synonyms.Asset} Name`}>
-                    <Input
-                        value={assetDetailState.assetId || ""}
-                        data-testid="assetid-input"
-                        onChange={(e) => {
-                            assetDetailDispatch({
-                                type: "UPDATE_ASSET_ID",
-                                payload: e.detail.value,
-                            });
-                        }}
-                    />
-                </FormField>
-
-                <FormField label="Is Distributable?">
-                    <Select
-                        options={isDistributableOptions}
-                        selectedOption={
-                            isDistributableOptions
-                                .filter(
-                                    (o) =>
-                                        (assetDetailState.isDistributable === false
-                                            ? "No"
-                                            : "Yes") === o.label
-                                )
-                                .pop() || isDistributableOptions[0]
-                        }
-                        onChange={({ detail }) => {
-                            assetDetailDispatch({
-                                type: "UPDATE_ASSET_DISTRIBUTABLE",
-                                payload: detail.selectedOption.label === "Yes",
-                            });
-                        }}
-                        filteringType="auto"
-                        selectedAriaLabel="Selected"
-                        data-testid="isDistributable-select"
-                    />
-                </FormField>
-
-                <FormField
-                    label={Synonyms.Database}
-                    errorText={validateNonZeroLengthTextAsYouType(assetDetailState.databaseId)}
-                >
-                    <DatabaseSelector
-                        onChange={(x: any) => {
-                            assetDetailDispatch({
-                                type: "UPDATE_ASSET_DATABASE",
-                                payload: x.detail.selectedOption.value,
-                            });
-                        }}
-                        selectedOption={{
-                            label: assetDetailState.databaseId,
-                            value: assetDetailState.databaseId,
-                        }}
-                        data-testid="database-selector"
-                    />
-                </FormField>
-
-                <FormField
-                    label="Description"
-                    constraintText="Minimum 4 characters"
-                    errorText={validateNonZeroLengthTextAsYouType(assetDetailState.description)}
-                >
-                    <Textarea
-                        value={assetDetailState.description || ""}
-                        onChange={(e) => {
-                            assetDetailDispatch({
-                                type: "UPDATE_ASSET_DESCRIPTION",
-                                payload: e.detail.value,
-                            });
-                        }}
-                        data-testid="asset-description-textarea"
-                    />
-                </FormField>
-
-                <FormField
-                    label="Comment"
-                    constraintText="Minimum 4 characters"
-                    errorText={validateNonZeroLengthTextAsYouType(assetDetailState.Comment)}
-                >
-                    <Input
-                        value={assetDetailState.Comment || ""}
-                        onChange={(e) => {
-                            assetDetailDispatch({
-                                type: "UPDATE_ASSET_COMMENT",
-                                payload: e.detail.value,
-                            });
-                        }}
-                        data-testid="asset-comment-input"
-                    />
-                </FormField>
-            </SpaceBetween>
-        </Container>
-    );
-};
-
-const AssetMetadataInfo = ({
-    metadata,
-    setMetadata,
-}: {
-    metadata: Metadata;
-    setMetadata: (metadata: Metadata) => void;
-}) => {
-    const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
-    const { assetDetailState } = assetDetailContext;
-
-    return (
-        <Container header={<Header variant="h2">{Synonyms.Asset} Metadata</Header>}>
-            <SpaceBetween direction="vertical" size="l">
-                <ControlledMetadata
-                    assetId={assetDetailState.assetId || ""}
-                    databaseId={assetDetailState.databaseId || ""}
-                    initialState={metadata}
-                    store={(databaseId, assetId, record) => {
-                        return new Promise((resolve) => {
-                            setMetadata(record);
-                            resolve(null);
-                        });
-                    }}
-                    data-testid="controlled-metadata-grid"
-                />
-            </SpaceBetween>
-        </Container>
-    );
-};
-
-const getFilesFromFileHandles = async (fileHandles: any[]) => {
-    const fileUploadTableItems: FileUploadTableItem[] = [];
-    for (let i = 0; i < fileHandles.length; i++) {
-        const file = (await fileHandles[i].handle.getFile()) as File;
-        fileUploadTableItems.push({
-            handle: fileHandles[i].handle,
-            index: i,
-            name: fileHandles[i].handle.name,
-            size: file.size,
-            relativePath: fileHandles[i].path,
-            progress: 0,
-            status: "Queued",
-            loaded: 0,
-            total: file.size,
-        });
-    }
-    return fileUploadTableItems;
-};
-
-const AssetFileInfo = ({
-    setFileUploadTableItems,
-}: {
-    setFileUploadTableItems: (fileUploadTableItems: FileUploadTableItem[]) => void;
-}) => {
-    const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
-    const { assetDetailState, assetDetailDispatch } = assetDetailContext;
-
-    return (
-        <Container header={<Header variant="h2">Select Files to Upload</Header>}>
-            <>
-                <FormField>
-                    <Toggle
-                        onChange={({ detail }) => {
-                            assetDetailDispatch({
-                                type: "UPDATE_ASSET_IS_MULTI_FILE",
-                                payload: detail.checked,
-                            });
-                        }}
-                        checked={assetDetailState.isMultiFile}
-                    >
-                        Folder Upload?
-                    </Toggle>
-                </FormField>
-                <Grid gridDefinition={[{ colspan: { default: 6 } }, { colspan: { default: 6 } }]}>
-                    <FolderUpload
-                        label={assetDetailState.isMultiFile ? "Choose Folder" : "Choose File"}
-                        description={
-                            assetDetailState.Asset
-                                ? "Total Files to Upload " + assetDetailState.Asset.length
-                                : ""
-                        }
-                        multiFile={assetDetailState.isMultiFile}
-                        errorText={(!assetDetailState.Asset && "Asset is required") || undefined}
-                        onSelect={async (directoryHandle: any, fileHandles: any[]) => {
-                            const files = await getFilesFromFileHandles(fileHandles);
-                            setFileUploadTableItems(files);
-                            assetDetailDispatch({
-                                type: "UPDATE_ASSET_DIRECTORY_HANDLE",
-                                payload: directoryHandle,
-                            });
-                            assetDetailDispatch({ type: "UPDATE_ASSET_FILES", payload: files });
-                            assetDetailDispatch({
-                                type: "UPDATE_ASSET_IS_MULTI_FILE",
-                                payload: files.length > 1,
-                            });
-                        }}
-                    ></FolderUpload>
-
-                    <FileUpload
-                        label="Preview (Optional)"
-                        disabled={false}
-                        setFile={(file) => {
-                            assetDetailDispatch({ type: "UPDATE_ASSET_PREVIEW", payload: file });
-                        }}
-                        fileFormats={previewFileFormatsStr}
-                        file={assetDetailState.Preview}
-                        data-testid="preview-file"
-                    />
-                </Grid>
-            </>
-        </Container>
-    );
-};
-
-const AssetUploadReview = ({
-    metadata,
-    setActiveStepIndex,
-}: {
-    metadata: Metadata;
-    setActiveStepIndex: (step: number) => void;
-}) => {
-    const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
-    const { assetDetailState } = assetDetailContext;
-
-    return (
-        <SpaceBetween size="xs">
-            <Header
-                variant="h3"
-                actions={<Button onClick={() => setActiveStepIndex(0)}>Edit</Button>}
-            >
-                Review
-            </Header>
-            <Container header={<Header variant="h2">{Synonyms.Asset} Detail</Header>}>
-                <ColumnLayout columns={2} variant="text-grid">
-                    {Object.keys(assetDetailState)
-                        .filter((k) => k !== "Asset" && k !== "DirectoryHandle")
-                        .sort()
-                        .map((k) => (
-                            <DisplayKV
-                                key={k}
-                                label={k}
-                                value={assetDetailState[k as keyof AssetDetail]}
-                            />
-                        ))}
-                </ColumnLayout>
-            </Container>
-
-            <Container header={<Header variant="h2">{Synonyms.Asset} Metadata</Header>}>
-                <ColumnLayout columns={2} variant="text-grid">
-                    {Object.keys(metadata).map((k) => (
-                        <DisplayKV key={k} label={k} value={metadata[k as keyof Metadata]} />
-                    ))}
-                </ColumnLayout>
-            </Container>
-            {assetDetailState.Asset && (
-                <FileUploadTable
-                    allItems={assetDetailState.Asset}
-                    resume={false}
-                    showCount={false}
-                    columnDefinitions={[
-                        {
-                            id: "filepath",
-                            header: "Path",
-                            cell: (item: FileUploadTableItem) => item.relativePath,
-                            sortingField: "filepath",
-                            isRowHeader: true,
-                        },
-                        {
-                            id: "filesize",
-                            header: "Size",
-                            cell: (item: FileUploadTableItem) =>
-                                item.total ? shortenBytes(item.total) : "0b",
-                            sortingField: "filesize",
-                            isRowHeader: true,
-                        },
-                    ]}
-                />
-            )}
-        </SpaceBetween>
-    );
-};
-
 const UploadForm = () => {
-    const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
-    const { assetDetailState, assetDetailDispatch } = assetDetailContext;
+    const [state, dispatch] = useAssetUploadState();
+
     const [activeStepIndex, setActiveStepIndex] = useState(0);
     const [metadata, setMetadata] = useState<Metadata>({});
     const [fileUploadTableItems, setFileUploadTableItems] = useState<FileUploadTableItem[]>([]);
@@ -592,11 +77,11 @@ const UploadForm = () => {
     const [isCancelVisible, setCancelVisible] = useState(false);
 
     useEffect(() => {
-        if (assetDetailState.assetId && fileUploadTableItems.length > 0) {
-            assetDetailDispatch({ type: "UPDATE_ASSET_FILES", payload: fileUploadTableItems });
+        if (state.assetId && fileUploadTableItems.length > 0) {
+            dispatch({ type: "UPDATE_ASSET_FILES", payload: fileUploadTableItems });
             localforage
-                .setItem(assetDetailState.assetId, {
-                    ...assetDetailState,
+                .setItem(state.assetId, {
+                    ...state,
                     Asset: fileUploadTableItems,
                 })
                 .then(() => {})
@@ -604,6 +89,7 @@ const UploadForm = () => {
                     console.error("Error setting item in localforage");
                 });
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [fileUploadTableItems]);
 
     const [execStatus, setExecStatus] = useState<Record<string, StatusIndicatorProps.Type>>({});
@@ -682,7 +168,7 @@ const UploadForm = () => {
             {showUploadAndExecProgress && uploadExecutionProps && (
                 <>
                     <ProgressScreen
-                        assetDetail={assetDetailState}
+                        assetDetail={state}
                         execStatus={execStatus}
                         previewUploadProgress={previewUploadProgress}
                         allFileUploadItems={fileUploadTableItems}
@@ -709,11 +195,14 @@ const UploadForm = () => {
                         setCancelVisible(true);
                     }}
                     onNavigate={({ detail }) => {
-                        setActiveStepIndex(detail.requestedStepIndex);
+                        if (detail.reason === "next" && state.pageValid) {
+                            setActiveStepIndex(detail.requestedStepIndex);
+                            dispatch({ type: "UPDATE_PAGE_VALIDITY", payload: false });
+                        }
                     }}
                     activeStepIndex={activeStepIndex}
                     onSubmit={onSubmit({
-                        assetDetail: assetDetailState,
+                        assetDetail: state,
                         setFreezeWizardButtons,
                         metadata,
                         execStatus,
@@ -765,14 +254,8 @@ const UploadForm = () => {
 };
 
 export default function AssetUploadPage() {
-    const [state, dispatch] = useReducer(assetDetailReducer, {
-        isMultiFile: false,
-        isDistributable: true,
-    });
     return (
-        <AssetDetailContext.Provider
-            value={{ assetDetailState: state, assetDetailDispatch: dispatch }}
-        >
+        <AssetUploadProvider>
             <Box padding={{ top: false ? "s" : "m", horizontal: "l" }}>
                 <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
                     <div>
@@ -783,6 +266,6 @@ export default function AssetUploadPage() {
                     </div>
                 </Grid>
             </Box>
-        </AssetDetailContext.Provider>
+        </AssetUploadProvider>
     );
 }

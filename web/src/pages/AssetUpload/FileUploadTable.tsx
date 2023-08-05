@@ -1,6 +1,6 @@
 //create a react functional component named FileUploadTable
 
-import React, { useState } from "react";
+import { useState } from "react";
 import { useCollection } from "@cloudscape-design/collection-hooks";
 import {
     Box,
@@ -14,6 +14,7 @@ import {
 } from "@cloudscape-design/components";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
+import type { FileUploadTableItem } from "./types";
 
 const FileUploadTableColumnDefinitions = [
     {
@@ -56,14 +57,6 @@ const FileUploadTableColumnDefinitions = [
     },
 ];
 
-interface FileUploadTableProps {
-    allItems: FileUploadTableItem[];
-    onRetry?: () => void;
-    resume: boolean;
-    columnDefinitions?: typeof FileUploadTableColumnDefinitions;
-    showCount?: boolean;
-}
-
 /**
  * Borrowed from : https://stackoverflow.com/a/42408230
  * @param {*} n : Number of Bytes to shorten
@@ -74,19 +67,6 @@ export function shortenBytes(n: number) {
     const rank = (k > 0 ? "KMGT"[k - 1] : "") + "b";
     const count = Math.floor(n / Math.pow(1024, k));
     return count + rank;
-}
-
-export interface FileUploadTableItem {
-    name: string;
-    handle?: any;
-    index: number;
-    size: number;
-    relativePath: string;
-    status: "Queued" | "In Progress" | "Completed" | "Failed";
-    progress: number;
-    startedAt?: number;
-    loaded: number;
-    total: number;
 }
 
 const getStatusIndicator = (status?: string) => {
@@ -218,6 +198,14 @@ function getActions(allItems: FileUploadTableItem[], resume: boolean, onRetry?: 
     }
 }
 
+interface FileUploadTableProps {
+    allItems: FileUploadTableItem[];
+    onRetry?: () => void;
+    resume: boolean;
+    columnDefinitions?: typeof FileUploadTableColumnDefinitions;
+    showCount?: boolean;
+}
+
 export const FileUploadTable = ({
     allItems,
     onRetry,
@@ -270,7 +258,7 @@ export const FileUploadTable = ({
                             {...collectionPreferencesProps}
                             preferences={preferences}
                             contentDisplayPreference={{ options: [] }}
-                            //@ts-ignore
+                            // @ts-expect-error type mismatch
                             onConfirm={({ detail }) => setPreferences(detail)}
                         />
                     }

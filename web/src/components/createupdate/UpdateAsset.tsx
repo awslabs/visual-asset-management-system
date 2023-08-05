@@ -7,7 +7,6 @@ import Input from "@cloudscape-design/components/input";
 import { useEffect, useState } from "react";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
 import { Storage, API } from "aws-amplify";
-import { AssetDetail } from "../../pages/AssetUpload/AssetUploadPage";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
 import { UploadAssetWorkflowApi } from "../../pages/AssetUpload/onSubmit";
 

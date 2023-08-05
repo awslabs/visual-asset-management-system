@@ -5,12 +5,11 @@
 import { ProgressBarProps } from "@cloudscape-design/components";
 import { NonCancelableCustomEvent } from "@cloudscape-design/components/interfaces";
 import { StatusIndicatorProps } from "@cloudscape-design/components/status-indicator";
-
 import { API, Storage, Cache } from "aws-amplify";
 import { Metadata, MetadataApi } from "../../components/single/Metadata";
-import { AssetDetail } from "./AssetUploadPage";
 import { generateUUID } from "../../common/utils/utils";
-import { FileUploadTableItem } from "./FileUploadTable";
+
+import type { AssetDetail, FileUploadTableItem } from "./types";
 
 export type ExecStatusType = Record<string, StatusIndicatorProps.Type>;
 

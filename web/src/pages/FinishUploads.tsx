@@ -1,13 +1,14 @@
 import { Box, Grid, Link, SpaceBetween, TextContent } from "@cloudscape-design/components";
 import Header from "@cloudscape-design/components/header";
-import React, { useEffect, useState } from "react";
-import { AssetDetail } from "./AssetUpload/AssetUploadPage";
+import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import localforage from "localforage";
-import { FileUploadTable, FileUploadTableItem } from "./AssetUpload/FileUploadTable";
+import { FileUploadTable } from "./AssetUpload/FileUploadTable";
 import { createAssetUploadPromises, executeUploads } from "./AssetUpload/onSubmit";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
 import Synonyms from "../synonyms";
+
+import type { AssetDetail, FileUploadTableItem } from "./AssetUpload/types";
 
 export async function verifyPermission(fileHandle: any, readWrite: any) {
     const options = {};
@@ -59,7 +60,7 @@ const FinishUploads = () => {
                 .then(() => {})
                 .catch((error) => {});
         }
-    }, [fileUploadTableItems]);
+    }, [assetDetail, fileUploadTableItems]);
 
     const getUpdatedItemAfterProgress = (
         item: FileUploadTableItem,
@@ -188,7 +189,7 @@ const FinishUploads = () => {
                     </Box>
                     <ProgressBar
                         status={
-                            get_completed_items(assetDetail.Asset).length ==
+                            get_completed_items(assetDetail.Asset).length ===
                             assetDetail.Asset.length
                                 ? "success"
                                 : "in-progress"

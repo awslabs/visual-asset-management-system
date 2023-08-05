@@ -8,9 +8,10 @@ import ProgressBar, { ProgressBarProps } from "@cloudscape-design/components/pro
 import StatusIndicator, {
     StatusIndicatorProps,
 } from "@cloudscape-design/components/status-indicator";
-import { FileUploadTable, FileUploadTableItem } from "./FileUploadTable";
-import { AssetDetail } from "./AssetUploadPage";
+import { FileUploadTable } from "./FileUploadTable";
 import Synonyms from "../../synonyms";
+
+import type { AssetDetail, FileUploadTableItem } from "./types";
 
 class ProgressScreenProps {
     assetDetail!: AssetDetail;
