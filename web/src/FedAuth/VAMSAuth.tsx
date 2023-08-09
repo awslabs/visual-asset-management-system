@@ -7,7 +7,7 @@ import React, { PropsWithChildren, useEffect, useState } from "react";
 import { API, Amplify, Auth, Cache, Hub } from "aws-amplify";
 import styles from "./loginbox.module.css";
 import loginBgImageSrc from "../resources/img/login_bg.png";
-import logoDarkImageSrc from "../resources/img/logo_dark.svg";
+import logoDarkImageSrc from "../resources/veerum/img/logo_dark.png";
 import { Heading, useTheme } from "@aws-amplify/ui-react";
 
 /**

@@ -10,7 +10,7 @@ import { Authenticator } from "@aws-amplify/ui-react";
 import { BrowserRouter } from "react-router-dom";
 import { TopNavigation } from "@cloudscape-design/components";
 import { AppRoutes } from "./routes";
-import logoWhite from "./resources/img/logo_white.png";
+import logoWhite from "./resources/veerum/img/logo_white.png";
 import "@aws-amplify/ui-react/styles.css";
 
 import { Header } from "./authenticator/Header";

@@ -4,7 +4,7 @@
  */
 
 import { Heading, useTheme } from "@aws-amplify/ui-react";
-import logoDarkImageSrc from "../resources/img/logo_dark.svg";
+import logoDarkImageSrc from "../resources/veerum/img/logo_dark.png";
 
 export function SignInHeader() {
     const { tokens } = useTheme();
