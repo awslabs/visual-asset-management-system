@@ -235,6 +235,7 @@ export default function SingleComment(props) {
                             className={
                                 "singleComment" + (deleteCommentBool ? " deleteCommentBorder" : "")
                             }
+                            data-testid="singleComment"
                             dangerouslySetInnerHTML={{ __html: sanitizeHtml(comment.commentBody) }}
                         ></div>
                     </TextContent>

@@ -1,4 +1,4 @@
-import { render, screen, act } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import CommentsList from "./CommentsList";
 import { fetchAllComments } from "../../services/APIService";
 
@@ -6,35 +6,30 @@ jest.mock("../../services/APIService", () => ({ fetchAllComments: jest.fn() }));
 jest.mock("aws-amplify");
 
 test("Should not be able to leave a comment with no asset selected", async () => {
-    await act(async () => render(<CommentsList selectedItems={[{}]} />));
-    const submitButton = screen.getByText("Submit");
-    const quillInput = document.getElementById("commentInput");
-    expect(submitButton).toBeDisabled;
-    expect(quillInput).toBeDisabled;
+    await render(<CommentsList selectedItems={[{}]} />);
+    const submitButton = screen.getByTestId("submitButton");
+    expect(submitButton).toHaveProperty("disabled", true);
 });
 
 test("Should be able to leave a comment with an asset selected", async () => {
-    await act(async () =>
-        render(
-            <CommentsList
-                selectedItems={[
-                    {
-                        assetId: "testId",
-                        currentVersion: {
-                            S3Version: "test-version-id",
-                            Version: "1",
-                            Comment: "test-version-comment",
-                        },
-                        versions: [],
+    await render(
+        <CommentsList
+            selectedItems={[
+                {
+                    assetId: "testId",
+                    currentVersion: {
+                        S3Version: "test-version-id",
+                        Version: "1",
+                        Comment: "test-version-comment",
                     },
-                ]}
-            />
-        )
+                    versions: [],
+                },
+            ]}
+        />
     );
-    const submitButton = screen.getByText("Submit");
-    const quillInput = document.getElementById("commentInput");
-    expect(submitButton).not.toBeDisabled;
-    expect(quillInput).not.toBeDisabled;
+    const submitButton = screen.getByTestId("submitButton");
+    console.log(submitButton);
+    expect(submitButton).toHaveProperty("disabled", false);
 });
 
 test("Should render a test comment correctly", async () => {
@@ -57,28 +52,25 @@ test("Should render a test comment correctly", async () => {
             },
         ];
     });
-    await act(async () =>
-        render(
-            <CommentsList
-                selectedItems={[
-                    {
-                        assetId: assetId,
-                        assetName: "Test_asset",
-                        currentVersion: {
-                            S3Version: "test-version-id",
-                            Version: "1",
-                            Comment: "test-version-comment",
-                        },
-                        versions: [],
+    await render(
+        <CommentsList
+            selectedItems={[
+                {
+                    assetId: assetId,
+                    assetName: "Test_asset",
+                    currentVersion: {
+                        S3Version: "test-version-id",
+                        Version: "1",
+                        Comment: "test-version-comment",
                     },
-                ]}
-            />
-        )
+                    versions: [],
+                },
+            ]}
+        />
     );
     // wait for fetchAllComments to be called
-    const commentContainer = document.getElementsByClassName("singleComment");
-    expect(commentContainer.length).toBe(1);
-    expect(commentContainer.item(0).innerHTML).toBe(commentBody);
+    const commentContainer = screen.getByTestId("singleComment");
+    expect(commentContainer.innerHTML).toBe(commentBody);
 });
 
 test("Should render multiple versions correctly", async () => {
@@ -101,29 +93,27 @@ test("Should render multiple versions correctly", async () => {
             },
         ];
     });
-    await act(async () =>
-        render(
-            <CommentsList
-                selectedItems={[
-                    {
-                        assetId: assetId,
-                        assetName: "Test_asset",
-                        currentVersion: {
-                            S3Version: "test-version-id-2",
-                            Version: "2",
-                            Comment: "test-version-comment-2",
-                        },
-                        versions: [
-                            {
-                                S3Version: "test-version-id",
-                                Version: "1",
-                                Comment: "test-version-comment",
-                            },
-                        ],
+    render(
+        <CommentsList
+            selectedItems={[
+                {
+                    assetId: assetId,
+                    assetName: "Test_asset",
+                    currentVersion: {
+                        S3Version: "test-version-id-2",
+                        Version: "2",
+                        Comment: "test-version-comment-2",
                     },
-                ]}
-            />
-        )
+                    versions: [
+                        {
+                            S3Version: "test-version-id",
+                            Version: "1",
+                            Comment: "test-version-comment",
+                        },
+                    ],
+                },
+            ]}
+        />
     );
     // wait for fetchAllComments to be called
     const expandableContainerList = screen.getAllByTestId("expandableSectionDiv");

@@ -87,7 +87,7 @@
     "devDependencies": {
         "@cloudscape-design/jest-preset": "^2.0.8",
         "@jest/types": "^29.5.0",
-        "@testing-library/jest-dom": "^5.14.1",
+        "@testing-library/jest-dom": "^5.17.0",
         "@testing-library/react": "^11.2.7",
         "@testing-library/react-hooks": "^8.0.1",
         "@testing-library/user-event": "^12.8.3",

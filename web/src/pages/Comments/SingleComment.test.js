@@ -8,22 +8,20 @@ import SingleComment from "./SingleComment";
 
 describe("Edit and delete visibility", () => {
     test("buttons should be visible when hovering and user owns comment", async () => {
-        await act(async () =>
-            render(
-                <SingleComment
-                    userId="test-sub"
-                    comment={{
-                        assetId: "test-asset-id",
-                        assetVersionIdAndCommentId: "test-version-id:test-comment-id",
-                        commentBody: "<p>Test comment body</p>",
-                        commentOwnerID: "test-sub",
-                        commentOwnerUsername: "test-email@amazon.com",
-                        dateCreated: "2023-07-05T19:46:57.141660Z",
-                    }}
-                    setReload={() => {}}
-                    nestedCommentBool={false}
-                />
-            )
+        render(
+            <SingleComment
+                userId="test-sub"
+                comment={{
+                    assetId: "test-asset-id",
+                    assetVersionIdAndCommentId: "test-version-id:test-comment-id",
+                    commentBody: "<p>Test comment body</p>",
+                    commentOwnerID: "test-sub",
+                    commentOwnerUsername: "test-email@amazon.com",
+                    dateCreated: "2023-07-05T19:46:57.141660Z",
+                }}
+                setReload={() => {}}
+                nestedCommentBool={false}
+            />
         );
         var fullCommentDiv = screen.getByTestId("fullCommentDiv");
         await fireEvent.mouseEnter(fullCommentDiv);
@@ -35,22 +33,20 @@ describe("Edit and delete visibility", () => {
     });
 
     test("buttons should NOT be visible when not hovering", async () => {
-        await act(async () =>
-            render(
-                <SingleComment
-                    userId="test-sub"
-                    comment={{
-                        assetId: "test-asset-id",
-                        assetVersionIdAndCommentId: "test-version-id:test-comment-id",
-                        commentBody: "<p>Test comment body</p>",
-                        commentOwnerId: "test_owner_id",
-                        commentOwnerUsername: "test-email@amazon.com",
-                        dateCreated: "2023-07-05T19:46:57.141660Z",
-                    }}
-                    setReload={() => {}}
-                    nestedCommentBool={false}
-                />
-            )
+        render(
+            <SingleComment
+                userId="test-sub"
+                comment={{
+                    assetId: "test-asset-id",
+                    assetVersionIdAndCommentId: "test-version-id:test-comment-id",
+                    commentBody: "<p>Test comment body</p>",
+                    commentOwnerId: "test_owner_id",
+                    commentOwnerUsername: "test-email@amazon.com",
+                    dateCreated: "2023-07-05T19:46:57.141660Z",
+                }}
+                setReload={() => {}}
+                nestedCommentBool={false}
+            />
         );
         var editDiv = await waitFor(() => {
             return screen.getByTestId("editDeleteCommentDiv");
@@ -59,22 +55,20 @@ describe("Edit and delete visibility", () => {
     });
 
     test("buttons should NOT be visible when hovering BUT user doesn't own comment", async () => {
-        await act(async () =>
-            render(
-                <SingleComment
-                    userId="test-sub"
-                    comment={{
-                        assetId: "test-asset-id",
-                        assetVersionIdAndCommentId: "test-version-id:test-comment-id",
-                        commentBody: "<p>Test comment body</p>",
-                        commentOwnerID: "test-sub",
-                        commentOwnerUsername: "test-email@amazon.com",
-                        dateCreated: "2023-07-05T19:46:57.141660Z",
-                    }}
-                    setReload={() => {}}
-                    nestedCommentBool={false}
-                />
-            )
+        render(
+            <SingleComment
+                userId="test-sub"
+                comment={{
+                    assetId: "test-asset-id",
+                    assetVersionIdAndCommentId: "test-version-id:test-comment-id",
+                    commentBody: "<p>Test comment body</p>",
+                    commentOwnerID: "test-sub",
+                    commentOwnerUsername: "test-email@amazon.com",
+                    dateCreated: "2023-07-05T19:46:57.141660Z",
+                }}
+                setReload={() => {}}
+                nestedCommentBool={false}
+            />
         );
         var fullCommentDiv = screen.getByTestId("fullCommentDiv");
         await fireEvent.mouseEnter(fullCommentDiv);
@@ -88,22 +82,20 @@ describe("Edit and delete visibility", () => {
 
 describe("Edit and delete visibility for nested comments", () => {
     test("buttons should be visible when hovering and user owns nested comment", async () => {
-        await act(async () =>
-            render(
-                <SingleComment
-                    userId="test-sub"
-                    comment={{
-                        assetId: "test-asset-id",
-                        assetVersionIdAndCommentId: "test-version-id:test-comment-id",
-                        commentBody: "<p>Test comment body</p>",
-                        commentOwnerID: "test-sub",
-                        commentOwnerUsername: "test-email@amazon.com",
-                        dateCreated: "2023-07-05T19:46:57.141660Z",
-                    }}
-                    setReload={() => {}}
-                    nestedCommentBool={true}
-                />
-            )
+        render(
+            <SingleComment
+                userId="test-sub"
+                comment={{
+                    assetId: "test-asset-id",
+                    assetVersionIdAndCommentId: "test-version-id:test-comment-id",
+                    commentBody: "<p>Test comment body</p>",
+                    commentOwnerID: "test-sub",
+                    commentOwnerUsername: "test-email@amazon.com",
+                    dateCreated: "2023-07-05T19:46:57.141660Z",
+                }}
+                setReload={() => {}}
+                nestedCommentBool={true}
+            />
         );
         var fullCommentDiv = screen.getByTestId("nestedFullCommentDiv");
         await fireEvent.mouseEnter(fullCommentDiv);
@@ -115,22 +107,20 @@ describe("Edit and delete visibility for nested comments", () => {
     });
 
     test("buttons should NOT be visible when not hovering", async () => {
-        await act(async () =>
-            render(
-                <SingleComment
-                    userId="test-sub"
-                    comment={{
-                        assetId: "test-asset-id",
-                        assetVersionIdAndCommentId: "test-version-id:test-comment-id",
-                        commentBody: "<p>Test comment body</p>",
-                        commentOwnerId: "test_owner_id",
-                        commentOwnerUsername: "test-email@amazon.com",
-                        dateCreated: "2023-07-05T19:46:57.141660Z",
-                    }}
-                    setReload={() => {}}
-                    nestedCommentBool={true}
-                />
-            )
+        render(
+            <SingleComment
+                userId="test-sub"
+                comment={{
+                    assetId: "test-asset-id",
+                    assetVersionIdAndCommentId: "test-version-id:test-comment-id",
+                    commentBody: "<p>Test comment body</p>",
+                    commentOwnerId: "test_owner_id",
+                    commentOwnerUsername: "test-email@amazon.com",
+                    dateCreated: "2023-07-05T19:46:57.141660Z",
+                }}
+                setReload={() => {}}
+                nestedCommentBool={true}
+            />
         );
         var editDiv = await waitFor(() => {
             return screen.getByTestId("editDeleteNestedCommentDiv");
@@ -139,22 +129,20 @@ describe("Edit and delete visibility for nested comments", () => {
     });
 
     test("buttons should NOT be visible when hovering BUT user doesn't own nested comment", async () => {
-        await act(async () =>
-            render(
-                <SingleComment
-                    userId="test-sub"
-                    comment={{
-                        assetId: "test-asset-id",
-                        assetVersionIdAndCommentId: "test-version-id:test-comment-id",
-                        commentBody: "<p>Test comment body</p>",
-                        commentOwnerID: "test-sub",
-                        commentOwnerUsername: "test-email@amazon.com",
-                        dateCreated: "2023-07-05T19:46:57.141660Z",
-                    }}
-                    setReload={() => {}}
-                    nestedCommentBool={true}
-                />
-            )
+        render(
+            <SingleComment
+                userId="test-sub"
+                comment={{
+                    assetId: "test-asset-id",
+                    assetVersionIdAndCommentId: "test-version-id:test-comment-id",
+                    commentBody: "<p>Test comment body</p>",
+                    commentOwnerID: "test-sub",
+                    commentOwnerUsername: "test-email@amazon.com",
+                    dateCreated: "2023-07-05T19:46:57.141660Z",
+                }}
+                setReload={() => {}}
+                nestedCommentBool={true}
+            />
         );
         var fullCommentDiv = screen.getByTestId("nestedFullCommentDiv");
         await fireEvent.mouseEnter(fullCommentDiv);

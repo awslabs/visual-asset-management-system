@@ -227,6 +227,7 @@ export default function CommentsList(props) {
                                                                     </div>
                                                                     <div className="commentSectionSubmitButton">
                                                                         <Button
+                                                                            data-testid="submitButton"
                                                                             variant="primary"
                                                                             disabled={
                                                                                 disableComments
