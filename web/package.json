@@ -31,6 +31,7 @@
         "loader-utils": "^3.2.0",
         "maplibre-gl": "^3.0.0",
         "maplibre-gl-js-amplify": "^3.0.5",
+        "moment": "^2.29.4",
         "online-3d-viewer": "^0.8.21",
         "papaparse": "^5.4.1",
         "patch-package": "^6.4.7",
