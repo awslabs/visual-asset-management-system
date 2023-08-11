@@ -64,6 +64,18 @@ export function EditComp({
                 setValidationText(Number.isNaN(Number(item.value)) ? "Value must be a number" : "");
                 break;
             }
+            case "controlled-list":
+            case "inline-controlled-list": {
+                setValidationText(!item.value ? "You must select an option." : "");
+                break;
+            }
+            case "location": {
+                setValidationText(!item.value ? "You must select a location." : "");
+                break;
+            }
+            case "date": {
+                setValidationText(!item.value ? "You must enter a valid date." : "");
+            }
         }
     }, [item.type, item.value]);
 
@@ -209,13 +221,15 @@ export function EditComp({
         }
 
         return (
-            <MapLocationSelectorModal2
-                json={currentValue ? currentValue : JSON.stringify(currentValueInit)}
-                setJson={(json) => {
-                    setValue(json);
-                }}
-                disabled={disabled}
-            />
+            <FormField errorText={required && showErrors && validationText}>
+                <MapLocationSelectorModal2
+                    json={currentValue ? currentValue : JSON.stringify(currentValueInit)}
+                    setJson={(json) => {
+                        setValue(json);
+                    }}
+                    disabled={disabled}
+                />
+            </FormField>
         );
     }
 

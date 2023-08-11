@@ -307,12 +307,23 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
         Comment?: string;
     }>({});
 
+    // Default `Comment` to an empty string so that it's optional and passes API validation
+    useEffect(() => {
+        if (!assetDetailState.Comment) {
+            assetDetailDispatch({
+                type: "UPDATE_ASSET_COMMENT",
+                payload: "",
+            });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     useEffect(() => {
         const validation = {
             assetId: validateNonZeroLengthTextAsYouType(assetDetailState.assetId),
             databaseId: validateNonZeroLengthTextAsYouType(assetDetailState.databaseId),
             description: validateNonZeroLengthTextAsYouType(assetDetailState.description),
-            Comment: validateNonZeroLengthTextAsYouType(assetDetailState.Comment),
+            Comment: "",
         };
         setValidationText(validation);
 
@@ -411,11 +422,7 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
                     />
                 </FormField>
 
-                <FormField
-                    label="Comment"
-                    constraintText="Minimum 4 characters"
-                    errorText={showErrors && validationText.Comment}
-                >
+                <FormField label="Comment">
                     <Input
                         value={assetDetailState.Comment || ""}
                         onChange={(e) => {
