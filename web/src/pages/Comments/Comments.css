@@ -147,11 +147,6 @@
     margin-bottom: 10px;
 }
 
-.commentSectionAssetsData {
-    overflow-y: scroll;
-    max-height: 100%;
-}
-
 .ql-container,
 .ql-editor {
     height: auto;

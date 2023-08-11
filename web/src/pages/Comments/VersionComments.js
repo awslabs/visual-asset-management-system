@@ -14,6 +14,10 @@ export default function VersionComments(props) {
 
     const [localLoading, setLocalLoading] = useState("");
 
+    if (localLoading && !loading) {
+        setLocalLoading(false);
+    }
+
     const reloadComments = (keepItemsDisplayed) => {
         setLocalLoading(keepItemsDisplayed);
         showLoading(keepItemsDisplayed);

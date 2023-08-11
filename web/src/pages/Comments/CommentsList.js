@@ -4,31 +4,86 @@
  */
 
 import LoadingIcons from "react-loading-icons";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Box, Tabs, TextFilter, Button, TextContent } from "@cloudscape-design/components";
-import ReactQuill from "react-quill";
-import "react-quill/dist/quill.snow.css";
 import PopulateComments from "./PopulateComments";
 import { API } from "aws-amplify";
 import { generateUUID } from "../../common/utils/utils";
 import { fetchAllComments } from "../../services/APIService";
 import { Auth } from "aws-amplify";
+import JoditEditor from "jodit-react";
 
 export default function CommentsList(props) {
     const { selectedItems } = props;
 
-    const [value, setValue] = useState("");
     const [reload, setReload] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [showLoadingIcon, setShowLoadingIcon] = useState(false);
     const [displayItemsWhileLoading, setDisplayItemsWhileLoading] = useState(false);
     const [displayedSelectedItems, setDisplayedSelectedItems] = useState([]);
     const [allItems, setAllItems] = useState([]);
     const [userId, setUserId] = useState("");
+    const [content, setContent] = useState("");
+    const editor = useRef(null);
 
     if (selectedItems !== displayedSelectedItems) {
         setDisplayedSelectedItems(selectedItems);
         setReload(true);
     }
+
+    // if no asset is selected, disable the textbox and submit button
+    let disableComments = selectedItems[0].assetId === undefined ? true : false;
+
+    const config = {
+        readonly: disableComments,
+        minHeight: 100,
+        showCharsCounter: false,
+        showWordsCounter: false,
+        showXPathInStatusbar: false,
+        maxWidth: "auto",
+        placeholder: "",
+        buttons: [
+            "bold",
+            "italic",
+            "strikethrough",
+            "underline",
+            "|",
+            "ul",
+            "ol",
+            "link",
+            "|",
+            "eraser",
+        ],
+        buttonsMD: [
+            "bold",
+            "italic",
+            "strikethrough",
+            "underline",
+            "|",
+            "ul",
+            "ol",
+            "link",
+            "|",
+            "eraser",
+        ],
+        buttonsXS: [
+            "bold",
+            "italic",
+            "strikethrough",
+            "underline",
+            "|",
+            "ul",
+            "ol",
+            "link",
+            "|",
+            "eraser",
+        ],
+    };
+
+    const handleUpdate = (event) => {
+        const editorContent = event;
+        setContent(editorContent);
+    };
 
     const selectedItem = displayedSelectedItems[0];
     const assetId = selectedItem?.assetId;
@@ -55,6 +110,7 @@ export default function CommentsList(props) {
 
             if (items !== false && Array.isArray(items)) {
                 setLoading(false);
+                setShowLoadingIcon(false);
                 setReload(false);
                 setDisplayItemsWhileLoading(false);
                 setAllItems(items.filter((item) => item.assetId.indexOf("#deleted") === -1));
@@ -66,23 +122,15 @@ export default function CommentsList(props) {
         }
     }, [reload, assetId, displayItemsWhileLoading]);
 
-    // modules for Quill (which types of formatting are allowed)
-    let modules = {
-        toolbar: [
-            ["bold", "italic", "underline", "strike"],
-            [{ list: "ordered" }, { list: "bullet" }],
-            ["link"],
-            ["clean"],
-        ],
-    };
-
-    let formats = ["bold", "italic", "underline", "strike", "list", "bullet", "link"];
-
     // Add a comment to the database based on the event that is passed to the function
     const addComment = async (event) => {
         // prevent page from reloading
         event.preventDefault();
-        setValue("");
+        if (content.replace(/(<([^>]+)>)/gi, "") === "") {
+            console.log("empty textbox, not adding comment");
+            return;
+        }
+        setContent("");
         const assetId = selectedItems[0].assetId;
         const versionId = selectedItems[0].currentVersion.S3Version;
         const uuid = "x" + generateUUID();
@@ -91,13 +139,14 @@ export default function CommentsList(props) {
         let response;
         setDisplayItemsWhileLoading(true);
         setLoading(true);
+        setShowLoadingIcon(true);
         try {
             response = await API.post(
                 "api",
                 `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
                 {
                     body: {
-                        commentBody: value,
+                        commentBody: content,
                     },
                 }
             );
@@ -115,8 +164,6 @@ export default function CommentsList(props) {
         setLoading(true);
     };
 
-    // if no asset is selected, disable the textbox and submit button
-    var disableComments = selectedItems[0].assetId === undefined ? true : false;
     return (
         <div>
             <Box padding={{ top: "m", horizontal: "l" }}>
@@ -135,14 +182,9 @@ export default function CommentsList(props) {
                                     <div>
                                         <table className="commentSectionTable commentSectionTableBorder">
                                             <tbody>
-                                                <tr>
-                                                    <td>
-                                                        <TextFilter />
-                                                    </td>
-                                                </tr>
                                                 <tr className="commentSectionAssetsContainerTable">
                                                     <td>
-                                                        <div className="commentSectionAssetsData">
+                                                        <div>
                                                             <PopulateComments
                                                                 loading={loading}
                                                                 showLoading={showLoading}
@@ -154,8 +196,9 @@ export default function CommentsList(props) {
                                                             <div
                                                                 className="center"
                                                                 hidden={
-                                                                    !loading ||
-                                                                    displayItemsWhileLoading
+                                                                    (!loading ||
+                                                                        displayItemsWhileLoading) &&
+                                                                    !showLoadingIcon
                                                                 }
                                                             >
                                                                 <LoadingIcons.SpinningCircles
@@ -171,29 +214,22 @@ export default function CommentsList(props) {
                                                         <div>
                                                             <form onSubmit={addComment}>
                                                                 <div className="container">
-                                                                    {/* Documentation: https://github.com/zenoamaro/react-quill */}
                                                                     <div className="commentSectionTextBoxContainer">
-                                                                        <ReactQuill
-                                                                            theme="snow"
-                                                                            value={value}
-                                                                            onChange={setValue}
-                                                                            id="commentInput"
-                                                                            readOnly={
-                                                                                disableComments
-                                                                            }
-                                                                            modules={modules}
-                                                                            formats={formats}
+                                                                        <JoditEditor
+                                                                            ref={editor}
+                                                                            value={content}
+                                                                            config={config}
+                                                                            onBlur={handleUpdate}
+                                                                            onChange={(
+                                                                                newContent
+                                                                            ) => {}}
                                                                         />
                                                                     </div>
                                                                     <div className="commentSectionSubmitButton">
                                                                         <Button
                                                                             variant="primary"
                                                                             disabled={
-                                                                                disableComments ||
-                                                                                value.replace(
-                                                                                    /(<([^>]+)>)/gi,
-                                                                                    ""
-                                                                                ) === ""
+                                                                                disableComments
                                                                             }
                                                                         >
                                                                             Submit
@@ -208,18 +244,6 @@ export default function CommentsList(props) {
                                         </table>
                                     </div>
                                 ),
-                            },
-                            {
-                                label: "Second tab",
-                                id: "second",
-                                content: "Second tab content area",
-                                disabled: true,
-                            },
-                            {
-                                label: "Third tab",
-                                id: "third",
-                                content: "Third tab content area",
-                                disabled: true,
                             },
                         ]}
                         variant="container"

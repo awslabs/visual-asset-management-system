@@ -3,24 +3,77 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { API } from "aws-amplify";
 import { Icon, Button, TextContent } from "@cloudscape-design/components";
 import { deleteComment } from "../../services/APIService";
 import moment from "moment";
 import sanitizeHtml from "sanitize-html";
-import ReactQuill from "react-quill";
-import "react-quill/dist/quill.snow.css";
+import JoditEditor from "jodit-react";
 
 export default function SingleComment(props) {
     const { userId, comment, setReload, reloadComments, nestedCommentBool } = props;
 
-    const [value, setValue] = useState("");
     const [showOnHover, setShowOnHover] = useState({ display: "none" });
     const [editCommentBool, setEditCommentBool] = useState(false);
     const [deleteCommentBool, setDeleteCommentBool] = useState(false);
+    const [content, setContent] = useState("");
+    const editor = useRef(null);
+
+    console.log(showOnHover, editCommentBool, deleteCommentBool, content);
 
     const STAY_HIDDEN = { display: "none" };
+
+    const config = {
+        readonly: false,
+        minHeight: 100,
+        showCharsCounter: false,
+        showWordsCounter: false,
+        showXPathInStatusbar: false,
+        maxWidth: "auto",
+        placeholder: "",
+        buttons: [
+            "bold",
+            "italic",
+            "strikethrough",
+            "underline",
+            "|",
+            "ul",
+            "ol",
+            "link",
+            "|",
+            "eraser",
+        ],
+        buttonsMD: [
+            "bold",
+            "italic",
+            "strikethrough",
+            "underline",
+            "|",
+            "ul",
+            "ol",
+            "link",
+            "|",
+            "eraser",
+        ],
+        buttonsXS: [
+            "bold",
+            "italic",
+            "strikethrough",
+            "underline",
+            "|",
+            "ul",
+            "ol",
+            "link",
+            "|",
+            "eraser",
+        ],
+    };
+
+    const handleUpdate = (event) => {
+        const editorContent = event;
+        setContent(editorContent);
+    };
 
     var editCommentIconsVisible = false;
     if (userId === comment.commentOwnerID && !editCommentBool && !deleteCommentBool) {
@@ -29,21 +82,10 @@ export default function SingleComment(props) {
 
     var timeDisplay = moment(comment.dateCreated).fromNow();
 
-    let modules = {
-        toolbar: [
-            ["bold", "italic", "underline", "strike"],
-            [{ list: "ordered" }, { list: "bullet" }],
-            ["link"],
-            ["clean"],
-        ],
-    };
-
-    let formats = ["bold", "italic", "underline", "strike", "list", "bullet", "link"];
-
     const selectEditComment = () => {
         editCommentIconsVisible = false;
         setEditCommentBool(true);
-        setValue(comment.commentBody);
+        setContent(comment.commentBody);
     };
 
     const confirmEdit = () => {
@@ -75,13 +117,13 @@ export default function SingleComment(props) {
     };
 
     const postCommentEdit = async () => {
-        if (value === comment.commentBody) {
+        if (content === comment.commentBody) {
             reloadComments(true);
             setReload(true);
-            setValue("");
+            setContent("");
             return;
         }
-        setValue("");
+        setContent("");
         reloadComments(true);
         try {
             let response = await API.put(
@@ -89,7 +131,7 @@ export default function SingleComment(props) {
                 `comments/assets/${comment.assetId}/assetVersionId:commentId/${comment["assetVersionId:commentId"]}`,
                 {
                     body: {
-                        commentBody: value,
+                        commentBody: content,
                     },
                 }
             );
@@ -108,10 +150,16 @@ export default function SingleComment(props) {
             <div
                 data-testid="fullCommentDiv"
                 onMouseEnter={(e) => {
-                    setShowOnHover({ display: "block" });
+                    if (!editCommentBool) {
+                        console.log("mouse enter");
+                        setShowOnHover({ display: "block" });
+                    }
                 }}
                 onMouseLeave={(e) => {
-                    setShowOnHover({ display: "none" });
+                    if (!editCommentBool) {
+                        console.log("mouse exit");
+                        setShowOnHover({ display: "none" });
+                    }
                 }}
             >
                 <div className="singleCommentContainer">
@@ -191,12 +239,11 @@ export default function SingleComment(props) {
                         ></div>
                     </TextContent>
                     <div hidden={!editCommentBool} className="quillEditDiv">
-                        <ReactQuill
-                            theme="snow"
-                            value={value}
-                            onChange={setValue}
-                            modules={modules}
-                            formats={formats}
+                        <JoditEditor
+                            ref={editor}
+                            value={content}
+                            config={config}
+                            onBlur={handleUpdate}
                         />
                     </div>
                 </div>
@@ -210,10 +257,16 @@ export default function SingleComment(props) {
                     data-testid="nestedFullCommentDiv"
                     className="singleNestedCommentContainer"
                     onMouseEnter={(e) => {
-                        setShowOnHover({ display: "block" });
+                        if (!editCommentBool) {
+                            console.log("mouse enter");
+                            setShowOnHover({ display: "block" });
+                        }
                     }}
                     onMouseLeave={(e) => {
-                        setShowOnHover({ display: "none" });
+                        if (!editCommentBool) {
+                            console.log("mouse exit");
+                            setShowOnHover({ display: "none" });
+                        }
                     }}
                 >
                     {/* Dangerously setting innerHTML bc comments are already stored with HTML tags */}
@@ -228,12 +281,12 @@ export default function SingleComment(props) {
                         ></div>
                     </TextContent>
                     <div hidden={!editCommentBool} className="quillEditDiv">
-                        <ReactQuill
-                            theme="snow"
-                            value={value}
-                            onChange={setValue}
-                            modules={modules}
-                            formats={formats}
+                        <JoditEditor
+                            ref={editor}
+                            value={content}
+                            config={config}
+                            onBlur={handleUpdate}
+                            onChange={(newContent) => {}}
                         />
                         <div style={editCommentBool ? { display: "block" } : { display: "none" }}>
                             <Button
