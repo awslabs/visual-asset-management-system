@@ -29,6 +29,8 @@ interface ControlledMetadataProps {
     apiget?: (apiName: string, path: string, init: any) => Promise<any>;
     storageget?: (key: string) => Promise<any>;
     handleCSVControlData?: HandleControlData;
+    showErrors?: boolean;
+    setValid?: (v: boolean) => void;
 }
 
 export interface TableRow {
@@ -49,12 +51,16 @@ export default function ControlledMetadata({
     storageget = Storage.get.bind(Storage),
     handleCSVControlData = originHandler,
     store = put,
+    showErrors,
+    setValid,
 }: ControlledMetadataProps) {
     const [schema, setSchema] = useState<SchemaContextData | null>(null);
     const [controlledLists, setControlledLists] = useState<any | null>(null);
     const [rawControlData, setRawControlData] = useState<any>([]);
     const [metadata, setMetadata] = useState<Metadata | null>();
     const [items, setItems] = useState<TableRow[]>([]);
+    const [requiredRows, setRequiredRows] = useState<string[]>([]);
+    const [validRows, setValidRows] = useState<string[]>([]);
 
     const metaToTableRow = (meta: Metadata, schema: SchemaContextData) => {
         schema.schemas.sort((a, b) => {
@@ -86,6 +92,23 @@ export default function ControlledMetadata({
 
         return controlled;
     };
+
+    useEffect(() => {
+        setRequiredRows(schema?.schemas.filter((s) => s.required).map((s) => s.field) || []);
+    }, [schema]);
+
+    useEffect(() => {
+        if (setValid) {
+            const isValid =
+                requiredRows.length > 0
+                    ? requiredRows
+                          ?.map((row) => validRows.includes(row))
+                          .reduce((acc, curr) => acc && curr)
+                    : true;
+            setValid(!!isValid);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [requiredRows, validRows]);
 
     const tableRowToMeta = (rows: TableRow[]): Metadata => {
         const result: Metadata = {};
@@ -214,7 +237,6 @@ export default function ControlledMetadata({
                                     controlData={rawControlData}
                                     setValue={(value) => {
                                         if (value !== undefined) {
-                                            console.log("items", items);
                                             const next: TableRow[] = [...items];
                                             next[row.idx].value = value;
 
@@ -239,9 +261,19 @@ export default function ControlledMetadata({
                                                     prefix
                                                 );
                                         } else {
-                                            console.log("undefined value", row);
+                                            console.warn("undefined value", row);
                                         }
                                     }}
+                                    setValid={(valid: boolean) => {
+                                        if (valid) {
+                                            if (!validRows.includes(row.name)) {
+                                                setValidRows([...validRows, row.name]);
+                                            }
+                                        } else {
+                                            setValidRows(validRows.filter((r) => r !== row.name));
+                                        }
+                                    }}
+                                    showErrors={showErrors}
                                 />
                             </div>
                         </Grid>
