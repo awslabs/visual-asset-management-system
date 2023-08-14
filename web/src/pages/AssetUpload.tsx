@@ -23,7 +23,7 @@ import {
     Toggle,
     Wizard,
 } from "@cloudscape-design/components";
-import { useLocation, useNavigate, useParams } from "react-router";
+import { useNavigate } from "react-router";
 import DatabaseSelector from "../components/selectors/DatabaseSelector";
 import { previewFileFormats } from "../common/constants/fileFormats";
 import { Metadata } from "../components/single/Metadata";
@@ -292,14 +292,63 @@ const CancelButtonModal = ({
     );
 };
 
-const AssetPrimaryInfo = () => {
+interface AssetPrimaryInfoProps {
+    setValid: (validity: boolean) => void;
+    showErrors: boolean;
+}
+
+const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
     const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
     const { assetDetailState, assetDetailDispatch } = assetDetailContext;
+    const [validationText, setValidationText] = useState<{
+        assetId?: string;
+        databaseId?: string;
+        description?: string;
+        Comment?: string;
+    }>({});
+
+    // Default `Comment` to an empty string so that it's optional and passes API validation
+    useEffect(() => {
+        if (!assetDetailState.Comment) {
+            assetDetailDispatch({
+                type: "UPDATE_ASSET_COMMENT",
+                payload: "",
+            });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    useEffect(() => {
+        const validation = {
+            assetId: validateNonZeroLengthTextAsYouType(assetDetailState.assetId),
+            databaseId: validateNonZeroLengthTextAsYouType(assetDetailState.databaseId),
+            description: validateNonZeroLengthTextAsYouType(assetDetailState.description),
+            Comment: "",
+        };
+        setValidationText(validation);
+
+        const isValid = !(
+            validation.assetId ||
+            validation.databaseId ||
+            validation.description ||
+            validation.Comment
+        );
+        setValid(isValid);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [
+        assetDetailState.Comment,
+        assetDetailState.assetId,
+        assetDetailState.databaseId,
+        assetDetailState.description,
+    ]);
 
     return (
         <Container header={<Header variant="h2">{Synonyms.Asset} Details</Header>}>
             <SpaceBetween direction="vertical" size="l">
-                <FormField label={`${Synonyms.Asset} Name`}>
+                <FormField
+                    label={`${Synonyms.Asset} Name`}
+                    errorText={showErrors && validationText.assetId}
+                >
                     <Input
                         value={assetDetailState.assetId || ""}
                         data-testid="assetid-input"
@@ -339,7 +388,7 @@ const AssetPrimaryInfo = () => {
 
                 <FormField
                     label={Synonyms.Database}
-                    errorText={validateNonZeroLengthTextAsYouType(assetDetailState.databaseId)}
+                    errorText={showErrors && validationText.databaseId}
                 >
                     <DatabaseSelector
                         onChange={(x: any) => {
@@ -359,7 +408,7 @@ const AssetPrimaryInfo = () => {
                 <FormField
                     label="Description"
                     constraintText="Minimum 4 characters"
-                    errorText={validateNonZeroLengthTextAsYouType(assetDetailState.description)}
+                    errorText={showErrors && validationText.description}
                 >
                     <Textarea
                         value={assetDetailState.description || ""}
@@ -373,11 +422,7 @@ const AssetPrimaryInfo = () => {
                     />
                 </FormField>
 
-                <FormField
-                    label="Comment"
-                    constraintText="Minimum 4 characters"
-                    errorText={validateNonZeroLengthTextAsYouType(assetDetailState.Comment)}
-                >
+                <FormField label="Comment">
                     <Input
                         value={assetDetailState.Comment || ""}
                         onChange={(e) => {
@@ -397,9 +442,13 @@ const AssetPrimaryInfo = () => {
 const AssetMetadataInfo = ({
     metadata,
     setMetadata,
+    showErrors,
+    setValid,
 }: {
     metadata: Metadata;
     setMetadata: (metadata: Metadata) => void;
+    showErrors: boolean;
+    setValid: (v: boolean) => void;
 }) => {
     const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
     const { assetDetailState } = assetDetailContext;
@@ -417,6 +466,8 @@ const AssetMetadataInfo = ({
                             resolve(null);
                         });
                     }}
+                    showErrors={showErrors}
+                    setValid={setValid}
                     data-testid="controlled-metadata-grid"
                 />
             </SpaceBetween>
@@ -445,11 +496,25 @@ const getFilesFromFileHandles = async (fileHandles: any[]) => {
 
 const AssetFileInfo = ({
     setFileUploadTableItems,
+    setValid,
+    showErrors,
 }: {
     setFileUploadTableItems: (fileUploadTableItems: FileUploadTableItem[]) => void;
+    setValid: (v: boolean) => void;
+    showErrors: boolean;
 }) => {
     const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
     const { assetDetailState, assetDetailDispatch } = assetDetailContext;
+
+    useEffect(() => {
+        console.log(assetDetailState);
+        if (assetDetailState.Asset?.length && assetDetailState.Asset.length > 0) {
+            setValid(true);
+        } else {
+            setValid(false);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [assetDetailState]);
 
     return (
         <Container header={<Header variant="h2">Select Files to Upload</Header>}>
@@ -476,7 +541,10 @@ const AssetFileInfo = ({
                                 : ""
                         }
                         multiFile={assetDetailState.isMultiFile}
-                        errorText={(!assetDetailState.Asset && "Asset is required") || undefined}
+                        errorText={
+                            (!assetDetailState.Asset && showErrors && "Asset is required") ||
+                            undefined
+                        }
                         onSelect={async (directoryHandle: any, fileHandles: any[]) => {
                             const files = await getFilesFromFileHandles(fileHandles);
                             setFileUploadTableItems(files);
@@ -590,6 +658,12 @@ const UploadForm = () => {
         status: "in-progress",
     });
     const [isCancelVisible, setCancelVisible] = useState(false);
+    const [showErrorsForPage, setShowErrorsForPage] = useState(-1);
+    const [validSteps, setValidSteps] = useState([false, false, false]);
+
+    useEffect(() => {
+        console.log("Valid steps", validSteps);
+    });
 
     useEffect(() => {
         if (assetDetailState.assetId && fileUploadTableItems.length > 0) {
@@ -604,6 +678,7 @@ const UploadForm = () => {
                     console.error("Error setting item in localforage");
                 });
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [fileUploadTableItems]);
 
     const [execStatus, setExecStatus] = useState<Record<string, StatusIndicatorProps.Type>>({});
@@ -709,7 +784,13 @@ const UploadForm = () => {
                         setCancelVisible(true);
                     }}
                     onNavigate={({ detail }) => {
-                        setActiveStepIndex(detail.requestedStepIndex);
+                        setShowErrorsForPage(activeStepIndex);
+                        if (
+                            validSteps[activeStepIndex] ||
+                            activeStepIndex > detail.requestedStepIndex
+                        ) {
+                            setActiveStepIndex(detail.requestedStepIndex);
+                        }
                     }}
                     activeStepIndex={activeStepIndex}
                     onSubmit={onSubmit({
@@ -731,20 +812,45 @@ const UploadForm = () => {
                         {
                             title: `${Synonyms.Asset} Details`,
                             isOptional: false,
-                            content: <AssetPrimaryInfo />,
+                            content: (
+                                <AssetPrimaryInfo
+                                    setValid={(v: boolean) => {
+                                        const newValidSteps = [...validSteps];
+                                        newValidSteps[0] = v;
+                                        setValidSteps(newValidSteps);
+                                    }}
+                                    showErrors={showErrorsForPage >= 0}
+                                />
+                            ),
                         },
                         {
                             title: `${Synonyms.Asset} Metadata`,
                             content: (
-                                <AssetMetadataInfo metadata={metadata} setMetadata={setMetadata} />
+                                <AssetMetadataInfo
+                                    setValid={(v: boolean) => {
+                                        const newValidSteps = [...validSteps];
+                                        newValidSteps[1] = v;
+                                        setValidSteps(newValidSteps);
+                                    }}
+                                    showErrors={showErrorsForPage >= 1}
+                                    metadata={metadata}
+                                    setMetadata={setMetadata}
+                                />
                             ),
-                            // Making this mandatory for now until form validation is implemented.
                             isOptional: false,
                         },
                         {
                             title: "Select Files to upload",
                             content: (
-                                <AssetFileInfo setFileUploadTableItems={setFileUploadTableItems} />
+                                <AssetFileInfo
+                                    setFileUploadTableItems={setFileUploadTableItems}
+                                    setValid={(v: boolean) => {
+                                        const newValidSteps = [...validSteps];
+                                        newValidSteps[2] = v;
+                                        setValidSteps(newValidSteps);
+                                    }}
+                                    showErrors={showErrorsForPage >= 2}
+                                />
                             ),
                             isOptional: false,
                         },

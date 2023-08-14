@@ -3,7 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-const config = {
+interface VAMSConfig {
+    APP_TITLE: string;
+    CUSTOMER_LOGO?: string;
+}
+
+const config: VAMSConfig = {
     APP_TITLE: "Amazon VAMS",
     // CUSTOMER_LOGO // defines a alternate logo
 };

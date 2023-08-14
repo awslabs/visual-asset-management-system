@@ -36,6 +36,7 @@ describe("EditComp", () => {
                 }}
                 currentValue={""}
                 metadata={metadata}
+                setValid={(v) => {}}
             />
         );
 
@@ -70,6 +71,7 @@ describe("EditComp", () => {
                 }}
                 currentValue={""}
                 metadata={metadata}
+                setValid={(v) => {}}
             />
         );
 
@@ -104,6 +106,7 @@ describe("EditComp", () => {
                 }}
                 currentValue={""}
                 metadata={metadata}
+                setValid={(v) => {}}
             />
         );
 
@@ -145,6 +148,7 @@ describe("EditComp", () => {
                 }}
                 currentValue={""}
                 metadata={metadata}
+                setValid={(v) => {}}
             />
         );
 
@@ -186,6 +190,7 @@ describe("EditComp", () => {
                 }}
                 currentValue={""}
                 metadata={metadata}
+                setValid={(v) => {}}
             />
         );
 
@@ -221,6 +226,7 @@ describe("EditComp", () => {
                 }}
                 currentValue={""}
                 metadata={metadata}
+                setValid={(v) => {}}
             />
         );
 
