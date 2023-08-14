@@ -22,7 +22,7 @@ import {
     search,
     sortSearch,
 } from "./SearchPropertyFilter";
-import { SearchPageViewProps } from "./SearchPage";
+import { INITIAL_STATE, SearchPageViewProps } from "./SearchPage";
 import Synonyms from "../../synonyms";
 import { EmptyState } from "../../common/common-components";
 import { useNavigate } from "react-router-dom";
@@ -129,7 +129,9 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                                 <Button
                                     onClick={() => {
                                         dispatch({ type: "query-criteria-cleared" });
-                                        search({ tokens: [] }, { state, dispatch });
+                                        setTimeout(() => {
+                                            search(INITIAL_STATE, { state, dispatch });
+                                        }, 10);
                                     }}
                                 >
                                     Clear filter

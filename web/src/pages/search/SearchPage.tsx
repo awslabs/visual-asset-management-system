@@ -87,15 +87,7 @@ function searchReducer(state: any, action: any) {
         case "query-criteria-cleared":
             return {
                 ...state,
-                propertyFilter: { tokens: [], operation: "and" },
-                error: undefined,
-                loading: true,
-                sort: action.sort,
-                tableSort: {},
-                filters: {},
-                pagination: {
-                    from: 0,
-                },
+                ...INITIAL_STATE,
             };
 
         case "property-filter-query-updated":
@@ -269,36 +261,38 @@ function searchReducer(state: any, action: any) {
     }
 }
 
+export const INITIAL_STATE = {
+    initialResult: false,
+    propertyFilter: { tokens: [], operation: "AND" },
+    loading: false,
+    tablePreferences: {
+        pageSize: 100,
+    },
+    pagination: {
+        from: 0,
+    },
+    rectype: {
+        value: "asset",
+        label: Synonyms.Assets,
+    },
+    filters: {
+        _rectype: {
+            label: Synonyms.Assets,
+            value: "asset",
+        },
+    },
+    query: "",
+    disableSelection: false,
+    view: "listview",
+    columnNames: [],
+    columnDefinitions: [],
+    notifications: [],
+};
+
 function SearchPage(props: SearchPageProps) {
     const [useMapView] = useState(true);
     const { databaseId } = useParams();
-    const [state, dispatch] = useReducer(searchReducer, {
-        initialResult: false,
-        propertyFilter: { tokens: [], operation: "AND" },
-        loading: false,
-        databaseId,
-        tablePreferences: {
-            pageSize: 100,
-        },
-        pagination: {
-            from: 0,
-        },
-        rectype: {
-            value: "asset",
-            label: Synonyms.Assets,
-        },
-        filters: {
-            _rectype: {
-                label: Synonyms.Assets,
-                value: "asset",
-            },
-        },
-        disableSelection: false,
-        view: "listview",
-        columnNames: [],
-        columnDefinitions: [],
-        notifications: [],
-    });
+    const [state, dispatch] = useReducer(searchReducer, { ...INITIAL_STATE, databaseId });
 
     useEffect(() => {
         if (!state.initialResult) {
