@@ -7,23 +7,12 @@ os.environ["COMMENT_STORAGE_TABLE_NAME"] = "commentStorageTable"
 
 
 @pytest.fixture(scope="function")
-def aws_credentials():
-    """
-    Mocked AWS credentials for moto
-    """
-    os.environ["AWS_ACCESS_KEY_ID"] = "VAMS_comments_testing"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "VAMS_comments_testing"
-    os.environ["AWS_SECURITY_TOKEN"] = "VAMS_comments_testing"
-    os.environ["AWS_SESSION_TOKEN"] = "VAMS_comments_testing"
-    os.environ["AWS_REGION"] = "us-east-1"
-
-
-@pytest.fixture(scope="function")
-def ddb_resource(aws_credentials):
+def ddb_resource(monkeypatch):
     """
     Create the dynamoDB resource to store the comments table
     :returns: mocked dynabmoDB resource
     """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
     with mock_dynamodb():
         yield boto3.resource("dynamodb", region_name="us-east-1")
 
