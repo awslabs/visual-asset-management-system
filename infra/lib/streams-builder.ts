@@ -17,6 +17,7 @@ import { CognitoWebNativeConstruct } from "./constructs/cognito-web-native-const
 import { buildSearchFunction } from "./lambdaBuilder/searchFunctions";
 import { attachFunctionToApi } from "./api-builder";
 import * as apigwv2 from "@aws-cdk/aws-apigatewayv2-alpha";
+import * as cdk from "aws-cdk-lib";
 
 export function streamsBuilder(
     scope: Stack,
@@ -28,10 +29,13 @@ export function streamsBuilder(
         principalArn: [],
     });
 
+    const indexNameParam = "/" + [cdk.Stack.of(scope).stackName, "indexName"].join("/");
+
     const indexingFunction = buildMetadataIndexingFunction(
         scope,
         storage,
         aoss.endpointSSMParameterName(),
+        indexNameParam,
         "m"
     );
 
@@ -39,6 +43,7 @@ export function streamsBuilder(
         scope,
         storage,
         aoss.endpointSSMParameterName(),
+        indexNameParam,
         "a"
     );
 
@@ -66,7 +71,13 @@ export function streamsBuilder(
     aoss.grantCollectionAccess(indexingFunction);
     aoss.grantCollectionAccess(assetIndexingFunction);
 
-    const searchFun = buildSearchFunction(scope, aoss.endpointSSMParameterName(), aoss, storage);
+    const searchFun = buildSearchFunction(
+        scope,
+        aoss.endpointSSMParameterName(),
+        indexNameParam,
+        aoss,
+        storage
+    );
     attachFunctionToApi(scope, searchFun, {
         routePath: "/search",
         method: apigwv2.HttpMethod.POST,

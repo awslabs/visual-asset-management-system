@@ -15,6 +15,7 @@ import * as cdk from "aws-cdk-lib";
 export function buildSearchFunction(
     scope: Construct,
     aossEndpoint: string,
+    indexNameParam: string,
     aossConstruct: OpensearchServerlessConstruct,
     storageResources: storageResources
 ): lambda.Function {
@@ -26,6 +27,7 @@ export function buildSearchFunction(
         memorySize: 3008,
         environment: {
             AOSS_ENDPOINT_PARAM: aossEndpoint,
+            AOSS_INDEX_NAME_PARAM: indexNameParam,
             AUTH_ENTITIES_TABLE: storageResources.dynamo.authEntitiesStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
         },
@@ -38,7 +40,7 @@ export function buildSearchFunction(
             resources: [
                 `arn:aws:ssm:${cdk.Stack.of(scope).region}:${
                     cdk.Stack.of(scope).account
-                }:parameter${aossEndpoint}`,
+                }:parameter/${cdk.Stack.of(scope).stackName}/*`,
             ],
         })
     );
