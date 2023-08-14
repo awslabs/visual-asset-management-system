@@ -32,8 +32,15 @@ interface RouteOption {
 const routeTable: RouteOption[] = [
     { path: "/", Page: LandingPage, active: "/" },
     { path: "/search", Page: SearchPage, active: "/" },
+    { path: "/search/:databaseId/assets", Page: SearchPage, active: "/", roles: ["assets"] },
+    { path: "/assets", Page: SearchPage, active: "/assets", roles: ["assets"] },
     { path: "/databases", Page: Databases, active: "/databases", roles: ["assets"] },
-    { path: "/databases/:databaseId/assets", Page: Assets, active: "/assets", roles: ["assets"] },
+    {
+        path: "/databases/:databaseId/assets",
+        Page: SearchPage,
+        active: "/assets",
+        roles: ["assets"],
+    },
     {
         path: "/databases/:databaseId/assets/:assetId",
         Page: ViewAsset,
@@ -61,7 +68,6 @@ const routeTable: RouteOption[] = [
     },
     { path: "/upload", Page: AssetUploadPage, active: "/upload", roles: ["assets", "upload"] },
     { path: "/visualizers/:pathViewType", Page: ViewAsset, active: "/assets", roles: ["assets"] },
-    { path: "/assets", Page: Assets, active: "/assets", roles: ["assets"] },
     {
         path: "/databases/:databaseId/pipelines",
         Page: Pipelines,

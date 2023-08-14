@@ -12,6 +12,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.data_classes import APIGatewayProxyEvent
 from urllib.parse import urlparse
 from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
+from backend.common import get_ssm_parameter_value
 
 
 logger = safeLogger(service=__name__, child=True, level="INFO")
@@ -61,7 +62,7 @@ def token_to_criteria(token):
             "multi_match": {
                 "query": token.get("value"),
                 "type": "best_fields",
-                "lenient": True
+                "lenient": True,
             }
         }
 
@@ -85,22 +86,35 @@ def property_token_filter_to_opensearch_query(token_filter, start=0, size=100):
     filter_criteria = []
     should_criteria = []
 
-    if token_filter.get("operation", "AND").upper() == "AND":
-        must_criteria = [
-            token_to_criteria(tok) for tok in token_filter['tokens']
-            if tok['operator'] in must_operators]
+    if len(token_filter.get("tokens", [])) == 0 \
+            and token_filter.get("query") is not None \
+            and token_filter.get("query") != "":
+        must_criteria.append({
+            "multi_match": {
+                "query": token_filter.get("query"),
+                "type": "cross_fields",
+                "lenient": True,
+            }
+        })
 
-        must_not_criteria = [
-            token_to_criteria(tok) for tok in token_filter['tokens']
-            if tok['operator'] in must_not_operators]
+    if len(token_filter.get("tokens", [])) > 0:
 
-    elif token_filter.get("operation").upper() == "OR":
-        must_not_criteria = [
-            token_to_criteria(tok) for tok in token_filter['tokens']
-            if tok['operator'] in must_not_operators]
-        should_criteria = [
-            token_to_criteria(tok) for tok in token_filter['tokens']
-            if tok['operator'] in must_operators]
+        if token_filter.get("operation", "AND").upper() == "AND":
+            must_criteria = [
+                token_to_criteria(tok) for tok in token_filter['tokens']
+                if tok['operator'] in must_operators]
+
+            must_not_criteria = [
+                token_to_criteria(tok) for tok in token_filter['tokens']
+                if tok['operator'] in must_not_operators]
+
+        elif token_filter.get("operation").upper() == "OR":
+            must_not_criteria = [
+                token_to_criteria(tok) for tok in token_filter['tokens']
+                if tok['operator'] in must_not_operators]
+            should_criteria = [
+                token_to_criteria(tok) for tok in token_filter['tokens']
+                if tok['operator'] in must_operators]
 
     query = {
         "from": token_filter.get("from", start),
@@ -122,9 +136,29 @@ def property_token_filter_to_opensearch_query(token_filter, start=0, size=100):
                 "@/opensearch-dashboards-highlighted-field@"
             ],
             "fields": {
-                "*": {}
+                "str_*": {}
             },
             "fragment_size": 2147483647
+        },
+        "aggs": {
+            "str_assettype": {
+                "terms": {
+                    "field": "str_assettype.raw",
+                    "size": 1000
+                }
+            },
+            "str_fileext": {
+                "terms": {
+                    "field": "str_fileext.raw",
+                    "size": 1000
+                }
+            },
+            "str_databaseid": {
+                "terms": {
+                    "field": "str_databaseid.raw",
+                    "size": 1000
+                }
+            }
         }
     }
 
@@ -132,7 +166,7 @@ def property_token_filter_to_opensearch_query(token_filter, start=0, size=100):
 
 
 class SearchAOSS():
-    def __init__(self, host, auth, region, service):
+    def __init__(self, host, auth, indexName):
         self.client = OpenSearch(
             hosts=[{'host': urlparse(host).hostname, 'port': 443}],
             http_auth=auth,
@@ -141,41 +175,37 @@ class SearchAOSS():
             connection_class=RequestsHttpConnection,
             pool_maxsize=20
         )
+        self.indexName = indexName
 
     @staticmethod
     def from_env(env=os.environ):
         print("env endpoint", env.get("AOSS_ENDPOINT"))
         print("env region", env.get("AWS_REGION"))
         region = env.get('AWS_REGION')
-        print(region)
         service = 'aoss'
         credentials = boto3.Session().get_credentials()
         auth = AWSV4SignerAuth(credentials, region, service)
-        print(auth)
 
-        ssm = boto3.client('ssm', region_name=region)
-        param = ssm.get_parameter(
-            Name=env.get('AOSS_ENDPOINT_PARAM'),
-            WithDecryption=False
-        )
-        host = param.get("Parameter", {}).get("Value")
+        host = get_ssm_parameter_value('AOSS_ENDPOINT_PARAM', region, env)
+        indexName = get_ssm_parameter_value(
+                        'AOSS_INDEX_NAME_PARAM', region, env)
 
         return SearchAOSS(
             host=host,
-            region=region,
-            service=service,
-            auth=auth
+            auth=auth,
+            indexName=indexName
         )
 
     def search(self, query):
         print("aoss query", query)
         return self.client.search(
             body=query,
-            index='assets1236'
+            index=self.indexName,
         )
 
     def mapping(self):
-        return self.client.indices.get_mapping("assets1236")
+        return self.client.indices.get_mapping(
+            self.indexName).get(self.indexName)
 
 
 def load_auth_entities(env=os.environ):
@@ -210,7 +240,8 @@ def lambda_handler(
                 "body": json.dumps(search_ao.mapping()),
             }
 
-        if "body" not in event and event['requestContext']['http']['method'] == "POST":
+        if "body" not in event and \
+                event['requestContext']['http']['method'] == "POST":
             raise ValidationError(400, {"error": "missing request body"})
 
         body = json.loads(event['body'])
@@ -228,15 +259,17 @@ def lambda_handler(
 
         print("all constraints", all_constraints)
         if len(all_constraints) > 0:
-            auth_filters = auth_entities.claims_to_opensearch_filters(all_constraints, authn['tokens'])
+            auth_filters = auth_entities.claims_to_opensearch_filters(
+                all_constraints, authn['tokens'])
             print("opensearch filters", auth_filters)
             if auth_filters['query']['query_string']['query'] != "":
                 query['query']['bool']['filter'].append(auth_filters['query'])
 
-        # database acl filters 
+        # database acl filters
         database_set = database_set_fn()
         accessible_databases = database_set(authn['tokens'])
-        accessible_databases = "str_databaseid:(%s)" % " OR ".join(accessible_databases)
+        accessible_databases = "str_databaseid:(%s)" % " OR ".join(
+                                        accessible_databases)
         print("accessible databases", accessible_databases)
         query['query']['bool']['filter'].append({
             'query_string': {

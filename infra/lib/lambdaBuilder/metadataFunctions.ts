@@ -46,6 +46,7 @@ export function buildMetadataIndexingFunction(
     scope: Construct,
     storageResources: storageResources,
     aossEndpoint: string,
+    indexNameParam: string,
     handlerType: "a" | "m"
 ): lambda.Function {
     const fun = new lambda.DockerImageFunction(scope, "idx" + handlerType, {
@@ -60,6 +61,7 @@ export function buildMetadataIndexingFunction(
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             ASSET_BUCKET_NAME: storageResources.s3.assetBucket.bucketName,
             AOSS_ENDPOINT_PARAM: aossEndpoint,
+            AOSS_INDEX_NAME_PARAM: indexNameParam,
         },
     });
 
@@ -70,7 +72,7 @@ export function buildMetadataIndexingFunction(
             resources: [
                 `arn:aws:ssm:${cdk.Stack.of(scope).region}:${
                     cdk.Stack.of(scope).account
-                }:parameter${aossEndpoint}`,
+                }:parameter/${cdk.Stack.of(scope).stackName}/*`,
             ],
         })
     );

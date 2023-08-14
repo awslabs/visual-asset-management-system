@@ -9,23 +9,48 @@ import {
 } from "@cloudscape-design/collection-hooks";
 import { Select, SpaceBetween } from "@cloudscape-design/components";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
+import { deleteElement } from "../../services/APIService";
+import { execPath } from "process";
 
 interface SearchPropertyFilterProps {
     state: any;
     dispatch: Dispatch<ReducerAction<any>>;
 }
 
+function filterFilter(key: string, filters: { [key: string]: OptionDefinition }) {
+    return filters[key] && filters[key].value !== "all";
+}
+
 async function search(overrides: any, { dispatch, state }: SearchPropertyFilterProps) {
+    const filters: object[] = Object.keys(state?.filters)
+        .filter((key: string) => filterFilter(key, state?.filters))
+        .map((key) => {
+            return {
+                query_string: {
+                    query: `(${key}:("${state?.filters[key].value}"))`,
+                },
+            };
+        });
+    if (state.databaseId) {
+        filters.push({
+            query_string: { query: `(str_databaseid:(${state?.databaseId}))` },
+        });
+    }
+
     const body = {
-        tokens: state.query.tokens,
-        operation: state.query.operation,
+        tokens: state.propertyFilter.tokens,
+        operation: state.propertyFilter.operation,
         sort: state.sort,
         from: state?.pagination?.from,
         size: state?.tablePreferences?.pageSize,
-        filters: [{ query_string: { query: `(_rectype:(${state?.rectype.value}))` } }],
+        query: state?.query,
+        filters,
         ...overrides,
     };
     console.log("body to send", body);
+
+    dispatch({ type: "search-results-requested" });
+
     try {
         const result = await API.post("api", "search", {
             "Content-type": "application/json",
@@ -75,6 +100,27 @@ export async function sortSearch(
     search(body, { dispatch, state });
 }
 
+export async function deleteSelected({ state, dispatch }: SearchPropertyFilterProps) {
+    dispatch({ type: "set-delete-in-progress" });
+
+    setTimeout(async () => {
+        await state?.selectedItems.forEach(async (item: any) => {
+            const [status, resp] = await deleteElement({
+                elementId: "assetId",
+                deleteRoute: "database/{databaseId}/assets/{assetId}",
+                item: {
+                    databaseId: item.str_databaseid,
+                    assetId: item.str_assetid,
+                },
+            });
+        });
+        setTimeout(async () => {
+            await search({}, { state, dispatch });
+            dispatch({ type: "end-delete-in-progress" });
+        }, 5000);
+    });
+}
+
 export async function paginateSearch(
     from: number,
     size: number,
@@ -94,7 +140,34 @@ export async function paginateSearch(
     search(body, { dispatch, state });
 }
 
-async function changeRectype(
+export async function changeFilter(
+    field: string,
+    value: OptionDefinition,
+    { state, dispatch }: SearchPropertyFilterProps
+) {
+    dispatch({ type: "query-filter-updated", filters: { [field]: value } });
+    const filters = {
+        ...state.filters,
+        [field]: {
+            label: field,
+            value: value.value,
+        },
+    };
+    const body = {
+        filters: Object.keys(filters)
+            .filter((key) => filterFilter(key, filters))
+            .map((key) => {
+                return {
+                    query_string: {
+                        query: `(${key}:("${filters[key].value}"))`,
+                    },
+                };
+            }),
+    };
+    search(body, { dispatch, state });
+}
+
+export async function changeRectype(
     value: OptionDefinition,
     { state, dispatch }: SearchPropertyFilterProps
 ) {
@@ -113,7 +186,7 @@ async function runSearch(
     { state, dispatch }: SearchPropertyFilterProps
 ) {
     dispatch({
-        type: "query-update",
+        type: "property-filter-query-updated",
         tokens: detail.tokens,
         operation: detail.operation,
         sort: ["_score"],
@@ -134,10 +207,8 @@ function SearchPropertyFilter({ state, dispatch }: SearchPropertyFilterProps) {
 
     useEffect(() => {
         API.get("api", "search", {}).then((response) => {
-            console.log("propss", response);
             const prefixes = "str bool date".split(" ");
-            // assets1236.mappings.properties
-            const result = Object.keys(response?.assets1236?.mappings?.properties || {})
+            const result = Object.keys(response?.mappings?.properties || {})
                 .filter((x) => {
                     if (x.indexOf("_") === 0) return false;
                     const segments = x.split("_");
@@ -151,7 +222,7 @@ function SearchPropertyFilter({ state, dispatch }: SearchPropertyFilterProps) {
                     if (key.indexOf("date_") === 0) {
                         operators = ["=", "!=", ">", "<", ">=", "<="];
                     }
-                    const property = response?.assets1236?.mappings?.properties[key];
+                    const property = response?.mappings?.properties[key];
                     const result: PropertyFilterProperty = {
                         key,
                         propertyLabel: key
@@ -174,7 +245,7 @@ function SearchPropertyFilter({ state, dispatch }: SearchPropertyFilterProps) {
             <PropertyFilter
                 disabled={state.loading}
                 onChange={({ detail }) => runSearch(detail, { state, dispatch })}
-                query={state.query}
+                query={state.propertyFilter}
                 filteringProperties={properties}
                 i18nStrings={{
                     filteringAriaLabel: `Find ${Synonyms.Asset}`,
@@ -200,3 +271,4 @@ function SearchPropertyFilter({ state, dispatch }: SearchPropertyFilterProps) {
 }
 
 export default SearchPropertyFilter;
+export { search };

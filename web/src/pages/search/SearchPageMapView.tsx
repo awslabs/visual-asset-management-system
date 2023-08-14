@@ -4,6 +4,7 @@ import { SearchPageViewProps } from "./SearchPage";
 import { Marker, Popup, MapRef } from "react-map-gl";
 import Button from "@cloudscape-design/components/button";
 import { LngLat, LngLatBounds, LngLatBoundsLike } from "maplibre-gl";
+import { Box } from "@cloudscape-design/components";
 
 function SearchPageMarker({ state, dispatch }: SearchPageViewProps) {
     return (
@@ -74,6 +75,13 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
 
     return (
         <div>
+            {state?.result?.hits?.total?.value ? (
+                <>
+                    <Box variant="h2">{state?.result?.hits?.total?.value} results</Box>
+                </>
+            ) : (
+                <Box variant="h2">No search results</Box>
+            )}
             <MapView
                 ref={mapRef}
                 style={{ width: "72vw" }}

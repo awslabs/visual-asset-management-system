@@ -14,6 +14,20 @@ import { defaultProvider } from "@aws-sdk/credential-provider-node";
 
 import { SSMClient, PutParameterCommand } from "@aws-sdk/client-ssm"; // ES Modules import
 
+const setIndexNameSSM = async (stackName: string, indexName: string) => {
+    const client = new SSMClient({});
+    const command = new PutParameterCommand({
+        // PutParameterRequest
+        Name: "/" + [stackName, "indexName"].join("/"),
+        Description: "The indexName in OpenSearch Service for " + stackName,
+        Value: indexName, // required
+        Type: "String",
+        Overwrite: true,
+    });
+    const response = await client.send(command);
+    console.log("indexName SSM response", response);
+};
+
 const setCollectionEndpointSSM = async (
     stackName: string,
     collectionName: string,
@@ -32,7 +46,7 @@ const setCollectionEndpointSSM = async (
         Overwrite: true,
     });
     const response = await client.send(command);
-    console.log("response", response);
+    console.log("opensearch endpoint SSM response", response);
 };
 
 export const handler: Handler = async function (event: any) {
@@ -90,6 +104,7 @@ export const handler: Handler = async function (event: any) {
         collectionName,
         response.collectionDetails![0].collectionEndpoint
     );
+    setIndexNameSSM(event?.ResourceProperties?.stackName, event?.ResourceProperties?.indexName);
 
     const exists_resp = await client.indices.exists({
         index: event?.ResourceProperties?.indexName,

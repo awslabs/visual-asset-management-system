@@ -15,6 +15,9 @@ from opensearchpy import OpenSearch, \
     RequestsHttpConnection, AWSV4SignerAuth, NotFoundError
 from boto3.dynamodb.types import TypeDeserializer
 
+from backend.common import get_ssm_parameter_value
+
+
 #
 # Single doc Example
 #
@@ -128,10 +131,11 @@ class MetadataTable():
 
 class AOSSIndexS3Objects():
     def __init__(self, bucketName, s3client,
-                 aosclient, metadataTable=MetadataTable.from_env):
+                 aosclient, indexName, metadataTable=MetadataTable.from_env):
         self.bucketName = bucketName
         self.s3client = s3client
         self.aosclient = aosclient
+        self.indexName = indexName
         self.metadataTable = metadataTable()
 
     @staticmethod
@@ -142,21 +146,18 @@ class AOSSIndexS3Objects():
         service = 'aoss'
         credentials = boto3.Session().get_credentials()
         auth = AWSV4SignerAuth(credentials, region, service)
-        ssm = boto3.client('ssm', region_name=region)
-        param = ssm.get_parameter(
-            Name=env.get('AOSS_ENDPOINT_PARAM'),
-            WithDecryption=False
-        )
-        host = param.get("Parameter", {}).get("Value")
+        host = get_ssm_parameter_value('AOSS_ENDPOINT_PARAM', region, env)
+        indexName = get_ssm_parameter_value(
+                        'AOSS_INDEX_NAME_PARAM', region, env)
         aosclient = OpenSearch(
             hosts=[{'host': urlparse(host).hostname, 'port': 443}],
             http_auth=auth,
             use_ssl=True,
             verify_certs=True,
             connection_class=RequestsHttpConnection,
-            pool_maxsize=20
+            pool_maxsize=20,
         )
-        return AOSSIndexS3Objects(bucketName, s3client, aosclient)
+        return AOSSIndexS3Objects(bucketName, s3client, aosclient, indexName)
 
     def _get_s3_object_keys_generator(self, prefix):
         paginator = self.s3client.get_paginator('list_objects')
@@ -216,7 +217,7 @@ class AOSSIndexS3Objects():
         aosrecord = self._metadata_and_s3_object_to_opensearch(
             s3object, metadata)
         self.aosclient.index(
-            index="assets1236",
+            index=self.indexName,
             body=aosrecord,
             id=s3object['Key'],
         )
@@ -224,7 +225,7 @@ class AOSSIndexS3Objects():
     def delete_item(self, key):
         try:
             return self.aosclient.delete(
-                index="assets1236",
+                index=self.indexName,
                 id=key,
             )
         except NotFoundError:
@@ -252,7 +253,7 @@ class AOSSIndexS3Objects():
 
 class AOSSIndexAssetMetadata():
 
-    def __init__(self, host, auth, region, service):
+    def __init__(self, host, auth, region, service, indexName):
         self.client = OpenSearch(
             hosts=[{'host': urlparse(host).hostname, 'port': 443}],
             http_auth=auth,
@@ -261,6 +262,7 @@ class AOSSIndexAssetMetadata():
             connection_class=RequestsHttpConnection,
             pool_maxsize=20
         )
+        self.indexName = indexName
 
     @staticmethod
     def from_env(env=os.environ):
@@ -273,16 +275,16 @@ class AOSSIndexAssetMetadata():
         service = 'aoss'
         credentials = boto3.Session().get_credentials()
         auth = AWSV4SignerAuth(credentials, region, service)
-
-        ssm = boto3.client('ssm', region_name=region)
-        param = ssm.get_parameter(
-            Name=env.get('AOSS_ENDPOINT_PARAM'),
-            WithDecryption=False
-        )
-        host = param.get("Parameter", {}).get("Value")
+        host = get_ssm_parameter_value('AOSS_ENDPOINT_PARAM', region, env)
+        indexName = get_ssm_parameter_value(
+                        'AOSS_INDEX_NAME_PARAM', region, env)
 
         return AOSSIndexAssetMetadata(
-            host=host, region=region, service=service, auth=auth)
+            host=host,
+            region=region,
+            service=service,
+            auth=auth,
+            indexName=indexName)
 
     @staticmethod
     def _determine_field_type(data):
@@ -384,7 +386,7 @@ class AOSSIndexAssetMetadata():
         try:
             body = AOSSIndexAssetMetadata._process_item(item)
             return self.client.index(
-                index="assets1236",
+                index=self.indexName,
                 body=body,
                 id=item['dynamodb']['Keys']['assetId']['S'],
                 # refresh = True,
@@ -397,7 +399,7 @@ class AOSSIndexAssetMetadata():
     def delete_item(self, assetId):
         try:
             return self.client.delete(
-                index="assets1236",
+                index=self.indexName,
                 id=assetId,
             )
         except NotFoundError:
@@ -407,7 +409,7 @@ class AOSSIndexAssetMetadata():
 
     def delete_item_by_query(self, assetId):
         results = self.client.search(
-            index="assets1236",
+            index=self.indexName,
             body={
                 "query": {
                     "match": {
@@ -457,7 +459,8 @@ def get_asset_fields(keys):
         )
 
         if result.get("Item") is None:
-            print("asset record is empty on attempt", attempts, "for keys", keys)
+            print("asset record is empty on attempt",
+                  attempts, "for keys", keys)
             time.sleep(1)
 
     return result.get('Item')
