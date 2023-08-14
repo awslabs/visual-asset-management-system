@@ -1,14 +1,16 @@
-# import json
-# import pytest
-import backend.handlers.comments.commentService as commentService
 from tests.conftest import TestComment
 
 
-def test_get_all_comments(comments_table):
+def test_get_all_comments(comments_table, monkeypatch):
     """
     Testing the get_all_comments function from commentService that should return all comments in the db
     :param comments_table: mocked dynamoDB commentStorageTable
+    :param monkeypatch: monkeypatch allows for setting environment variables before importing function
+                        so we don't get an error
     """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    import backend.handlers.comments.commentService as commentService
+
     # Generate two seperate comments for testing
     test_valid_comment = TestComment().get_comment()
     test_valid_comment_2 = TestComment(
@@ -33,11 +35,16 @@ def test_get_all_comments(comments_table):
     assert test_valid_comment_3 in response["Items"]
 
 
-def test_get_comments_asset(comments_table):
+def test_get_comments_asset(comments_table, monkeypatch):
     """
     Testing the get_comments function that should get all comments from the db with the given asset id
     :param comments_table: mocked dynamoDB commentStorageTable
+    :param monkeypatch: monkeypatch allows for setting environment variables before importing function
+                        so we don't get an error
     """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    import backend.handlers.comments.commentService as commentService
+
     # Generate two seperate comments for testing
     test_valid_comment = TestComment(asset_id="test-id").get_comment()
     test_valid_comment_2 = TestComment(
@@ -61,12 +68,17 @@ def test_get_comments_asset(comments_table):
     assert test_invalid_comment not in response
 
 
-def test_get_comments_version(comments_table):
+def test_get_comments_version(comments_table, monkeypatch):
     """
     Testing the get_comments_version function that should get
     all comments with a given asset id and assetVersionId from db
     :param comments_table: mocked dynamoDB commentStorageTable
+    :param monkeypatch: monkeypatch allows for setting environment variables before importing function
+                        so we don't get an error
     """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    import backend.handlers.comments.commentService as commentService
+
     test_valid_comment = TestComment(
         asset_id="test-id",
         asset_version_id_and_comment_id="test-version-id:test-comment-id",
@@ -102,12 +114,17 @@ def test_get_comments_version(comments_table):
     assert test_invalid_comment_2 not in response
 
 
-def test_get_single_comment(comments_table):
+def test_get_single_comment(comments_table, monkeypatch):
     """
     Testing the get_single_comment function that should return the comment with the given assetId
     and assetVersionId:commentId pair from db
     :param comments_table: mocked dynamoDB commentStorageTable
+    :param monkeypatch: monkeypatch allows for setting environment variables before importing function
+                        so we don't get an error
     """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    import backend.handlers.comments.commentService as commentService
+
     # Generate a testing comment
     test_valid_comment = TestComment(
         asset_id="test-id",
@@ -116,9 +133,7 @@ def test_get_single_comment(comments_table):
     # Add the testing comment to the table
     comments_table.put_item(Item=test_valid_comment)
 
-    response = commentService.get_single_comment(
-        "test-id", "test-version-id:test-comment-id"
-    )
+    response = commentService.get_single_comment("test-id", "test-version-id:test-comment-id")
     print(response)
 
     assert test_valid_comment == response

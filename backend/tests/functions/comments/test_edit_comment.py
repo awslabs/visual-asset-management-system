@@ -1,6 +1,5 @@
 import pytest
 import datetime
-import backend.handlers.comments.editComment as editComment
 from tests.conftest import TestComment
 
 
@@ -27,12 +26,17 @@ def edit_event():
     }
 
 
-def test_edit_comment(comments_table, edit_event):
+def test_edit_comment(comments_table, edit_event, monkeypatch):
     """
     Testing the edit comment function with a valid event
     :param comments_table: mocked dynamoDB commentStorageTable
     :param edit_event: Lamdba event dictionary for editing a comment
+    :param monkeypatch: monkeypatch allows for setting environment variables before importing function
+                        so we don't get an error
     """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    import backend.handlers.comments.editComment as editComment
+
     asset_id = "test-id"
     asset_version_id_and_comment_id = "test-version-id:test-comment-id"
     test_valid_comment = TestComment(
@@ -61,27 +65,35 @@ def test_edit_comment(comments_table, edit_event):
     assert time_difference.total_seconds() < 100
 
 
-def test_edit_comment_not_exist(comments_table, edit_event):
+def test_edit_comment_not_exist(comments_table, edit_event, monkeypatch):
     """
     Testing the edit comment function with an invalid event (nonexistent comment)
     :param comments_table: mocked dynamoDB commentStorageTable
     :param edit_event: Lamdba event dictionary for editing a comment
+    :param monkeypatch: monkeypatch allows for setting environment variables before importing function
+                        so we don't get an error
     """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    import backend.handlers.comments.editComment as editComment
+
     asset_id = "test-id"
     asset_version_id_and_comment_id = "test-version-id:test-comment-id"
 
-    response = editComment.edit_comment(
-        asset_id, asset_version_id_and_comment_id, edit_event
-    )
+    response = editComment.edit_comment(asset_id, asset_version_id_and_comment_id, edit_event)
     assert response["statusCode"] == 404
 
 
-def test_edit_comment_wrong_owner(comments_table, edit_event):
+def test_edit_comment_wrong_owner(comments_table, edit_event, monkeypatch):
     """
     Testing the edit comment function with a valid comment but an invalid owner
     :param comments_table: mocked dynamoDB commentStorageTable
     :param edit_event: Lamdba event dictionary for editing a comment
+    :param monkeypatch: monkeypatch allows for setting environment variables before importing function
+                        so we don't get an error
     """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    import backend.handlers.comments.editComment as editComment
+
     asset_id = "test-id"
     asset_version_id_and_comment_id = "test-version-id:test-comment-id"
 
@@ -93,8 +105,6 @@ def test_edit_comment_wrong_owner(comments_table, edit_event):
 
     comments_table.put_item(Item=test_unowned_comment)
 
-    response = editComment.edit_comment(
-        asset_id, asset_version_id_and_comment_id, edit_event
-    )
+    response = editComment.edit_comment(asset_id, asset_version_id_and_comment_id, edit_event)
     assert response["statusCode"] == 401
     assert response["message"] == "Unauthorized"

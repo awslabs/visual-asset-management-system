@@ -1,6 +1,5 @@
 import json
 import pytest
-import backend.handlers.comments.commentService as commentService
 from tests.conftest import TestComment
 
 
@@ -51,12 +50,17 @@ def invalid_delete_event():
     }
 
 
-def test_delete_comment(comments_table, delete_event):
+def test_delete_comment(comments_table, delete_event, monkeypatch):
     """
     Testing the delete comment Lambda handler with  delete a comment from the database
     :param comments_table: mocked dynamoDB commentStorageTable
     :param delete_event: Lambda event to get delete a comment
+    :param monkeypatch: monkeypatch allows for setting environment variables before importing function
+                        so we don't get an error
     """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    import backend.handlers.comments.commentService as commentService
+
     # Generate the testing comment
     test_comment_instance = TestComment().get_comment()
     # Add the testing comment to the table
@@ -65,9 +69,7 @@ def test_delete_comment(comments_table, delete_event):
     response = comments_table.get_item(
         Key={
             "assetId": test_comment_instance["assetId"],
-            "assetVersionId:commentId": test_comment_instance[
-                "assetVersionId:commentId"
-            ],
+            "assetVersionId:commentId": test_comment_instance["assetVersionId:commentId"],
         }
     )
     # make sure the testing comment was added succesfully
@@ -82,32 +84,39 @@ def test_delete_comment(comments_table, delete_event):
     response = comments_table.get_item(
         Key={
             "assetId": test_comment_instance["assetId"],
-            "assetVersionId:commentId": test_comment_instance[
-                "assetVersionId:commentId"
-            ],
+            "assetVersionId:commentId": test_comment_instance["assetVersionId:commentId"],
         }
     )
 
     assert "Item" not in response
 
 
-def test_delete_comment_not_exists(comments_table, delete_event):
+def test_delete_comment_not_exists(comments_table, delete_event, monkeypatch):
     """
     Testing the delete comment Lambda handler for a comment that does not exist in the database
     :param comments_table: mocked dynamoDB commentStorageTable
     :param delete_event: Lambda event to delete a comment
+    :param monkeypatch: monkeypatch allows for setting environment variables before importing function
+                        so we don't get an error
     """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    import backend.handlers.comments.commentService as commentService
 
     response = commentService.lambda_handler(delete_event, None)
     assert response["statusCode"] == 404
 
 
-def test_delete_comment_wrong_owner(comments_table, delete_event):
+def test_delete_comment_wrong_owner(comments_table, delete_event, monkeypatch):
     """
     Testing the delete comment Lambda handler with a valid comment to delete but an invalid owner
     :param comments_table: mocked dynamoDB commentStorageTable
     :param delete_event: Lambda event dictionary for deleting a comment
+    :param monkeypatch: monkeypatch allows for setting environment variables before importing function
+                        so we don't get an error
     """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    import backend.handlers.comments.commentService as commentService
+
     asset_id = "test-id"
     asset_version_id_and_comment_id = "test-version-id:test-comment-id"
 
@@ -126,12 +135,17 @@ def test_delete_comment_wrong_owner(comments_table, delete_event):
     assert response_body["message"] == "Unauthorized"
 
 
-def test_delete_comment_invalid_event(comments_table, invalid_delete_event):
+def test_delete_comment_invalid_event(comments_table, invalid_delete_event, monkeypatch):
     """
     Testing the delete comment Lambda handler with an invalid delete event
     :param comments_table: mocked dynamoDB commentStorageTable
     :param delete_event_invalid: invalid Lambda event dictionary for deleting a comment
+    :param monkeypatch: monkeypatch allows for setting environment variables before importing function
+                        so we don't get an error
     """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    import backend.handlers.comments.commentService as commentService
+
     response = commentService.lambda_handler(invalid_delete_event, None)
     print(response)
     assert response["statusCode"] == 400

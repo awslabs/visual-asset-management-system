@@ -1,6 +1,5 @@
 import json
 import pytest
-import backend.handlers.comments.commentService as commentService
 from tests.conftest import TestComment
 
 
@@ -79,9 +78,7 @@ def get_one_version_event(assetId="test-id", assetVersionId="test-version-id"):
 
 
 @pytest.fixture(scope="function")
-def get_single_event(
-    assetId="test-id", assetVersionIdAndCommentId="test-version-id:test-comment-id"
-):
+def get_single_event(assetId="test-id", assetVersionIdAndCommentId="test-version-id:test-comment-id"):
     """
     Generates an event mocking what the API sends when it attempts to get a single comment
     :param assetId: assetId to get comments for
@@ -129,12 +126,17 @@ def invalid_get_event():
     }
 
 
-def test_get_all_comments(comments_table, get_all_event):
+def test_get_all_comments(comments_table, get_all_event, monkeypatch):
     """
     Testing reading all comments for one asset (using assetId)
     :param comments_table: mocked dynamoDB commentStorageTable
     :param get_all_event: Lambda event to get all comments
+    :param monkeypatch: monkeypatch allows for setting environment variables before importing function
+                        so we don't get an error
     """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    import backend.handlers.comments.commentService as commentService
+
     # Generate two seperate comments for testing
     test_valid_comment = TestComment().get_comment()
     test_valid_comment_2 = TestComment(
@@ -161,18 +163,14 @@ def test_get_all_comments(comments_table, get_all_event):
     response = comments_table.get_item(
         Key={
             "assetId": test_valid_comment_2["assetId"],
-            "assetVersionId:commentId": test_valid_comment_2[
-                "assetVersionId:commentId"
-            ],
+            "assetVersionId:commentId": test_valid_comment_2["assetVersionId:commentId"],
         }
     )
     assert response["Item"] == test_valid_comment_2
     response = comments_table.get_item(
         Key={
             "assetId": test_valid_comment_3["assetId"],
-            "assetVersionId:commentId": test_valid_comment_3[
-                "assetVersionId:commentId"
-            ],
+            "assetVersionId:commentId": test_valid_comment_3["assetVersionId:commentId"],
         }
     )
     assert response["Item"] == test_valid_comment_3
@@ -190,17 +188,20 @@ def test_get_all_comments(comments_table, get_all_event):
     assert test_valid_comment_3 in response_body["message"]["Items"]
 
 
-def test_get_all_asset_comments(comments_table, get_one_asset_event):
+def test_get_all_asset_comments(comments_table, get_one_asset_event, monkeypatch):
     """
     Testing reading all comments for one asset (using assetId)
     :param comments_table: mocked dynamoDB commentStorageTable
     :param get_one_asset_event: Lambda event to get all comments for a given assetId
+    :param monkeypatch: monkeypatch allows for setting environment variables before importing function
+                        so we don't get an error
     """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    import backend.handlers.comments.commentService as commentService
+
     # Generate two seperate comments for testing
     test_valid_comment = TestComment().get_comment()
-    test_valid_comment_2 = TestComment(
-        asset_version_id_and_comment_id="test-version-id-2"
-    ).get_comment()
+    test_valid_comment_2 = TestComment(asset_version_id_and_comment_id="test-version-id-2").get_comment()
     # Generate a third comment with a different assetId that should not be returned by the function
     test_invalid_comment = TestComment(asset_id="invalid-test-id").get_comment()
     # Add the testing comment to the table
@@ -219,18 +220,14 @@ def test_get_all_asset_comments(comments_table, get_one_asset_event):
     response = comments_table.get_item(
         Key={
             "assetId": test_valid_comment_2["assetId"],
-            "assetVersionId:commentId": test_valid_comment_2[
-                "assetVersionId:commentId"
-            ],
+            "assetVersionId:commentId": test_valid_comment_2["assetVersionId:commentId"],
         }
     )
     assert response["Item"] == test_valid_comment_2
     response = comments_table.get_item(
         Key={
             "assetId": test_invalid_comment["assetId"],
-            "assetVersionId:commentId": test_invalid_comment[
-                "assetVersionId:commentId"
-            ],
+            "assetVersionId:commentId": test_invalid_comment["assetVersionId:commentId"],
         }
     )
     assert response["Item"] == test_invalid_comment
@@ -247,12 +244,17 @@ def test_get_all_asset_comments(comments_table, get_one_asset_event):
     assert test_invalid_comment not in response_body["message"]
 
 
-def test_get_all_version_comments(comments_table, get_one_version_event):
+def test_get_all_version_comments(comments_table, get_one_version_event, monkeypatch):
     """
     Testing reading all comments for one asset (using assetId)
     :param comments_table: mocked dynamoDB commentStorageTable
     :param get_one_version_event: Lambda event to get all comments for a specific assetId versionId pair
+    :param monkeypatch: monkeypatch allows for setting environment variables before importing function
+                        so we don't get an error
     """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    import backend.handlers.comments.commentService as commentService
+
     # Generate two seperate comments for testing
     test_valid_comment = TestComment().get_comment()
     test_valid_comment_2 = TestComment(
@@ -278,18 +280,14 @@ def test_get_all_version_comments(comments_table, get_one_version_event):
     response = comments_table.get_item(
         Key={
             "assetId": test_valid_comment_2["assetId"],
-            "assetVersionId:commentId": test_valid_comment_2[
-                "assetVersionId:commentId"
-            ],
+            "assetVersionId:commentId": test_valid_comment_2["assetVersionId:commentId"],
         }
     )
     assert response["Item"] == test_valid_comment_2
     response = comments_table.get_item(
         Key={
             "assetId": test_invalid_comment["assetId"],
-            "assetVersionId:commentId": test_invalid_comment[
-                "assetVersionId:commentId"
-            ],
+            "assetVersionId:commentId": test_invalid_comment["assetVersionId:commentId"],
         }
     )
     assert response["Item"] == test_invalid_comment
@@ -307,12 +305,17 @@ def test_get_all_version_comments(comments_table, get_one_version_event):
     assert test_invalid_comment not in response_body["message"]
 
 
-def test_get_single_comment(comments_table, get_single_event):
+def test_get_single_comment(comments_table, get_single_event, monkeypatch):
     """
     Testing reading a single comment (using assetId and assetVersionId:commentId)
     :param comments_table: mocked dynamoDB commentStorageTable
     :param get_single_event: Lambda event to get a single comment
+    :param monkeypatch: monkeypatch allows for setting environment variables before importing function
+                        so we don't get an error
     """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    import backend.handlers.comments.commentService as commentService
+
     # Generate the testing comment
     test_comment_instance = TestComment().get_comment()
     # Add the testing comment to the table
@@ -321,9 +324,7 @@ def test_get_single_comment(comments_table, get_single_event):
     response = comments_table.get_item(
         Key={
             "assetId": test_comment_instance["assetId"],
-            "assetVersionId:commentId": test_comment_instance[
-                "assetVersionId:commentId"
-            ],
+            "assetVersionId:commentId": test_comment_instance["assetVersionId:commentId"],
         }
     )
     # make sure the testing comment was added succesfully
@@ -336,11 +337,16 @@ def test_get_single_comment(comments_table, get_single_event):
     assert response_body["message"] == test_comment_instance
 
 
-def test_invalid_get(invalid_get_event):
+def test_invalid_get(invalid_get_event, monkeypatch):
     """
     Testing the response when an invalid assetId is passed to the lambda handler
     :param invalid_get_event: Lambda event with invalid assetId
+    :param monkeypatch: monkeypatch allows for setting environment variables before importing function
+                        so we don't get an error
     """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    import backend.handlers.comments.commentService as commentService
+
     response = commentService.lambda_handler(invalid_get_event, None)
     print(response)
     assert response["statusCode"] == 400

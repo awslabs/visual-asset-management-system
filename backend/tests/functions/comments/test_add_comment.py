@@ -29,6 +29,8 @@ def test_add_comment(comments_table, add_event, monkeypatch):
     Testing the add comment function
     :param comments_table: mocked dynamoDB commentStorageTable
     :param add_event: Lamdba event dictionary for adding a comment
+    :param monkeypatch: monkeypatch allows for setting environment variables before importing function
+                        so we don't get an error
     """
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
     import backend.handlers.comments.addComment as addComment
