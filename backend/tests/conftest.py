@@ -7,12 +7,11 @@ os.environ["COMMENT_STORAGE_TABLE_NAME"] = "commentStorageTable"
 
 
 @pytest.fixture(scope="function")
-def ddb_resource(monkeypatch):
+def ddb_resource():
     """
     Create the dynamoDB resource to store the comments table
     :returns: mocked dynabmoDB resource
     """
-    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
     with mock_dynamodb():
         yield boto3.resource("dynamodb", region_name="us-east-1")
 

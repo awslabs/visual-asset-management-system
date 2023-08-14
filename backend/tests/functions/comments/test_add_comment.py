@@ -1,5 +1,4 @@
 import pytest
-import backend.handlers.comments.addComment as addComment
 
 
 @pytest.fixture(scope="function")
@@ -25,17 +24,18 @@ def add_event():
     }
 
 
-def test_add_comment(comments_table, add_event):
+def test_add_comment(comments_table, add_event, monkeypatch):
     """
     Testing the add comment function
     :param comments_table: mocked dynamoDB commentStorageTable
     :param add_event: Lamdba event dictionary for adding a comment
     """
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    import backend.handlers.comments.addComment as addComment
+
     asset_id = "test-id"
     version_id_and_comment_id = "test-version-id:test-comment-id"
     response = addComment.add_comment(asset_id, version_id_and_comment_id, add_event)
     assert response["statusCode"] == 200
-    response = comments_table.get_item(
-        Key={"assetId": asset_id, "assetVersionId:commentId": version_id_and_comment_id}
-    )
+    response = comments_table.get_item(Key={"assetId": asset_id, "assetVersionId:commentId": version_id_and_comment_id})
     assert response["Item"]["commentBody"] == "test comment body"
