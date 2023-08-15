@@ -8,6 +8,7 @@ import * as path from "path";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import { storageResources } from "../storage-builder";
+import * as cdk from "aws-cdk-lib";
 
 export function buildMetadataFunctions(
     scope: Construct,

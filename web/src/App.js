@@ -55,7 +55,7 @@ function App() {
     }, [navigationOpen]);
 
     return (
-        <Authenticator components={components} loginMechanisms={["email"]}>
+        <Authenticator components={components} loginMechanisms={["email"]} hideSignUp={true}>
             {({ signOut, user }) => {
                 const menuText =
                     user.signInUserSession?.idToken?.payload?.name || user.username || user.email;

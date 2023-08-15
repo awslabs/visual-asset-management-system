@@ -31,13 +31,17 @@ import { OptionDefinition } from "@cloudscape-design/components/internal/compone
 import { validateNonZeroLengthTextAsYouType } from "./AssetUpload/validations";
 import { DisplayKV, FileUpload } from "./AssetUpload/components";
 import ProgressScreen from "./AssetUpload/ProgressScreen";
-import onSubmit from "./AssetUpload/onSubmit";
 import ControlledMetadata from "../components/metadata/ControlledMetadata";
 import Synonyms from "../synonyms";
+import onSubmit, { onUploadRetry, UploadExecutionProps } from "./AssetUpload/onSubmit";
+import FolderUpload from "../components/form/FolderUpload";
+import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./AssetUpload/FileUploadTable";
+import localforage from "localforage";
 
 const previewFileFormatsStr = previewFileFormats.join(", ");
 
 export class AssetDetail {
+    isMultiFile: boolean = false;
     assetId?: string;
     assetName?: string;
     databaseId?: string;
@@ -52,7 +56,8 @@ export class AssetDetail {
         Bucket?: string;
         Key?: string;
     };
-    Asset?: File;
+    Asset?: FileUploadTableItem[];
+    DirectoryHandle?: any;
     Preview?: File;
 }
 
@@ -795,9 +800,12 @@ const UploadForm = () => {
                         execStatus,
                         setExecStatus,
                         setShowUploadAndExecProgress,
-                        setAssetUploadProgress,
+                        moveToQueued,
+                        updateProgressForFileUploadItem,
+                        fileUploadComplete,
+                        fileUploadError,
                         setPreviewUploadProgress,
-                        setCanNavigateToAssetPage,
+                        setUploadExecutionProps,
                     })}
                     allowSkipTo
                     steps={[
@@ -832,7 +840,7 @@ const UploadForm = () => {
                             isOptional: false,
                         },
                         {
-                            title: "Workflow Actions",
+                            title: "Select Files to upload",
                             content: (
                                 <AssetFileInfo
                                     setFileUploadTableItems={setFileUploadTableItems}
@@ -844,7 +852,7 @@ const UploadForm = () => {
                                     showErrors={showErrorsForPage >= 2}
                                 />
                             ),
-                            isOptional: true,
+                            isOptional: false,
                         },
                         {
                             title: "Review and Upload",

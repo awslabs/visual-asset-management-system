@@ -22,29 +22,54 @@ class TableRow {
     type: string | null | undefined;
 }
 
-export const put = async (databaseId: string, assetId: string, record: Metadata) => {
+export const put = async (
+    databaseId: string,
+    assetId: string,
+    record: Metadata,
+    prefix?: string
+) => {
     if (Object.keys(record).length < 1) {
         return;
     }
-    return API.put("api", `metadata/${databaseId}/${assetId}`, {
-        body: {
-            version: "1",
-            metadata: record,
-        },
-    });
+    if (prefix) {
+        return API.put("api", `metadata/${databaseId}/${assetId}?prefix=${prefix}`, {
+            body: {
+                version: "1",
+                metadata: record,
+            },
+        });
+    } else {
+        return API.put("api", `metadata/${databaseId}/${assetId}`, {
+            body: {
+                version: "1",
+                metadata: record,
+            },
+        });
+    }
 };
-const get = async (databaseId: string, assetId: string): Promise<object> => {
-    return API.get("api", `metadata/${databaseId}/${assetId}`, {});
+
+const get = async (databaseId: string, assetId: string, prefix?: string): Promise<object> => {
+    if (prefix) {
+        return API.get("api", `metadata/${databaseId}/${assetId}?prefix=${prefix}`, {});
+    } else {
+        return API.get("api", `metadata/${databaseId}/${assetId}`, {});
+    }
 };
 
 class MetadataInputs {
     assetId!: string;
     databaseId!: string;
     initialState?: Metadata;
-    store?: (databaseId: string, assetId: string, record: Metadata) => Promise<any>;
+    prefix?: string;
+    store?: (
+        databaseId: string,
+        assetId: string,
+        record: Metadata,
+        prefix?: string
+    ) => Promise<any>;
 }
 
-const MetadataTable = ({ assetId, databaseId, store, initialState }: MetadataInputs) => {
+const MetadataTable = ({ assetId, databaseId, store, prefix, initialState }: MetadataInputs) => {
     const _store = store !== undefined ? store : put;
     const tableRowToMeta = (rows: TableRow[]): Metadata => {
         const result: Metadata = {};
@@ -82,7 +107,7 @@ const MetadataTable = ({ assetId, databaseId, store, initialState }: MetadataInp
             return;
         }
 
-        get(databaseId, assetId)
+        get(databaseId, assetId, prefix)
             .catch((x) => {
                 // if 404 , then set an initial status to empty
                 if (x.response.status === 404) {
@@ -200,7 +225,7 @@ const MetadataTable = ({ assetId, databaseId, store, initialState }: MetadataInp
                     }
                     setItems(next);
 
-                    await _store(databaseId, assetId, tableRowToMeta(next));
+                    await _store(databaseId, assetId, tableRowToMeta(next), prefix);
                 }}
                 items={items}
                 empty={

@@ -7,6 +7,7 @@ import React from "react";
 import { Route, Routes } from "react-router-dom";
 import AppLayout from "@cloudscape-design/components/app-layout";
 import LandingPage from "./pages/LandingPage";
+import SearchPage from "./pages/search/SearchPage";
 import { Navigation } from "./layout/Navigation";
 import Databases from "./pages/Databases";
 import Assets from "./pages/Assets";
@@ -18,7 +19,9 @@ import ViewPipeline from "./components/single/ViewPipeline";
 import Workflows from "./pages/Workflows";
 import CreateUpdateWorkflow from "./components/createupdate/CreateUpdateWorkflow";
 import Constraints from "./pages/auth/Constraints";
+import FinishUploadsPage from "./pages/FinishUploads";
 import MetadataSchema from "./pages/MetadataSchema";
+import ViewFile from "./components/single/ViewFile";
 
 interface RouteOption {
     path: string;
@@ -44,6 +47,18 @@ const routeTable: RouteOption[] = [
         Page: ViewAsset,
         active: "/assets",
         roles: ["assets"],
+    },
+    {
+        path: "/databases/:databaseId/assets/:assetId/uploads",
+        Page: FinishUploadsPage,
+        active: "/assets",
+        roles: ["assets", "upload"],
+    },
+    {
+        path: "/databases/:databaseId/assets/:assetId/file",
+        Page: ViewFile,
+        active: "/assets",
+        roles: ["assets", "upload"],
     },
     { path: "/assets/:assetId", Page: ViewAsset, active: "/assets", roles: ["assets"] },
     {

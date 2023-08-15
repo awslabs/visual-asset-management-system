@@ -4,25 +4,19 @@
 import json
 import traceback
 
-from backend.handlers.metadata import (
-    logger,
-    mask_sensitive_data,
-    build_response,
-    table,
-    validate_event,
-    ValidationError,
-)
+from backend.handlers.metadata import logger, mask_sensitive_data, \
+    build_response, table, validate_event, ValidationError
 from backend.handlers.auth import get_database_set, request_to_claims
 
 
 def generate_prefixes(path):
     prefixes = []
-    parts = path.split("/")
+    parts = path.split('/')
     for i in range(1, len(parts)):
-        prefix = "/".join(parts[:i]) + "/"
+        prefix = '/'.join(parts[:i]) + '/'
         prefixes.insert(0, prefix)
 
-    if not path.endswith("/"):
+    if (not path.endswith('/')):
         prefixes.insert(0, path)
     return prefixes
 
@@ -38,7 +32,7 @@ def get_metadata_with_prefix(databaseId, assetId, prefix):
                 }
             )
             if "Item" in resp:
-                result = resp["Item"] | result
+                result = resp['Item'] | result
         try:
             asset_metadata = get_metadata(databaseId, assetId)
             result = asset_metadata | result
@@ -58,22 +52,26 @@ def get_metadata(databaseId, assetId):
     )
     if "Item" not in resp:
         raise ValidationError(404, "Item Not Found")
-    return resp["Item"]
+    return resp['Item']
 
 
 def lambda_handler(event, context):
     logger.info(mask_sensitive_data(event))
     try:
         validate_event(event)
-        databaseId = event["pathParameters"]["databaseId"]
-        assetId = event["pathParameters"]["assetId"]
+        databaseId = event['pathParameters']['databaseId']
+        assetId = event['pathParameters']['assetId']
         prefix = None
-        if "queryStringParameters" in event and "prefix" in event["queryStringParameters"]:
-            prefix = event["queryStringParameters"] and event["queryStringParameters"]["prefix"]
+        if ('queryStringParameters' in event
+                and 'prefix' in event['queryStringParameters']):
+            prefix = (event['queryStringParameters']
+                      and event['queryStringParameters']['prefix'])
 
         claims_and_roles = request_to_claims(event)
-        databases = get_database_set(claims_and_roles["tokens"])
-        if databaseId in databases or "super-admin" in claims_and_roles["roles"]:
+        databases = get_database_set(claims_and_roles['tokens'])
+        if (databaseId in databases
+                or "super-admin" in claims_and_roles['roles']):
+
             metadata = get_metadata_with_prefix(databaseId, assetId, prefix)
 
             # remove private keys that start with underscores
@@ -81,17 +79,13 @@ def lambda_handler(event, context):
                 if key.startswith("_"):
                     del metadata[key]
 
-            return build_response(
-                200,
-                json.dumps(
-                    {
-                        "version": "1",
-                        "metadata": metadata,
-                    }
-                ),
-            )
+            return build_response(200, json.dumps({
+                "version": "1",
+                "metadata": metadata,
+            }))
         else:
-            print("raising 403 databaseId not in claims and roles?", databaseId, claims_and_roles, databases)
+            print("raising 403 databaseId not in claims and roles?",
+                  databaseId, claims_and_roles, databases)
             raise ValidationError(403, "Not Authorized")
 
     except ValidationError as ex:

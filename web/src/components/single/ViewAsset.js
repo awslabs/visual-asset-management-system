@@ -12,6 +12,7 @@ import {
     FormField,
     Grid,
     Header,
+    Link,
     SegmentedControl,
     SpaceBetween,
     Spinner,
@@ -19,58 +20,29 @@ import {
 
 import ControlledMetadata from "../metadata/ControlledMetadata";
 import ImgViewer from "../viewers/ImgViewer";
-import React, { useEffect, useState, Suspense } from "react";
+import React, { Suspense, useEffect, useState } from "react";
 import { useParams } from "react-router";
 import {
-    fetchAsset,
-    fetchWorkflowExecutions,
-    fetchDatabaseWorkflows,
     downloadAsset,
+    fetchAsset,
+    fetchDatabaseWorkflows,
+    fetchWorkflowExecutions,
 } from "../../services/APIService";
 /**
  * No viewer yet for cad and archive file formats
  */
-import {
-    columnarFileFormats,
-    modelFileFormats,
-    presentationFileFormats,
-} from "../../common/constants/fileFormats";
 import AssetSelectorWithModal from "../selectors/AssetSelectorWithModal";
 import RelatedTableList from "../list/RelatedTableList";
 import { WorkflowExecutionListDefinition } from "../list/list-definitions/WorkflowExecutionListDefinition";
 import CreateUpdateAsset from "../createupdate/CreateUpdateAsset";
 import { actionTypes } from "../createupdate/form-definitions/types/FormDefinition";
 import WorkflowSelectorWithModal from "../selectors/WorkflowSelectorWithModal";
+import localforage from "localforage";
 import { ErrorBoundary } from "react-error-boundary";
 import Synonyms from "../../synonyms";
+import { UpdateAsset } from "../createupdate/UpdateAsset";
 
-const ThreeDimensionalPlotter = React.lazy(() => import("../viewers/ThreeDimensionalPlotter"));
-const ColumnarViewer = React.lazy(() => import("../viewers/ColumnarViewer"));
-const HTMLViewer = React.lazy(() => import("../viewers/HTMLViewer"));
-const ModelViewer = React.lazy(() => import("../viewers/ModelViewer"));
-const checkFileFormat = (asset) => {
-    let filetype;
-    if (asset?.generated_artifacts?.gltf?.Key) {
-        filetype = asset?.generated_artifacts?.gltf?.Key.split(".").pop();
-    } else {
-        filetype = asset.assetType;
-    }
-
-    filetype = filetype.toLowerCase();
-    if (modelFileFormats.includes(filetype) || modelFileFormats.includes("." + filetype)) {
-        return "model";
-    }
-    if (columnarFileFormats.includes(filetype) || columnarFileFormats.includes("." + filetype)) {
-        return "plot";
-    }
-    if (
-        presentationFileFormats.includes(filetype) ||
-        presentationFileFormats.includes("." + filetype)
-    ) {
-        return "html";
-    }
-    return "preview";
-};
+const FolderViewer = React.lazy(() => import("../viewers/FolderViewer"));
 
 export default function ViewAsset() {
     const { databaseId, assetId, pathViewType } = useParams();
@@ -88,6 +60,7 @@ export default function ViewAsset() {
     const [loading, setLoading] = useState(true);
     const [allItems, setAllItems] = useState([]);
     const [workflowOpen, setWorkflowOpen] = useState(false);
+    const [containsIncompleteUploads, setContainsIncompleteUploads] = useState(false);
 
     // error state
     const [assetDownloadError, setAssetDownloadError] = useState("");
@@ -506,18 +479,17 @@ export default function ViewAsset() {
                             </ErrorBoundary>
                         </SpaceBetween>
                     </Box>
-                    <CreateUpdateAsset
-                        open={openUpdateAsset}
-                        setOpen={setOpenUpdateAsset}
-                        setReload={setReload}
-                        databaseId={databaseId}
-                        assetId={assetId}
-                        actionType={actionTypes.UPDATE}
-                        asset={asset}
-                        setAsset={(a) => {
-                            setViewType("preview");
-                        }}
-                    />
+                    {asset && (
+                        <UpdateAsset
+                            asset={asset}
+                            isOpen={openUpdateAsset}
+                            onClose={() => handleOpenUpdateAsset(false)}
+                            onComplete={() => {
+                                handleOpenUpdateAsset(false);
+                                window.location.reload(true);
+                            }}
+                        />
+                    )}
                     <WorkflowSelectorWithModal
                         assetId={assetId}
                         databaseId={databaseId}

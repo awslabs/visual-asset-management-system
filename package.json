@@ -23,5 +23,8 @@
     },
     "dependencies": {
         "minimist": "^1.2.7"
+    },
+    "resolutions": {
+        "semver": "^7.5.2"
     }
 }

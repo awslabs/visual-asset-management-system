@@ -32,6 +32,7 @@ import {
     buildDownloadAssetFunction,
     buildRevertAssetFunction,
     buildUploadAssetWorkflowFunction,
+    buildAssetFiles,
 } from "./lambdaBuilder/assetFunctions";
 import {
     buildAddCommentLambdaFunction,
@@ -56,7 +57,7 @@ interface apiGatewayLambdaConfiguration {
     api: apigwv2.HttpApi;
 }
 
-function attachFunctionToApi(
+export function attachFunctionToApi(
     scope: Construct,
     lambdaFunction: lambda.Function,
     apiGatewayConfiguration: apiGatewayLambdaConfiguration
@@ -122,6 +123,7 @@ export function apiBuilder(
         api: api.apiGatewayV2,
     });
 
+    //Comment Resources
     const commentService = buildCommentService(
         scope,
         storageResources.dynamo.commentStorageTable,
@@ -148,7 +150,6 @@ export function apiBuilder(
         api: api.apiGatewayV2,
     });
 
-    //Comment Resources
     const addCommentFunction = buildAddCommentLambdaFunction(
         scope,
         storageResources.dynamo.commentStorageTable
@@ -193,6 +194,18 @@ export function apiBuilder(
     });
     attachFunctionToApi(scope, assetService, {
         routePath: "/assets",
+        method: apigwv2.HttpMethod.GET,
+        api: api.apiGatewayV2,
+    });
+
+    const listAssetFiles = buildAssetFiles(
+        scope,
+        storageResources.dynamo.assetStorageTable,
+        storageResources.dynamo.databaseStorageTable,
+        storageResources.s3.assetBucket
+    );
+    attachFunctionToApi(scope, listAssetFiles, {
+        routePath: "/database/{databaseId}/assets/{assetId}/listFiles",
         method: apigwv2.HttpMethod.GET,
         api: api.apiGatewayV2,
     });
