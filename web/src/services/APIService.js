@@ -209,6 +209,25 @@ export const fetchAsset = async ({ databaseId, assetId }, api = API) => {
     }
 };
 
+export const fetchAssetFiles = async ({ databaseId, assetId }, api = API) => {
+    try {
+        let response;
+        if (databaseId && assetId) {
+            response = await api.get(
+                "api",
+                `database/${databaseId}/assets/${assetId}/listFiles`,
+                {}
+            );
+            if (response) return response;
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return error?.message;
+    }
+};
+
 /**
  * Returns array of all the comments that are attached to a given assetId
  * @returns {Promise<boolean|{message}|any>}

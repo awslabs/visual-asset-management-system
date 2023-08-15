@@ -149,9 +149,12 @@ def delete_asset(databaseId, assetId, queryParameters):
     if item:
         print("Deleting asset: ", item)
         if "assetLocation" in item:
-            archive_file(item['assetLocation'])
+            if item['isMultiFile']:
+                archive_multi_file(item['assetLocation'], databaseId, assetId)
+            else:
+                archive_file(item['assetLocation'], databaseId, assetId)
         if "previewLocation" in item:
-            archive_file(item['previewLocation'])
+            archive_file(item['previewLocation'], databaseId, assetId)
         item['databaseId'] = databaseId + "#deleted"
         table.put_item(
             Item=item
@@ -165,7 +168,40 @@ def delete_asset(databaseId, assetId, queryParameters):
     return response
 
 
-def archive_file(location):
+def archive_multi_file(location, databaseId, assetId):
+    s3 = boto3.client('s3')
+    bucket = ""
+    prefix = ""
+    if "Bucket" in location:
+        bucket = location['Bucket']
+    if "Key" in location:
+        prefix = location['Key']
+    if len(bucket) == 0 or len(prefix) == 0:
+        return 
+    print('Archiving folder with multiple files')
+
+    paginator = s3.get_paginator('list_objects_v2')
+    files = []
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page['Contents']:
+            files.append(obj['Key'])
+    
+    for key in files:
+        try:
+            response = move_to_glacier_and_mark_deleted(bucket, key, databaseId, assetId)
+            print("S3 response: ", response)
+
+        except s3.exceptions.InvalidObjectState as ios:
+            print("S3 object already archived: ", key)
+            print(ios)
+
+        except botocore.exceptions.ClientError as e:
+            # TODO: Most likely an error when the key doesnt exist
+            print("Error occurred: ", e)
+
+    return
+
+def archive_file(location, databaseId, assetId):
     s3 = boto3.client('s3')
 
     bucket = ""
@@ -179,19 +215,8 @@ def archive_file(location):
         return
     print("Archiving item: ", bucket, ":", key)
 
-    source = {
-        'Bucket': bucket,
-        'Key': key
-    }
-
     try:
-        response = s3.copy(
-            source, bucket, key,
-            ExtraArgs={
-                'StorageClass': 'GLACIER',
-                'MetadataDirective': 'COPY'
-            }
-        )
+        response = move_to_glacier_and_mark_deleted(bucket, key, databaseId, assetId)
         print("S3 response: ", response)
 
     except s3.exceptions.InvalidObjectState as ios:
@@ -200,6 +225,24 @@ def archive_file(location):
 
     return
 
+
+def move_to_glacier_and_mark_deleted(bucket, key, assetId, databaseId):
+    s3 = boto3.client('s3')
+    return s3.copy_object(
+        CopySource={
+            "Bucket": bucket,
+            "Key": key,
+        },
+        Bucket=bucket,
+        Key=key,
+        MetadataDirective='REPLACE',
+        Metadata={
+            "assetid": assetId,
+            "databaseid": databaseId,
+            "vams-status": "deleted",
+        },
+        StorageClass='GLACIER',
+    )
 
 def set_pagination_info(queryParameters):
     if 'maxItems' not in queryParameters:

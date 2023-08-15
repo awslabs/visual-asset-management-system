@@ -13,7 +13,8 @@ aws-lambda-powertools = "^2.7.1"
 pydantic = "^1.10.4"
 boto3-stubs = {extras = ["stepfunctions"], version = "^1.26.69"}
 Werkzeug = "^2.2.3"
-certifi = "2022.12.07"
+certifi = "2023.7.22"
+opensearch-py = "^2.2.0"
 
 [tool.poetry.dev-dependencies]
 pytest = "^7"

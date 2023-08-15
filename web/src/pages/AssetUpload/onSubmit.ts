@@ -35,7 +35,6 @@ class UploadAssetWorkflowApi {
 }
 
 class OnSubmitProps {
-    selectedWorkflows!: any;
     metadata!: Metadata;
     assetDetail!: AssetDetail;
     setFreezeWizardButtons!: (x: boolean) => void;
@@ -62,12 +61,46 @@ async function uploadAssetToS3(
     return Storage.put(key, file, { metadata, progressCallback });
 }
 
-export default function onSubmit({
+const getAssetType = (assetDetail: AssetDetail) => {
+    if (assetDetail.Asset?.length === 1) {
+        return "." + assetDetail.Asset[0].name.split(".").pop();
+    } else {
+        return "folder";
+    }
+};
+
+const getKeyPrefix = (uuid: string, assetDetail: AssetDetail) => {
+    if (assetDetail.Asset?.length === 1) {
+        return uuid + "/" + assetDetail.assetId + assetDetail.assetType;
+    } else {
+        return uuid + "/";
+    }
+};
+
+export interface UploadExecutionProps {
+    assetDetail: AssetDetail;
+    updateProgressForFileUploadItem: (index: number, loaded: number, total: number) => void;
+    moveToQueued: (index: number) => void;
+    fileUploadComplete: (index: number, event: any) => void;
+    fileUploadError: (index: number, event: any) => void;
+    setPreviewUploadProgress: (x: ProgressBarProps) => void;
+    uuid: string;
+    prevAssetId?: string;
+    metadata: Metadata;
+    setExecStatus: (x: ExecStatusType | ((x: ExecStatusType) => ExecStatusType)) => void;
+    execStatus: ExecStatusType;
+}
+
+async function performUploads({
     assetDetail,
-    setFreezeWizardButtons,
+    updateProgressForFileUploadItem,
+    moveToQueued,
+    fileUploadComplete,
+    fileUploadError,
+    setPreviewUploadProgress,
+    uuid,
+    prevAssetId,
     metadata,
-    selectedWorkflows,
-    execStatus,
     setExecStatus,
     setShowUploadAndExecProgress,
     setAssetUploadProgress,
@@ -173,65 +206,140 @@ export default function onSubmit({
                         })) ||
                 Promise.resolve();
 
-            await Promise.all([up1, up2]).then((uploads) => {
-                const body: UploadAssetWorkflowApi = {
-                    assetPreprocessingBody: {
-                        assetId: assetDetail.assetId,
-                        databaseId: assetDetail.databaseId,
-                        gltf: {
-                            Bucket: assetDetail.bucket,
-                            Key: uuid + "/" + prevAssetId + ".gltf",
-                        },
-                        original_asset: {
-                            Bucket: assetDetail.bucket,
-                            Key: assetDetail.key,
-                        },
-                        preview: {
-                            Bucket: assetDetail.bucket,
-                            Key: uuid + "/" + prevAssetId + ".png",
-                        },
+        await Promise.all([up2]).then((uploads) => {
+            const body: UploadAssetWorkflowApi = {
+                assetPreprocessingBody: {
+                    assetId: assetDetail.assetId,
+                    databaseId: assetDetail.databaseId,
+                    gltf: {
+                        Bucket: assetDetail.bucket,
+                        Key: uuid + "/" + prevAssetId + ".gltf",
                     },
-                    executeWorkflowBody: {
-                        workflowIds: selectedWorkflows.map(
-                            (wf: { workflowId: string }) => wf.workflowId
-                        ),
+                    original_asset: {
+                        Bucket: assetDetail.bucket,
+                        Key: assetDetail.key,
                     },
-                    updateMetadataBody: {
-                        version: "1",
-                        metadata,
+                    preview: {
+                        Bucket: assetDetail.bucket,
+                        Key: uuid + "/" + prevAssetId + ".png",
                     },
-                    uploadAssetBody: assetDetail,
-                };
+                    isMultiFile: assetDetail.isMultiFile,
+                },
+                executeWorkflowBody: {
+                    workflowIds: [],
+                },
+                updateMetadataBody: {
+                    version: "1",
+                    metadata,
+                },
+                uploadAssetBody: assetDetail,
+            };
 
                 if (assetDetail.assetType === ".gltf") {
                     delete body.assetPreprocessingBody;
                 }
 
-                setExecStatus({
-                    ...execStatus,
-                    "Asset Detail": "in-progress",
-                });
-                return API.post("api", "assets/uploadAssetWorkflow", {
-                    "Content-type": "application/json",
-                    body,
-                })
-                    .then((res) => {
-                        setExecStatus((p) => ({
-                            ...p,
-                            "Asset Detail": "success",
-                        }));
-                    })
-                    .catch((err) => {
-                        console.log("err asset detail", err);
-                        setExecStatus((p) => ({
-                            ...p,
-                            "Asset Detail": "error",
-                        }));
-                        return Promise.reject(err);
-                    });
+            setExecStatus({
+                ...execStatus,
+                "Asset Detail": "in-progress",
             });
-            setCanNavigateToAssetPage(true);
-            window.onbeforeunload = null;
+            return API.post("api", "assets/uploadAssetWorkflow", {
+                "Content-type": "application/json",
+                body,
+            })
+                .then((res) => {
+                    setExecStatus((p) => ({
+                        ...p,
+                        "Asset Detail": "success",
+                    }));
+                })
+                .catch((err) => {
+                    console.log("err asset detail", err);
+                    setExecStatus((p) => ({
+                        ...p,
+                        "Asset Detail": "error",
+                    }));
+                    return Promise.reject(err);
+                });
+        });
+        window.onbeforeunload = null;
+    }
+}
+
+function updateAssetDetail(assetDetail: AssetDetail) {
+    // prefix with x so that we pass the assetId validation that requires this regex ^[a-z]([-_a-z0-9]){3,63}$
+    const uuid = "x" + generateUUID();
+
+    const prevAssetId = assetDetail.assetId;
+    // TODO duplicate logic with AssetFormDefinition and uploadAssetToS3
+    // duplicate except that the uuids are unique to this version
+    const config = Cache.getItem("config");
+    assetDetail.bucket = config.bucket;
+    assetDetail.assetType = getAssetType(assetDetail);
+    assetDetail.key = getKeyPrefix(uuid, assetDetail);
+    assetDetail.specifiedPipelines = [];
+    if (assetDetail.Preview) {
+        assetDetail.previewLocation = {
+            Bucket: config.bucket,
+            Key:
+                "previews" +
+                "/" +
+                uuid +
+                "/" +
+                assetDetail.assetId +
+                "." +
+                assetDetail.Preview?.name.split(".").pop(),
+        };
+    }
+    assetDetail.assetName = assetDetail.assetId;
+    assetDetail.assetId = uuid;
+    return { uuid, prevAssetId };
+}
+
+export default function onSubmit({
+    assetDetail,
+    setFreezeWizardButtons,
+    metadata,
+    execStatus,
+    setExecStatus,
+    setShowUploadAndExecProgress,
+    moveToQueued,
+    updateProgressForFileUploadItem,
+    fileUploadComplete,
+    fileUploadError,
+    setPreviewUploadProgress,
+    setUploadExecutionProps,
+}: OnSubmitProps) {
+    return async (detail: NonCancelableCustomEvent<{}>) => {
+        setFreezeWizardButtons(true);
+        if (assetDetail.Asset && assetDetail.assetId && assetDetail.databaseId) {
+            const { uuid, prevAssetId } = updateAssetDetail(assetDetail);
+            const execStatusNew: Record<string, StatusIndicatorProps.Type> = {
+                "Asset Details": "pending",
+            };
+            setExecStatus(execStatusNew);
+            window.onbeforeunload = function () {
+                return "";
+            };
+            setShowUploadAndExecProgress(true);
+            const uploadExecutionProps: UploadExecutionProps = {
+                assetDetail,
+                moveToQueued,
+                updateProgressForFileUploadItem,
+                fileUploadComplete,
+                fileUploadError,
+                setPreviewUploadProgress,
+                uuid,
+                prevAssetId,
+                metadata,
+                setExecStatus,
+                execStatus,
+            };
+            setUploadExecutionProps(uploadExecutionProps);
+            await performUploads(uploadExecutionProps);
+        } else {
+            console.log("Asset detail not right");
+            console.log(assetDetail);
         }
     };
 }

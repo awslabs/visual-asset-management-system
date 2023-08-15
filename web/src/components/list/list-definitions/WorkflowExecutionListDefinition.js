@@ -34,7 +34,6 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
                     return <></>;
                 }
                 if (!item.workflowId) {
-                    console.log(item);
                     if (
                         !item.Items ||
                         !Array.isArray(item.Items) ||

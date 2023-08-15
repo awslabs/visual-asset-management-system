@@ -76,9 +76,9 @@ export default function ViewAsset() {
     const { databaseId, assetId, pathViewType } = useParams();
 
     const [reload, setReload] = useState(true);
-    const [viewType, setViewType] = useState(null);
+    const [viewType, setViewType] = useState("folder");
     const [asset, setAsset] = useState({});
-
+    const [deleteFromCache, setDeleteFromCache] = useState(false);
     const [viewerOptions, setViewerOptions] = useState([]);
     const [viewerMode, setViewerMode] = useState("collapse");
     const [downloadUrl, setDownloadUrl] = useState(null);
@@ -130,7 +130,6 @@ export default function ViewAsset() {
                         assetId: assetId,
                         workflowId: workflowId,
                     });
-                    console.log("subItems:", subItems);
                     if (subItems !== false && Array.isArray(subItems)) {
                         for (let j = 0; j < subItems.length; j++) {
                             const newParentRowChild = Object.assign({}, subItems[j]);
@@ -147,11 +146,40 @@ export default function ViewAsset() {
                 setLoading(false);
                 setReload(false);
             }
+            localforage.getItem(assetId).then((value) => {
+                if (value) {
+                    //console.log("Reading from localforage:", value);
+                    for (let i = 0; i < value.Asset.length; i++) {
+                        if (
+                            value.Asset[i].status !== "Completed" &&
+                            value.Asset[i].loaded !== value.Asset[i].total
+                        ) {
+                            setContainsIncompleteUploads(true);
+                            return;
+                        }
+                    }
+                    //all downloads are complete. Can delete asset from browser cache
+                    setDeleteFromCache(true);
+                }
+            });
         };
         if (reload) {
             getData();
         }
-    }, [reload, assetId, databaseId, asset]);
+    }, [reload, assetId, databaseId]);
+
+    useEffect(() => {
+        if (deleteFromCache) {
+            localforage
+                .removeItem(assetId)
+                .then(function () {
+                    console.log("Removed item from localstorage", assetId);
+                })
+                .catch(function (err) {
+                    console.log(err);
+                });
+        }
+    }, [deleteFromCache]);
 
     const changeViewerMode = (mode) => {
         if (mode === "fullscreen" && viewerMode === "fullscreen") {
@@ -216,67 +244,17 @@ export default function ViewAsset() {
         setOpenUpdateAsset(mode);
     };
 
-    const handleAssetDownload = async (event) => {
-        event.preventDefault();
-        setDownloadUrl(null);
-        setAssetDownloadError("");
-        // note: the "version" parameter is not used by the frontend, but available via API
-        const config = {
-            body: {
-                databaseId: databaseId,
-                assetId: assetId,
-            },
-        };
-        const result = await downloadAsset({
-            databaseId: databaseId,
-            assetId: assetId,
-            config: config,
-        });
-        if (result !== false && Array.isArray(result)) {
-            if (result[0] === false) {
-                setAssetDownloadError(`Unable to download ${Synonyms.asset}. ${result[1]}`);
-            } else {
-                setAssetDownloadError("");
-                setDownloadUrl(result[1]);
-            }
-        }
-    };
-
     useEffect(() => {
         const getData = async () => {
             if (databaseId && assetId) {
                 const item = await fetchAsset({ databaseId: databaseId, assetId: assetId });
                 if (item !== false) {
-                    console.log(item);
+                    //console.log(item);
                     setAsset(item);
-
-                    const defaultViewType = checkFileFormat(item);
-                    console.log("default view type", defaultViewType);
-                    const newViewerOptions = [{ text: "Preview", id: "preview" }];
-                    if (defaultViewType === "plot") {
-                        newViewerOptions.push({ text: "Plot", id: "plot" });
-                        newViewerOptions.push({ text: "Column", id: "column" });
-                    } else if (defaultViewType === "model") {
-                        newViewerOptions.push({ text: "Model", id: "model" });
-                    } else if (defaultViewType === "html") {
-                        newViewerOptions.push({ text: "HTML", id: "html" });
-                    }
-                    setViewerOptions(newViewerOptions);
-                    if (!window.location.hash) setViewType(defaultViewType);
-                    else {
-                        if (window.location.hash === "#preview") {
-                            setViewType("preview");
-                        }
-                        if (window.location.hash === "#model") {
-                            setViewType("model");
-                        } else if (window.location.hash === "#plot") {
-                            setViewType("plot");
-                        } else if (window.location.hash === "#column") {
-                            setViewType("column");
-                        } else if (window.location.hash === "#html") {
-                            setViewType("html");
-                        }
-                    }
+                    setViewerOptions([
+                        { text: "Folder", id: "folder" },
+                        { text: "Preview", id: "preview", disabled: !item.previewLocation },
+                    ]);
                 }
             }
         };
@@ -342,42 +320,16 @@ export default function ViewAsset() {
                                             <>{asset?.currentVersion?.Version}</>
                                             <h5>Date Modified</h5>
                                             {asset?.currentVersion?.DateModified}
-                                            {!downloadUrl && (
-                                                <div style={{ marginTop: "20px" }}>
-                                                    <Button
-                                                        variant="primary"
-                                                        onClick={handleAssetDownload}
-                                                        disabled={asset?.isDistributable !== true}
+                                            {containsIncompleteUploads && (
+                                                <>
+                                                    <h5>Finish Incomplete uploads</h5>
+                                                    <Link
+                                                        href={`/databases/${databaseId}/assets/${assetId}/uploads`}
                                                     >
-                                                        Generate Download Link
-                                                    </Button>
-                                                </div>
-                                            )}
-                                            {downloadUrl && (
-                                                <div style={{ marginTop: "20px" }}>
-                                                    <SpaceBetween direction="horizontal" size="xs">
-                                                        <>
-                                                            <Button
-                                                                iconName="copy"
-                                                                variant="loki"
-                                                                onClick={() => {
-                                                                    navigator.clipboard.writeText(
-                                                                        downloadUrl
-                                                                    );
-                                                                }}
-                                                            >
-                                                                Copy Link
-                                                            </Button>
-                                                            <Button
-                                                                variant={"primary"}
-                                                                href={downloadUrl}
-                                                                external
-                                                            >
-                                                                Download
-                                                            </Button>
-                                                        </>
-                                                    </SpaceBetween>
-                                                </div>
+                                                        {" "}
+                                                        Finish Incomplete uploads{" "}
+                                                    </Link>
+                                                </>
                                             )}
                                             <FormField errorText={assetDownloadError}></FormField>
                                         </Container>
@@ -430,32 +382,18 @@ export default function ViewAsset() {
                                                                     }
                                                                 />
                                                             )}
-                                                        {viewType === "model" && (
-                                                            <ModelViewer
-                                                                assetKey={
-                                                                    asset?.generated_artifacts?.gltf
-                                                                        ?.Key ||
-                                                                    asset?.assetLocation?.Key
-                                                                }
-                                                                className="visualizer-container-canvas"
-                                                            />
-                                                        )}
-                                                        {viewType === "plot" && (
-                                                            <ThreeDimensionalPlotter
-                                                                assetKey={asset?.assetLocation?.Key}
-                                                                className="visualizer-container-canvas"
-                                                            />
-                                                        )}
-                                                        {viewType === "column" && (
-                                                            <ColumnarViewer
-                                                                assetKey={asset?.assetLocation?.Key}
-                                                            />
-                                                        )}
-                                                        {viewType === "html" && (
-                                                            <HTMLViewer
-                                                                assetKey={asset?.assetLocation?.Key}
-                                                            />
-                                                        )}
+                                                        {viewType === "folder" &&
+                                                            asset.assetId &&
+                                                            asset.databaseId && (
+                                                                <FolderViewer
+                                                                    assetId={asset?.assetId}
+                                                                    databaseId={asset?.databaseId}
+                                                                    assetName={asset?.assetName}
+                                                                    isDistributable={
+                                                                        asset?.isDistributable
+                                                                    }
+                                                                />
+                                                            )}
                                                     </div>
 
                                                     <div className="visualizer-footer">

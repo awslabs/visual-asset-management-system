@@ -70,12 +70,31 @@ def only_required():
     )
 
 
+@pytest.fixture()
+def without_preview():
+    return UploadAssetWorkflowRequestModel(
+        uploadAssetBody=UploadAssetModel(
+            databaseId='1',
+            assetId='test',
+            assetName='test',
+            bucket='test_bucket',
+            key='test_file',
+            assetType='step',
+            description='Testing',
+            isDistributable=False,
+            specifiedPipelines=[],
+            Comment='Testing',
+        )
+    )
+
+
 def test_step_function_input_from_request(sample_request):
     result = GetUploadAssetWorkflowStepFunctionInput(sample_request)
     assert result.copyObjectBody is not None
     assert result.updateMetadataBody is not None
     assert result.executeWorkflowBody is not None
     assert result.uploadAssetBody is not None
+    print(result.uploadAssetBody)
 
 
 def test_step_function_input_required(only_required):
@@ -83,3 +102,11 @@ def test_step_function_input_required(only_required):
     assert result.updateMetadataBody is None
     assert result.executeWorkflowBody is None
     assert result.uploadAssetBody is not None
+
+
+def test_without_preview(without_preview):
+    result = GetUploadAssetWorkflowStepFunctionInput(without_preview)
+    assert result.updateMetadataBody is None
+    assert result.executeWorkflowBody is None
+    assert result.uploadAssetBody is not None
+    print(result.uploadAssetBody)
