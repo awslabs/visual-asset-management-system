@@ -46,7 +46,6 @@
         "react-error-boundary": "^4.0.9",
         "react-flow-renderer": "^9.6.11",
         "react-loading-icons": "^1.1.0",
-        "react-map-gl": "^7.0.25",
         "react-folder-tree": "^5.1.1",
         "react-papaparse": "^3.18.1",
         "react-router": "^6.0.0",
