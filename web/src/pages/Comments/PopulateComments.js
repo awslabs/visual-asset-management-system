@@ -17,9 +17,14 @@ export default function PopulateComments(props) {
         <div data-testid="expandableSectionDiv">
             {selectedItems.map((item) => {
                 if (item.assetId != null) {
-                    // shallow copy of the item.versions array
-                    let allVersions = [...item.versions];
-                    allVersions.push(item.currentVersion);
+                    let allVersions;
+                    if (item.versions == undefined) {
+                        allVersions = [item.currentVersion];
+                    } else {
+                        // shallow copy of the item.versions array
+                        allVersions = [...item.versions];
+                        allVersions.push(item.currentVersion);
+                    }
                     return allVersions.map((version, index) => {
                         // filter comments and only return comments for this versionId
                         const comments = allComments.filter(
@@ -29,7 +34,7 @@ export default function PopulateComments(props) {
                         );
                         return (
                             <VersionComments
-                                key={version.S3Version}
+                                key={`${version.S3Version}:${version.Version}`}
                                 loading={loading}
                                 showLoading={showLoading}
                                 userId={userId}
