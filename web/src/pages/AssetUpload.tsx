@@ -507,7 +507,6 @@ const AssetFileInfo = ({
     const { assetDetailState, assetDetailDispatch } = assetDetailContext;
 
     useEffect(() => {
-        console.log(assetDetailState);
         if (assetDetailState.Asset?.length && assetDetailState.Asset.length > 0) {
             setValid(true);
         } else {
@@ -660,10 +659,6 @@ const UploadForm = () => {
     const [isCancelVisible, setCancelVisible] = useState(false);
     const [showErrorsForPage, setShowErrorsForPage] = useState(-1);
     const [validSteps, setValidSteps] = useState([false, false, false]);
-
-    useEffect(() => {
-        console.log("Valid steps", validSteps);
-    });
 
     useEffect(() => {
         if (assetDetailState.assetId && fileUploadTableItems.length > 0) {

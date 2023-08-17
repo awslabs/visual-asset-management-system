@@ -39,13 +39,8 @@ export function EditComp({
     setValid,
 }: EditCompProps) {
     const [validationText, setValidationText] = useState("");
-    const [required, setRequired] = useState(false);
     const disabled = !item.dependsOn.every((x: string) => metadata[x] && metadata[x] !== "");
-
-    useEffect(() => {
-        setRequired(!!schema.schemas.find((s) => s.field === item.name)?.required);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [schema]);
+    const required = !!schema.schemas.find((s) => s.field === item.name)?.required;
 
     useEffect(() => {
         switch (item.type) {
@@ -75,6 +70,7 @@ export function EditComp({
             }
             case "date": {
                 setValidationText(!item.value ? "You must enter a valid date." : "");
+                break;
             }
         }
     }, [item.type, item.value]);
