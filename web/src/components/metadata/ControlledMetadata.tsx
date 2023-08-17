@@ -267,10 +267,12 @@ export default function ControlledMetadata({
                                     setValid={(valid: boolean) => {
                                         if (valid) {
                                             if (!validRows.includes(row.name)) {
-                                                setValidRows([...validRows, row.name]);
+                                                setValidRows((prev) => [...prev, row.name]);
                                             }
                                         } else {
-                                            setValidRows(validRows.filter((r) => r !== row.name));
+                                            setValidRows((prev) =>
+                                                prev.filter((r) => r !== row.name)
+                                            );
                                         }
                                     }}
                                     showErrors={showErrors}
