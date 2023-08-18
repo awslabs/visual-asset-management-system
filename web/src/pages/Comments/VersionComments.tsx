@@ -8,24 +8,25 @@ import ExpandableSection from "@cloudscape-design/components/expandable-section"
 import SingleComment from "./SingleComment";
 import LoadingIcons from "react-loading-icons";
 import moment from "moment";
+import { CommentType } from "./Comments";
 
-export default function VersionComments(props) {
+export default function VersionComments(props: any) {
     const { loading, showLoading, userId, setReload, defaultExpanded, version, comments } = props;
 
-    const [localLoading, setLocalLoading] = useState("");
+    const [localLoading, setLocalLoading] = useState<boolean>(false);
 
     if (localLoading && !loading) {
         setLocalLoading(false);
     }
 
-    const reloadComments = (keepItemsDisplayed) => {
+    const reloadComments = (keepItemsDisplayed: boolean) => {
         setLocalLoading(keepItemsDisplayed);
         showLoading(keepItemsDisplayed);
     };
 
-    let previousOwnerId = undefined;
-    let previousCommentTime = undefined;
-    let nestedCommentBool = false;
+    let previousOwnerId: string = "";
+    let previousCommentTime: string = "";
+    let nestedCommentBool: boolean = false;
 
     return (
         <ExpandableSection
@@ -34,7 +35,7 @@ export default function VersionComments(props) {
             headerText={`V${version.Version}`}
             headerDescription={version.Comment}
         >
-            {comments.map((comment) => {
+            {comments.map((comment: CommentType) => {
                 nestedCommentBool =
                     comment.commentOwnerID === previousOwnerId &&
                     moment(comment.dateCreated).diff(previousCommentTime, "minutes") < 10;
@@ -53,7 +54,7 @@ export default function VersionComments(props) {
                     />
                 );
             })}
-            <div className="center" hidden={!(loading && localLoading)}>
+            <div hidden={!(loading && localLoading)}>
                 <LoadingIcons.SpinningCircles className="center" fill="#000716" />
             </div>
         </ExpandableSection>

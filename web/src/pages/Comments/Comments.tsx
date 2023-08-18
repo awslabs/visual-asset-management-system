@@ -12,11 +12,44 @@ import Synonyms from "../../synonyms";
 import "./Comments.css";
 import { AssetListDefinitionCommentPage } from "../../components/list/list-definitions/AssetListDefinitionCommentPage";
 import CommentListPage from "../CommentListPage";
+import { StringMappingType } from "typescript";
+
+export interface CommentType {
+    assetId: string,
+    "assetVersionId:commentId": string,
+    commentBody: string,
+    commentOwnerID: string,
+    commentOwnerUsername: string,
+    dateCreated: string,
+    dateEdited?: string,
+}
+
+export interface AssetType {
+    assetId: string,
+    assetLocation: Object,
+    assetName: string,
+    assetType: string, 
+    currentVersion: {
+        Comment: string,
+        dateModified: string,
+        S3Version: string,
+        Version: string,
+        description: string,
+    },
+    databaseId: string,
+    description: string,
+    executionId: string,
+    isDistributable: boolean,
+    pipelineId: string,
+    specifiedPipelines: Array<any>
+    versions?: Array<any>;
+}
 
 export default function Assets() {
-    const [selectedItems, setSelectedItems] = React.useState([{}]);
+    const [selectedItems, setSelectedItems] = React.useState<Array<Object>>([{}]);
     const navigate = useNavigate();
     const urlParams = useParams();
+    
     return (
         <div className="container">
             <div className="assetSelection">
@@ -40,7 +73,7 @@ export default function Assets() {
                 />
             </div>
             <div className="commentSectionContainer">
-                <CommentsList selectedItems={selectedItems} setSelectedItems={setSelectedItems} />
+                <CommentsList selectedItems={selectedItems} />
             </div>
         </div>
     );

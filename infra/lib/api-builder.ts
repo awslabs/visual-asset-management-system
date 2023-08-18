@@ -129,6 +129,12 @@ export function apiBuilder(
         storageResources.dynamo.commentStorageTable,
         storageResources.dynamo.assetStorageTable
     );
+
+    const commentServiceRoutes = [
+        "/comments/assets/{assetId}",
+        "/comments/assets/{assetId}/assetVersionId/{assetVersionId}",
+        "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}"
+    ]
     attachFunctionToApi(scope, commentService, {
         routePath: "/comments/assets/{assetId}",
         method: apigwv2.HttpMethod.GET,
@@ -144,6 +150,7 @@ export function apiBuilder(
         method: apigwv2.HttpMethod.GET,
         api: api.apiGatewayV2,
     });
+    
     attachFunctionToApi(scope, commentService, {
         routePath: "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
         method: apigwv2.HttpMethod.DELETE,
@@ -410,7 +417,7 @@ export function apiBuilder(
     for (let i = 0; i < metadataSchemaMethods.length; i++) {
         attachFunctionToApi(scope, metadataSchemaFunctions, {
             routePath: "/metadataschema/{databaseId}",
-            method: methods[i],
+            method: metadataSchemaMethods[i],
             api: api.apiGatewayV2,
         });
     }

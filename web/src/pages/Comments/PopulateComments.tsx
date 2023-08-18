@@ -4,18 +4,19 @@
  */
 
 import VersionComments from "./VersionComments";
+import { CommentType, AssetType } from "./Comments";
 
-export default function PopulateComments(props) {
+export default function PopulateComments(props: any) {
     const { loading, showLoading, userId, selectedItems, allComments, setReload } = props;
 
     // sort the comments so that the most recent comment appears at the bottom of the list
-    allComments.sort(function (a, b) {
-        return new Date(a.dateCreated) - new Date(b.dateCreated);
+    allComments.sort(function (a: CommentType, b: CommentType) {
+        return new Date(a.dateCreated).valueOf() - new Date(b.dateCreated).valueOf();
     });
 
     return (
         <div data-testid="expandableSectionDiv">
-            {selectedItems.map((item) => {
+            {selectedItems.map((item: AssetType) => {
                 if (item.assetId != null) {
                     let allVersions;
                     if (item.versions == undefined) {
@@ -28,7 +29,7 @@ export default function PopulateComments(props) {
                     return allVersions.map((version, index) => {
                         // filter comments and only return comments for this versionId
                         const comments = allComments.filter(
-                            (comment) =>
+                            (comment: CommentType) =>
                                 comment["assetVersionId:commentId"].split(":")[0] ===
                                 version.S3Version
                         );

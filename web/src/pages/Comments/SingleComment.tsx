@@ -11,7 +11,7 @@ import moment from "moment";
 import sanitizeHtml from "sanitize-html";
 import JoditEditor from "jodit-react";
 
-export default function SingleComment(props) {
+export default function SingleComment(props: any) {
     const { userId, comment, setReload, reloadComments, nestedCommentBool } = props;
 
     const [showOnHover, setShowOnHover] = useState({ display: "none" });
@@ -19,8 +19,6 @@ export default function SingleComment(props) {
     const [deleteCommentBool, setDeleteCommentBool] = useState(false);
     const [content, setContent] = useState("");
     const editor = useRef(null);
-
-    console.log(showOnHover, editCommentBool, deleteCommentBool, content);
 
     const STAY_HIDDEN = { display: "none" };
 
@@ -70,7 +68,7 @@ export default function SingleComment(props) {
         ],
     };
 
-    const handleUpdate = (event) => {
+    const handleUpdate = (event: string) => {
         const editorContent = event;
         setContent(editorContent);
     };
@@ -151,13 +149,11 @@ export default function SingleComment(props) {
                 data-testid="fullCommentDiv"
                 onMouseEnter={(e) => {
                     if (!editCommentBool) {
-                        console.log("mouse enter");
                         setShowOnHover({ display: "block" });
                     }
                 }}
                 onMouseLeave={(e) => {
                     if (!editCommentBool) {
-                        console.log("mouse exit");
                         setShowOnHover({ display: "none" });
                     }
                 }}
@@ -192,13 +188,11 @@ export default function SingleComment(props) {
                         >
                             <Button
                                 iconName="edit"
-                                size="small"
                                 variant="icon"
                                 onClick={selectEditComment}
                             />
                             <Button
                                 iconName="remove"
-                                size="small"
                                 variant="icon"
                                 onClick={selectDeleteComment}
                             />
@@ -206,13 +200,11 @@ export default function SingleComment(props) {
                         <div style={editCommentBool ? { display: "block" } : { display: "none" }}>
                             <Button
                                 iconName="check"
-                                size="small"
                                 variant="icon"
                                 onClick={confirmEdit}
                             />
                             <Button
                                 iconName="close"
-                                size="small"
                                 variant="icon"
                                 onClick={cancelEdit}
                             />
@@ -259,13 +251,11 @@ export default function SingleComment(props) {
                     className="singleNestedCommentContainer"
                     onMouseEnter={(e) => {
                         if (!editCommentBool) {
-                            console.log("mouse enter");
                             setShowOnHover({ display: "block" });
                         }
                     }}
                     onMouseLeave={(e) => {
                         if (!editCommentBool) {
-                            console.log("mouse exit");
                             setShowOnHover({ display: "none" });
                         }
                     }}
@@ -292,13 +282,11 @@ export default function SingleComment(props) {
                         <div style={editCommentBool ? { display: "block" } : { display: "none" }}>
                             <Button
                                 iconName="check"
-                                size="small"
                                 variant="icon"
                                 onClick={confirmEdit}
                             />
                             <Button
                                 iconName="close"
-                                size="small"
                                 variant="icon"
                                 onClick={cancelEdit}
                             />
@@ -321,13 +309,11 @@ export default function SingleComment(props) {
                     >
                         <Button
                             iconName="edit"
-                            size="small"
                             variant="icon"
                             onClick={selectEditComment}
                         />
                         <Button
                             iconName="remove"
-                            size="small"
                             variant="icon"
                             onClick={selectDeleteComment}
                         />

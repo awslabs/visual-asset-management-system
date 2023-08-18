@@ -5,7 +5,12 @@ import os
 import boto3
 import json
 import datetime
+import logging
 from backend.common.validators import validate
+
+# Create a logger object to log the events
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 dynamodb = boto3.resource("dynamodb")
 s3c = boto3.client("s3")
@@ -27,7 +32,7 @@ comment_database = None
 try:
     comment_database = os.environ["COMMENT_STORAGE_TABLE_NAME"]
 except:
-    print("Failed Loading Environment Variables")
+    logger.info("Failed Loading Environment Variables")
     response["statusCode"] = 500
     response["body"] = json.dumps({"message": "Failed Loading Environment Variables"})
 
@@ -41,31 +46,29 @@ def add_comment(assetId: str, assetVersionIdAndCommentId: str, event: dict) -> d
     :returns: dictionary with status code and success info
     """
     response = {"statusCode": 200, "message": "Succeeded"}
-    print("Setting Table")
-    print(comment_database)
+    logger.info("Setting Table")
+    logger.info(comment_database)
     table = dynamodb.Table(comment_database)
-    print("Setting Time Stamp")
+    logger.info("Setting Time Stamp")
     dtNow = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    print("current time in ISO8601:" + dtNow)
+    logger.info("current time in ISO8601:" + dtNow)
     item = {
         "assetId": assetId,
         "assetVersionId:commentId": assetVersionIdAndCommentId,
         "commentBody": event["body"]["commentBody"],
         "commentOwnerID": event["requestContext"]["authorizer"]["jwt"]["claims"]["sub"],
-        "commentOwnerUsername": event["requestContext"]["authorizer"]["jwt"]["claims"][
-            "email"
-        ],
+        "commentOwnerUsername": event["requestContext"]["authorizer"]["jwt"]["claims"]["email"],
         "dateCreated": dtNow,
     }
     try:
         table.put_item(Item=item)
     except Exception as e:
-        print(e)
+        logger.error(e)
         response["statusCode"] = 400
         response["message"] = e
         return response
 
-    print(item)
+    logger.info(item)
 
     return response
 
@@ -77,7 +80,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
     :param context: Lambda context disctionary
     :returns: Http response object (statusCode, headers, body)
     """
-    print(event)
+    logger.info(event)
     response = {
         "statusCode": 200,
         "body": "",
@@ -99,7 +102,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
         return response
 
     pathParameters = event.get("pathParameters", {})
-    print(pathParameters)
+    logger.info(pathParameters)
 
     try:
         # error if no assetId in api call
@@ -110,7 +113,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
             return response
 
         split_arr = pathParameters["assetVersionId:commentId"].split(":")
-        print("Validating parameters")
+        logger.info("Validating parameters")
         (valid, message) = validate(
             {
                 "assetId": {"value": pathParameters["assetId"], "validator": "ID"},
@@ -119,44 +122,33 @@ def lambda_handler(event: dict, context: dict) -> dict:
         )
 
         if not valid:
-            print(message)
+            logger.warning(message)
             response["body"] = json.dumps({"message": message})
             response["statusCode"] = 400
             return response
 
-        print("Trying to add comment")
+        logger.info("Trying to add comment")
         # call the add_comment function if everything is valid
-        returned = add_comment(
-            pathParameters["assetId"], pathParameters["assetVersionId:commentId"], event
-        )
+        returned = add_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], event)
         response["statusCode"] = returned["statusCode"]
         response["body"] = json.dumps({"message": returned["message"]})
-        print(response)
+        logger.info(response)
         return response
     except Exception as e:
-        print(f"caught exception: {e}")
+        logger.error(f"caught exception: {e}")
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
             response["statusCode"] = 500
             response["body"] = json.dumps(
-                {
-                    "message": "comment "
-                    + str(
-                        event["body"]["assetVersionId:commentId"] + " already exists."
-                    )
-                }
+                {"message": "comment " + str(event["body"]["assetVersionId:commentId"] + " already exists.")}
             )
             return response
         else:
             response["statusCode"] = 500
-            print("Error!", e.__class__, "occurred.")
+            logger.error("Error!", e.__class__, "occurred.")
             try:
-                print(e)
+                logger.info(e)
                 response["body"] = json.dumps({"message": str(e)})
             except:
-                print("Can't Read Error")
-                response["body"] = json.dumps(
-                    {
-                        "message": "An unexpected error occurred while executing the request"
-                    }
-                )
+                logger.info("Can't Read Error")
+                response["body"] = json.dumps({"message": "An unexpected error occurred while executing the request"})
             return response

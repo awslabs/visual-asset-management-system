@@ -28,8 +28,7 @@ describe("Edit and delete visibility", () => {
         var editDiv = await waitFor(() => {
             return screen.getByTestId("editDeleteCommentDiv");
         });
-
-        expect(editDiv.style._values).toEqual({ display: "block" });
+        expect(editDiv.style).toHaveProperty("_values", {"display": "block"});
     });
 
     test("buttons should NOT be visible when not hovering", async () => {
@@ -51,7 +50,7 @@ describe("Edit and delete visibility", () => {
         var editDiv = await waitFor(() => {
             return screen.getByTestId("editDeleteCommentDiv");
         });
-        expect(editDiv.style._values).toEqual({ display: "none" });
+        expect(editDiv.style).toHaveProperty("_values", {"display": "none"});
     });
 
     test("buttons should NOT be visible when hovering BUT user doesn't own comment", async () => {
@@ -76,7 +75,7 @@ describe("Edit and delete visibility", () => {
             return screen.getByTestId("editDeleteCommentDiv");
         });
 
-        expect(editDiv.style._values).toEqual({ display: "block" });
+        expect(editDiv.style).toHaveProperty("_values", {"display": "block"});
     });
 });
 
@@ -103,7 +102,7 @@ describe("Edit and delete visibility for nested comments", () => {
             return screen.getByTestId("editDeleteNestedCommentDiv");
         });
 
-        expect(editDiv.style._values).toEqual({ display: "block" });
+        expect(editDiv.style).toHaveProperty("_values", {"display": "block"});
     });
 
     test("buttons should NOT be visible when not hovering", async () => {
@@ -125,7 +124,7 @@ describe("Edit and delete visibility for nested comments", () => {
         var editDiv = await waitFor(() => {
             return screen.getByTestId("editDeleteNestedCommentDiv");
         });
-        expect(editDiv.style._values).toEqual({ display: "none" });
+        expect(editDiv.style).toHaveProperty("_values", {"display": "none"});
     });
 
     test("buttons should NOT be visible when hovering BUT user doesn't own nested comment", async () => {
@@ -150,6 +149,6 @@ describe("Edit and delete visibility for nested comments", () => {
             return screen.getByTestId("editDeleteNestedCommentDiv");
         });
 
-        expect(editDiv.style._values).toEqual({ display: "block" });
+        expect(editDiv.style).toHaveProperty("_values", {"display": "block"});
     });
 });

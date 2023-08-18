@@ -348,6 +348,9 @@ CommentTableList.propTypes = {
     allItems: PropTypes.array.isRequired,
     loading: PropTypes.bool.isRequired,
     setReload: PropTypes.func.isRequired,
+    onSelection: PropTypes.func,
+    selectedItems: PropTypes.array,
+
     listDefinition: PropTypes.instanceOf(ListDefinition).isRequired,
     databaseId: PropTypes.string,
     editEnabled: PropTypes.bool,

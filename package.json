@@ -22,6 +22,7 @@
         "standard-version": "^9.3.2"
     },
     "dependencies": {
+        "@types/sanitize-html": "^2.9.0",
         "minimist": "^1.2.7"
     },
     "resolutions": {

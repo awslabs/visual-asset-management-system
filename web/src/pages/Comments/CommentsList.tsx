@@ -12,19 +12,22 @@ import { generateUUID } from "../../common/utils/utils";
 import { fetchAllComments } from "../../services/APIService";
 import { Auth } from "aws-amplify";
 import JoditEditor from "jodit-react";
+import { CommentType } from "./Comments";
+import { ObjectEncodingOptions } from "fs";
 
-export default function CommentsList(props) {
+export default function CommentsList(props: any ) {
     const { selectedItems } = props;
 
-    const [reload, setReload] = useState(false);
-    const [loading, setLoading] = useState(false);
-    const [showLoadingIcon, setShowLoadingIcon] = useState(false);
-    const [displayItemsWhileLoading, setDisplayItemsWhileLoading] = useState(false);
-    const [displayedSelectedItems, setDisplayedSelectedItems] = useState([]);
-    const [allItems, setAllItems] = useState([]);
-    const [userId, setUserId] = useState("");
-    const [content, setContent] = useState("");
+    const [reload, setReload] = useState<boolean>(false);
+    const [loading, setLoading] = useState<boolean>(false);
+    const [showLoadingIcon, setShowLoadingIcon] = useState<boolean>(false);
+    const [displayItemsWhileLoading, setDisplayItemsWhileLoading] = useState<boolean>(false);
+    const [displayedSelectedItems, setDisplayedSelectedItems] = useState<Array<any>>([]);
+    const [allItems, setAllItems] = useState<Array<any>>([]);
+    const [userId, setUserId] = useState<string>("");
+    const [content, setContent] = useState<string>("");
     const editor = useRef(null);
+    const listInnerRef = useRef(null);
 
     if (selectedItems !== displayedSelectedItems) {
         setDisplayedSelectedItems(selectedItems);
@@ -80,12 +83,12 @@ export default function CommentsList(props) {
         ],
     };
 
-    const handleUpdate = (event) => {
+    const handleUpdate = (event: string) => {
         const editorContent = event;
         setContent(editorContent);
     };
 
-    const selectedItem = displayedSelectedItems[0];
+    const selectedItem: any = displayedSelectedItems[0];
     const assetId = selectedItem?.assetId;
 
     useEffect(() => {
@@ -123,7 +126,7 @@ export default function CommentsList(props) {
     }, [reload, assetId, displayItemsWhileLoading]);
 
     // Add a comment to the database based on the event that is passed to the function
-    const addComment = async (event) => {
+    const addComment = async (event: { preventDefault: () => void; }) => {
         // prevent page from reloading
         event.preventDefault();
         if (content.replace(/(<([^>]+)>)/gi, "") === "") {
@@ -159,7 +162,7 @@ export default function CommentsList(props) {
         }
     };
 
-    const showLoading = (keepItemsDisplayed) => {
+    const showLoading = (keepItemsDisplayed: boolean | ((prevState: boolean) => boolean)) => {
         setDisplayItemsWhileLoading(keepItemsDisplayed);
         setLoading(true);
     };
@@ -184,17 +187,9 @@ export default function CommentsList(props) {
                                             <tbody>
                                                 <tr className="commentSectionAssetsContainerTable">
                                                     <td>
-                                                        <div>
-                                                            <PopulateComments
-                                                                loading={loading}
-                                                                showLoading={showLoading}
-                                                                userId={userId}
-                                                                selectedItems={selectedItems}
-                                                                allComments={allItems}
-                                                                setReload={setReload}
-                                                            />
+                                                        <div className="populateCommentsDiv"
+                                                        ref={listInnerRef}>
                                                             <div
-                                                                className="center"
                                                                 hidden={
                                                                     (!loading ||
                                                                         displayItemsWhileLoading) &&
@@ -206,6 +201,14 @@ export default function CommentsList(props) {
                                                                     fill="#000716"
                                                                 />
                                                             </div>
+                                                            <PopulateComments
+                                                                loading={loading}
+                                                                showLoading={showLoading}
+                                                                userId={userId}
+                                                                selectedItems={selectedItems}
+                                                                allComments={allItems}
+                                                                setReload={setReload}
+                                                            />
                                                         </div>
                                                     </td>
                                                 </tr>

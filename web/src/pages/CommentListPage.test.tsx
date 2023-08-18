@@ -18,7 +18,7 @@ jest.mock("react-router", () => ({
 describe("Rendering CommentListPage", () => {
     test("Should render correctly WITH databaseId", () => {
         // mock useParams to return a databaseId
-        useParams.mockReturnValue({ databaseId: "test-id" });
+        jest.mocked(useParams).mockReturnValue({ databaseId: "test-id" });
         const fetchElements = jest.fn().mockImplementation((databaseId) => {});
         const fetchAllElements = () => {
             console.log("fetching all elements");
@@ -43,7 +43,7 @@ describe("Rendering CommentListPage", () => {
 
     test("Should render correctly WITHOUT databaseId", () => {
         // mock useParams to return nothing
-        useParams.mockReturnValue({});
+        jest.mocked(useParams).mockReturnValue({});
         const fetchElements = jest.fn().mockImplementation((databaseId) => {});
         const fetchAllElements = jest.fn().mockImplementation(() => {});
         render(

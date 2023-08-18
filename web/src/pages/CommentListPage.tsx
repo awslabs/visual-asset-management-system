@@ -15,12 +15,12 @@ import {
 } from "@cloudscape-design/components";
 import { useParams } from "react-router";
 import CommentTableList from "../components/list/CommentTableList";
-import PropTypes from "prop-types";
+import PropTypes, { object } from "prop-types";
 import ListDefinition from "../components/list/list-definitions/types/ListDefinition";
 import RelatedTableList from "../components/list/RelatedTableList";
 import Synonyms from "../synonyms";
 
-export default function CommentListPage(props) {
+export default function CommentListPage(props: any) {
     const { databaseId } = useParams();
     const {
         singularNameTitleCase,
@@ -36,9 +36,9 @@ export default function CommentListPage(props) {
         onSelection,
         selectedItems,
     } = props;
-    const [reload, setReload] = useState(true);
-    const [loading, setLoading] = useState(true);
-    const [allItems, setAllItems] = useState([]);
+    const [reload, setReload] = useState<boolean>(true);
+    const [loading, setLoading] = useState<boolean>(true);
+    const [allItems, setAllItems] = useState<Array<any>>([]);
 
     const [openNewElement, setOpenNewElement] = useState(false);
 
@@ -82,12 +82,11 @@ export default function CommentListPage(props) {
                                 text: databaseId,
                                 href: `/databases/${databaseId}/${pluralName}/`,
                             },
-                            { text: pluralNameTitleCase },
                         ]}
                         ariaLabel="Breadcrumbs"
                     />
                 )}
-                <Grid gridDefinition={[{ colspan: { default: "6" } }]}>
+                <Grid gridDefinition={[{ colspan: { default: 6 } }]}>
                     <div>
                         <TextContent>
                             <h1>
@@ -97,7 +96,7 @@ export default function CommentListPage(props) {
                         </TextContent>
                     </div>
                 </Grid>
-                <Grid gridDefinition={[{ colspan: { default: "12" } }]}>
+                <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
                     {isRelatedTable && (
                         <RelatedTableList
                             allItems={allItems}
@@ -153,6 +152,8 @@ CommentListPage.propTypes = {
     fetchElements: PropTypes.func.isRequired,
     fetchAllElements: PropTypes.func,
     onCreateCallback: PropTypes.func,
+    onSelection: PropTypes.func,
+    selectedItems: PropTypes.arrayOf(object),
     isRelatedTable: PropTypes.bool,
     editEnabled: PropTypes.bool,
 };

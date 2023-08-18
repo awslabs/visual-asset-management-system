@@ -4,10 +4,15 @@
 import os
 import boto3
 import json
+import logging
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from backend.common.validators import validate
 from typing import List
+
+# Create a logger object to log the events
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 dynamodb = boto3.resource("dynamodb")
 dynamodb_client = boto3.client("dynamodb")
@@ -27,7 +32,7 @@ comment_database = None
 try:
     comment_database = os.environ["COMMENT_STORAGE_TABLE_NAME"]
 except:
-    print("Failed Loading Comment Storage Environment Variables")
+    logger.error("Failed Loading Comment Storage Environment Variables")
     response["body"]["message"] = "Failed Loading Comment Storage Environment Variables"
 
 
@@ -62,13 +67,11 @@ def get_all_comments(queryParams: dict, showDeleted=False) -> dict:
         },
     ).build_full_result()
 
-    print("Fetching results")
+    logger.info("Fetching results")
     result = {}
     items = []
     for item in pageIterator["Items"]:
-        deserialized_document = {
-            k: deserializer.deserialize(v) for k, v in item.items()
-        }
+        deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
         items.append(deserialized_document)
     result["Items"] = items
     if "NextToken" in pageIterator:
@@ -105,17 +108,14 @@ def get_comments_version(assetId: str, assetVersionId: str, showDeleted=False) -
 
     # Queries partition key (assetId) and queries sort keys that begin_with the desired asset version
     response = table.query(
-        KeyConditionExpression=Key("assetId").eq(assetId)
-        & Key("assetVersionId:commentId").begins_with(assetVersionId),
+        KeyConditionExpression=Key("assetId").eq(assetId) & Key("assetVersionId:commentId").begins_with(assetVersionId),
         ScanIndexForward=False,
         Limit=1000,
     )
     return response["Items"]
 
 
-def get_single_comment(
-    assetId: str, assetVersionIdAndCommentId: str, showDeleted=False
-) -> dict:
+def get_single_comment(assetId: str, assetVersionIdAndCommentId: str, showDeleted=False) -> dict:
     """
     Gets a specific comment from the assetId and the assetVersionId:commentId
     :param assetId: id of the asset to get comments for
@@ -123,12 +123,10 @@ def get_single_comment(
     :param showDeleted: boolean storing if deleted comments should be returned
     :returns: dictionary with the specific comment
     """
-    print("Getting single comment")
+    logger.info("Getting single comment")
     table = dynamodb.Table(comment_database)
 
-    response = table.get_item(
-        Key={"assetId": assetId, "assetVersionId:commentId": assetVersionIdAndCommentId}
-    )
+    response = table.get_item(Key={"assetId": assetId, "assetVersionId:commentId": assetVersionIdAndCommentId})
     return response.get("Item", {})
 
 
@@ -145,19 +143,19 @@ def delete_comment(assetId: str, assetVersionIdAndCommentId: str, event: dict) -
         return response
     item = get_single_comment(assetId, assetVersionIdAndCommentId)
     if item:
-        print("Got comment:")
-        print(item)
-        print("Verifying user")
+        logger.info(f"Got comment:")
+        logger.info(item)
 
+        logger.info("Verifying user")
         api_call_user_id = event["requestContext"]["authorizer"]["jwt"]["claims"]["sub"]
         comment_user_id = item["commentOwnerID"]
         if api_call_user_id != comment_user_id:
-            print("invalid user")
+            logger.warning("invalid user")
             response["statusCode"] = 401
             response["message"] = "Unauthorized"
             return response
 
-        print("Deleting comment")
+        logger.info("Deleting comment")
         item["assetId"] = assetId + "#deleted"
 
         # Delete the old comment from the table
@@ -169,7 +167,7 @@ def delete_comment(assetId: str, assetVersionIdAndCommentId: str, event: dict) -
                 }
             )
         except:
-            print(e)
+            logger.error(e)
             response["statusCode"] = 400
             response["message"] = e
             return response
@@ -178,7 +176,7 @@ def delete_comment(assetId: str, assetVersionIdAndCommentId: str, event: dict) -
         try:
             table.put_item(Item=item)
         except Exception as e:
-            print(e)
+            logger.error(e)
             response["statusCode"] = 400
             response["message"] = e
             return response
@@ -218,21 +216,16 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
     if "assetVersionId:commentId" not in pathParameters:
         # if we have an assetVersionId and assetId, call get_comments_version
         if "assetVersionId" in pathParameters and "assetId" in pathParameters:
-            print("Validating parameters")
-            (valid, message) = validate(
-                {"assetId": {"value": pathParameters["assetId"], "validator": "ID"}}
-            )
+            logger.info("Validating parameters")
+            (valid, message) = validate({"assetId": {"value": pathParameters["assetId"], "validator": "ID"}})
             if not valid:
-                print(message)
+                logger.warning(message)
                 response["body"] = json.dumps({"message": message})
                 response["statusCode"] = 400
                 return response
 
-            print(
-                "Listing comments for asset:",
-                pathParameters["assetId"],
-                "and version",
-                pathParameters["assetVersionId"],
+            logger.info(
+                f"Listing comments for asset: {pathParameters['assetId']} and version {pathParameters['assetVersionId']}",
             )
             response["body"] = json.dumps(
                 {
@@ -243,34 +236,25 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
                     )
                 }
             )
-            print(response)
             return response
 
         # if we just have assetId, call get_comments
         if "assetId" in pathParameters:
-            print("Validating parameters")
-            (valid, message) = validate(
-                {"assetId": {"value": pathParameters["assetId"], "validator": "ID"}}
-            )
+            logger.info("Validating parameters")
+            (valid, message) = validate({"assetId": {"value": pathParameters["assetId"], "validator": "ID"}})
             if not valid:
-                print(message)
+                logger.warning(message)
                 response["body"] = json.dumps({"message": message})
                 response["statusCode"] = 400
                 return response
 
-            print("Listing comments for asset:", pathParameters["assetId"])
-            response["body"] = json.dumps(
-                {"message": get_comments(pathParameters["assetId"], showDeleted)}
-            )
-            print(response)
+            logger.info(f"Listing comments for asset: {pathParameters['assetId']}")
+            response["body"] = json.dumps({"message": get_comments(pathParameters["assetId"], showDeleted)})
             return response
         else:
             # if we have nothing, call get_all_comments
-            print("Listing All Comments")
-            response["body"] = json.dumps(
-                {"message": get_all_comments(queryParameters, showDeleted)}
-            )
-            print(response)
+            logger.info("Listing All Comments")
+            response["body"] = json.dumps({"message": get_all_comments(queryParameters, showDeleted)})
             return response
     else:
         # error, no assetId in call
@@ -278,13 +262,12 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
             message = "No asset ID in API Call"
             response["body"] = json.dumps({"message": message})
             response["statusCode"] = 400
-            print(response)
             return response
 
-        print("Validating parameters")
+        logger.info("Validating parameters")
 
         split_arr = pathParameters["assetVersionId:commentId"].split(":")
-        print("Validating parameters")
+        logger.info("Validating parameters")
         (valid, message) = validate(
             {
                 "assetId": {"value": pathParameters["assetId"], "validator": "ID"},
@@ -293,16 +276,13 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
         )
 
         if not valid:
-            print(message)
+            logger.warning(message)
             response["body"] = json.dumps({"message": message})
             response["statusCode"] = 400
             return response
 
-        print(
-            "Getting comment with assetId",
-            pathParameters["assetId"],
-            "and assetVersionId:commentId",
-            pathParameters["assetVersionId:commentId"],
+        logger.info(
+            f"Getting comment with assetId {pathParameters['assetId']} and assetVersionId:commentId {pathParameters['assetVersionId:commentId']}"
         )
         response["body"] = json.dumps(
             {
@@ -313,7 +293,6 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
                 )
             }
         )
-        print(response)
         return response
 
 
@@ -329,16 +308,14 @@ def delete_handler(response: dict, pathParameters: dict, event: dict) -> dict:
         message = "No asset ID in API Call"
         response["body"] = json.dumps({"message": message})
         response["statusCode"] = 400
-        print(response)
         return response
     if "assetVersionId:commentId" not in pathParameters:
         message = "No assetVersionId:commentId in API Call"
         response["body"] = json.dumps({"message": message})
         response["statusCode"] = 400
-        print(response)
         return response
 
-    print("Validating parameters")
+    logger.info("Validating parameters")
     split_arr = pathParameters["assetVersionId:commentId"].split(":")
     (valid, message) = validate(
         {
@@ -347,23 +324,17 @@ def delete_handler(response: dict, pathParameters: dict, event: dict) -> dict:
         }
     )
     if not valid:
-        print(message)
+        logger.warning(message)
         response["body"] = json.dumps({"message": message})
         response["statusCode"] = 400
         return response
 
-    print(
-        "Deleting comment for assetId:",
-        pathParameters["assetId"],
-        "and versionId:commentId:",
-        pathParameters["assetVersionId:commentId"],
+    logger.info(
+        f"Deleting comment for assetId: {pathParameters['assetId']} and versionId:commentId: {pathParameters['assetVersionId:commentId']}",
     )
-    result = delete_comment(
-        pathParameters["assetId"], pathParameters["assetVersionId:commentId"], event
-    )
+    result = delete_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], event)
     response["body"] = json.dumps({"message": result["message"]})
     response["statusCode"] = result["statusCode"]
-    print(response)
     return response
 
 
@@ -374,7 +345,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
     :param context: lambda context dictionary
     :returns: Http response object (statusCode, headers, body)
     """
-    print(event)
+    logger.info(event)
     response = {
         "statusCode": 200,
         "body": "",
@@ -394,7 +365,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
     try:
         # route the api call based on tags
         httpMethod = event["requestContext"]["http"]["method"]
-        print(httpMethod)
+        logger.info(httpMethod)
 
         if httpMethod == "GET":
             return get_handler(response, pathParameters, queryParameters)
@@ -403,18 +374,16 @@ def lambda_handler(event: dict, context: dict) -> dict:
 
     except Exception as e:
         response["statusCode"] = 500
-        print("Error!", e.__class__, "occurred.")
+        logger.error("Error!", e.__class__, "occurred.")
         try:
-            print(e)
+            logger.info(e)
             response["body"] = json.dumps({"message": str(e)})
         except:
-            print("Can't Read Error")
-            response["body"] = json.dumps(
-                {"message": "An unexpected error occurred while executing the request"}
-            )
+            logger.info("Can't Read Error")
+            response["body"] = json.dumps({"message": "An unexpected error occurred while executing the request"})
         return response
 
 
 if __name__ == "__main__":
     test_response = lambda_handler(None, None)
-    print(test_response)
+    logger.info(test_response)

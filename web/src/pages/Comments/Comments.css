@@ -134,9 +134,15 @@
 }
 
 .commentSectionAssetsContainerTable {
-    height: 50vh;
-    max-height: 50vh;
+    /* max-height: 50vh; */
     vertical-align: bottom;
+}
+
+.populateCommentsDiv {
+    height: 50vh;
+    overflow-y: auto;
+    flex-direction: column-reverse;
+    display: flex;
 }
 
 .usernameDiv {
@@ -181,7 +187,8 @@
 
 .center {
     height: 50px;
-    margin: auto;
+    margin-left: auto;
+    margin-right: auto;
     width: 100%;
     padding: 10px;
 }
