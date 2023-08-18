@@ -133,24 +133,16 @@ export function apiBuilder(
     const commentServiceRoutes = [
         "/comments/assets/{assetId}",
         "/comments/assets/{assetId}/assetVersionId/{assetVersionId}",
-        "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
-    ];
-    attachFunctionToApi(scope, commentService, {
-        routePath: "/comments/assets/{assetId}",
-        method: apigwv2.HttpMethod.GET,
-        api: api.apiGatewayV2,
-    });
-    attachFunctionToApi(scope, commentService, {
-        routePath: "/comments/assets/{assetId}/assetVersionId/{assetVersionId}",
-        method: apigwv2.HttpMethod.GET,
-        api: api.apiGatewayV2,
-    });
-    attachFunctionToApi(scope, commentService, {
-        routePath: "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
-        method: apigwv2.HttpMethod.GET,
-        api: api.apiGatewayV2,
-    });
-
+        "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}"
+    ]
+    for (let i = 0; i < commentServiceRoutes.length; i++){
+        attachFunctionToApi(scope, commentService, {
+            routePath: commentServiceRoutes[i],
+            method: apigwv2.HttpMethod.GET,
+            api: api.apiGatewayV2,
+        });
+    }
+    
     attachFunctionToApi(scope, commentService, {
         routePath: "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
         method: apigwv2.HttpMethod.DELETE,
