@@ -121,7 +121,5 @@ test("Should render multiple versions correctly", async () => {
     let expandableContainer = expandableContainerList.at(0);
     // there should be 2 expandable sections (one for each version of the asset)
     expect(expandableContainer).not.toBeUndefined();
-    if (expandableContainer != undefined) {
-        expect(expandableContainer.childNodes.length).toBe(2);
-    }
+    expect(expandableContainer!.childNodes.length).toBe(2);
 });
