@@ -133,8 +133,8 @@ export function apiBuilder(
     const commentServiceRoutes = [
         "/comments/assets/{assetId}",
         "/comments/assets/{assetId}/assetVersionId/{assetVersionId}",
-        "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}"
-    ]
+        "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
+    ];
     attachFunctionToApi(scope, commentService, {
         routePath: "/comments/assets/{assetId}",
         method: apigwv2.HttpMethod.GET,
@@ -150,7 +150,7 @@ export function apiBuilder(
         method: apigwv2.HttpMethod.GET,
         api: api.apiGatewayV2,
     });
-    
+
     attachFunctionToApi(scope, commentService, {
         routePath: "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
         method: apigwv2.HttpMethod.DELETE,

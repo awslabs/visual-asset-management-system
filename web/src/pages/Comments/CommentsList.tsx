@@ -15,7 +15,7 @@ import JoditEditor from "jodit-react";
 import { CommentType } from "./Comments";
 import { ObjectEncodingOptions } from "fs";
 
-export default function CommentsList(props: any ) {
+export default function CommentsList(props: any) {
     const { selectedItems } = props;
 
     const [reload, setReload] = useState<boolean>(false);
@@ -126,7 +126,7 @@ export default function CommentsList(props: any ) {
     }, [reload, assetId, displayItemsWhileLoading]);
 
     // Add a comment to the database based on the event that is passed to the function
-    const addComment = async (event: { preventDefault: () => void; }) => {
+    const addComment = async (event: { preventDefault: () => void }) => {
         // prevent page from reloading
         event.preventDefault();
         if (content.replace(/(<([^>]+)>)/gi, "") === "") {
@@ -187,8 +187,10 @@ export default function CommentsList(props: any ) {
                                             <tbody>
                                                 <tr className="commentSectionAssetsContainerTable">
                                                     <td>
-                                                        <div className="populateCommentsDiv"
-                                                        ref={listInnerRef}>
+                                                        <div
+                                                            className="populateCommentsDiv"
+                                                            ref={listInnerRef}
+                                                        >
                                                             <div
                                                                 hidden={
                                                                     (!loading ||

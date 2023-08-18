@@ -40,8 +40,8 @@ test("Should render a test comment correctly", async () => {
     const commentOwnerId = "test_owner_id";
     const commentOwnerUsername = "test-email@amazon.com";
     const dateCreated = "2023-07-05T19:46:57.141660Z";
-    jest.mocked(fetchAllComments).mockImplementation(() => Promise.resolve(
-        [
+    jest.mocked(fetchAllComments).mockImplementation(() =>
+        Promise.resolve([
             {
                 assetId: assetId,
                 "assetVersionId:commentId": assetVersionIdAndCommentId,
@@ -50,8 +50,8 @@ test("Should render a test comment correctly", async () => {
                 commentOwnerUsername: commentOwnerUsername,
                 dateCreated: dateCreated,
             },
-        ]
-    ));
+        ])
+    );
     await render(
         <CommentsList
             selectedItems={[
@@ -81,8 +81,8 @@ test("Should render multiple versions correctly", async () => {
     const commentOwnerId = "test_owner_id";
     const commentOwnerUsername = "test-email@amazon.com";
     const dateCreated = "2023-07-05T19:46:57.141660Z";
-    jest.mocked(fetchAllComments).mockImplementation(() => Promise.resolve(
-        [
+    jest.mocked(fetchAllComments).mockImplementation(() =>
+        Promise.resolve([
             {
                 assetId: assetId,
                 "assetVersionId:commentId": assetVersionIdAndCommentId,
@@ -91,8 +91,8 @@ test("Should render multiple versions correctly", async () => {
                 commentOwnerUsername: commentOwnerUsername,
                 dateCreated: dateCreated,
             },
-        ]
-    ));
+        ])
+    );
     render(
         <CommentsList
             selectedItems={[
@@ -121,7 +121,7 @@ test("Should render multiple versions correctly", async () => {
     let expandableContainer = expandableContainerList.at(0);
     // there should be 2 expandable sections (one for each version of the asset)
     expect(expandableContainer).not.toBeUndefined();
-    if(expandableContainer != undefined){
+    if (expandableContainer != undefined) {
         expect(expandableContainer.childNodes.length).toBe(2);
     }
 });

@@ -186,11 +186,7 @@ export default function SingleComment(props: any) {
                             data-testid="editDeleteCommentDiv"
                             style={editCommentIconsVisible ? showOnHover : STAY_HIDDEN}
                         >
-                            <Button
-                                iconName="edit"
-                                variant="icon"
-                                onClick={selectEditComment}
-                            />
+                            <Button iconName="edit" variant="icon" onClick={selectEditComment} />
                             <Button
                                 iconName="remove"
                                 variant="icon"
@@ -198,16 +194,8 @@ export default function SingleComment(props: any) {
                             />
                         </div>
                         <div style={editCommentBool ? { display: "block" } : { display: "none" }}>
-                            <Button
-                                iconName="check"
-                                variant="icon"
-                                onClick={confirmEdit}
-                            />
-                            <Button
-                                iconName="close"
-                                variant="icon"
-                                onClick={cancelEdit}
-                            />
+                            <Button iconName="check" variant="icon" onClick={confirmEdit} />
+                            <Button iconName="close" variant="icon" onClick={cancelEdit} />
                         </div>
                         <div style={deleteCommentBool ? { display: "block" } : { display: "none" }}>
                             <button className="deleteCommentButtons" onClick={confirmDelete}>
@@ -280,16 +268,8 @@ export default function SingleComment(props: any) {
                             onChange={(newContent) => {}}
                         />
                         <div style={editCommentBool ? { display: "block" } : { display: "none" }}>
-                            <Button
-                                iconName="check"
-                                variant="icon"
-                                onClick={confirmEdit}
-                            />
-                            <Button
-                                iconName="close"
-                                variant="icon"
-                                onClick={cancelEdit}
-                            />
+                            <Button iconName="check" variant="icon" onClick={confirmEdit} />
+                            <Button iconName="close" variant="icon" onClick={cancelEdit} />
                         </div>
                     </div>
                     <div
@@ -307,16 +287,8 @@ export default function SingleComment(props: any) {
                         className="singleNestedCommentIcons"
                         style={editCommentIconsVisible ? showOnHover : STAY_HIDDEN}
                     >
-                        <Button
-                            iconName="edit"
-                            variant="icon"
-                            onClick={selectEditComment}
-                        />
-                        <Button
-                            iconName="remove"
-                            variant="icon"
-                            onClick={selectDeleteComment}
-                        />
+                        <Button iconName="edit" variant="icon" onClick={selectEditComment} />
+                        <Button iconName="remove" variant="icon" onClick={selectDeleteComment} />
                     </div>
                 </div>
                 <div
