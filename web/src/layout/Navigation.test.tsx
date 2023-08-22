@@ -41,6 +41,7 @@ describe("Navigation", () => {
             wrapper,
             "/assets",
             "/upload",
+            "/comments",
             "/pipelines",
             "/workflows",
             "/auth/constraints",
@@ -59,6 +60,7 @@ describe("Navigation", () => {
             wrapper,
             "/assets",
             "/upload",
+            "/comments",
             "/visualizers/column",
             "/visualizers/model",
             "/visualizers/plot"
@@ -76,6 +78,7 @@ describe("Navigation", () => {
             wrapper,
             "/assets",
             "/upload",
+            "/comments",
             "/workflows",
             "/auth/constraints",
             "/visualizers/model",
@@ -93,6 +96,7 @@ describe("Navigation", () => {
         expectNoSideNavLinks(
             wrapper,
             "/assets",
+            "/comments",
             "/pipelines",
             "/auth/constraints",
             "/visualizers/column",
@@ -112,6 +116,7 @@ describe("Navigation", () => {
         expectSideNavLinks(
             wrapper,
             "/assets",
+            "/comments",
             "/pipelines",
             "/workflows",
             "/visualizers/column",

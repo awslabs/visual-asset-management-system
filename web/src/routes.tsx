@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -11,6 +11,7 @@ import SearchPage from "./pages/search/SearchPage";
 import { Navigation } from "./layout/Navigation";
 import Databases from "./pages/Databases";
 import Assets from "./pages/Assets";
+import Comments from "./pages/Comments/Comments";
 import AssetUploadPage from "./pages/AssetUpload";
 import ViewAsset from "./components/single/ViewAsset";
 import Pipelines from "./pages/Pipelines";
@@ -66,6 +67,7 @@ const routeTable: RouteOption[] = [
         active: "/upload",
         roles: ["assets", "upload"],
     },
+    { path: "/comments", Page: Comments, active: "/comments" },
     { path: "/upload", Page: AssetUploadPage, active: "/upload", roles: ["assets", "upload"] },
     { path: "/visualizers/:pathViewType", Page: ViewAsset, active: "/assets", roles: ["assets"] },
     {

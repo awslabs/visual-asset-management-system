@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -225,6 +225,60 @@ export const fetchAssetFiles = async ({ databaseId, assetId }, api = API) => {
     } catch (error) {
         console.log(error);
         return error?.message;
+    }
+};
+
+/**
+ * Returns array of all the comments that are attached to a given assetId
+ * @returns {Promise<boolean|{message}|any>}
+ */
+export const fetchAllComments = async ({ assetId }, api = API) => {
+    try {
+        let response = await api.get("api", `comments/assets/${assetId}`, {});
+        let items = [];
+        const init = { queryStringParameters: { startingToken: null } };
+        if (response.message) {
+            if (response.message.Items) {
+                items = items.concat(response.message.Items);
+                while (response.message.NextToken) {
+                    init["queryStringParameters"]["startingToken"] = response.message.NextToken;
+                    response = await api.get("api", `comments/assets/${assetId}`, init);
+                    items = items.concat(response.message.Items);
+                }
+                return items;
+            } else {
+                return response.message;
+            }
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return error?.message;
+    }
+};
+
+/**
+ * Deletes the given comment from the database
+ * @returns {Promise<boolean|{message}|any>}
+ */
+export const deleteComment = async ({ assetId, assetVersionIdAndCommentId }, api = API) => {
+    try {
+        let response = await api.del(
+            "api",
+            `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
+            {}
+        );
+        if (response.message) {
+            console.log(response.message);
+            return [true, response.message];
+        } else {
+            console.log(response);
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
     }
 };
 

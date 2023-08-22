@@ -22,6 +22,7 @@ export interface storageResources {
     };
     dynamo: {
         assetStorageTable: dynamodb.Table;
+        commentStorageTable: dynamodb.Table;
         jobStorageTable: dynamodb.Table;
         pipelineStorageTable: dynamodb.Table;
         databaseStorageTable: dynamodb.Table;
@@ -119,6 +120,18 @@ export function storageResourcesBuilder(
     new s3deployment.BucketDeployment(scope, "DeployArtefacts", {
         sources: [s3deployment.Source.asset("./lib/artefacts")],
         destinationBucket: artefactsBucket,
+    });
+
+    const commentStorageTable = new dynamodb.Table(scope, "CommentStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "assetVersionId:commentId",
+            type: dynamodb.AttributeType.STRING,
+        },
     });
 
     const assetStorageTable = new dynamodb.Table(scope, "AssetStorageTable", {
@@ -242,6 +255,7 @@ export function storageResourcesBuilder(
         },
         dynamo: {
             assetStorageTable: assetStorageTable,
+            commentStorageTable: commentStorageTable,
             jobStorageTable: jobStorageTable,
             pipelineStorageTable: pipelineStorageTable,
             databaseStorageTable: databaseStorageTable,
