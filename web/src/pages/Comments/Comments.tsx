@@ -12,7 +12,6 @@ import Synonyms from "../../synonyms";
 import "./Comments.css";
 import { AssetListDefinitionCommentPage } from "../../components/list/list-definitions/AssetListDefinitionCommentPage";
 import CommentListPage from "../CommentListPage";
-import { StringMappingType } from "typescript";
 
 export interface CommentType {
     assetId: string;

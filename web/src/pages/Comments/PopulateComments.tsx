@@ -14,12 +14,16 @@ export default function PopulateComments(props: any) {
         return new Date(a.dateCreated).valueOf() - new Date(b.dateCreated).valueOf();
     });
 
-    return (
-        <div data-testid="expandableSectionDiv">
-            {selectedItems.map((item: AssetType) => {
-                if (item.assetId != null) {
+    const items = selectedItems.filter(
+        (x: AssetType) => x.assetId !== undefined && x.assetId !== null
+    );
+
+    if (items.length > 0) {
+        return (
+            <div data-testid="expandableSectionDiv">
+                {items.map((item: AssetType) => {
                     let allVersions;
-                    if (item.versions == undefined) {
+                    if (item.versions === undefined) {
                         allVersions = [item.currentVersion];
                     } else {
                         // shallow copy of the item.versions array
@@ -46,9 +50,10 @@ export default function PopulateComments(props: any) {
                             ></VersionComments>
                         );
                     });
-                }
-                return <></>;
-            })}
-        </div>
-    );
+                })}
+            </div>
+        );
+    } else {
+        return <div data-testid="expandableSectionDiv"></div>;
+    }
 }
