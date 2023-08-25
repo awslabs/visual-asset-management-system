@@ -40,6 +40,7 @@ export class CognitoWebNativeConstruct extends Construct {
     public webClientId: string;
     public nativeClientId: string;
     public authenticatedRole: iam.Role;
+    public superAdminRole: iam.Role;
     public unauthenticatedRole: iam.Role;
 
     constructor(parent: Construct, name: string, props: CognitoWebNativeConstructProps) {
@@ -182,7 +183,97 @@ export class CognitoWebNativeConstruct extends Construct {
             })
         );
 
-        const authenticatedRole = new iam.Role(this, "DefaultAuthenticatedRole", {
+        const authenticatedRole = this.createAuthenticatedRole(
+            "DefaultAuthenticatedRole",
+            identityPool,
+            props
+        );
+        const superAdminRole = this.createAuthenticatedRole("SuperAdminRole", identityPool, props);
+        superAdminRole.addToPolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: [
+                    "s3:PutObject",
+                    "s3:GetObject",
+                    "s3:CreateMultipartUpload",
+                    "s3:ListBucket",
+                ],
+                resources: [
+                    props.storageResources.s3.assetBucket.bucketArn,
+                    props.storageResources.s3.assetBucket.bucketArn + "/*",
+                ],
+            })
+        );
+
+        const defaultPolicy = new cognito.CfnIdentityPoolRoleAttachment(
+            this,
+            "IdentityPoolRoleAttachment",
+            {
+                identityPoolId: identityPool.ref,
+                roleMappings: {
+                    default: {
+                        type: "Token",
+                        ambiguousRoleResolution: "AuthenticatedRole",
+                        identityProvider: `cognito-idp.${cdk.Stack.of(this).region}.amazonaws.com/${
+                            userPool.userPoolId
+                        }:${userPoolWebClient.userPoolClientId}`,
+                    },
+                },
+                roles: {
+                    unauthenticated: unauthenticatedRole.roleArn,
+                    authenticated: authenticatedRole.roleArn,
+                },
+            }
+        );
+
+        // Assign Cfn Outputs
+        new cdk.CfnOutput(this, "UserPoolId", {
+            value: userPool.userPoolId,
+        });
+        new cdk.CfnOutput(this, "IdentityPoolId", {
+            value: identityPool.ref,
+        });
+        new cdk.CfnOutput(this, "WebClientId", {
+            value: userPoolWebClient.userPoolClientId,
+        });
+
+        if (props.samlSettings) {
+            new cdk.CfnOutput(this, "SAML_urn", {
+                value: `urn:amazon:cognito:sp:${userPool.userPoolId}`,
+                description: "SP urn / Audience URI / SP entity ID",
+            });
+        }
+
+        // Add SSM Parameters
+        new ssm.StringParameter(this, "COGNITO_USER_POOL_ID", {
+            stringValue: userPool.userPoolId,
+        });
+
+        new ssm.StringParameter(this, "COGNITO_IDENTITY_POOL_ID", {
+            stringValue: identityPool.ref,
+        });
+
+        new ssm.StringParameter(this, "COGNITO_WEB_CLIENT_ID", {
+            stringValue: userPoolWebClient.userPoolClientId,
+        });
+
+        // assign public properties
+        this.userPool = userPool;
+        this.webClientUserPool = userPoolWebClient;
+        this.authenticatedRole = authenticatedRole;
+        this.unauthenticatedRole = unauthenticatedRole;
+        this.superAdminRole = superAdminRole;
+        this.userPoolId = userPool.userPoolId;
+        this.identityPoolId = identityPool.ref;
+        this.webClientId = userPoolWebClient.userPoolClientId;
+    }
+
+    private createAuthenticatedRole(
+        id: string,
+        identityPool: cognito.CfnIdentityPool,
+        props: CognitoWebNativeConstructProps
+    ) {
+        const authenticatedRole = new iam.Role(this, id, {
             assumedBy: new iam.FederatedPrincipal(
                 "cognito-identity.amazonaws.com",
                 {
@@ -228,69 +319,10 @@ export class CognitoWebNativeConstruct extends Construct {
         authenticatedRole.addToPolicy(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
-                actions: [
-                    "s3:PutObject",
-                    "s3:GetObject",
-                    "s3:CreateMultipartUpload",
-                    "s3:ListBucket",
-                ],
-                resources: [
-                    props.storageResources.s3.assetBucket.bucketArn,
-                    props.storageResources.s3.assetBucket.bucketArn + "/*",
-                ],
+                actions: ["s3:GetObject"],
+                resources: [props.storageResources.s3.assetBucket.bucketArn + "/metadataschema/*"],
             })
         );
-
-        const defaultPolicy = new cognito.CfnIdentityPoolRoleAttachment(
-            this,
-            "IdentityPoolRoleAttachment",
-            {
-                identityPoolId: identityPool.ref,
-                roles: {
-                    unauthenticated: unauthenticatedRole.roleArn,
-                    authenticated: authenticatedRole.roleArn,
-                },
-            }
-        );
-
-        // Assign Cfn Outputs
-        new cdk.CfnOutput(this, "UserPoolId", {
-            value: userPool.userPoolId,
-        });
-        new cdk.CfnOutput(this, "IdentityPoolId", {
-            value: identityPool.ref,
-        });
-        new cdk.CfnOutput(this, "WebClientId", {
-            value: userPoolWebClient.userPoolClientId,
-        });
-
-        if (props.samlSettings) {
-            new cdk.CfnOutput(this, "SAML_urn", {
-                value: `urn:amazon:cognito:sp:${userPool.userPoolId}`,
-                description: "SP urn / Audience URI / SP entity ID",
-            });
-        }
-
-        // Add SSM Parameters
-        new ssm.StringParameter(this, "COGNITO_USER_POOL_ID", {
-            stringValue: userPool.userPoolId,
-        });
-
-        new ssm.StringParameter(this, "COGNITO_IDENTITY_POOL_ID", {
-            stringValue: identityPool.ref,
-        });
-
-        new ssm.StringParameter(this, "COGNITO_WEB_CLIENT_ID", {
-            stringValue: userPoolWebClient.userPoolClientId,
-        });
-
-        // assign public properties
-        this.userPool = userPool;
-        this.webClientUserPool = userPoolWebClient;
-        this.authenticatedRole = authenticatedRole;
-        this.unauthenticatedRole = unauthenticatedRole;
-        this.userPoolId = userPool.userPoolId;
-        this.identityPoolId = identityPool.ref;
-        this.webClientId = userPoolWebClient.userPoolClientId;
+        return authenticatedRole;
     }
 }
