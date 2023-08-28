@@ -1,7 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import CommentsList from "./CommentsList";
 import { fetchAllComments } from "../../services/APIService";
-import { isUndefined } from "util";
 
 jest.mock("../../services/APIService", () => ({ fetchAllComments: jest.fn() }));
 jest.mock("aws-amplify");

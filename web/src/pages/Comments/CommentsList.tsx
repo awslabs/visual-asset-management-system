@@ -5,15 +5,13 @@
 
 import LoadingIcons from "react-loading-icons";
 import { useEffect, useState, useRef } from "react";
-import { Box, Tabs, TextFilter, Button, TextContent } from "@cloudscape-design/components";
+import { Box, Tabs, Button, TextContent } from "@cloudscape-design/components";
 import PopulateComments from "./PopulateComments";
 import { API } from "aws-amplify";
 import { generateUUID } from "../../common/utils/utils";
 import { fetchAllComments } from "../../services/APIService";
 import { Auth } from "aws-amplify";
 import JoditEditor from "jodit-react";
-import { CommentType } from "./Comments";
-import { ObjectEncodingOptions } from "fs";
 
 export default function CommentsList(props: any) {
     const { selectedItems } = props;
