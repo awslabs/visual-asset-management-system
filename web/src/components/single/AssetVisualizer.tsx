@@ -48,6 +48,8 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                     )}
                     {props.viewType === "model" && (
                         <ModelViewer
+                            assetId={props.asset.assetId}
+                            databaseId={props.asset.databaseId}
                             assetKey={
                                 props.asset?.generated_artifacts?.gltf?.Key ||
                                 props.asset?.assetLocation?.Key
@@ -57,15 +59,25 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                     )}
                     {props.viewType === "plot" && (
                         <ThreeDimensionalPlotter
+                            assetId={props.asset.assetId}
+                            databaseId={props.asset.databaseId}
                             assetKey={props.asset?.assetLocation?.Key}
                             className="visualizer-container-canvas"
                         />
                     )}
                     {props.viewType === "column" && (
-                        <ColumnarViewer assetKey={props.asset?.assetLocation?.Key} />
+                        <ColumnarViewer
+                            assetId={props.asset.assetId}
+                            databaseId={props.asset.databaseId}
+                            assetKey={props.asset?.assetLocation?.Key}
+                        />
                     )}
                     {props.viewType === "html" && (
-                        <HTMLViewer assetKey={props.asset?.assetLocation?.Key} />
+                        <HTMLViewer
+                            assetId={props.asset.assetId}
+                            databaseId={props.asset.databaseId}
+                            assetKey={props.asset?.assetLocation?.Key}
+                        />
                     )}
                     {props.viewType === "folder" && (
                         <FolderViewer
