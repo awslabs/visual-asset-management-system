@@ -37,6 +37,8 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                 <div className="visualizer-container-canvases">
                     {props.viewType === "preview" && props.asset?.previewLocation?.Key && (
                         <ImgViewer
+                            assetId={props.asset.assetId}
+                            databaseId={props.asset.databaseId}
                             assetKey={
                                 props.asset?.generated_artifacts?.preview?.Key ||
                                 props.asset.previewLocation.Key
