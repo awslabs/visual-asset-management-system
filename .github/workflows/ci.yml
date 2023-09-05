@@ -100,7 +100,7 @@ jobs:
                   export STACK_NAME=CfnNagTest
                   export REGION=us-east-1
                   export VAMS_ADMIN_EMAIL=user@example.com
-                  npx cdk synth
+                  npx cdk@2.94.0 synth
 
             - name: eslint
               working-directory: vams
