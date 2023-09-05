@@ -11,7 +11,8 @@ import { Metadata, MetadataApi } from "../../components/single/Metadata";
 import { AssetDetail } from "../AssetUpload";
 import { generateUUID } from "../../common/utils/utils";
 import { FileUploadTableItem } from "./FileUploadTable";
-import { getUploadTaskPromise } from "../../common/auth/s3";
+import getUploadTaskPromise from "../../common/s3/uploadtaskpromise";
+import { GetCredentials } from "../../common/s3/credentials";
 
 export type ExecStatusType = Record<string, StatusIndicatorProps.Type>;
 
@@ -62,7 +63,7 @@ export function createAssetUploadPromises(
     isMultiFile: boolean,
     files: FileUploadTableItem[],
     keyPrefix: string,
-    metadata: { [k: string]: string },
+    metadata: { [k: string]: string } & GetCredentials,
     moveToQueued: (index: number) => void,
     progressCallback: (index: number, progress: ProgressCallbackArgs) => void,
     completeCallback: (index: number, event: any) => void,

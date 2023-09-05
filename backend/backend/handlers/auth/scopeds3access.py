@@ -64,10 +64,11 @@ def lambda_handler(event, context):
             return response
 
         claims_and_roles = request_to_claims(event)
+        is_super_admin = "super-admin" in claims_and_roles.get("roles", [])
         tokens = claims_and_roles['tokens']
 
         databases = get_database_set(tokens)
-        if databaseId not in databases:
+        if databaseId not in databases and not is_super_admin:
             response['body'] = json.dumps({
                 "message": "Not Authorized",
             })
@@ -85,20 +86,30 @@ def lambda_handler(event, context):
                 "Effect": "Allow",
                 # set of actions needed to do get object and multipart upload
                 "Action": [
-                    "s3:GetObject",
                     "s3:PutObject",
+                    "s3:GetObject*",
+                    "s3:GetBucket*",
+                    "s3:List*",
                     "s3:CreateMultipartUpload",
                     "s3:AbortMultipartUpload",
                     "s3:ListMultipartUploadParts",
                     "s3:DeleteObject",
-                    "s3:ListBucket",
                 ],
                 "Resource": [
                     "arn:aws:s3:::" +
                     os.environ['S3_BUCKET'] + "/" + assetId + "/*",
                     "arn:aws:s3:::" +
                     os.environ['S3_BUCKET'] + "/previews/" + assetId + "/*"
-
+                ]
+            }, {
+                "Sid": "Stmt2",
+                "Effect": "Allow",
+                # set of actions needed to do get object and multipart upload
+                "Action": [
+                    "s3:ListBucket",
+                ],
+                "Resource": [
+                    "arn:aws:s3:::" + os.environ['S3_BUCKET']
                 ]
             }]
         }

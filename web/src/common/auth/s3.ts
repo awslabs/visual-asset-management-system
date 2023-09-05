@@ -1,8 +1,11 @@
+/*
+ * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import {
     S3Client,
     GetObjectCommand,
-    ListMultipartUploadsCommand,
-    ListPartsCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Upload } from "@aws-sdk/lib-storage";
@@ -14,7 +17,6 @@ interface GetCredentials {
 }
 
 async function getCredentials(assetIdentifiers: GetCredentials): Promise<any> {
-    console.log("asset identifiers", assetIdentifiers);
     return API.post("api", "auth/scopeds3access", { body: assetIdentifiers });
 }
 
@@ -86,74 +88,6 @@ async function uploadToS3(
     }
 }
 
-async function getOngoingUploadId(
-    s3: S3Client,
-    Bucket: string,
-    Key: string
-): Promise<string | null> {
-    const command = new ListMultipartUploadsCommand({ Bucket: Bucket });
-    const response = await s3.send(command);
-
-    const ongoingUpload = response.Uploads?.find((upload) => upload.Key === Key);
-    return ongoingUpload?.UploadId || null;
-}
-
-async function getUploadedParts(
-    s3: S3Client,
-    Bucket: string,
-    Key: string,
-    uploadId: string
-): Promise<number[]> {
-    const command = new ListPartsCommand({
-        Bucket: Bucket,
-        Key: Key,
-        UploadId: uploadId,
-    });
-
-    const response = await s3.send(command);
-    if (response.Parts) {
-        return response.Parts.map((part) => part.PartNumber || 0);
-    }
-    return [];
-}
-
-/*
-async function uploadToS3(params: UploadParams, onProgress: (progress: number) => void): Promise<void> {
-    // Identify if there's an ongoing upload for the given key
-    const uploadId = await getOngoingUploadId(params.s3, params.Bucket, params.Key);
-    let uploadedParts: number[] = [];
-
-    if (uploadId) {
-        // If there's an ongoing upload, get the already uploaded parts
-        uploadedParts = await getUploadedParts(params.s3, params.Bucket, params.Key, uploadId);
-    }
-
-    const uploader = new Upload({
-        client: params.s3,
-        params: {
-            Bucket: params.Bucket,
-            Key: params.Key,
-            Body: params.Body
-        },
-        leavePartsOnError: true, // If set to true, it won't clean up the parts if the multipart upload fails.
-        partSize: 5 * 1024 * 1024,
-        queueSize: 4
-    });
-
-    uploader.on('httpUploadProgress', (progressEvent) => {
-        const progress = (progressEvent.loaded / progressEvent.total) * 100;
-        onProgress(progress);
-    });
-
-    // Skip already uploaded parts
-    if (uploadedParts.length) {
-        uploader['partNumbersToUpload'] = uploader['partNumbersToUpload'].filter((partNumber: number) => !uploadedParts.includes(partNumber));
-    }
-
-    await uploader.done();
-}
-*/
-
 async function getS3ClientForAsset(
     assetId: string,
     databaseId: string
@@ -203,19 +137,16 @@ async function getUploadTaskPromise(
             { s3: s3Client, Bucket: bucket, Key: key, Body: f, metadata },
 
             (part, progress) => {
-                console.log("progress", progress);
                 progressCallback(index, {
                     loaded: progress.loaded,
                     total: progress.total,
                 });
             },
             (part, event) => {
-                console.log("complete", part, event);
                 completeCallback(index, null);
                 resolve(true);
             },
             (part, event) => {
-                console.log("error", part, event);
                 errorCallback(index, event);
                 resolve(true);
             }
