@@ -103,7 +103,7 @@ async function getS3ClientForAsset(
 }
 
 async function getPresignedKey(assetId: string, databaseId: string, key: string): Promise<string> {
-    const { s3Client, bucket, region } = await getS3ClientForAsset(assetId, databaseId);
+    const { s3Client, bucket } = await getS3ClientForAsset(assetId, databaseId);
 
     // presign the key
     const command = new GetObjectCommand({
@@ -111,7 +111,7 @@ async function getPresignedKey(assetId: string, databaseId: string, key: string)
         Key: key,
     });
 
-    const url = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+    const url = await getSignedUrl(s3Client, command, { expiresIn: 900 });
     return url;
 }
 
