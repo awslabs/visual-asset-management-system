@@ -38,7 +38,7 @@ class AssetCredentials {
         if (
             this.credentials &&
             this.credentials.expiration &&
-            this.credentials.expiration.getTime() > Date.now() + 60000 * 14
+            this.credentials.expiration.getTime() > Date.now() + 60000
         ) {
             return this.credentials;
         }
