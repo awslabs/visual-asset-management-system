@@ -4,8 +4,10 @@
  */
 import events from "events";
 import S3Upload, { TaskEvents } from "./upload";
-import AssetCredentials, { GetCredentials } from "./credentials";
+import AssetCredentials from "./credentials";
+
 import { Cache } from "aws-amplify";
+import { GetCredentials } from "./types";
 
 class ProgressCallbackArgs {
     loaded!: number;

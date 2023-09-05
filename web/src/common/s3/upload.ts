@@ -32,7 +32,9 @@ import {
     CreateMultipartUploadCommandInput,
     CreateMultipartUploadCommand,
 } from "@aws-sdk/client-s3";
+
 import * as events from "events";
+import { ICredentials } from "./types";
 
 export enum AWSS3UploadTaskState {
     INIT,
@@ -40,15 +42,6 @@ export enum AWSS3UploadTaskState {
     PAUSED,
     CANCELLED,
     COMPLETED,
-}
-
-export interface ICredentials {
-    accessKeyId: string;
-    sessionToken: string;
-    secretAccessKey: string;
-    identityId: string;
-    authenticated: boolean;
-    expiration?: Date;
 }
 
 export enum TaskEvents {

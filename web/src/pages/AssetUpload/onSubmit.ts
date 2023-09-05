@@ -11,10 +11,31 @@ import { Metadata, MetadataApi } from "../../components/single/Metadata";
 import { AssetDetail } from "../AssetUpload";
 import { generateUUID } from "../../common/utils/utils";
 import { FileUploadTableItem } from "./FileUploadTable";
-import getUploadTaskPromise from "../../common/s3/uploadtaskpromise";
-import { GetCredentials } from "../../common/s3/credentials";
-
+// import getUploadTaskPromise from "../../common/s3/uploadtaskpromise";
+import { GetCredentials } from "../../common/s3/types";
 export type ExecStatusType = Record<string, StatusIndicatorProps.Type>;
+
+function getUploadTaskPromiseLazy(
+    index: number,
+    key: string,
+    f: File,
+    metadata: { [p: string]: string } & GetCredentials,
+    progressCallback: (index: number, progress: ProgressCallbackArgs) => void,
+    completeCallback: (index: number, event: any) => void,
+    errorCallback: (index: number, event: any) => void
+): Promise<void> {
+    return import("../../common/s3/uploadtaskpromise").then((fun) => {
+        return fun.default(
+            index,
+            key,
+            f,
+            metadata,
+            progressCallback,
+            completeCallback,
+            errorCallback
+        );
+    });
+}
 
 class BucketKey {
     Bucket?: string;
@@ -78,7 +99,7 @@ export function createAssetUploadPromises(
         uploads.push(
             async () =>
                 await files[0].handle.getFile().then((f: File) => {
-                    return getUploadTaskPromise(
+                    return getUploadTaskPromiseLazy(
                         0,
                         keyPrefix,
                         f,
@@ -97,7 +118,7 @@ export function createAssetUploadPromises(
                     async () =>
                         await files[i].handle.getFile().then((f: File) => {
                             let key = keyPrefix + files[i].relativePath;
-                            return getUploadTaskPromise(
+                            return getUploadTaskPromiseLazy(
                                 i,
                                 key,
                                 f,
@@ -205,7 +226,7 @@ async function performUploads({
         const up2 =
             (assetDetail.Preview &&
                 assetDetail?.previewLocation?.Key &&
-                getUploadTaskPromise(
+                getUploadTaskPromiseLazy(
                     0,
                     assetDetail.previewLocation?.Key,
                     assetDetail.Preview,

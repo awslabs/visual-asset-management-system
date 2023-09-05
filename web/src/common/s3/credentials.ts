@@ -4,12 +4,7 @@
  */
 
 import { API } from "aws-amplify";
-import { ICredentials } from "./upload";
-
-export interface GetCredentials {
-    assetId: string;
-    databaseId: string;
-}
+import { ICredentials, GetCredentials } from "./types";
 
 class UnableToRetrieveCredentialsError extends Error {
     constructor(message: string) {
