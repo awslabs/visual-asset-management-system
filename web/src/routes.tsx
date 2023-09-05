@@ -8,6 +8,7 @@ import { Route, Routes } from "react-router-dom";
 import AppLayout from "@cloudscape-design/components/app-layout";
 import { Navigation } from "./layout/Navigation";
 import LandingPage from "./pages/LandingPage";
+import Spinner from "@cloudscape-design/components/spinner";
 
 const Databases = React.lazy(() => import("./pages/Databases"));
 const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
@@ -139,6 +140,23 @@ interface AppRoutesProps {
     user: any;
 }
 
+function CenterSpinner() {
+    return (
+        <div
+            aria-live="polite"
+            aria-label="Loading page content."
+            style={{
+                display: "flex",
+                justifyContent: "center",
+                alignItems: "center",
+                height: "100%",
+            }}
+        >
+            <Spinner size="large" />
+        </div>
+    );
+}
+
 export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutesProps) => {
     const buildRoute = (routeOptions: RouteOption, i: number = 0) => {
         const { path, active, Page } = routeOptions;
@@ -150,7 +168,7 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                     <AppLayout
                         disableContentPaddings={navigationOpen}
                         content={
-                            <Suspense fallback={<div />}>
+                            <Suspense fallback={<CenterSpinner />}>
                                 <Page />
                             </Suspense>
                         }

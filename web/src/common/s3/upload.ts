@@ -5,9 +5,17 @@
 
 /*
 
-This was derived in large part from Amplify's upload functionality. This 
-version was created to leverage @aws-sdk/client-s3 and a different 
+This was derived in large part from Amplify's upload functionality. This
+version was created to leverage @aws-sdk/client-s3 and a different
 credentials model to support the authorization models in VAMS.
+
+- Instead of using the embedded client inside of amplify, we use the
+  @aws-sdk/client-s3 library. Functions to call the S3Client are found in
+  this class.
+
+- The credential model is to pass in a function to the S3Upload constructor
+  that can be called to get fresh credentials. So it can be used with any
+  source of credentials and not just a Cognito user pool as is the case with Amplify.
 
 https://github.com/aws-amplify/amplify-js/blob/main/packages/storage/src/providers/AWSS3Provider.ts
 
@@ -141,16 +149,15 @@ class S3Upload {
             // first time running resume, find any cached parts on s3 or start a new multipart upload request before
             // starting the upload
         } else if (!this.uploadId) {
-            logger.info("resuming upload");
+            logger.debug("resuming upload");
             this._initializeUploadTask();
         } else {
-            logger.info("starting upload");
+            logger.debug("starting upload");
             this._startUpload();
         }
     }
 
     private async _initializeUploadTask() {
-        console.log("initialize");
         this.state = AWSS3UploadTaskState.IN_PROGRESS;
         this.partSize = calculatePartSize(this.totalBytes);
         try {
