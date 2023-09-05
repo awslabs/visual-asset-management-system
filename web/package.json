@@ -9,7 +9,9 @@
     "dependencies": {
         "@aws-amplify/storage": "^5.4.0",
         "@aws-amplify/ui-react": "^2.1.5",
-        "@aws-sdk/client-s3": "^3.338.0",
+        "@aws-sdk/client-s3": "^3.400.0",
+        "@aws-sdk/lib-storage": "^3.400.0",
+        "@aws-sdk/s3-request-presigner": "^3.400.0",
         "@cloudscape-design/collection-hooks": "^1.0.19",
         "@cloudscape-design/components": "^3.0.196",
         "@cloudscape-design/design-tokens": "^3.0.8",

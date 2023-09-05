@@ -444,6 +444,13 @@ export function apiBuilder(
     });
 
     const authFunctions = buildAuthFunctions(scope, storageResources);
+
+    attachFunctionToApi(scope, authFunctions.scopeds3access, {
+        routePath: "/auth/scopeds3access",
+        method: apigwv2.HttpMethod.POST,
+        api: api.apiGatewayV2,
+    });
+
     attachFunctionToApi(scope, authFunctions.groups, {
         routePath: "/auth/groups",
         method: apigwv2.HttpMethod.GET,

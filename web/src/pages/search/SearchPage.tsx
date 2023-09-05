@@ -1,3 +1,7 @@
+/*
+ * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 import React, { Dispatch, ReducerAction, useEffect, useReducer, useState } from "react";
 import SearchPropertyFilter, { changeFilter, search } from "./SearchPropertyFilter";
 import Container from "@cloudscape-design/components/container";

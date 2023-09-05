@@ -3,25 +3,28 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from "react";
+import React, { Suspense } from "react";
 import { Route, Routes } from "react-router-dom";
 import AppLayout from "@cloudscape-design/components/app-layout";
-import LandingPage from "./pages/LandingPage";
-import SearchPage from "./pages/search/SearchPage";
 import { Navigation } from "./layout/Navigation";
-import Databases from "./pages/Databases";
-import Assets from "./pages/Assets";
-import Comments from "./pages/Comments/Comments";
-import AssetUploadPage from "./pages/AssetUpload";
-import ViewAsset from "./components/single/ViewAsset";
-import Pipelines from "./pages/Pipelines";
-import ViewPipeline from "./components/single/ViewPipeline";
-import Workflows from "./pages/Workflows";
-import CreateUpdateWorkflow from "./components/createupdate/CreateUpdateWorkflow";
-import Constraints from "./pages/auth/Constraints";
-import FinishUploadsPage from "./pages/FinishUploads";
-import MetadataSchema from "./pages/MetadataSchema";
-import ViewFile from "./components/single/ViewFile";
+import LandingPage from "./pages/LandingPage";
+import Spinner from "@cloudscape-design/components/spinner";
+
+const Databases = React.lazy(() => import("./pages/Databases"));
+const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
+const Comments = React.lazy(() => import("./pages/Comments/Comments"));
+const AssetUploadPage = React.lazy(() => import("./pages/AssetUpload"));
+const ViewAsset = React.lazy(() => import("./components/single/ViewAsset"));
+const Pipelines = React.lazy(() => import("./pages/Pipelines"));
+const ViewPipeline = React.lazy(() => import("./components/single/ViewPipeline"));
+const Workflows = React.lazy(() => import("./pages/Workflows"));
+const CreateUpdateWorkflow = React.lazy(
+    () => import("./components/createupdate/CreateUpdateWorkflow")
+);
+const Constraints = React.lazy(() => import("./pages/auth/Constraints"));
+const FinishUploadsPage = React.lazy(() => import("./pages/FinishUploads"));
+const MetadataSchema = React.lazy(() => import("./pages/MetadataSchema"));
+const ViewFile = React.lazy(() => import("./components/single/ViewFile"));
 
 interface RouteOption {
     path: string;
@@ -137,6 +140,23 @@ interface AppRoutesProps {
     user: any;
 }
 
+function CenterSpinner() {
+    return (
+        <div
+            aria-live="polite"
+            aria-label="Loading page content."
+            style={{
+                display: "flex",
+                justifyContent: "center",
+                alignItems: "center",
+                height: "100%",
+            }}
+        >
+            <Spinner size="large" />
+        </div>
+    );
+}
+
 export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutesProps) => {
     const buildRoute = (routeOptions: RouteOption, i: number = 0) => {
         const { path, active, Page } = routeOptions;
@@ -147,7 +167,11 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                 element={
                     <AppLayout
                         disableContentPaddings={navigationOpen}
-                        content={<Page />}
+                        content={
+                            <Suspense fallback={<CenterSpinner />}>
+                                <Page />
+                            </Suspense>
+                        }
                         navigation={<Navigation activeHref={active} user={user} />}
                         navigationOpen={navigationOpen}
                         onNavigationChange={({ detail }) => setNavigationOpen(detail.open)}

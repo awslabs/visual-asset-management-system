@@ -185,9 +185,9 @@ def archive_multi_file(location, databaseId, assetId):
     paginator = s3.get_paginator('list_objects_v2')
     files = []
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-        for obj in page['Contents']:
+        for obj in page.get('Contents', []):
             files.append(obj['Key'])
-    
+
     for key in files:
         try:
             response = move_to_glacier_and_mark_deleted(bucket, key, databaseId, assetId)

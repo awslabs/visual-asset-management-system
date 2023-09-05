@@ -88,6 +88,7 @@ export class VAMS extends cdk.Stack {
         new cognito.CfnUserPoolGroup(this, "AdminGroup", {
             groupName: "super-admin",
             userPoolId: cognitoResources.userPoolId,
+            roleArn: cognitoResources.superAdminRole.roleArn,
         });
 
         const userGroupAttachment = new cognito.CfnUserPoolUserToGroupAttachment(

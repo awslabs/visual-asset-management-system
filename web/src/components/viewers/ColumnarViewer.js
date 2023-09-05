@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { Storage } from "aws-amplify";
+import { getPresignedKey } from "../../common/auth/s3";
 import { readRemoteFile } from "react-papaparse";
 import DataGrid from "react-data-grid";
 import FCS from "fcs";
@@ -82,18 +82,14 @@ const readCsvFile = (remoteFileUrl, setColumns, setRows) => {
 };
 
 export default function ColumnarViewer(props) {
-    const { assetKey } = props;
+    const { assetId, databaseId, assetKey } = props;
     const [loaded, setLoaded] = useState(false);
     const [columns, setColumns] = useState([]);
     const [rows, setRows] = useState([]);
 
     useEffect(() => {
-        let config = {
-            download: false,
-            expires: 10,
-        };
         const loadAsset = async () => {
-            await Storage.get(assetKey, config).then((remoteFileUrl) => {
+            await getPresignedKey(assetId, databaseId, assetKey).then((remoteFileUrl) => {
                 if (assetKey.indexOf(".fcs") !== -1) {
                     try {
                         readFcsFile(remoteFileUrl, setColumns, setRows);

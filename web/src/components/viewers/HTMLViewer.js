@@ -4,21 +4,17 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import { Storage } from "aws-amplify";
 import DOMPurify from "dompurify";
+import { getPresignedKey } from "../../common/auth/s3";
 
 export default function HTMLViewer(props) {
     const shadowElement = useRef(null);
-    const { assetKey } = props;
+    const { assetId, databaseId, assetKey } = props;
     const [loaded, setLoaded] = useState(false);
 
     useEffect(() => {
-        let config = {
-            download: false,
-            expires: 10,
-        };
         const loadAsset = async () => {
-            await Storage.get(assetKey, config).then((remoteFileUrl) => {
+            await getPresignedKey(assetId, databaseId, assetKey).then((remoteFileUrl) => {
                 const request = new XMLHttpRequest();
                 request.onload = function (e) {
                     const cleanContent = DOMPurify.sanitize(request.response);
