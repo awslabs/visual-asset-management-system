@@ -1,3 +1,7 @@
+/*
+ * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 import { Auth } from "aws-amplify";
 
 export async function anyRoleOf(roles: string[]) {

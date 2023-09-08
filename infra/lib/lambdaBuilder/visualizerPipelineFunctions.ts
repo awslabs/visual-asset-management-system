@@ -43,6 +43,7 @@ export function buildOpenPipelineFunction(
     assetBucket: s3.Bucket,
     assetVisualizerBucket: s3.Bucket,
     pipelineStateMachine: sfn.StateMachine,
+    allowedPipelineInputExtensions: string,
     vpc: ec2.Vpc,
     pipelineSubnets: ec2.ISubnet[]
 ): lambda.Function {
@@ -63,6 +64,7 @@ export function buildOpenPipelineFunction(
             SOURCE_BUCKET_NAME: assetBucket.bucketName,
             DEST_BUCKET_NAME: assetVisualizerBucket.bucketName,
             STATE_MACHINE_ARN: pipelineStateMachine.stateMachineArn,
+            ALLOWED_INPUT_FILEEXTENSIONS: allowedPipelineInputExtensions,
         },
     });
 

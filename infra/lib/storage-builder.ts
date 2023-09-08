@@ -6,6 +6,11 @@
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as s3deployment from "aws-cdk-lib/aws-s3-deployment";
+import * as sns from "aws-cdk-lib/aws-sns";
+import * as kms from "aws-cdk-lib/aws-kms";
+import * as iam from "aws-cdk-lib/aws-iam";
+import * as s3not from "aws-cdk-lib/aws-s3-notifications";
+import * as cdk from "aws-cdk-lib";
 import { Duration, RemovalPolicy } from "aws-cdk-lib";
 import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
@@ -21,8 +26,14 @@ export interface storageResources {
         sagemakerBucket: s3.Bucket;
         stagingBucket?: s3.IBucket;
     };
+    sns: {
+        assetBucketObjectCreatedTopic: sns.Topic;
+        assetBucketObjectRemovedTopic: sns.Topic;
+        kmsTopicKey: kms.Key;
+    };
     dynamo: {
         assetStorageTable: dynamodb.Table;
+        commentStorageTable: dynamodb.Table;
         jobStorageTable: dynamodb.Table;
         pipelineStorageTable: dynamodb.Table;
         databaseStorageTable: dynamodb.Table;
@@ -99,6 +110,44 @@ export function storageResourcesBuilder(
     });
     requireTLSAddToResourcePolicy(assetBucket);
 
+    /**
+     * SNS Fan out for S3 Asset Creation/Deletion
+     */
+    const topicKey = new kms.Key(scope, "AssetNotificationTopicKey", {
+        description: "KMS key for AssetNotificationTopics",
+        enableKeyRotation: true,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    topicKey.addToResourcePolicy(
+        new iam.PolicyStatement({
+            actions: ["kms:GenerateDataKey*", "kms:Decrypt"],
+            resources: ["*"],
+            principals: [new iam.ServicePrincipal("s3.amazonaws.com")],
+        })
+    );
+
+    // Object Create Topic
+    const S3AssetsObjectCreatedTopic = new sns.Topic(scope, "S3AssetsObjectCreatedTopic", {
+        masterKey: topicKey,
+    });
+
+    // Object Removed Topic
+    const S3AssetsObjectRemovedTopic = new sns.Topic(scope, "S3AssetsObjectRemovedTopic", {
+        masterKey: topicKey,
+    });
+
+    //Add S3 Asset Bucket event notifications for SNS Topics
+    assetBucket.addEventNotification(
+        s3.EventType.OBJECT_CREATED,
+        new s3not.SnsDestination(S3AssetsObjectCreatedTopic)
+    );
+
+    assetBucket.addEventNotification(
+        s3.EventType.OBJECT_REMOVED,
+        new s3not.SnsDestination(S3AssetsObjectRemovedTopic)
+    );
+
     const assetVisualizerBucket = new s3.Bucket(scope, "AssetVisualizerBucket", {
         ...s3DefaultProps,
         cors: [
@@ -115,7 +164,7 @@ export function storageResourcesBuilder(
             },
         ],
         serverAccessLogsBucket: accessLogsBucket,
-        serverAccessLogsPrefix: "asset-bucket-logs/",
+        serverAccessLogsPrefix: "assetVisualizer-bucket-logs/",
     });
     requireTLSAddToResourcePolicy(assetVisualizerBucket);
 
@@ -140,6 +189,18 @@ export function storageResourcesBuilder(
     new s3deployment.BucketDeployment(scope, "DeployArtefacts", {
         sources: [s3deployment.Source.asset("./lib/artefacts")],
         destinationBucket: artefactsBucket,
+    });
+
+    const commentStorageTable = new dynamodb.Table(scope, "CommentStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "assetVersionId:commentId",
+            type: dynamodb.AttributeType.STRING,
+        },
     });
 
     const assetStorageTable = new dynamodb.Table(scope, "AssetStorageTable", {
@@ -262,8 +323,14 @@ export function storageResourcesBuilder(
             sagemakerBucket: sagemakerBucket,
             stagingBucket: stagingBucket,
         },
+        sns: {
+            assetBucketObjectCreatedTopic: S3AssetsObjectCreatedTopic,
+            assetBucketObjectRemovedTopic: S3AssetsObjectRemovedTopic,
+            kmsTopicKey: topicKey,
+        },
         dynamo: {
             assetStorageTable: assetStorageTable,
+            commentStorageTable: commentStorageTable,
             jobStorageTable: jobStorageTable,
             pipelineStorageTable: pipelineStorageTable,
             databaseStorageTable: databaseStorageTable,

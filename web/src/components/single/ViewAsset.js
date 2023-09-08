@@ -345,6 +345,8 @@ export default function ViewAsset() {
                                                         {viewType === "preview" &&
                                                             asset?.previewLocation?.Key && (
                                                                 <ImgViewer
+                                                                    assetId={assetId}
+                                                                    databaseId={databaseId}
                                                                     assetKey={
                                                                         asset?.generated_artifacts
                                                                             ?.preview?.Key ||

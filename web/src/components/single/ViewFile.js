@@ -4,23 +4,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { useEffect, useState } from "react";
 import {
     Box,
     BreadcrumbGroup,
-    Button,
     Container,
-    FormField,
     Grid,
     Header,
-    Link,
     SegmentedControl,
     SpaceBetween,
 } from "@cloudscape-design/components";
+import { useLocation, useParams } from "react-router";
 
 import ControlledMetadata from "../metadata/ControlledMetadata";
-import React, { useEffect, useState } from "react";
-import { useLocation, useParams } from "react-router";
-import { downloadAsset, fetchAsset } from "../../services/APIService";
+import { fetchAsset } from "../../services/APIService";
 /**
  * No viewer yet for cad and archive file formats
  */
@@ -72,10 +69,7 @@ export default function ViewFile() {
 
     const [viewerOptions, setViewerOptions] = useState([]);
     const [viewerMode, setViewerMode] = useState("collapse");
-    const [downloadUrl, setDownloadUrl] = useState(null);
 
-    // error state
-    const [assetDownloadError, setAssetDownloadError] = useState("");
     const changeViewerMode = (mode) => {
         if (mode === "fullscreen" && viewerMode === "fullscreen") {
             mode = "collapse";
@@ -128,7 +122,7 @@ export default function ViewFile() {
                 element.removeEventListener("fullscreenchange", fullscreenChangeHandler);
             };
         }
-    }, [assetId, viewerMode]);
+    }, [assetId, isDirectory, viewerMode]);
 
     const changeViewType = (event) => {
         setViewType(event.detail.selectedId);
@@ -165,7 +159,7 @@ export default function ViewFile() {
         if (reload && !pathViewType) {
             getData();
         }
-    }, [reload, assetId, databaseId, pathViewType, asset]);
+    }, [reload, assetId, databaseId, pathViewType, asset, filename, isDirectory]);
 
     return (
         <>

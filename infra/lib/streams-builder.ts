@@ -8,14 +8,15 @@ import { storageResources } from "./storage-builder";
 import { buildMetadataIndexingFunction } from "./lambdaBuilder/metadataFunctions";
 import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import { NagSuppressions } from "cdk-nag";
 import { OpensearchServerlessConstruct } from "./constructs/opensearch-serverless";
 import { Stack } from "aws-cdk-lib";
 import { CognitoWebNativeConstruct } from "./constructs/cognito-web-native-construct";
-import * as ssm from "aws-cdk-lib/aws-ssm";
 import { buildSearchFunction } from "./lambdaBuilder/searchFunctions";
 import { attachFunctionToApi } from "./api-builder";
 import * as apigwv2 from "@aws-cdk/aws-apigatewayv2-alpha";
+import * as cdk from "aws-cdk-lib";
 
 export function streamsBuilder(
     scope: Stack,
@@ -27,10 +28,31 @@ export function streamsBuilder(
         principalArn: [],
     });
 
+    const indexNameParam = "/" + [cdk.Stack.of(scope).stackName, "indexName"].join("/");
+
     const indexingFunction = buildMetadataIndexingFunction(
         scope,
         storage,
-        aoss.endpointSSMParameterName()
+        aoss.endpointSSMParameterName(),
+        indexNameParam,
+        "m"
+    );
+
+    const assetIndexingFunction = buildMetadataIndexingFunction(
+        scope,
+        storage,
+        aoss.endpointSSMParameterName(),
+        indexNameParam,
+        "a"
+    );
+
+    //Add subscriptions to kick-off lambda function for indexing
+    storage.sns.assetBucketObjectCreatedTopic.addSubscription(
+        new LambdaSubscription(indexingFunction)
+    );
+
+    storage.sns.assetBucketObjectRemovedTopic.addSubscription(
+        new LambdaSubscription(indexingFunction)
     );
 
     indexingFunction.addEventSource(
@@ -38,10 +60,22 @@ export function streamsBuilder(
             startingPosition: lambda.StartingPosition.TRIM_HORIZON,
         })
     );
+    assetIndexingFunction.addEventSource(
+        new eventsources.DynamoEventSource(storage.dynamo.assetStorageTable, {
+            startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+        })
+    );
 
     aoss.grantCollectionAccess(indexingFunction);
+    aoss.grantCollectionAccess(assetIndexingFunction);
 
-    const searchFun = buildSearchFunction(scope, aoss.endpointSSMParameterName(), aoss, storage);
+    const searchFun = buildSearchFunction(
+        scope,
+        aoss.endpointSSMParameterName(),
+        indexNameParam,
+        aoss,
+        storage
+    );
     attachFunctionToApi(scope, searchFun, {
         routePath: "/search",
         method: apigwv2.HttpMethod.POST,

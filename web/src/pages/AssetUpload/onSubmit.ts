@@ -11,8 +11,31 @@ import { Metadata, MetadataApi } from "../../components/single/Metadata";
 import { AssetDetail } from "../AssetUpload";
 import { generateUUID } from "../../common/utils/utils";
 import { FileUploadTableItem } from "./FileUploadTable";
-
+// import getUploadTaskPromise from "../../common/s3/uploadtaskpromise";
+import { GetCredentials } from "../../common/s3/types";
 export type ExecStatusType = Record<string, StatusIndicatorProps.Type>;
+
+function getUploadTaskPromiseLazy(
+    index: number,
+    key: string,
+    f: File,
+    metadata: { [p: string]: string } & GetCredentials,
+    progressCallback: (index: number, progress: ProgressCallbackArgs) => void,
+    completeCallback: (index: number, event: any) => void,
+    errorCallback: (index: number, event: any) => void
+): Promise<void> {
+    return import("../../common/s3/uploadtaskpromise").then((fun) => {
+        return fun.default(
+            index,
+            key,
+            f,
+            metadata,
+            progressCallback,
+            completeCallback,
+            errorCallback
+        );
+    });
+}
 
 class BucketKey {
     Bucket?: string;
@@ -57,45 +80,11 @@ class ProgressCallbackArgs {
     total!: number;
 }
 
-function getUploadTaskPromise(
-    index: number,
-    key: string,
-    f: File,
-    metadata: { [p: string]: string },
-    progressCallback: (index: number, progress: ProgressCallbackArgs) => void,
-    completeCallback: (index: number, event: any) => void,
-    errorCallback: (index: number, event: any) => void
-) {
-    return new Promise((resolve, reject) => {
-        return Storage.put(key, f, {
-            metadata,
-            resumable: true,
-            customPrefix: {
-                public: "",
-            },
-            progressCallback: (progress: ProgressCallbackArgs) => {
-                progressCallback(index, {
-                    loaded: progress.loaded,
-                    total: progress.total,
-                });
-            },
-            completeCallback: (event: any) => {
-                completeCallback(index, null);
-                resolve(true);
-            },
-            errorCallback: (event: any) => {
-                errorCallback(index, event);
-                resolve(true);
-            },
-        });
-    });
-}
-
 export function createAssetUploadPromises(
     isMultiFile: boolean,
     files: FileUploadTableItem[],
     keyPrefix: string,
-    metadata: { [k: string]: string },
+    metadata: { [k: string]: string } & GetCredentials,
     moveToQueued: (index: number) => void,
     progressCallback: (index: number, progress: ProgressCallbackArgs) => void,
     completeCallback: (index: number, event: any) => void,
@@ -110,7 +99,7 @@ export function createAssetUploadPromises(
         uploads.push(
             async () =>
                 await files[0].handle.getFile().then((f: File) => {
-                    return getUploadTaskPromise(
+                    return getUploadTaskPromiseLazy(
                         0,
                         keyPrefix,
                         f,
@@ -129,7 +118,7 @@ export function createAssetUploadPromises(
                     async () =>
                         await files[i].handle.getFile().then((f: File) => {
                             let key = keyPrefix + files[i].relativePath;
-                            return getUploadTaskPromise(
+                            return getUploadTaskPromiseLazy(
                                 i,
                                 key,
                                 f,
@@ -237,17 +226,22 @@ async function performUploads({
         const up2 =
             (assetDetail.Preview &&
                 assetDetail?.previewLocation?.Key &&
-                uploadAssetToS3(
-                    assetDetail.Preview,
+                getUploadTaskPromiseLazy(
+                    0,
                     assetDetail.previewLocation?.Key,
+                    assetDetail.Preview,
                     {
                         assetId: assetDetail.assetId,
                         databaseId: assetDetail.databaseId,
                     },
-                    (progress) => {
+                    (idx, progress) => {
                         setPreviewUploadProgress({
                             value: (progress.loaded / progress.total) * 100,
                         });
+                    },
+                    (idx, complete) => {},
+                    (idx, error) => {
+                        console.log("error uploading preview", idx, error);
                     }
                 )
                     .then((res) => {

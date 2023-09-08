@@ -7,7 +7,6 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import { Storage } from "aws-amplify";
 import {
     Engine,
     Scene,
@@ -30,6 +29,7 @@ import "babylonjs-loaders";
 import { readRemoteFile } from "react-papaparse";
 import FCS from "fcs";
 import arrayBufferToBuffer from "arraybuffer-to-buffer";
+import { getPresignedKey } from "../../common/auth/s3";
 
 let scatterPlot = {};
 let points = [];
@@ -375,7 +375,15 @@ const readCsvFile = (remoteFileUrl, render) => {
 
 export default function ThreeDimensionalPlotter(props) {
     const reactCanvas = useRef(null);
-    const { assetKey, engineOptions, adaptToDeviceRatio, sceneOptions, ...rest } = props;
+    const {
+        assetId,
+        databaseId,
+        assetKey,
+        engineOptions,
+        adaptToDeviceRatio,
+        sceneOptions,
+        ...rest
+    } = props;
     const [loaded, setLoaded] = useState(false);
     const antialias = true;
 
@@ -543,7 +551,7 @@ export default function ThreeDimensionalPlotter(props) {
         };
         const loadAsset = async () => {
             points = [];
-            await Storage.get(assetKey, config).then((remoteFileUrl) => {
+            await getPresignedKey(assetId, databaseId, assetKey).then((remoteFileUrl) => {
                 if (assetKey.indexOf(".fcs") !== -1) {
                     try {
                         readFcsFile(remoteFileUrl, render);

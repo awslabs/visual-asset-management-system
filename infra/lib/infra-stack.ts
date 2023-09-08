@@ -106,10 +106,13 @@ export class VAMS extends cdk.Stack {
             ],
         });
 
-        new cognito.CfnUserPoolGroup(this, "AdminGroup", {
+        const userPoolGroup = new cognito.CfnUserPoolGroup(this, "AdminGroup", {
             groupName: "super-admin",
             userPoolId: cognitoResources.userPoolId,
+            roleArn: cognitoResources.superAdminRole.roleArn,
         });
+
+        userPoolGroup.node.addDependency(cognitoResources);
 
         const userGroupAttachment = new cognito.CfnUserPoolUserToGroupAttachment(
             this,
@@ -121,6 +124,8 @@ export class VAMS extends cdk.Stack {
             }
         );
         userGroupAttachment.addDependency(cognitoUser);
+        userGroupAttachment.addDependency(userPoolGroup);
+
         // initialize api gateway and bind it to /api route of cloudfront
         const api = new ApiGatewayV2CloudFrontConstruct(this, "api", {
             ...props,
@@ -158,8 +163,7 @@ export class VAMS extends cdk.Stack {
                 "VisualizerPipeline",
                 {
                     ...props,
-                    assetBucket: storageResources.s3.assetBucket,
-                    assetVisualizerBucket: storageResources.s3.assetVisualizerBucket,
+                    storage: storageResources,
                     vpc: visualizerPipelineNetwork.vpc,
                     visualizerPipelineSubnets: visualizerPipelineNetwork.subnets.pipeline,
                     visualizerPipelineSecurityGroups: [
@@ -321,7 +325,8 @@ export class VAMS extends cdk.Stack {
             `/${props.stackName}/pipelineService`,
             `/${props.stackName}/workflowService`,
             `/${props.stackName}/listExecutions`,
-            `/${props.stackName}/ndxng`,
+            `/${props.stackName}/idxa`,
+            `/${props.stackName}/idxm`,
         ];
         for (const path of refactorPaths) {
             const reason = `Intention is to refactor this model away moving forward 

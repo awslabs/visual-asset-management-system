@@ -15,6 +15,7 @@ sfn = boto3.client(
 SOURCE_BUCKET_NAME = os.environ["SOURCE_BUCKET_NAME"]
 DEST_BUCKET_NAME = os.environ["DEST_BUCKET_NAME"]
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
+ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
 
 
 def lambda_handler(event, context):
@@ -60,9 +61,9 @@ def lambda_handler(event, context):
         for record in s3_records:
             print(f"S3 Record: {record}")
 
-            #Extract S3 file or files (if coming from a non S3 event source where you can group files to process)
-            #TODO: Upgrade this to support multiple files. For now it can take an array but still only grabs the first item
-            if(isinstance(record['s3'], list)):
+            # Extract S3 file or files (if coming from a non S3 event source where you can group files to process)
+            # TODO: Upgrade this to support multiple files. For now it can take an array but still only grabs the first item
+            if (isinstance(record['s3'], list)):
                 s3Record = record['s3'][0]
             else:
                 s3Record = record['s3']
@@ -71,14 +72,23 @@ def lambda_handler(event, context):
             s3_source_bucket = s3Record['bucket']['name']
             s3_source_key = s3Record['object']['key']
 
-            #Get any given additional outer/external task token to report back to (when using this pipeline as part of another state machine)
-            if('sfnExternalTaskToken' in record):
+            # Get any given additional outer/external task token to report back to (when using this pipeline as part of another state machine)
+            if ('sfnExternalTaskToken' in record):
                 external_sfn_task_token = record['sfnExternalTaskToken']
             else:
                 external_sfn_task_token = ''
 
             # Extract the root name and extension from the input key
             file_root, extension = os.path.splitext(s3_source_key)
+
+            # Check to make sure we are working with the right file types (if not, gracefully exit)
+            if (extension.lower() not in ALLOWED_INPUT_FILEEXTENSIONS):
+                return {
+                    'statusCode': 200,
+                    'body': {
+                        "message": "Skipping pipeline as file extension did not meet allowed input types"
+                    }
+                }
 
             # Generate new job name
             job_name = f"VisualizerPipelineJob_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"

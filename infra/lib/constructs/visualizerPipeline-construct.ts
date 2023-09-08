@@ -2,15 +2,12 @@
  * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
-import * as s3 from "aws-cdk-lib/aws-s3";
-import * as dest from "aws-cdk-lib/aws-s3-notifications";
+import { storageResources } from "./../storage-builder";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
-import * as sns from "aws-cdk-lib/aws-sns";
-import * as kms from "aws-cdk-lib/aws-kms";
 import * as path from "path";
 import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import * as cdk from "aws-cdk-lib";
@@ -27,8 +24,7 @@ import { NagSuppressions } from "cdk-nag";
 import { CfnOutput } from "aws-cdk-lib";
 
 export interface VisualizationPipelineConstructProps extends cdk.StackProps {
-    assetBucket: s3.Bucket;
-    assetVisualizerBucket: s3.Bucket;
+    storage: storageResources;
     vpc: ec2.Vpc;
     visualizerPipelineSubnets: ec2.ISubnet[];
     visualizerPipelineSecurityGroups: ec2.SecurityGroup[];
@@ -67,65 +63,20 @@ export class VisualizationPipelineConstruct extends Construct {
         });
 
         /**
-         * SNS Resources
-         */
-        const topicKey = new kms.Key(this, "ObjectCreatedTopicKey", {
-            description: "KMS key for ObjectCreatedTopic",
-            enableKeyRotation: true,
-            removalPolicy: cdk.RemovalPolicy.DESTROY,
-        });
-
-        topicKey.addToResourcePolicy(
-            new iam.PolicyStatement({
-                actions: ["kms:GenerateDataKey*", "kms:Decrypt"],
-                resources: ["*"],
-                principals: [new iam.ServicePrincipal("s3.amazonaws.com")],
-            })
-        );
-
-        // Object Create Topic -- S3 /.laz,  /.las, /.e57
-        const S3AssetsObjectCreatedTopic_PointCloud = new sns.Topic(
-            this,
-            "S3AssetsObjectCreatedTopic_PointCloud",
-            {
-                masterKey: topicKey,
-            }
-        );
-
-        // trigger an event notification when a .las, .laz, or .e47 point cloud file is uploaded
-        props.assetBucket.addObjectCreatedNotification(
-            new dest.SnsDestination(S3AssetsObjectCreatedTopic_PointCloud),
-            {
-                suffix: ".laz",
-            }
-        );
-
-        props.assetBucket.addObjectCreatedNotification(
-            new dest.SnsDestination(S3AssetsObjectCreatedTopic_PointCloud),
-            {
-                suffix: ".las",
-            }
-        );
-
-        props.assetBucket.addObjectCreatedNotification(
-            new dest.SnsDestination(S3AssetsObjectCreatedTopic_PointCloud),
-            {
-                suffix: ".e57",
-            }
-        );
-
-        /**
          * Batch Resources
          */
         const inputBucketPolicy = new iam.PolicyDocument({
             statements: [
                 new iam.PolicyStatement({
                     actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-                    resources: [props.assetBucket.bucketArn, `${props.assetBucket.bucketArn}/*`],
+                    resources: [
+                        props.storage.s3.assetBucket.bucketArn,
+                        `${props.storage.s3.assetBucket.bucketArn}/*`,
+                    ],
                 }),
                 new iam.PolicyStatement({
                     actions: ["s3:ListBucket"],
-                    resources: [props.assetBucket.bucketArn],
+                    resources: [props.storage.s3.assetBucket.bucketArn],
                 }),
             ],
         });
@@ -135,13 +86,13 @@ export class VisualizationPipelineConstruct extends Construct {
                 new iam.PolicyStatement({
                     actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
                     resources: [
-                        props.assetVisualizerBucket.bucketArn,
-                        `${props.assetVisualizerBucket.bucketArn}/*`,
+                        props.storage.s3.assetVisualizerBucket.bucketArn,
+                        `${props.storage.s3.assetVisualizerBucket.bucketArn}/*`,
                     ],
                 }),
                 new iam.PolicyStatement({
                     actions: ["s3:ListBucket"],
-                    resources: [props.assetVisualizerBucket.bucketArn],
+                    resources: [props.storage.s3.assetVisualizerBucket.bucketArn],
                 }),
             ],
         });
@@ -277,8 +228,8 @@ export class VisualizationPipelineConstruct extends Construct {
         // final lambda called on pipeline end to close out the statemachine run
         const pipelineEndFunction = buildPipelineEndFunction(
             this,
-            props.assetBucket,
-            props.assetVisualizerBucket,
+            props.storage.s3.assetBucket,
+            props.storage.s3.assetVisualizerBucket,
             props.vpc,
             props.visualizerPipelineSubnets,
             props.visualizerPipelineSecurityGroups
@@ -379,25 +330,26 @@ export class VisualizationPipelineConstruct extends Construct {
             }
         );
 
-        pipelineStateMachine.addToRolePolicy(
-            new iam.PolicyStatement({
-                actions: [
-                    "kms:Decrypt",
-                    "kms:DescribeKey",
-                    "kms:Encrypt",
-                    "kms:GenerateDataKey*",
-                    "kms:ImportKeyMaterial",
-                ],
-                resources: [topicKey.keyArn],
-            })
-        );
+        //TODO: See if these are needed???? Why does state machine need to decrypt as this is post openPipeline lambda
+        // pipelineStateMachine.addToRolePolicy(
+        //     new iam.PolicyStatement({
+        //         actions: [
+        //             "kms:Decrypt",
+        //             "kms:DescribeKey",
+        //             "kms:Encrypt",
+        //             "kms:GenerateDataKey*",
+        //             "kms:ImportKeyMaterial",
+        //         ],
+        //         resources: [props.storage.sns.kmsTopicKey.keyArn],
+        //     })
+        // );
 
-        pipelineStateMachine.addToRolePolicy(
-            new iam.PolicyStatement({
-                actions: ["kms:ListKeys"],
-                resources: ["*"],
-            })
-        );
+        // pipelineStateMachine.addToRolePolicy(
+        //     new iam.PolicyStatement({
+        //         actions: ["kms:ListKeys"],
+        //         resources: ["*"],
+        //     })
+        // );
 
         /**
          * Lambda Resources & SNS Subscriptions
@@ -405,9 +357,9 @@ export class VisualizationPipelineConstruct extends Construct {
         //Build Lambda VAMS Execution Function (as an optional pipeline execution action)
         const visualizerPCPipelineExecuteFunction = buildExecuteVisualizerPCPipelineFunction(
             this,
-            props.assetBucket,
-            props.assetVisualizerBucket,
-            S3AssetsObjectCreatedTopic_PointCloud
+            props.storage.s3.assetBucket,
+            props.storage.s3.assetVisualizerBucket,
+            props.storage.sns.assetBucketObjectCreatedTopic
         );
 
         visualizerPCPipelineExecuteFunction.addToRolePolicy(
@@ -419,23 +371,29 @@ export class VisualizationPipelineConstruct extends Construct {
                     "kms:GenerateDataKey*",
                     "kms:ImportKeyMaterial",
                 ],
-                resources: [topicKey.keyArn],
+                resources: [props.storage.sns.kmsTopicKey.keyArn],
             })
         );
 
         //Build Lambda Web Visualizer Pipeline Resources to Open the Pipeline through a SNS Topic Subscription
+        const allowedInputFileExtensions = ".laz,.las,.e57";
         const openPipelineFunction = buildOpenPipelineFunction(
             this,
-            props.assetBucket,
-            props.assetVisualizerBucket,
+            props.storage.s3.assetBucket,
+            props.storage.s3.assetVisualizerBucket,
             pipelineStateMachine,
+            allowedInputFileExtensions,
             props.vpc,
             props.visualizerPipelineSubnets
         );
 
         //Add subscription to kick-off lambda function of pipeline (as the main pipeline execution action)
-        S3AssetsObjectCreatedTopic_PointCloud.addSubscription(
-            new LambdaSubscription(openPipelineFunction)
+        props.storage.sns.assetBucketObjectCreatedTopic.addSubscription(
+            new LambdaSubscription(openPipelineFunction, {
+                filterPolicy: {
+                    //Future TODO: If SNS Subscription String Filtering ever supports suffix matching, add a filter here for LAS/LAZ/E57 files to reduce calls to Lambda
+                },
+            })
         );
 
         //Output VAMS Pipeline Execution Function name

@@ -36,6 +36,11 @@ import {
     buildAssetFiles,
 } from "./lambdaBuilder/assetFunctions";
 import {
+    buildAddCommentLambdaFunction,
+    buildEditCommentLambdaFunction,
+    buildCommentService,
+} from "./lambdaBuilder/commentFunctions";
+import {
     buildCreatePipelineFunction,
     buildEnablePipelineFunction,
     buildPipelineService,
@@ -116,6 +121,52 @@ export function apiBuilder(
     attachFunctionToApi(scope, databaseService, {
         routePath: "/databases/{databaseId}",
         method: apigwv2.HttpMethod.DELETE,
+        api: api.apiGatewayV2,
+    });
+
+    //Comment Resources
+    const commentService = buildCommentService(
+        scope,
+        storageResources.dynamo.commentStorageTable,
+        storageResources.dynamo.assetStorageTable
+    );
+
+    const commentServiceRoutes = [
+        "/comments/assets/{assetId}",
+        "/comments/assets/{assetId}/assetVersionId/{assetVersionId}",
+        "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
+    ];
+    for (let i = 0; i < commentServiceRoutes.length; i++) {
+        attachFunctionToApi(scope, commentService, {
+            routePath: commentServiceRoutes[i],
+            method: apigwv2.HttpMethod.GET,
+            api: api.apiGatewayV2,
+        });
+    }
+
+    attachFunctionToApi(scope, commentService, {
+        routePath: "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
+        method: apigwv2.HttpMethod.DELETE,
+        api: api.apiGatewayV2,
+    });
+
+    const addCommentFunction = buildAddCommentLambdaFunction(
+        scope,
+        storageResources.dynamo.commentStorageTable
+    );
+    attachFunctionToApi(scope, addCommentFunction, {
+        routePath: "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
+        method: apigwv2.HttpMethod.POST,
+        api: api.apiGatewayV2,
+    });
+
+    const editCommentFunction = buildEditCommentLambdaFunction(
+        scope,
+        storageResources.dynamo.commentStorageTable
+    );
+    attachFunctionToApi(scope, editCommentFunction, {
+        routePath: "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
+        method: apigwv2.HttpMethod.PUT,
         api: api.apiGatewayV2,
     });
 
@@ -370,7 +421,7 @@ export function apiBuilder(
     for (let i = 0; i < metadataSchemaMethods.length; i++) {
         attachFunctionToApi(scope, metadataSchemaFunctions, {
             routePath: "/metadataschema/{databaseId}",
-            method: methods[i],
+            method: metadataSchemaMethods[i],
             api: api.apiGatewayV2,
         });
     }
@@ -405,6 +456,13 @@ export function apiBuilder(
     });
 
     const authFunctions = buildAuthFunctions(scope, storageResources);
+
+    attachFunctionToApi(scope, authFunctions.scopeds3access, {
+        routePath: "/auth/scopeds3access",
+        method: apigwv2.HttpMethod.POST,
+        api: api.apiGatewayV2,
+    });
+
     attachFunctionToApi(scope, authFunctions.groups, {
         routePath: "/auth/groups",
         method: apigwv2.HttpMethod.GET,

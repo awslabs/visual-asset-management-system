@@ -2,7 +2,7 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 """
-Lambda Function to Call from within VAMS PIpeline and Workflows for Manual Execution
+Lambda Function to Call from within VAMS Pipeline and Workflows for Manual Execution
 """
 import os
 import boto3
@@ -26,21 +26,22 @@ def execute_visualizer_pipeline(input_path, external_task_token):
     input_bucket, input_key = input_path.replace("s3://", "").split("/", 1)
 
     # Create the object message to be sent (partially simulating coming from an S3 event notification (a default to the pipeline))
-    message= {
-                "Records":[{
-                            "s3":[{
-                                    "bucket": {"name":input_bucket},
-                                    "object": {"key":input_key}
-                                    }],
-                            "sfnExternalTaskToken":external_task_token
-                        }]
-            }
+    message = {
+        "Records": [{
+            "s3": [{
+                "bucket": {"name": input_bucket},
+                "object": {"key": input_key}
+            }],
+            "sfnExternalTaskToken": external_task_token
+        }]
+    }
 
     # Publish the message to the SNS topic
     response = sns_client.publish(
         TopicArn=SNS_VISUALIZER_PIPELINE_PC_TOPICARN,
         Subject="VAMS Pipeline Notification",
         Message=json.dumps(message))
+
 
 def lambda_handler(event, context):
     print(event)
@@ -49,17 +50,16 @@ def lambda_handler(event, context):
     else:
         data = event['body']
 
-    #Get external task token if passed
+    # Get external task token if passed
     if 'TaskToken' in data:
         external_task_token = data['TaskToken']
     else:
         external_task_token = ''
 
-    #Starts excution of visualizer pipeline by writing to SNS topic with the input files
+    # Starts excution of visualizer pipeline by writing to SNS topic with the input files
     execute_visualizer_pipeline(data['inputPath'], external_task_token)
-    
+
     return {
-        'statusCode': 200, 
+        'statusCode': 200,
         'body': 'Success'
-    } 
-    
+    }

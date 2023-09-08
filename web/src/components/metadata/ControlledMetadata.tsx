@@ -2,14 +2,14 @@
  * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { SchemaContextData } from "../../pages/MetadataSchema";
 import { API, Storage } from "aws-amplify";
 import { Container, Grid, Header } from "@cloudscape-design/components";
-import React from "react";
 import { EditComp } from "./EditComp";
 import { HandleControlData, handleCSVControlData as originHandler } from "./CSVControlData";
 import MetadataTable, { MetadataApi, put } from "../single/Metadata";
+import { isAxiosError } from "../../common/typeUtils";
 
 export interface Metadata {
     [k: string]: string;
@@ -29,6 +29,8 @@ interface ControlledMetadataProps {
     apiget?: (apiName: string, path: string, init: any) => Promise<any>;
     storageget?: (key: string) => Promise<any>;
     handleCSVControlData?: HandleControlData;
+    showErrors?: boolean;
+    setValid?: (v: boolean) => void;
 }
 
 export interface TableRow {
@@ -49,16 +51,16 @@ export default function ControlledMetadata({
     storageget = Storage.get.bind(Storage),
     handleCSVControlData = originHandler,
     store = put,
+    showErrors,
+    setValid,
 }: ControlledMetadataProps) {
     const [schema, setSchema] = useState<SchemaContextData | null>(null);
     const [controlledLists, setControlledLists] = useState<any | null>(null);
     const [rawControlData, setRawControlData] = useState<any>([]);
     const [metadata, setMetadata] = useState<Metadata | null>();
     const [items, setItems] = useState<TableRow[]>([]);
-
-    // console.log("schema", schema);
-    // console.log("items", items);
-    // console.log("controlledLists", controlledLists);
+    const [requiredRows, setRequiredRows] = useState<string[]>([]);
+    const [validRows, setValidRows] = useState<string[]>([]);
 
     const metaToTableRow = (meta: Metadata, schema: SchemaContextData) => {
         schema.schemas.sort((a, b) => {
@@ -71,7 +73,7 @@ export default function ControlledMetadata({
             return a.sequenceNumber - b.sequenceNumber;
         });
 
-        return schema.schemas
+        const controlled = schema.schemas
             .map((x) => x.field)
             .map((key, idx): TableRow => {
                 return {
@@ -87,7 +89,26 @@ export default function ControlledMetadata({
                     type: schema.schemas.find((x) => x.field === key)?.dataType || "string",
                 };
             });
+
+        return controlled;
     };
+
+    useEffect(() => {
+        setRequiredRows(schema?.schemas.filter((s) => s.required).map((s) => s.field) || []);
+    }, [schema]);
+
+    useEffect(() => {
+        if (setValid) {
+            const isValid =
+                requiredRows.length > 0
+                    ? requiredRows
+                          ?.map((row) => validRows.includes(row))
+                          .reduce((acc, curr) => acc && curr)
+                    : true;
+            setValid(!!isValid);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [requiredRows, validRows]);
 
     const tableRowToMeta = (rows: TableRow[]): Metadata => {
         const result: Metadata = {};
@@ -106,31 +127,57 @@ export default function ControlledMetadata({
             return;
         }
 
-        if (initialState === undefined) {
-            let path = `metadata/${databaseId}/${assetId}`;
-            if (prefix) {
-                path += `?prefix=${prefix}`;
-            }
-            apiget("api", path, {})
-                .then(({ metadata: start }: MetadataApi) => {
-                    apiget("api", `metadataschema/${databaseId}`, {})
-                        .then((data: SchemaContextData) => {
-                            setSchema(data);
-                            if (data.schemas.length > 0) {
-                                const meta = data.schemas.reduce((acc, x) => {
-                                    acc[x.field] = start[x.field] || "";
-                                    return acc;
-                                }, start);
-                                console.log("metadata in init", meta);
-                                setMetadata(meta);
-                                setItems(metaToTableRow(meta, data));
-                            }
-                        })
-                        .catch((error) => console.error(error));
-                })
-                .catch((error) => console.error(error));
-        } else {
-            apiget("api", `metadataschema/${databaseId}`, {}).then((data: SchemaContextData) => {
+        const getMetadata = async () => {
+            if (initialState === undefined) {
+                let path = `metadata/${databaseId}/${assetId}`;
+                if (prefix) {
+                    path += `?prefix=${prefix}`;
+                }
+
+                let start: Metadata = {};
+
+                try {
+                    const { metadata }: MetadataApi = await apiget("api", path, {});
+                    start = metadata;
+                } catch (e) {
+                    if (
+                        isAxiosError(e) &&
+                        e.response.status === 404 &&
+                        e.response.data === "Item Not Found"
+                    ) {
+                        console.warn("No metadata found.");
+                    } else {
+                        throw e;
+                    }
+                }
+
+                try {
+                    const data: SchemaContextData = await apiget(
+                        "api",
+                        `metadataschema/${databaseId}`,
+                        {}
+                    );
+
+                    setSchema(data);
+
+                    if (data.schemas.length > 0) {
+                        const meta = data.schemas.reduce((acc, x) => {
+                            acc[x.field] = start[x.field] || "";
+                            return acc;
+                        }, start);
+                        setMetadata(meta);
+                        setItems(metaToTableRow(meta, data));
+                    }
+                } catch (error) {
+                    setSchema({ databaseId, schemas: [] });
+                    console.error(error);
+                }
+            } else {
+                const data: SchemaContextData = await apiget(
+                    "api",
+                    `metadataschema/${databaseId}`,
+                    {}
+                );
                 setSchema(data);
                 if (data.schemas.length > 0) {
                     const start: Metadata = initialState || {};
@@ -141,8 +188,10 @@ export default function ControlledMetadata({
                     setMetadata(meta);
                     setItems(metaToTableRow(meta, data));
                 }
-            });
-        }
+            }
+        };
+        getMetadata();
+
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [databaseId, assetId, initialState]);
 
@@ -173,13 +222,7 @@ export default function ControlledMetadata({
 
     return (
         <React.Fragment>
-            <Container
-                header={
-                    <Header variant="h2" description="Metadata">
-                        Metadata
-                    </Header>
-                }
-            >
+            <Container header={<Header variant="h2">Metadata</Header>}>
                 {items.map((row) => {
                     return (
                         <Grid gridDefinition={[{ colspan: 3 }, { colspan: 6 }]} key={row.idx}>
@@ -194,7 +237,6 @@ export default function ControlledMetadata({
                                     controlData={rawControlData}
                                     setValue={(value) => {
                                         if (value !== undefined) {
-                                            console.log("items", items);
                                             const next: TableRow[] = [...items];
                                             next[row.idx].value = value;
 
@@ -219,9 +261,21 @@ export default function ControlledMetadata({
                                                     prefix
                                                 );
                                         } else {
-                                            console.log("undefined value", row);
+                                            console.warn("undefined value", row);
                                         }
                                     }}
+                                    setValid={(valid: boolean) => {
+                                        if (valid) {
+                                            if (!validRows.includes(row.name)) {
+                                                setValidRows((prev) => [...prev, row.name]);
+                                            }
+                                        } else {
+                                            setValidRows((prev) =>
+                                                prev.filter((r) => r !== row.name)
+                                            );
+                                        }
+                                    }}
+                                    showErrors={showErrors}
                                 />
                             </div>
                         </Grid>

@@ -5,6 +5,57 @@ from backend.handlers.search.search \
     import property_token_filter_to_opensearch_query
 
 
+def test_example_body_with_query_only2():
+    result_example = {
+        "query": {
+            "bool": {
+                "must": [],
+                "filter": [],
+                "should": [],
+                "must_not": [],
+            }
+        },
+    }
+
+    example_body = {
+        "operation": "AND"
+    }
+
+    result = property_token_filter_to_opensearch_query(example_body)
+
+    assert result['query'] == result_example['query']
+
+
+def test_example_body_with_query_only():
+    result_example = {
+        "query": {
+            "bool": {
+                "must": [
+                    {
+                        "multi_match": {
+                            "type": "cross_fields",
+                            "query": "one two three",
+                            "lenient": True,
+                        }
+                    }
+                ],
+                "filter": [],
+                "should": [],
+                "must_not": [],
+            }
+        },
+    }
+
+    example_body = {
+        "query": "one two three",
+        "operation": "AND"
+    }
+
+    result = property_token_filter_to_opensearch_query(example_body)
+
+    assert result['query'] == result_example['query']
+
+
 def test_example_body():
 
     result_example = {

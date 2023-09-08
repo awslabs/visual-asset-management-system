@@ -3,7 +3,6 @@
 
 import json
 import boto3
-import logging
 import os
 import traceback
 from backend.logging.logger import safeLogger
@@ -17,17 +16,25 @@ dynamodb = boto3.resource('dynamodb', region_name=region)
 table = dynamodb.Table(os.environ['TABLE_NAME'])
 
 
+def get_groups(event):
+    return event.get(
+        "request", {}).get(
+        "groupConfiguration", {}).get(
+        "groupsToOverride", [])
+
+
 def determine_vams_roles(event):
     """determine the VAMS roles for a user based on their Cognito group list"""
 
     # Default set of roles
     roles = ["pipelines", "workflows", "assets"]
     try:
-        cognito_groups = event['request']['groupConfiguration']['groupsToOverride']
+        cognito_groups = get_groups(event)
         if "super-admin" in cognito_groups:
             roles.append("super-admin")
 
-        # Example: grant access to pipelines and workflows when the user is in the group "pipelines-workflows".
+        # Example: grant access to pipelines and workflows when the user is in
+        # the group "pipelines-workflows".
         #
         # if "pipelines-workflows" in cognito_groups:
         #     roles.append("pipelines")
@@ -38,25 +45,30 @@ def determine_vams_roles(event):
         return roles
 
     except Exception as ex:
-        logger.warn("groups were not assigned to user", traceback.format_exc(ex))
+        logger.warn("groups were not assigned to user",
+                    traceback.format_exc(ex))
         return roles
 
 
 def remember_observed_claims(claims: set):
-    """add claims to the claims record in dynamodb using ADD in the update expression"""
+    """add claims to the claims record in
+       dynamodb using ADD in the update expression"""
     values = {
         'claims': claims,
     }
     keys_map, values_map, expr = to_update_expr(values, op="ADD")
-    logger.info("updating observed claims with expression, {expr}, values_map, {values_map}, keys_map, {keys_map}".format(
-        expr=expr, values_map=values_map, keys_map=keys_map))
+    logger.info(
+        "updating observed claims with expression, {expr}, "
+        "values_map, {values_map}, keys_map, {keys_map}".format(
+            expr=expr, values_map=values_map, keys_map=keys_map))
 
     table.update_item(
         Key={
             'entityType': 'claims',
             'sk': 'observed_claims',
         },
-        UpdateExpression="ADD #f0 :v0",  # TODO this only works b/c there's a single field in the value
+        # TODO this only works b/c there's a single field in the value
+        UpdateExpression="ADD #f0 :v0",
         ExpressionAttributeNames=keys_map,
         ExpressionAttributeValues=values_map,
         ReturnValues="UPDATED_NEW"
@@ -78,11 +90,12 @@ def lambda_handler(event, context):
     if 'custom:groups' in event['request']['userAttributes']:
         groups = event['request']['userAttributes']['custom:groups']
         claims_to_save = parse_group_list(groups)
-        claims_to_save = claims_to_save | set(event['request']['groupConfiguration']['groupsToOverride'])
+        claims_to_save = claims_to_save | set(get_groups(event))
         remember_observed_claims(claims_to_save)
     else:
-        claims_to_save = set(event['request']['groupConfiguration']['groupsToOverride'])
-        remember_observed_claims(claims_to_save)
+        claims_to_save = set(get_groups(event))
+        if len(claims_to_save) > 0:
+            remember_observed_claims(claims_to_save)
 
     roles = determine_vams_roles(event)
 
@@ -93,10 +106,18 @@ def lambda_handler(event, context):
             "claimsOverrideDetails": {
                 "claimsToAddOrOverride": {
                     "vams:roles": json.dumps(roles),
-                    "vams:tokens": json.dumps(list(claims_to_save) + ["vams:all_users", event['userName']])
+                    "vams:tokens": (
+                        json.dumps(
+                            list(claims_to_save) + [
+                                "vams:all_users",
+                                event['userName']
+                            ])
+                    )
                 }
-            }
+            },
         }
     })
+
     print("result", result)
+
     return result
