@@ -249,6 +249,7 @@ def lambda_handler(
         search_ao = search_fn()
         authn = request_to_claims(event)
         print("authn", authn)
+        is_super_admin = "super-admin" in authn.get("roles", [])
         query = property_token_filter_to_opensearch_query(body)
 
         # add fine grained access controls to the query
@@ -265,17 +266,26 @@ def lambda_handler(
             if auth_filters['query']['query_string']['query'] != "":
                 query['query']['bool']['filter'].append(auth_filters['query'])
 
-        # database acl filters
         database_set = database_set_fn()
         accessible_databases = database_set(authn['tokens'])
-        accessible_databases = "str_databaseid:(%s)" % " OR ".join(
-                                        accessible_databases)
-        print("accessible databases", accessible_databases)
-        query['query']['bool']['filter'].append({
-            'query_string': {
-                'query': accessible_databases
+        if not is_super_admin and len(accessible_databases) > 0:
+            # database acl filters
+            accessible_databases_filter = "str_databaseid.raw:(%s)" % " OR ".join(accessible_databases)
+            print("accessible databases", accessible_databases_filter)
+            query['query']['bool']['filter'].append({
+                'query_string': {
+                    'query': accessible_databases_filter
+                }
+            })
+
+        if not is_super_admin and len(all_constraints) == 0 \
+                and len(accessible_databases) == 0:
+            return {
+                "statusCode": 403,
+                "body": json.dumps({
+                    "message": "No access grants for this user",
+                })
             }
-        })
 
         result = search_ao.search(query)
 
