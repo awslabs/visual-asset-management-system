@@ -87,7 +87,7 @@ export function buildUploadAssetWorkflow(
 
     const logGroup = new logs.LogGroup(scope, "UploadAssetWorkflowLogs");
     return new sfn.StateMachine(scope, "UploadAssetWorkflow", {
-        definition: definition,
+        definitionBody: sfn.DefinitionBody.fromChainable(definition),
         timeout: Duration.minutes(10),
         logs: {
             level: sfn.LogLevel.ALL,

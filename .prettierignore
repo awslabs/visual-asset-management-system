@@ -6,3 +6,5 @@ cdk.out
 ash_cf2cdk_output
 ash
 backend/.venv
+web/customInstalls/potree/source
+web/public/potree_libs

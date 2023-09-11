@@ -34,33 +34,42 @@ Sample use cases that have leveraged early iterations of VAMS include:
 
 ## 3D Asset Types Supported for In-Browser Viewing
 
-VAMS currently integrates with [Online 3D Viewer](https://github.com/kovacsv/Online3DViewer) and supports the following formats for viewing 3D assets.
+VAMS currently integrates with several different asset viewers and supports the following formats for viewing assets interactively.
 
-| Name                              | Extension | Type   |
-| :-------------------------------- | :-------- | :----- |
-| Wavefront                         | obj       | text   |
-| 3D Studio                         | 3ds       | binary |
-| Stereolithography                 | stl       | text   |
-| Stereolithography                 | stl       | binary |
-| Polygon File Format               | ply       | text   |
-| Polygon File Format               | ply       | binary |
-| glTF                              | gltf      | text   |
-| glTF                              | glb       | binary |
-| Object File Format                | off       | text   |
-| Object File Format                | off       | binary |
-| Dotbim                            | bim       | text   |
-| Rhinoceros 3D                     | 3dm       | binary |
-| Filmbox                           | fbx       | text   |
-| Filmbox                           | fbx       | binary |
-| Collada                           | dae       | text   |
-| Virtual Reality Modeling Language | wrl       | text   |
-| 3D Manufacturing Format           | 3mf       | text   |
-| Industry Foundation Classes       | ifc       | text   |
+| Name                              | Extension | Type   | Viewer           |
+| :-------------------------------- | :-------- | :----- | :--------------- |
+| Wavefront                         | obj       | text   | Online 3D Viewer |
+| 3D Studio                         | 3ds       | binary | Online 3D Viewer |
+| Stereolithography                 | stl       | text   | Online 3D Viewer |
+| Stereolithography                 | stl       | binary | Online 3D Viewer |
+| Polygon File Format               | ply       | text   | Online 3D Viewer |
+| Polygon File Format               | ply       | binary | Online 3D Viewer |
+| glTF                              | gltf      | text   | Online 3D Viewer |
+| glTF                              | glb       | binary | Online 3D Viewer |
+| Object File Format                | off       | text   | Online 3D Viewer |
+| Object File Format                | off       | binary | Online 3D Viewer |
+| Dotbim                            | bim       | text   | Online 3D Viewer |
+| Rhinoceros 3D                     | 3dm       | binary | Online 3D Viewer |
+| Filmbox                           | fbx       | text   | Online 3D Viewer |
+| Filmbox                           | fbx       | binary | Online 3D Viewer |
+| Collada                           | dae       | text   | Online 3D Viewer |
+| Virtual Reality Modeling Language | wrl       | text   | Online 3D Viewer |
+| 3D Manufacturing Format           | 3mf       | text   | Online 3D Viewer |
+| Industry Foundation Classes       | ifc       | text   | Online 3D Viewer |
+| Point Cloud - LiDAR Data Exchange | laz       | binary | Potree Viewer    |
+| Point Cloud - LiDAR Data Exchange | las       | binary | Potree Viewer    |
+| Point Cloud - LiDAR Data Exchange | e57       | binary | Potree Viewer    |
+
+Viewers available include:
+
+-   [Online 3D Viewer](https://github.com/kovacsv/Online3DViewer)
+-   [Potree Viewer](https://github.com/potree/potree)
 
 Please take note:
 
 -   While we are limited to these formats to view assets, any file format may be uploaded to VAMS.
 -   There are some limitations with formats that leverage multiple files such as glTF that uses json with references to other files.
+-   Some viewers like Potree Viewer requires additional pipelines to be deployed to fully generate and view visualizer files.
 
 ## Install
 
@@ -95,7 +104,9 @@ You can identify stable releases by their tag. Fetch the tags `git fetch --all -
 
 6. Set the CDK stack name and the region for deployment with environment variables `export AWS_REGION=us-east-1 && export STACK_NAME=dev` - replace with the region you would like to deploy to and the name you want to associate with the cloudformation stack that the CDK will deploy.
 
-7. `npm run deploy.dev adminEmailAddress=myuser@example.com` - replace with your email address to deploy. An account is created in an AWS Cognito User Pool using this email address. Expect an email from no-reply@verificationemail.com with a temporary password.
+7. (Optional) Set the optional feature to deploy the Point Cloud (PC) visualizer pipeline with environment variables `export pipelineActivatePCVisualizer=true` - the point cloud (PC) visualizer pipeline stack is for viewing Point Cloud files in the VAMS visualizer preview. You can optionally set this via CDK deploy context parameter. Note: This does deploy additional AWS components such as a VPC and EPV endpoints that may have additional static infrastructure costs.
+
+8. `npm run deploy.dev adminEmailAddress=myuser@example.com` - replace with your email address to deploy. An account is created in an AWS Cognito User Pool using this email address. Expect an email from no-reply@verificationemail.com with a temporary password.
 
 #### Deployment Success
 
@@ -210,6 +221,15 @@ An approximate cost breakdown is below (excluding free tiers):
 | Amazon Rekognition                | 9000 Image analysis, 3 Custom Label inference units      | $22.32 |
 | Amazon SageMaker                  | 2 inference endpoints                                    | $5.13  |
 | Amazon Elastic Container Registry | ECR (In region)40GB                                      | $4     |
+
+Below are the additional costs for including visualizer pipeline and their outputs in your deployment:
+
+| Service           | Quantity                                                 | Cost   |
+| :---------------- | :------------------------------------------------------- | :----- |
+| VPC               | 7 VPC endpoints per AZ (1 AZ configuration){Static Cost} | $51.11 |
+| Batch Fargate     | 10 hours of processing                                   | $3.56  |
+| Amazon S3         | 300 GB storage, 30GB transfer out                        | $9.60  |
+| Amazon Cloudwatch | 1GB logs - VPC Flowlogs/API Gateway/Pipeline             | $3.28  |
 
 ## License
 

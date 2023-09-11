@@ -1,11 +1,16 @@
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as s3deployment from "aws-cdk-lib/aws-s3-deployment";
+import * as sns from "aws-cdk-lib/aws-sns";
+import * as kms from "aws-cdk-lib/aws-kms";
+import * as iam from "aws-cdk-lib/aws-iam";
+import * as s3not from "aws-cdk-lib/aws-s3-notifications";
+import * as cdk from "aws-cdk-lib";
 import { Duration, RemovalPolicy } from "aws-cdk-lib";
 import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
@@ -15,10 +20,16 @@ import { NagSuppressions } from "cdk-nag";
 export interface storageResources {
     s3: {
         assetBucket: s3.Bucket;
+        assetVisualizerBucket: s3.Bucket;
         artefactsBucket: s3.Bucket;
         accessLogsBucket: s3.Bucket;
         sagemakerBucket: s3.Bucket;
         stagingBucket?: s3.IBucket;
+    };
+    sns: {
+        assetBucketObjectCreatedTopic: sns.Topic;
+        assetBucketObjectRemovedTopic: sns.Topic;
+        kmsTopicKey: kms.Key;
     };
     dynamo: {
         assetStorageTable: dynamodb.Table;
@@ -98,6 +109,64 @@ export function storageResourcesBuilder(
         serverAccessLogsPrefix: "asset-bucket-logs/",
     });
     requireTLSAddToResourcePolicy(assetBucket);
+
+    /**
+     * SNS Fan out for S3 Asset Creation/Deletion
+     */
+    const topicKey = new kms.Key(scope, "AssetNotificationTopicKey", {
+        description: "KMS key for AssetNotificationTopics",
+        enableKeyRotation: true,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    topicKey.addToResourcePolicy(
+        new iam.PolicyStatement({
+            actions: ["kms:GenerateDataKey*", "kms:Decrypt"],
+            resources: ["*"],
+            principals: [new iam.ServicePrincipal("s3.amazonaws.com")],
+        })
+    );
+
+    // Object Create Topic
+    const S3AssetsObjectCreatedTopic = new sns.Topic(scope, "S3AssetsObjectCreatedTopic", {
+        masterKey: topicKey,
+    });
+
+    // Object Removed Topic
+    const S3AssetsObjectRemovedTopic = new sns.Topic(scope, "S3AssetsObjectRemovedTopic", {
+        masterKey: topicKey,
+    });
+
+    //Add S3 Asset Bucket event notifications for SNS Topics
+    assetBucket.addEventNotification(
+        s3.EventType.OBJECT_CREATED,
+        new s3not.SnsDestination(S3AssetsObjectCreatedTopic)
+    );
+
+    assetBucket.addEventNotification(
+        s3.EventType.OBJECT_REMOVED,
+        new s3not.SnsDestination(S3AssetsObjectRemovedTopic)
+    );
+
+    const assetVisualizerBucket = new s3.Bucket(scope, "AssetVisualizerBucket", {
+        ...s3DefaultProps,
+        cors: [
+            {
+                allowedOrigins: ["*"],
+                allowedHeaders: ["*"],
+                allowedMethods: [
+                    s3.HttpMethods.GET,
+                    s3.HttpMethods.PUT,
+                    s3.HttpMethods.POST,
+                    s3.HttpMethods.HEAD,
+                ],
+                exposedHeaders: ["ETag"],
+            },
+        ],
+        serverAccessLogsBucket: accessLogsBucket,
+        serverAccessLogsPrefix: "assetVisualizer-bucket-logs/",
+    });
+    requireTLSAddToResourcePolicy(assetVisualizerBucket);
 
     const artefactsBucket = new s3.Bucket(scope, "ArtefactsBucket", {
         ...s3DefaultProps,
@@ -248,10 +317,16 @@ export function storageResourcesBuilder(
     return {
         s3: {
             assetBucket: assetBucket,
+            assetVisualizerBucket: assetVisualizerBucket,
             artefactsBucket: artefactsBucket,
             accessLogsBucket: accessLogsBucket,
             sagemakerBucket: sagemakerBucket,
             stagingBucket: stagingBucket,
+        },
+        sns: {
+            assetBucketObjectCreatedTopic: S3AssetsObjectCreatedTopic,
+            assetBucketObjectRemovedTopic: S3AssetsObjectRemovedTopic,
+            kmsTopicKey: topicKey,
         },
         dynamo: {
             assetStorageTable: assetStorageTable,

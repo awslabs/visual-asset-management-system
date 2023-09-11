@@ -24,6 +24,7 @@ import { fetchAsset } from "../../services/APIService";
 import {
     columnarFileFormats,
     modelFileFormats,
+    pcFileFormats,
     presentationFileFormats,
 } from "../../common/constants/fileFormats";
 import AssetVisualizer from "./AssetVisualizer";
@@ -40,6 +41,9 @@ const checkFileFormat = (fileName, isDirectory) => {
     filetype = filetype.toLowerCase();
     if (modelFileFormats.includes(filetype) || modelFileFormats.includes("." + filetype)) {
         return "model";
+    }
+    if (pcFileFormats.includes(filetype) || pcFileFormats.includes("." + filetype)) {
+        return "pc";
     }
     if (columnarFileFormats.includes(filetype) || columnarFileFormats.includes("." + filetype)) {
         return "plot";
@@ -139,6 +143,8 @@ export default function ViewFile() {
                         newViewerOptions.push({ text: "Column", id: "column" });
                     } else if (defaultViewType === "model") {
                         newViewerOptions.push({ text: "Model", id: "model" });
+                    } else if (defaultViewType === "pc") {
+                        newViewerOptions.push({ text: "Point Cloud", id: "pc" });
                     } else if (defaultViewType === "html") {
                         newViewerOptions.push({ text: "HTML", id: "html" });
                     } else if (defaultViewType === "folder") {

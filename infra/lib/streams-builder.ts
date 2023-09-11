@@ -8,8 +8,7 @@ import { storageResources } from "./storage-builder";
 import { buildMetadataIndexingFunction } from "./lambdaBuilder/metadataFunctions";
 import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as lambda from "aws-cdk-lib/aws-lambda";
-import * as s3 from "aws-cdk-lib/aws-s3";
-import * as s3n from "aws-cdk-lib/aws-s3-notifications";
+import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import { NagSuppressions } from "cdk-nag";
 import { OpensearchServerlessConstruct } from "./constructs/opensearch-serverless";
 import { Stack } from "aws-cdk-lib";
@@ -47,14 +46,13 @@ export function streamsBuilder(
         "a"
     );
 
-    storage.s3.assetBucket.addEventNotification(
-        s3.EventType.OBJECT_CREATED,
-        new s3n.LambdaDestination(indexingFunction)
+    //Add subscriptions to kick-off lambda function for indexing
+    storage.sns.assetBucketObjectCreatedTopic.addSubscription(
+        new LambdaSubscription(indexingFunction)
     );
 
-    storage.s3.assetBucket.addEventNotification(
-        s3.EventType.OBJECT_REMOVED,
-        new s3n.LambdaDestination(indexingFunction)
+    storage.sns.assetBucketObjectRemovedTopic.addSubscription(
+        new LambdaSubscription(indexingFunction)
     );
 
     indexingFunction.addEventSource(

@@ -148,7 +148,7 @@ class AOSSIndexS3Objects():
         auth = AWSV4SignerAuth(credentials, region, service)
         host = get_ssm_parameter_value('AOSS_ENDPOINT_PARAM', region, env)
         indexName = get_ssm_parameter_value(
-                        'AOSS_INDEX_NAME_PARAM', region, env)
+            'AOSS_INDEX_NAME_PARAM', region, env)
         aosclient = OpenSearch(
             hosts=[{'host': urlparse(host).hostname, 'port': 443}],
             http_auth=auth,
@@ -277,7 +277,7 @@ class AOSSIndexAssetMetadata():
         auth = AWSV4SignerAuth(credentials, region, service)
         host = get_ssm_parameter_value('AOSS_ENDPOINT_PARAM', region, env)
         indexName = get_ssm_parameter_value(
-                        'AOSS_INDEX_NAME_PARAM', region, env)
+            'AOSS_INDEX_NAME_PARAM', region, env)
 
         return AOSSIndexAssetMetadata(
             host=host,
@@ -377,7 +377,7 @@ class AOSSIndexAssetMetadata():
             x: y
             for k, v in item["dynamodb"]["NewImage"].items()
             for x, y in AOSSIndexAssetMetadata._determine_field_name(
-                            k, deserialize(v))
+                k, deserialize(v))
         }
         result['_rectype'] = 'asset'
         return result
@@ -582,7 +582,7 @@ def lambda_handler_m(event, context,
         client.delete_item(event['dynamodb']['Keys']['assetId']['S'])
         return
     else:
-        print("not a remove record")
+        print("Not a DynamoDB remove record")
 
     if 'Records' not in event:
         return
@@ -590,6 +590,14 @@ def lambda_handler_m(event, context,
     for record in event['Records']:
         print("record", record)
 
+        # Coming from SNS by S3 event notification
+        if "EventSource" in record and record['EventSource'] == 'aws:sns' and 'Records' in json.loads(record["Sns"]["Message"]):
+            for snsS3Record in json.loads(record['Sns']['Message'])['Records']:
+                if (snsS3Record['eventSource'] == "aws:s3"):
+                    handle_s3_event_record(snsS3Record)
+            continue
+
+        # Coming directly from S3 event notification
         if record.get("eventSource") == "aws:s3":
             handle_s3_event_record(record)
             continue

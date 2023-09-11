@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,6 +10,7 @@ import {
     columnarFileFormats,
     previewFileFormats,
     modelFileFormats,
+    pcFileFormats,
     archiveFileFormats,
 } from "../../common/constants/fileFormats";
 import FileUploadControl from "./FileUploadControl";
@@ -25,7 +26,9 @@ const AssetFilesUploadGroup = (props) => {
                     controlName={"Asset"}
                     fileFormats={modelFileFormats
                         .concat(
-                            columnarFileFormats.concat(cadFileFormats.concat(archiveFileFormats))
+                            columnarFileFormats.concat(
+                                cadFileFormats.concat(archiveFileFormats.concat(pcFileFormats))
+                            )
                         )
                         .join(",")}
                 />

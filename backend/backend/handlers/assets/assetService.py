@@ -1,4 +1,4 @@
-#  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -27,6 +27,7 @@ response = {
 }
 asset_database = None
 db_database = None
+s3_assetVisualizer_bucket = None
 unitTest = {
     "body": {
         "databaseId": "Unit_Test"
@@ -37,6 +38,7 @@ unitTest['body'] = json.dumps(unitTest['body'])
 try:
     asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
     db_database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
+    s3_assetVisualizer_bucket = os.environ["S3_ASSET_VISUALIZER_BUCKET"]
 except:
     print("Failed Loading Environment Variables")
     response['body']['message'] = "Failed Loading Environment Variables"
@@ -153,8 +155,10 @@ def delete_asset(databaseId, assetId, queryParameters):
         if "assetLocation" in item:
             if item['isMultiFile']:
                 archive_multi_file(item['assetLocation'], databaseId, assetId)
+                delete_assetVisualizer_files(item['assetLocation'])
             else:
                 archive_file(item['assetLocation'], databaseId, assetId)
+                delete_assetVisualizer_files(item['assetLocation'])
         if "previewLocation" in item:
             archive_file(item['previewLocation'], databaseId, assetId)
         item['databaseId'] = databaseId + "#deleted"
@@ -179,7 +183,7 @@ def archive_multi_file(location, databaseId, assetId):
     if "Key" in location:
         prefix = location['Key']
     if len(bucket) == 0 or len(prefix) == 0:
-        return 
+        return
     print('Archiving folder with multiple files')
 
     paginator = s3.get_paginator('list_objects_v2')
@@ -202,6 +206,7 @@ def archive_multi_file(location, databaseId, assetId):
             print("Error occurred: ", e)
 
     return
+
 
 def archive_file(location, databaseId, assetId):
     s3 = boto3.client('s3')
@@ -248,6 +253,7 @@ def move_to_glacier_and_mark_deleted(bucket, key, assetId, databaseId):
         },
         StorageClass='GLACIER',
     )
+
 
 def set_pagination_info(queryParameters):
     if 'maxItems' not in queryParameters:
@@ -508,6 +514,39 @@ def delete_handler(response, pathParameters, queryParameters):
     response['statusCode'] = result['statusCode']
     print(response)
     return response
+
+
+def delete_assetVisualizer_files(assetLocation):
+    s3 = boto3.client('s3')
+
+    key = ""
+    if "Key" in assetLocation:
+        key = assetLocation['Key']
+
+    if len(key) == 0:
+        return
+
+    # Add the folder deliminiator to the end of the key
+    key = key + '/'
+
+    print("Deleting Temporary Asset Visualizer Files Under Folder: ", s3_assetVisualizer_bucket, ":", key)
+
+    try:
+        # Get all assets in assetVisualizer bucket (unversioned, temporary files for the web visualizers) for deletion
+        # Use assetLocation key as root folder key for assetVisualizerFiles
+        assetVisualizerBucketFilesDeleted = []
+        paginator = s3.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=s3_assetVisualizer_bucket, Prefix=key):
+            for item in page['Contents']:
+                assetVisualizerBucketFilesDeleted.append(item['Key'])
+                print("Deleting visualizer asset file: ", item['Key'])
+                s3.delete_object(Bucket=s3_assetVisualizer_bucket, Key=item['Key'])
+                # print(item)
+
+    except Exception as e:
+        print("Error: ", e)
+
+    return
 
 
 def lambda_handler(event, context):

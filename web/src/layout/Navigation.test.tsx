@@ -47,6 +47,7 @@ describe("Navigation", () => {
             "/auth/constraints",
             "/visualizers/column",
             "/visualizers/model",
+            "/visualizers/pc",
             "/visualizers/plot"
         );
     });
@@ -63,6 +64,7 @@ describe("Navigation", () => {
             "/comments",
             "/visualizers/column",
             "/visualizers/model",
+            "/visualizers/pc",
             "/visualizers/plot"
         );
         expectNoSideNavLinks(wrapper, "/pipelines", "/workflows", "/auth/constraints");
@@ -82,6 +84,7 @@ describe("Navigation", () => {
             "/workflows",
             "/auth/constraints",
             "/visualizers/model",
+            "/visualizers/pc",
             "/visualizers/plot",
             "visualizers/column"
         );
@@ -101,6 +104,7 @@ describe("Navigation", () => {
             "/auth/constraints",
             "/visualizers/column",
             "/visualizers/model",
+            "/visualizers/pc",
             "/visualizers/plot"
         );
     });
@@ -121,6 +125,7 @@ describe("Navigation", () => {
             "/workflows",
             "/visualizers/column",
             "/visualizers/model",
+            "/visualizers/pc",
             "/visualizers/plot"
         );
         expectNoSideNavLinks(wrapper, "/auth/constraints");
