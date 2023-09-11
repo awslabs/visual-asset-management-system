@@ -330,27 +330,6 @@ export class VisualizationPipelineConstruct extends Construct {
             }
         );
 
-        //TODO: See if these are needed???? Why does state machine need to decrypt as this is post openPipeline lambda
-        // pipelineStateMachine.addToRolePolicy(
-        //     new iam.PolicyStatement({
-        //         actions: [
-        //             "kms:Decrypt",
-        //             "kms:DescribeKey",
-        //             "kms:Encrypt",
-        //             "kms:GenerateDataKey*",
-        //             "kms:ImportKeyMaterial",
-        //         ],
-        //         resources: [props.storage.sns.kmsTopicKey.keyArn],
-        //     })
-        // );
-
-        // pipelineStateMachine.addToRolePolicy(
-        //     new iam.PolicyStatement({
-        //         actions: ["kms:ListKeys"],
-        //         resources: ["*"],
-        //     })
-        // );
-
         /**
          * Lambda Resources & SNS Subscriptions
          */
