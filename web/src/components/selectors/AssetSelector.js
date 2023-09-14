@@ -45,20 +45,11 @@ const AssetSelector = (props) => {
                             return false;
                         }
                         if (pathViewType === "column" || pathViewType === "plot") {
-                            if (columnarFileFormats.includes(item.assetType)) {
-                                return true;
-                            }
-                            return false;
-                        } else if (pathViewType === "3d") {
-                            if (modelFileFormats.includes(item.assetType)) {
-                                return true;
-                            }
-                            return false;
+                            return columnarFileFormats.includes(item.assetType);
+                        } else if (pathViewType === "3d" || pathViewType === "model") {
+                            return modelFileFormats.includes(item.assetType);
                         } else if (pathViewType === "pc") {
-                            if (pcFileFormats.includes(item.assetType)) {
-                                return true;
-                            }
-                            return false;
+                            return pcFileFormats.includes(item.assetType);
                         }
                         return false;
                     });
