@@ -28,7 +28,7 @@ import { streamsBuilder } from "./streams-builder";
 import { VpcSecurityGroupGatewayVisualizerPipelineConstruct } from "./constructs/vpc-securitygroup-gateway-visualizerPipeline-construct";
 import { VisualizationPipelineConstruct } from "./constructs/visualizerPipeline-construct";
 
-interface EnvProps {
+export interface EnvProps {
     prod: boolean; //ToDo: replace with env
     env: cdk.Environment;
     stackName: string;
@@ -204,7 +204,7 @@ export class VAMS extends cdk.Stack {
             customCognitoWebClientConfig.node.addDependency(website);
         }
 
-        apiBuilder(this, api, storageResources);
+        apiBuilder(this, api, storageResources, props);
 
         streamsBuilder(this, cognitoResources, api, storageResources);
 
