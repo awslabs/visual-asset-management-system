@@ -1,119 +1,52 @@
-From 1fc411b299d2b15caac6812560390037663764e3 Mon Sep 17 00:00:00 2001
+From bce198d2aad16d33cf63ac55117a797f659dbb58 Mon Sep 17 00:00:00 2001
 From: Scott Patten <scopatvr@amazon.com>
-Date: Tue, 16 May 2023 15:19:44 -0700
-Subject: [PATCH 1/5] Added header mods to OctreeLoader
+Date: Thu, 21 Sep 2023 07:26:09 -0700
+Subject: [PATCH] Removed global CSS rules.
 
 ---
- src/modules/loader/2.0/OctreeLoader.js | 9 ++++++---
- 1 file changed, 6 insertions(+), 3 deletions(-)
-
-diff --git a/src/modules/loader/2.0/OctreeLoader.js b/src/modules/loader/2.0/OctreeLoader.js
-index 0f025661..53e1ecf8 100644
---- a/src/modules/loader/2.0/OctreeLoader.js
-+++ b/src/modules/loader/2.0/OctreeLoader.js
-@@ -384,9 +384,12 @@ export class OctreeLoader{
- 		return attributes;
- 	}
- 
--	static async load(url){
--
--		let response = await fetch(url);
-+	static async load(url, requestHeaders){
-+		
-+		let response = await fetch(url, {
-+			method: 'GET',
-+			headers: requestHeaders
-+		});
- 		let metadata = await response.json();
- 
- 		let attributes = OctreeLoader.parseAttributes(metadata.attributes);
--- 
-2.38.1.windows.1
-
-
-From 91e38851dda88b10196c4640936d562d2e5985fe Mon Sep 17 00:00:00 2001
-From: Scott Patten <scopatvr@amazon.com>
-Date: Wed, 17 May 2023 16:23:17 -0700
-Subject: [PATCH 2/5] Add header injection to potree octree.
-
----
- src/Potree.js                          | 6 +++---
- src/modules/loader/2.0/OctreeLoader.js | 1 -
- 2 files changed, 3 insertions(+), 4 deletions(-)
+ src/Potree.js                          | 31 +++++++++-----
+ src/PotreeRenderer.js                  | 11 +++--
+ src/modules/loader/2.0/OctreeLoader.js | 57 +++++++++++++++++++-------
+ src/viewer/potree.css                  | 46 +++++++++++++--------
+ src/viewer/sidebar.html                | 17 ++++++--
+ src/viewer/viewer.js                   | 18 ++++++--
+ 6 files changed, 127 insertions(+), 53 deletions(-)
 
 diff --git a/src/Potree.js b/src/Potree.js
-index 92e6fb57..beea8bc1 100644
+index 92e6fb57..923af93f 100644
 --- a/src/Potree.js
 +++ b/src/Potree.js
-@@ -128,7 +128,7 @@ let resourcePath = scriptPath + '/resources';
- export {scriptPath, resourcePath};
+@@ -1,3 +1,8 @@
++/*
++* Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
++* Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
++* SPDX-License-Identifier: Apache-2.0
++*/
  
- 
--export function loadPointCloud(path, name, callback){
-+export function loadPointCloud(path, name, requestHeaders, callback){
- 	let loaded = function(e){
- 		e.pointcloud.name = name;
- 		callback(e);
-@@ -162,7 +162,7 @@ export function loadPointCloud(path, name, callback){
- 				}
- 			});
- 		} else if (path.indexOf('metadata.json') > 0) {
--			Potree.OctreeLoader.load(path).then(e => {
-+			Potree.OctreeLoader.load(path, requestHeaders).then(e => {
- 				let geometry = e.geometry;
- 
- 				if(!geometry){
-@@ -183,7 +183,7 @@ export function loadPointCloud(path, name, callback){
- 				}
- 			});
- 
--			OctreeLoader.load(path, function (geometry) {
-+			OctreeLoader.load(path, requestHeaders, function (geometry) {
- 				if (!geometry) {
- 					//callback({type: 'loading_failed'});
- 					console.error(new Error(`failed to load point cloud from URL: ${path}`));
-diff --git a/src/modules/loader/2.0/OctreeLoader.js b/src/modules/loader/2.0/OctreeLoader.js
-index 53e1ecf8..40617d39 100644
---- a/src/modules/loader/2.0/OctreeLoader.js
-+++ b/src/modules/loader/2.0/OctreeLoader.js
-@@ -385,7 +385,6 @@ export class OctreeLoader{
- 	}
- 
- 	static async load(url, requestHeaders){
--		
- 		let response = await fetch(url, {
- 			method: 'GET',
- 			headers: requestHeaders
--- 
-2.38.1.windows.1
-
-
-From 28c865baab39e7bf4bcd6d6eb256577958448346 Mon Sep 17 00:00:00 2001
-From: Scott Patten <scopatvr@amazon.com>
-Date: Fri, 19 May 2023 14:35:21 -0700
-Subject: [PATCH 3/5] Suppressed warnings.
-
----
- src/Potree.js                          | 13 +++++---
- src/PotreeRenderer.js                  |  2 +-
- src/modules/loader/2.0/OctreeLoader.js | 45 ++++++++++++++++++--------
- src/viewer/viewer.js                   |  5 +--
- 4 files changed, 44 insertions(+), 21 deletions(-)
-
-diff --git a/src/Potree.js b/src/Potree.js
-index beea8bc1..e38a66d1 100644
---- a/src/Potree.js
-+++ b/src/Potree.js
-@@ -96,7 +96,7 @@ export const version = {
+ export * from "./Actions.js";
+ export * from "./AnimationPath.js";
+@@ -95,8 +100,9 @@ export const version = {
+ };
  
  export let lru = new LRU();
- 
+-
 -console.log('Potree ' + version.major + '.' + version.minor + version.suffix);
++// 2023-05-19 Amazon modification
 +// console.log('Potree ' + version.major + '.' + version.minor + version.suffix);
++// End of Amazon modification
  
  export let pointBudget = 1 * 1000 * 1000;
  export let framenumber = 0;
-@@ -134,7 +134,7 @@ export function loadPointCloud(path, name, requestHeaders, callback){
+@@ -127,14 +133,14 @@ let resourcePath = scriptPath + '/resources';
+ // resourcePath:build/potree/resources
+ export {scriptPath, resourcePath};
+ 
+-
+-export function loadPointCloud(path, name, callback){
++// 2023-05-19 Amazon modification
++export function loadPointCloud(path, name, requestHeaders, callback){
+ 	let loaded = function(e){
+ 		e.pointcloud.name = name;
  		callback(e);
  	};
  
@@ -122,53 +55,97 @@ index beea8bc1..e38a66d1 100644
  
  		// load pointcloud
  		if (!path){
-@@ -163,11 +163,14 @@ export function loadPointCloud(path, name, requestHeaders, callback){
+@@ -162,12 +168,15 @@ export function loadPointCloud(path, name, callback){
+ 				}
  			});
  		} else if (path.indexOf('metadata.json') > 0) {
- 			Potree.OctreeLoader.load(path, requestHeaders).then(e => {
+-			Potree.OctreeLoader.load(path).then(e => {
 -				let geometry = e.geometry;
++			Potree.OctreeLoader.load(path, requestHeaders).then(e => {
  
 -				if(!geometry){
 +				if (!e || !e.geometry)
 +				{
  					console.error(new Error(`failed to load point cloud from URL: ${path}`));
 -				}else{
-+					reject(new Error("Failed to load point cloud.")); 
++					reject(new Error("Failed to load point cloud."));
 +				} else
 +				{
 +					let geometry = e.geometry;
  					let pointcloud = new PointCloudOctree(geometry);
  
  					let aPosition = pointcloud.getAttribute("position");
+@@ -183,7 +192,7 @@ export function loadPointCloud(path, name, callback){
+ 				}
+ 			});
+ 
+-			OctreeLoader.load(path, function (geometry) {
++			OctreeLoader.load(path, requestHeaders, function (geometry) {
+ 				if (!geometry) {
+ 					//callback({type: 'loading_failed'});
+ 					console.error(new Error(`failed to load point cloud from URL: ${path}`));
+@@ -218,7 +227,7 @@ export function loadPointCloud(path, name, callback){
+ 		return promise;
+ 	}
+ };
+-
++// End of Amazon modification
+ 
+ // add selectgroup
+ (function($){
 diff --git a/src/PotreeRenderer.js b/src/PotreeRenderer.js
-index 79964f42..1aee7a2e 100644
+index 79964f42..3823e64c 100644
 --- a/src/PotreeRenderer.js
 +++ b/src/PotreeRenderer.js
-@@ -328,7 +328,7 @@ class Shader {
+@@ -1,3 +1,8 @@
++/*
++* Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
++* Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
++* SPDX-License-Identifier: Apache-2.0
++*/
+ 
+ import * as THREE from "../libs/three.js/build/three.module.js";
+ import {PointCloudTree} from "./PointCloudTree.js";
+@@ -327,9 +332,9 @@ class Shader {
+ 
  		const tEnd = performance.now();
  		const duration = tEnd - tStart;
- 
+-
 -		console.log(`shader compile duration: ${duration.toFixed(3)}`);
+-
++		// 2023-05-19 Amazon modifications
 +		// console.log(`shader compile duration: ${duration.toFixed(3)}`);
- 
++		// End of Amazon modifications
  
  	}
+ 
 diff --git a/src/modules/loader/2.0/OctreeLoader.js b/src/modules/loader/2.0/OctreeLoader.js
-index 40617d39..3a5c4133 100644
+index 0f025661..c42be196 100644
 --- a/src/modules/loader/2.0/OctreeLoader.js
 +++ b/src/modules/loader/2.0/OctreeLoader.js
-@@ -7,8 +7,9 @@ import {OctreeGeometry, OctreeGeometryNode} from "./OctreeGeometry.js";
+@@ -1,3 +1,8 @@
++/*
++* Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
++* Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
++* SPDX-License-Identifier: Apache-2.0
++*/
+ 
+ import * as THREE from "../../../../libs/three.js/build/three.module.js";
+ import {PointAttribute, PointAttributes, PointAttributeTypes} from "../../../loader/PointAttributes.js";
+@@ -6,9 +11,10 @@ import {OctreeGeometry, OctreeGeometryNode} from "./OctreeGeometry.js";
+ // let loadedNodes = new Set();
  
  export class NodeLoader{
- 
+-
 -	constructor(url){
++// 2023-05-19 Amazon modifications
 +	constructor(url, appendHeaders){
  		this.url = url;
 +		this.appendHeaders = appendHeaders
  	}
  
  	async load(node){
-@@ -44,13 +45,19 @@ export class NodeLoader{
+@@ -44,13 +50,19 @@ export class NodeLoader{
  
  			if(byteSize === 0n){
  				buffer = new ArrayBuffer(0);
@@ -193,7 +170,7 @@ index 40617d39..3a5c4133 100644
  				});
  
  				buffer = await response.arrayBuffer();
-@@ -250,11 +257,17 @@ export class NodeLoader{
+@@ -250,14 +262,20 @@ export class NodeLoader{
  		let first = hierarchyByteOffset;
  		let last = first + hierarchyByteSize - 1n;
  
@@ -203,263 +180,121 @@ index 40617d39..3a5c4133 100644
  				'content-type': 'multipart/byteranges',
 -				'Range': `bytes=${first}-${last}`,
 -			},
+-		});
 +				'Range': `bytes=${first}-${last}`
 +		};
-+		
++
 +		for (const property in this.appendHeaders){
 +			headers[property] = this.appendHeaders[property];
 +		}
-+
+ 
 +		let response = await fetch(hierarchyPath, {
 +			headers: headers
- 		});
++		});
  
++// End of Amazon modifications
  
-@@ -384,16 +397,22 @@ export class OctreeLoader{
+ 		let buffer = await response.arrayBuffer();
+ 
+@@ -383,15 +401,24 @@ export class OctreeLoader{
+ 
  		return attributes;
  	}
- 
--	static async load(url, requestHeaders){
++// 2023-05-19 Amazon modifications
 +	static async load(url, headers){
- 		let response = await fetch(url, {
- 			method: 'GET',
--			headers: requestHeaders
++		let response = await fetch(url, {
++			method: 'GET',
 +			headers: headers
- 		});
-+
++		});
+ 
+-	static async load(url){
 +		if(!response || !response.ok){
 +			console.log(`Error: could not retrieve asset from ${url}`);
 +			return;
 +		}
-+
+ 
+-		let response = await fetch(url);
  		let metadata = await response.json();
  
  		let attributes = OctreeLoader.parseAttributes(metadata.attributes);
  
 -		let loader = new NodeLoader(url);
 +		let loader = new NodeLoader(url, headers);
- 		loader.metadata = metadata;
- 		loader.attributes = attributes;
- 		loader.scale = metadata.scale;
-diff --git a/src/viewer/viewer.js b/src/viewer/viewer.js
-index baf1fb1b..c1b8dec8 100644
---- a/src/viewer/viewer.js
-+++ b/src/viewer/viewer.js
-@@ -1232,7 +1232,7 @@ export class Viewer extends EventDispatcher{
- 			VRButton.createButton(this.renderer).then(vrButton => {
- 
- 				if(vrButton == null){
--					console.log("VR not supported or active.");
-+					//console.log("VR not supported or active.");
- 
- 					return;
- 				}
-@@ -1401,7 +1401,7 @@ export class Viewer extends EventDispatcher{
- 
- 	initThree () {
- 
--		console.log(`initializing three.js ${THREE.REVISION}`);
-+		// console.log(`initializing three.js ${THREE.REVISION}`);
- 
- 		let width = this.renderArea.clientWidth;
- 		let height = this.renderArea.clientHeight;
-@@ -1441,6 +1441,7 @@ export class Viewer extends EventDispatcher{
- 		this.renderArea.appendChild(this.renderer.domElement);
- 		this.renderer.domElement.tabIndex = '2222';
- 		this.renderer.domElement.style.position = 'absolute';
-+		this.renderer.domElement.style.left = '0%';
- 		this.renderer.domElement.addEventListener('mousedown', () => {
- 			this.renderer.domElement.focus();
- 		});
--- 
-2.38.1.windows.1
-
-
-From d6c970e6bf69b29ab66e3ff29b6774ceb4bd36b8 Mon Sep 17 00:00:00 2001
-From: Scott Patten <scopatvr@amazon.com>
-Date: Thu, 8 Jun 2023 10:50:22 -0700
-Subject: [PATCH 4/5] Update: Comment out sidebar items.
-
----
- src/viewer/sidebar.html | 8 ++++----
- 1 file changed, 4 insertions(+), 4 deletions(-)
-
-diff --git a/src/viewer/sidebar.html b/src/viewer/sidebar.html
-index 15524270..b1ad490e 100644
---- a/src/viewer/sidebar.html
-+++ b/src/viewer/sidebar.html
-@@ -1,6 +1,6 @@
- 
- <div id="sidebar_root" class="">
--	<div id="sidebar_header">
-+	<!-- <div id="sidebar_header">
- 		<span id="potree_branding" class="potree_sidebar_brand">
- 			<a href="http://potree.org" target="_blank">potree.org</a> 
- 			<span style="margin: 0px 3px; color: #9AA1A4"> - </span> 
-@@ -11,7 +11,7 @@
- 			<span id="potree_version_number" style="color: #9AA1A4; font-size: 80%; font-weight: 100"></span>
- 		</span>
- 		<div id="potree_languages" style="font-family:arial;"></div>
--	</div>
-+	</div> -->
- 	<div> 
- 
- 	<div id="potree_menu" class="accordion">
-@@ -166,7 +166,7 @@
- 		</div>
- 		
- 		<!-- ABOUT -->
--		<h3 id="menu_about"><span data-i18n="tb.about_opt"></span></h3>
-+		<!-- <h3 id="menu_about"><span data-i18n="tb.about_opt"></span></h3>
- 		<div>
- 			<ul class="pv-menu-list">
- 				<li><a href="http://potree.org" target="_blank">Potree</a> is a viewer for large point cloud / LIDAR data sets, developed at the Vienna University of Technology. 
-@@ -252,7 +252,7 @@ Thanks to all the companies and institutions funding Potree:
- 
- 			
- 			</ul>
--		</div>
-+		</div> -->
- 
- 	</div>
- 
--- 
-2.38.1.windows.1
-
-
-From 1db965270e584822ea00914c31791160fddb281e Mon Sep 17 00:00:00 2001
-From: Scott Patten <scopatvr@amazon.com>
-Date: Mon, 26 Jun 2023 12:38:21 -0700
-Subject: [PATCH 5/5] Added headers
-
----
- src/Potree.js                          | 12 +++++++++---
- src/PotreeRenderer.js                  |  9 +++++++--
- src/modules/loader/2.0/OctreeLoader.js | 12 +++++++++---
- src/viewer/sidebar.html                |  9 +++++++++
- src/viewer/viewer.js                   | 13 +++++++++++--
- 5 files changed, 45 insertions(+), 10 deletions(-)
-
-diff --git a/src/Potree.js b/src/Potree.js
-index e38a66d1..eb8c969f 100644
---- a/src/Potree.js
-+++ b/src/Potree.js
-@@ -1,3 +1,8 @@
-+/*
-+* Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
-+* Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-+* SPDX-License-Identifier: Apache-2.0
-+*/
- 
- export * from "./Actions.js";
- export * from "./AnimationPath.js";
-@@ -95,8 +100,9 @@ export const version = {
- };
- 
- export let lru = new LRU();
--
-+// 2023-05-19 Amazon modification
- // console.log('Potree ' + version.major + '.' + version.minor + version.suffix);
-+// End of Amazon modification
- 
- export let pointBudget = 1 * 1000 * 1000;
- export let framenumber = 0;
-@@ -127,7 +133,7 @@ let resourcePath = scriptPath + '/resources';
- // resourcePath:build/potree/resources
- export {scriptPath, resourcePath};
- 
--
-+// 2023-05-19 Amazon modification
- export function loadPointCloud(path, name, requestHeaders, callback){
- 	let loaded = function(e){
- 		e.pointcloud.name = name;
-@@ -221,7 +227,7 @@ export function loadPointCloud(path, name, requestHeaders, callback){
- 		return promise;
- 	}
- };
--
-+// End of Amazon modification
- 
- // add selectgroup
- (function($){
-diff --git a/src/PotreeRenderer.js b/src/PotreeRenderer.js
-index 1aee7a2e..3823e64c 100644
---- a/src/PotreeRenderer.js
-+++ b/src/PotreeRenderer.js
-@@ -1,3 +1,8 @@
-+/*
-+* Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
-+* Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-+* SPDX-License-Identifier: Apache-2.0
-+*/
- 
- import * as THREE from "../libs/three.js/build/three.module.js";
- import {PointCloudTree} from "./PointCloudTree.js";
-@@ -327,9 +332,9 @@ class Shader {
- 
- 		const tEnd = performance.now();
- 		const duration = tEnd - tStart;
--
-+		// 2023-05-19 Amazon modifications
- 		// console.log(`shader compile duration: ${duration.toFixed(3)}`);
--
-+		// End of Amazon modifications
- 
- 	}
- 
-diff --git a/src/modules/loader/2.0/OctreeLoader.js b/src/modules/loader/2.0/OctreeLoader.js
-index 3a5c4133..684687c1 100644
---- a/src/modules/loader/2.0/OctreeLoader.js
-+++ b/src/modules/loader/2.0/OctreeLoader.js
-@@ -1,3 +1,8 @@
-+/*
-+* Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
-+* Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-+* SPDX-License-Identifier: Apache-2.0
-+*/
- 
- import * as THREE from "../../../../libs/three.js/build/three.module.js";
- import {PointAttribute, PointAttributes, PointAttributeTypes} from "../../../loader/PointAttributes.js";
-@@ -6,7 +11,7 @@ import {OctreeGeometry, OctreeGeometryNode} from "./OctreeGeometry.js";
- // let loadedNodes = new Set();
- 
- export class NodeLoader{
--
-+// 2023-05-19 Amazon modifications
- 	constructor(url, appendHeaders){
- 		this.url = url;
- 		this.appendHeaders = appendHeaders
-@@ -270,7 +275,7 @@ export class NodeLoader{
- 			headers: headers
- 		});
- 
--
-+// End of Amazon modifications
- 
- 		let buffer = await response.arrayBuffer();
- 
-@@ -396,7 +401,7 @@ export class OctreeLoader{
- 
- 		return attributes;
- 	}
--
-+// 2023-05-19 Amazon modifications
- 	static async load(url, headers){
- 		let response = await fetch(url, {
- 			method: 'GET',
-@@ -413,6 +418,7 @@ export class OctreeLoader{
- 		let attributes = OctreeLoader.parseAttributes(metadata.attributes);
- 
- 		let loader = new NodeLoader(url, headers);
 +		// End of Amazon modifications
  		loader.metadata = metadata;
  		loader.attributes = attributes;
  		loader.scale = metadata.scale;
+diff --git a/src/viewer/potree.css b/src/viewer/potree.css
+index 8e5b5022..f3749466 100644
+--- a/src/viewer/potree.css
++++ b/src/viewer/potree.css
+@@ -187,10 +187,18 @@
+ 	background-color: var(--bg-dark-color);
+ }
+ 
+-a:hover, a:visited, a:link, a:active{
+-	color: 				#ccccff;
+-	text-decoration: 	none;
+-}
++/*
++	2023-09-21 Amazon modifications
++	
++	Removed global rule:
++
++	a:hover, a:visited, a:link, a:active{
++		color: 				#ccccff;
++		text-decoration: 	none;
++	}
++
++	End of Amazon modifications
++*/
+ 
+ .annotation{
+ 	position:		absolute;
+@@ -309,20 +317,26 @@ a:hover, a:visited, a:link, a:active{
+ 	opacity:	0.5;
+ }
+ 
++/*  2023-09-21 Amazon modifications
+ 
+-canvas { 
+-	width: 100%; 
+-	height: 100% 
+-}
++	Remove global rules:
+ 
+-body{ 
+-	margin: 	0; 
+-	padding: 	0;
+-	position:	absolute;
+-	width: 		100%;
+-	height: 	100%;
+-	overflow:	hidden;
+-}
++	canvas { 
++		width: 100%; 
++		height: 100% 
++	}
++
++	body{ 
++		margin: 	0; 
++		padding: 	0;
++		position:	absolute;
++		width: 		100%;
++		height: 	100%;
++		overflow:	hidden;
++	}
++	
++	End of Amazon modifications
++*/
+ 
+ .axis {
+   font: 		10px sans-serif;
 diff --git a/src/viewer/sidebar.html b/src/viewer/sidebar.html
-index b1ad490e..e71ebc9c 100644
+index 15524270..e71ebc9c 100644
 --- a/src/viewer/sidebar.html
 +++ b/src/viewer/sidebar.html
-@@ -1,5 +1,11 @@
+@@ -1,6 +1,12 @@
 +<!--
 +# Original Copyright (c) 2011-2020, Markus Schütz. All rights reserved. Licensed under the BSD-2 License.
 +# Modifications Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
@@ -467,36 +302,44 @@ index b1ad490e..e71ebc9c 100644
 +-->
  
  <div id="sidebar_root" class="">
+-	<div id="sidebar_header">
 +	<!-- 2023-06-08 Amazon modification -->
- 	<!-- <div id="sidebar_header">
++	<!-- <div id="sidebar_header">
  		<span id="potree_branding" class="potree_sidebar_brand">
  			<a href="http://potree.org" target="_blank">potree.org</a> 
-@@ -12,6 +18,7 @@
+ 			<span style="margin: 0px 3px; color: #9AA1A4"> - </span> 
+@@ -11,7 +17,8 @@
+ 			<span id="potree_version_number" style="color: #9AA1A4; font-size: 80%; font-weight: 100"></span>
  		</span>
  		<div id="potree_languages" style="font-family:arial;"></div>
- 	</div> -->
+-	</div>
++	</div> -->
 +	<!-- End of Amazon modification -->
  	<div> 
  
  	<div id="potree_menu" class="accordion">
-@@ -166,6 +173,7 @@
+@@ -166,7 +173,8 @@
  		</div>
  		
  		<!-- ABOUT -->
+-		<h3 id="menu_about"><span data-i18n="tb.about_opt"></span></h3>
 +		<!-- 2023-06-08 Amazon modification -->
- 		<!-- <h3 id="menu_about"><span data-i18n="tb.about_opt"></span></h3>
++		<!-- <h3 id="menu_about"><span data-i18n="tb.about_opt"></span></h3>
  		<div>
  			<ul class="pv-menu-list">
-@@ -253,6 +261,7 @@ Thanks to all the companies and institutions funding Potree:
+ 				<li><a href="http://potree.org" target="_blank">Potree</a> is a viewer for large point cloud / LIDAR data sets, developed at the Vienna University of Technology. 
+@@ -252,7 +260,8 @@ Thanks to all the companies and institutions funding Potree:
+ 
  			
  			</ul>
- 		</div> -->
+-		</div>
++		</div> -->
 +		<!-- End of Amazon modification -->
  
  	</div>
  
 diff --git a/src/viewer/viewer.js b/src/viewer/viewer.js
-index c1b8dec8..ad908b14 100644
+index baf1fb1b..ad908b14 100644
 --- a/src/viewer/viewer.js
 +++ b/src/viewer/viewer.js
 @@ -1,3 +1,8 @@
@@ -512,9 +355,10 @@ index c1b8dec8..ad908b14 100644
  			VRButton.createButton(this.renderer).then(vrButton => {
  
  				if(vrButton == null){
-+					// 2023-05-19 Amazon modifications
- 					//console.log("VR not supported or active.");
+-					console.log("VR not supported or active.");
 -
++					// 2023-05-19 Amazon modifications
++					//console.log("VR not supported or active.");
 +					// End of Amazon modifications
  					return;
  				}
@@ -524,18 +368,19 @@ index c1b8dec8..ad908b14 100644
  
  	initThree () {
 -
+-		console.log(`initializing three.js ${THREE.REVISION}`);
 +		// 2023-05-19 Amazon modifications
- 		// console.log(`initializing three.js ${THREE.REVISION}`);
++		// console.log(`initializing three.js ${THREE.REVISION}`);
 +		// End of Amazon modifications
  
  		let width = this.renderArea.clientWidth;
  		let height = this.renderArea.clientHeight;
-@@ -1441,7 +1448,9 @@ export class Viewer extends EventDispatcher{
+@@ -1441,6 +1448,9 @@ export class Viewer extends EventDispatcher{
  		this.renderArea.appendChild(this.renderer.domElement);
  		this.renderer.domElement.tabIndex = '2222';
  		this.renderer.domElement.style.position = 'absolute';
 +		// 2023-05-19 Amazon modifications
- 		this.renderer.domElement.style.left = '0%';
++		this.renderer.domElement.style.left = '0%';
 +		// End of Amazon modifications
  		this.renderer.domElement.addEventListener('mousedown', () => {
  			this.renderer.domElement.focus();
