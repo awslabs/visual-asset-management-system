@@ -41,10 +41,9 @@ export class CodepipelineStack extends cdk.Stack {
                     CONNECTION_ARN: connectionArn,
                     REPO_OWNER: repositoryOwner,
                 },
-                installCommands: ["cd web", "yarn install", "npm run build", "npm run test"],
+                installCommands: ["cd web", "yarn install", "npm run build", "npm run test", "cd ../infra", "npm install", "npm run build", "cd ../codepipeline", "npm install"],
                 // Install dependencies, run tests, build and run cdk synth
-                commands: ["cd ../infra", "npm install", "npm run build", "cd ../codepipeline", "npm install", "cdk synth"],
-
+                commands: ["npx cdk synth"],
                 primaryOutputDirectory: "codepipeline/cdk.out",
             }),
             codeBuildDefaults: {
@@ -52,7 +51,8 @@ export class CodepipelineStack extends cdk.Stack {
                     computeType: ComputeType.MEDIUM,
                     privileged: true
                 },
-            }
+            },
+            selfMutation: false
       });
       
       // This is where we add the application stages
