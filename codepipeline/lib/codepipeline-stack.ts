@@ -35,7 +35,7 @@ export class CodepipelineStack extends cdk.Stack {
                   connectionArn: connectionArn, // Created using the AWS console
               }),
               env: {
-                  DOCKER_DEFAULT_PLATFORM: dockerDefaultPlatform,
+                  DOCKER_DEFAULT_PLATFORM: "linux/amd64",
                   STACK_NAME: stackName,
                   VAMS_ADMIN_EMAIL: adminEmailAddress,
                   CONNECTION_ARN: connectionArn,
@@ -52,31 +52,7 @@ export class CodepipelineStack extends cdk.Stack {
                   privileged: true
               },
           },
-          selfMutation: true,
-          selfMutationCodeBuildDefaults: {
-              buildEnvironment: {
-                  environmentVariables: {
-                      CONNECTION_ARN: {
-                          type: BuildEnvironmentVariableType.PLAINTEXT,
-                          value: connectionArn,
-                      },
-                      REPO_OWNER: {
-                          type: BuildEnvironmentVariableType.PLAINTEXT,
-                          value: repositoryOwner,
-                      },
-                  },
-              },
-              partialBuildSpec: BuildSpec.fromObject({
-                  version: "0.2",
-                  phases: {
-                      build: {
-                          commands: [
-                              `cdk -a . deploy ${props?.stackName}  --require-approval=never --verbose --context repo-owner=${repositoryOwner}`
-                          ],
-                      },
-                  },
-              }),
-          },
+          selfMutation: false
       });
       
       // This is where we add the application stages
