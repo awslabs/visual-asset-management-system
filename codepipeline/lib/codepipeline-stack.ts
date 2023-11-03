@@ -26,58 +26,33 @@ export class CodepipelineStack extends cdk.Stack {
         process.env.CONNECTION_ARN || this.node.tryGetContext("connection-arn");
 
         const pipeline = new CodePipeline(this, "Pipeline", {
-          // The pipeline name
-          pipelineName: pipelineName,
-          // How it will be built and synthesized
-          synth: new ShellStep("Synth", {
-              // Where the source can be found
-              input: CodePipelineSource.connection(repository, "codepipeline", {
-                  connectionArn: connectionArn, // Created using the AWS console
-              }),
-              env: {
-                  DOCKER_DEFAULT_PLATFORM: "linux/amd64",
-                  STACK_NAME: stackName,
-                  VAMS_ADMIN_EMAIL: adminEmailAddress,
-                  CONNECTION_ARN: connectionArn,
-                  REPO_OWNER: repositoryOwner,
-              },
-              installCommands: ["cd web", "yarn install", "npm run build", "npm run test"],
-              // Install dependencies, run tests, build and run cdk synth
-              commands: ["cd ../infra", "npm install", "npm run build", "npm install -g esbuild ", "npx cdk synth"],
-              primaryOutputDirectory: "infra/cdk.out",
-          }),
-          codeBuildDefaults: {
-              buildEnvironment: {
-                  computeType: ComputeType.MEDIUM,
-                  privileged: true
-              },
-          },
-          selfMutation: true,
-          selfMutationCodeBuildDefaults: {
-              buildEnvironment: {
-                  environmentVariables: {
-                      CONNECTION_ARN: {
-                          type: BuildEnvironmentVariableType.PLAINTEXT,
-                          value: connectionArn,
-                      },
-                      REPO_OWNER: {
-                          type: BuildEnvironmentVariableType.PLAINTEXT,
-                          value: repositoryOwner,
-                      },
-                  },
-              },
-              partialBuildSpec: BuildSpec.fromObject({
-                  version: "0.2",
-                  phases: {
-                      build: {
-                          commands: [
-                              `cd codepipeline && cdk synth`,
-                              `cdk -a . deploy ${props?.stackName}  --require-approval=never --verbose --context repo-owner=${repositoryOwner}`
-                          ],
-                      },
-                  },
-              }),
-          },
+            // The pipeline name
+            pipelineName: pipelineName,
+            // How it will be built and synthesized
+            synth: new ShellStep("Synth", {
+                // Where the source can be found
+                input: CodePipelineSource.connection(repository, "codepipeline", {
+                    connectionArn: connectionArn, // Created using the AWS console
+                }),
+                env: {
+                    DOCKER_DEFAULT_PLATFORM: "linux/amd64",
+                    STACK_NAME: stackName,
+                    VAMS_ADMIN_EMAIL: adminEmailAddress,
+                    CONNECTION_ARN: connectionArn,
+                    REPO_OWNER: repositoryOwner,
+                },
+                installCommands: ["cd web", "yarn install", "npm run build", "npm run test"],
+                // Install dependencies, run tests, build and run cdk synth
+                commands: ["cd ../infra", "npm install", "npm run build", "cd ../codepipeline", "npm install", "cdk synth"],
+
+                primaryOutputDirectory: "codepipeline/cdk.out",
+            }),
+            codeBuildDefaults: {
+                buildEnvironment: {
+                    computeType: ComputeType.MEDIUM,
+                    privileged: true
+                },
+            }
       });
       
       // This is where we add the application stages
