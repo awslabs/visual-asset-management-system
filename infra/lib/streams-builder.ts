@@ -22,7 +22,8 @@ export function streamsBuilder(
     scope: Stack,
     cognitoResources: CognitoWebNativeConstruct,
     api: ApiGatewayV2CloudFrontConstruct,
-    storage: storageResources
+    storage: storageResources,
+    isPipelineEnabled?: boolean
 ) {
     const aoss = new OpensearchServerlessConstruct(scope, "AOSS", {
         principalArn: [],
@@ -110,9 +111,14 @@ export function streamsBuilder(
         },
     ]);
 
+    var nagSuppressionPath = scope.stackName;
+
+    if(isPipelineEnabled){
+        nagSuppressionPath = `vams-code-pipeline-${process.env.DEPLOYMENT_ENV || "dev"}/deploy-assets/${scope.stackName}`;
+    }
     NagSuppressions.addResourceSuppressionsByPath(
         scope,
-        `/${scope.stackName}/AOSS/OpensearchServerlessDeploySchemaProvider/framework-onEvent/Resource`,
+        `/${nagSuppressionPath}/AOSS/OpensearchServerlessDeploySchemaProvider/framework-onEvent/Resource`,
         [
             {
                 id: "AwsSolutions-L1",

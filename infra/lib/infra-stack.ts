@@ -36,6 +36,7 @@ export interface EnvProps {
     ssmWafArnParameterRegion: string;
     ssmWafArn: string;
     stagingBucket?: string;
+    isPipelineEnabled?: boolean;
 }
 
 export class VAMS extends cdk.Stack {
@@ -75,7 +76,7 @@ export class VAMS extends cdk.Stack {
 
         const webAppBuildPath = "../web/build";
 
-        const storageResources = storageResourcesBuilder(this, props.stagingBucket);
+        const storageResources = storageResourcesBuilder(this, props.stagingBucket, props.isPipelineEnabled);
         const trail = new cloudTrail.Trail(this, "CloudTrail-VAMS", {
             isMultiRegionTrail: false,
             bucket: storageResources.s3.accessLogsBucket,
@@ -206,7 +207,7 @@ export class VAMS extends cdk.Stack {
 
         apiBuilder(this, api, storageResources, props);
 
-        streamsBuilder(this, cognitoResources, api, storageResources);
+        streamsBuilder(this, cognitoResources, api, storageResources, props.isPipelineEnabled);
 
         // required by AWS internal accounts.  Can be removed in customer Accounts
         // const wafv2Regional = new Wafv2BasicConstruct(this, "Wafv2Regional", {
@@ -307,9 +308,14 @@ export class VAMS extends cdk.Stack {
             true
         );
 
+        var nagSuppressionPath = props.stackName;
+
+        if(props.isPipelineEnabled){
+            nagSuppressionPath = `vams-code-pipeline-${process.env.DEPLOYMENT_ENV || "dev"}/deploy-assets/${props.stackName}`;
+        }
         NagSuppressions.addResourceSuppressionsByPath(
             this,
-            `/${props.stackName}/WebApp/WebAppDistribution/Resource`,
+            `${nagSuppressionPath}/WebApp/WebAppDistribution/Resource`,
             [
                 {
                     id: "AwsSolutions-CFR4",
@@ -320,13 +326,13 @@ export class VAMS extends cdk.Stack {
         );
 
         const refactorPaths = [
-            `/${props.stackName}/VAMSWorkflowIAMRole/Resource`,
-            `/${props.stackName}/lambdaPipelineRole`,
-            `/${props.stackName}/pipelineService`,
-            `/${props.stackName}/workflowService`,
-            `/${props.stackName}/listExecutions`,
-            `/${props.stackName}/idxa`,
-            `/${props.stackName}/idxm`,
+            `${nagSuppressionPath}/VAMSWorkflowIAMRole/Resource`,
+            `${nagSuppressionPath}/lambdaPipelineRole`,
+            `${nagSuppressionPath}/pipelineService`,
+            `${nagSuppressionPath}/workflowService`,
+            `${nagSuppressionPath}/listExecutions`,
+            `${nagSuppressionPath}/idxa`,
+            `${nagSuppressionPath}/idxm`,
         ];
         for (const path of refactorPaths) {
             const reason = `Intention is to refactor this model away moving forward 

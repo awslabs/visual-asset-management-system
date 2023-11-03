@@ -46,7 +46,8 @@ export interface storageResources {
 }
 export function storageResourcesBuilder(
     scope: Construct,
-    staging_bucket?: string
+    staging_bucket?: string,
+    isPipelineEnabled?: boolean
 ): storageResources {
     // dynamodb contributorInsightsEnabled
     const dynamodbDefaultProps: Partial<dynamodb.TableProps> = {
@@ -186,8 +187,12 @@ export function storageResourcesBuilder(
     if (staging_bucket)
         stagingBucket = s3.Bucket.fromBucketName(scope, "Staging Bucket", staging_bucket);
 
+    let artefactsSourcePath = "./lib/artefacts";
+    if(isPipelineEnabled){
+        artefactsSourcePath = "./../infra/lib/artefacts"
+    }   
     new s3deployment.BucketDeployment(scope, "DeployArtefacts", {
-        sources: [s3deployment.Source.asset("./lib/artefacts")],
+        sources: [s3deployment.Source.asset(artefactsSourcePath)],
         destinationBucket: artefactsBucket,
     });
 
