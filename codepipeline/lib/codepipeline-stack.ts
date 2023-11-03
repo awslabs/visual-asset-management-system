@@ -43,7 +43,7 @@ export class CodepipelineStack extends cdk.Stack {
               },
               installCommands: ["cd web", "yarn install", "npm run build", "npm run test"],
               // Install dependencies, run tests, build and run cdk synth
-              commands: ["cd ../infra", "npm install", "npm run build", "npx cdk synth"],
+              commands: ["cd ../infra", "npm install", "npm run build", "npm install -g esbuild ", "npx cdk synth"],
               primaryOutputDirectory: "infra/cdk.out",
           }),
           codeBuildDefaults: {
