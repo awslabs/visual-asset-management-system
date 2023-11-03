@@ -52,7 +52,32 @@ export class CodepipelineStack extends cdk.Stack {
                   privileged: true
               },
           },
-          selfMutation: false
+          selfMutation: true,
+          selfMutationCodeBuildDefaults: {
+              buildEnvironment: {
+                  environmentVariables: {
+                      CONNECTION_ARN: {
+                          type: BuildEnvironmentVariableType.PLAINTEXT,
+                          value: connectionArn,
+                      },
+                      REPO_OWNER: {
+                          type: BuildEnvironmentVariableType.PLAINTEXT,
+                          value: repositoryOwner,
+                      },
+                  },
+              },
+              partialBuildSpec: BuildSpec.fromObject({
+                  version: "0.2",
+                  phases: {
+                      build: {
+                          commands: [
+                              `cd codepipeline && cdk synth`,
+                              `cdk -a . deploy ${props?.stackName}  --require-approval=never --verbose --context repo-owner=${repositoryOwner}`
+                          ],
+                      },
+                  },
+              }),
+          },
       });
       
       // This is where we add the application stages
