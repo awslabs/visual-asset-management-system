@@ -10,7 +10,16 @@ import * as Infra from "../lib/infra-stack";
 test("Empty Stack", () => {
     const app = new cdk.App();
     // WHEN
-    const stack = new Infra.VAMS(app, "MyTestStack", { prod: false, stackName: `vams--test` });
+    const stack = new Infra.VAMS(app, "MyTestStack", {
+        env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: 'us-east-1' },
+        prod: false,
+        stackName: `vams--test`,
+        ssmWafArnParameterName: '',
+        ssmWafArnParameterRegion: '',
+        ssmWafArn: '',
+        stagingBucket: '',
+        isPipelineEnabled: false
+    });
     // THEN
     expectCDK(stack).to(
         matchTemplate(
