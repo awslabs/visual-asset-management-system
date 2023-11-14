@@ -84,7 +84,7 @@
                 "SizeBytes": 565,
                 "StreamViewType": "NEW_IMAGE"
             },
-            "eventSourceARN": "arn:aws:dynamodb:us-east-1:651680266520:table/vams-dev-us-east-1-AssetStorageTable53D33AD8-8UT44213TTZ4/stream/2023-07-18T09:46:27.940"
+            "eventSourceARN": "arn:aws:dynamodb:us-east-1:123123123123:table/vams-dev-us-east-1-AssetStorageTable53D33AD8-8UT44213TTZ4/stream/2023-07-18T09:46:27.940"
         }
     ]
 }
