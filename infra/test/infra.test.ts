@@ -17,8 +17,7 @@ test("Empty Stack", () => {
         ssmWafArnParameterName: '',
         ssmWafArnParameterRegion: '',
         ssmWafArn: '',
-        stagingBucket: '',
-        isPipelineEnabled: false
+        stagingBucket: ''
     });
     // THEN
     expectCDK(stack).to(
