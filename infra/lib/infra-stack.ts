@@ -310,9 +310,9 @@ export class VAMS extends cdk.Stack {
 
         var nagSuppressionPath = props.stackName;
 
-        if(props.isPipelineEnabled){
-            nagSuppressionPath = `vams-code-pipeline-${process.env.DEPLOYMENT_ENV || "dev"}/deploy-assets/${props.stackName}`;
-        }
+        // if(props.isPipelineEnabled){
+        //     nagSuppressionPath = `vams-code-pipeline-${process.env.DEPLOYMENT_ENV || "dev"}/deploy-assets/${props.stackName}`;
+        // }
         NagSuppressions.addResourceSuppressionsByPath(
             this,
             `${nagSuppressionPath}/WebApp/WebAppDistribution/Resource`,
