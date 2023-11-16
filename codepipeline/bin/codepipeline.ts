@@ -19,16 +19,11 @@ const region = process.env.AWS_REGION || "us-east-1";
 console.log(region);
 console.log(process.env.region);
 
-const enableCdkNag = false;
+const enableCdkNag = true;
 
 if (enableCdkNag) {
     Aspects.of(app).add(new AwsSolutionsChecks({ verbose: true }));
 }
-
-// new CodepipelineStack(app,  `vams-code-pipeline-${process.env.DEPLOYMENT_ENV || "dev"}`, {
-//   stackName: `vams-code-pipeline-${process.env.DEPLOYMENT_ENV || "dev"}`,
-//   env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: region }
-// });
 
 new CodePipelineStack(app,  `vams-code-pipeline-${process.env.DEPLOYMENT_ENV || "dev"}`, {
     stackName: `vams-code-pipeline-${process.env.DEPLOYMENT_ENV || "dev"}`,

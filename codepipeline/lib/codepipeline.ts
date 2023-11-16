@@ -1,12 +1,15 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
+import { Bucket, BlockPublicAccess } from 'aws-cdk-lib/aws-s3';
+import { RemovalPolicy } from 'aws-cdk-lib';
 import { CodeBuildAction, CodeCommitSourceAction, CodeStarConnectionsSourceAction, GitHubSourceAction } from 'aws-cdk-lib/aws-codepipeline-actions'
-import { Artifact, Pipeline, } from 'aws-cdk-lib/aws-codepipeline'
-import { Asset } from 'aws-cdk-lib/aws-s3-assets';
-import * as codecommit from 'aws-cdk-lib/aws-codecommit';
+import { Artifact, Pipeline, } from 'aws-cdk-lib/aws-codepipeline';
 import { BuildSpec, LinuxBuildImage, PipelineProject, ComputeType } from 'aws-cdk-lib/aws-codebuild';
-import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
-import * as path from 'path';
+import { PolicyStatement, AccountRootPrincipal, PolicyDocument, Effect, AnyPrincipal } from 'aws-cdk-lib/aws-iam';
+import { NagSuppressions } from "cdk-nag/lib/nag-suppressions";
+import { Key } from 'aws-cdk-lib/aws-kms';
+import { Duration } from 'aws-cdk-lib';
+
 
 export class CodePipelineStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -32,8 +35,54 @@ export class CodePipelineStack extends cdk.Stack {
 
     // const backendRepo = codecommit.Repository.fromRepositoryName(this, 'backend-repo', 'sample-lambda');
 
+    const kms = new Key(this, 'VamsCodePipelineEncryptionKey', {
+        alias: 'vams-code-pipeline-encryption-key',
+        enableKeyRotation: true,
+        policy: new PolicyDocument(
+            {
+                statements: [
+                        new PolicyStatement({
+                        actions: ['kms:*'],
+                        resources: ['*'],
+                        principals: [new AccountRootPrincipal()],
+                    })
+                ]
+            }
+        )
+    })
+
+    const accessLogsBucket = new Bucket(this, "AccessLogsBucket", {
+        bucketName: `${stackName}-access-logs-bucket`,
+        encryptionKey: kms,
+        blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+        enforceSSL: true,
+        removalPolicy: RemovalPolicy.RETAIN,
+        lifecycleRules: [
+            {
+                enabled: true,
+                expiration: Duration.days(1),
+                noncurrentVersionExpiration: Duration.days(1),
+            },
+        ],
+    });
+
+    // requireTLSAddToResourcePolicy(accessLogsBucket);
+
+    const artifactBucket = new Bucket(this, "ArtifactBucket", {
+        bucketName: `${stackName}-artifact-bucket`,
+        encryptionKey: kms,
+        blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+        enforceSSL: true,
+        versioned: false,
+        removalPolicy: RemovalPolicy.RETAIN,
+        serverAccessLogsBucket: accessLogsBucket,
+        serverAccessLogsPrefix: "asset-bucket-logs/",
+    });
+    // requireTLSAddToResourcePolicy(artifactBucket);
+
     const pipeline = new Pipeline(this, "Pipeline", {
       pipelineName: "ModularAppPipeline",
+      artifactBucket: artifactBucket
     });
 
     // CodeCommit Repository for Backend Developer
@@ -155,6 +204,17 @@ export class CodePipelineStack extends cdk.Stack {
         deployApiAction
       ]
     });
+
+    NagSuppressions.addStackSuppressions(this, [
+        {
+            id: "AwsSolutions-IAM5",
+            reason: "Using service roles created with required permissions by CDK for code pipeline with required permissions.",
+        },
+        {
+            id: "AwsSolutions-CB3",
+            reason: "The project requires access to Docker for building VAMS application and hence privileged mode is required.",
+        },
+    ]);
   }
 }
 
@@ -175,4 +235,18 @@ function empowerProject(project: PipelineProject) {
       resources: ["*"], // this is needed to check the status of the bootstrap stack when doing `cdk deploy`
     })
   );
+}
+
+function requireTLSAddToResourcePolicy(bucket: Bucket) {
+    bucket.addToResourcePolicy(
+        new PolicyStatement({
+            effect: Effect.DENY,
+            principals: [new AnyPrincipal()],
+            actions: ["s3:*"],
+            resources: [`${bucket.bucketArn}/*`, bucket.bucketArn],
+            conditions: {
+                Bool: { "aws:SecureTransport": "false" },
+            },
+        })
+    );
 }
