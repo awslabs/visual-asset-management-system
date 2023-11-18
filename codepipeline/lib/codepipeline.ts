@@ -25,7 +25,7 @@ export class CodePipelineStack extends cdk.Stack {
     const connectionArn =
         process.env.CONNECTION_ARN || this.node.tryGetContext("connection-arn");
     const branch = process.env.BRANCH_NAME || "main";
-
+    const pipelineActivatePCVisualizer = process.env.pipelineActivatePCVisualizer || "false";
     console.log(region);
     console.log(stackName);
     console.log(pipelineName);
@@ -66,8 +66,6 @@ export class CodePipelineStack extends cdk.Stack {
         ],
     });
 
-    // requireTLSAddToResourcePolicy(accessLogsBucket);
-
     const artifactBucket = new Bucket(this, "ArtifactBucket", {
         bucketName: `${stackName}-artifact-bucket`,
         encryptionKey: kms,
@@ -78,10 +76,9 @@ export class CodePipelineStack extends cdk.Stack {
         serverAccessLogsBucket: accessLogsBucket,
         serverAccessLogsPrefix: "asset-bucket-logs/",
     });
-    // requireTLSAddToResourcePolicy(artifactBucket);
 
     const pipeline = new Pipeline(this, "Pipeline", {
-      pipelineName: "ModularAppPipeline",
+      pipelineName: `${stackName}-pipeline`,
       artifactBucket: artifactBucket
     });
 
@@ -135,6 +132,7 @@ export class CodePipelineStack extends cdk.Stack {
             "DOCKER_DEFAULT_PLATFORM": { value: "linux/amd64" },
             "STACK_NAME": { value: stackName },
             "REGION": { value: region },
+            "PIPELINEACTIVATE_PCVISUALIZER": { value: pipelineActivatePCVisualizer }
           }
       }
     );
@@ -149,6 +147,9 @@ export class CodePipelineStack extends cdk.Stack {
       runOrder: 1,
     });
 
+    const vamsStackName = "vams-" + stackName + "-" + region;
+    const vamsDeployCommand = `cdk -a . deploy ${vamsStackName} --require-approval=never --outputs-file config.json`;
+
     // Deploy API using CDK on CodeBuild Project
     const deployApiProject = new PipelineProject(
       this,
@@ -158,11 +159,11 @@ export class CodePipelineStack extends cdk.Stack {
           version: "0.2",
           phases: {
             install: {
-              commands: ["cd infra", "npm install -g aws-cdk"]
+              commands: ["npm install -g aws-cdk"]
             },
             build: {
               commands: [
-                `cdk deploy --all`,
+                vamsDeployCommand
               ],
             },
           },
@@ -235,18 +236,4 @@ function empowerProject(project: PipelineProject) {
       resources: ["*"], // this is needed to check the status of the bootstrap stack when doing `cdk deploy`
     })
   );
-}
-
-function requireTLSAddToResourcePolicy(bucket: Bucket) {
-    bucket.addToResourcePolicy(
-        new PolicyStatement({
-            effect: Effect.DENY,
-            principals: [new AnyPrincipal()],
-            actions: ["s3:*"],
-            resources: [`${bucket.bucketArn}/*`, bucket.bucketArn],
-            conditions: {
-                Bool: { "aws:SecureTransport": "false" },
-            },
-        })
-    );
 }
