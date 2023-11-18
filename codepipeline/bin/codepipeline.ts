@@ -7,7 +7,6 @@
 
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
-// import { CodepipelineStack } from '../lib/codepipeline-stack';
 import { AwsSolutionsChecks } from "cdk-nag";
 import { Aspects } from "aws-cdk-lib";
 import {CodePipelineStack} from "../lib/codepipeline";
@@ -16,9 +15,6 @@ const app = new cdk.App();
 const region = process.env.AWS_REGION || "us-east-1";
 
 /** development variables **/
-console.log(region);
-console.log(process.env.region);
-
 const enableCdkNag = true;
 
 if (enableCdkNag) {

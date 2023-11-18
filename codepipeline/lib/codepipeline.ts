@@ -26,12 +26,15 @@ export class CodePipelineStack extends cdk.Stack {
         process.env.CONNECTION_ARN || this.node.tryGetContext("connection-arn");
     const branch = process.env.BRANCH_NAME || "main";
     const pipelineActivatePCVisualizer = process.env.pipelineActivatePCVisualizer || "false";
-    console.log(region);
-    console.log(stackName);
-    console.log(pipelineName);
-    console.log(adminEmailAddress);
-    console.log(repositoryOwner);
-    console.log(branch);
+
+    console.log("REGION 👉", region);
+    console.log("STACK NAME 👉", stackName);
+    console.log("PIPELINE NAME 👉", pipelineName);
+    console.log("ADMIN EMAIL ADDRESS 👉", adminEmailAddress);
+    console.log("REPO OWNER 👉", repositoryOwner);
+    console.log("BRANCH 👉", branch);
+    console.log("CONNECTION_ARN 👉", connectionArn);
+    console.log("PIPELINE ACTIVATED PCVISUALIZER 👉", pipelineActivatePCVisualizer);
 
     // const backendRepo = codecommit.Repository.fromRepositoryName(this, 'backend-repo', 'sample-lambda');
 
