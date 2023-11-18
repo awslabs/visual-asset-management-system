@@ -54,34 +54,33 @@ export class CodePipelineStack extends cdk.Stack {
         )
     })
 
-    const accessLogsBucket = new Bucket(this, "AccessLogsBucket", {
-        bucketName: `${stackName}-access-logs-bucket`,
-        encryptionKey: kms,
-        blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
-        enforceSSL: true,
-        removalPolicy: RemovalPolicy.RETAIN,
-        lifecycleRules: [
-            {
-                enabled: true,
-                expiration: Duration.days(1),
-                noncurrentVersionExpiration: Duration.days(1),
-            },
-        ],
-    });
+    // const accessLogsBucket = new Bucket(this, "AccessLogsBucket", {
+    //     bucketName: `${stackName}-access-logs-bucket`,
+    //     encryptionKey: kms,
+    //     blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+    //     enforceSSL: true,
+    //     removalPolicy: RemovalPolicy.RETAIN,
+    //     lifecycleRules: [
+    //         {
+    //             enabled: true,
+    //             expiration: Duration.days(1),
+    //             noncurrentVersionExpiration: Duration.days(1),
+    //         },
+    //     ],
+    // });
 
     const artifactBucket = new Bucket(this, "ArtifactBucket", {
-        bucketName: `${stackName}-artifact-bucket`,
+        bucketName: `vams-${stackName}-artifact-bucket`,
         encryptionKey: kms,
         blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
         enforceSSL: true,
         versioned: false,
         removalPolicy: RemovalPolicy.RETAIN,
-        serverAccessLogsBucket: accessLogsBucket,
-        serverAccessLogsPrefix: "asset-bucket-logs/",
+        serverAccessLogsPrefix: "access-logs/",
     });
 
     const pipeline = new Pipeline(this, "Pipeline", {
-      pipelineName: `${stackName}-pipeline`,
+      pipelineName: `vams-${stackName}-pipeline`,
       artifactBucket: artifactBucket
     });
 
@@ -116,7 +115,7 @@ export class CodePipelineStack extends cdk.Stack {
               commands: ["cd web", "yarn install", "cd ../infra", "npm install",]
             },
             build: {
-              commands : ["ls", "cd ../web", "npm run build",  "cd ../infra", "npm run build", "cdk synth"]
+              commands : ["ls", "cd ../web", "npm run build",  "cd ../infra", "npm run build", "npm install -g aws-cdk", "cdk synth"]
             },
           },
           artifacts: {
@@ -139,6 +138,7 @@ export class CodePipelineStack extends cdk.Stack {
           }
       }
     );
+    empowerProject(prepareBackendProject);
 
     // Build CodeBuild artifact for API (Backend)
     const prepareApiOutput = new Artifact("API2");
@@ -235,7 +235,10 @@ function empowerProject(project: PipelineProject) {
   );
   project.addToRolePolicy(
     new PolicyStatement({
-      actions: ["cloudformation:DescribeStacks"],
+      actions: [
+        "cloudformation:DescribeStacks",
+        "ec2:DescribeAvailabilityZones"
+    ],
       resources: ["*"], // this is needed to check the status of the bootstrap stack when doing `cdk deploy`
     })
   );
