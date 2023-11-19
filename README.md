@@ -86,7 +86,52 @@ Please take note:
 
 ### Deploy VAMS for the First Time
 
-#### Build & Deploy Steps (Linux/Mac)
+VAMS can be deployed from your local machine directly or by deploying a CI/CD pipeline connected to your VAMS repository and performing continous deployments using the CI/CD pipeline.
+
+#### Deploying using CodePipeline
+
+##### Create a CodeStar Connection
+
+Connections are configurations that you use to connect AWS resources to external code repositories. VAMS solution uses [AWS CodePipeline](https://aws.amazon.com/codepipeline/) to deploy the resources and this connection will provide CodePipeline access to source code as well as trigger the pipeline everytime there is a code change in your repository.
+
+1. Create a fork of this repository in your Github account.
+
+2. Follow the steps provided [here](https://docs.aws.amazon.com/dtconsole/latest/userguide/connections-create-github.html) to create a connection between the forked repository in your account and your AWS account using CodePipeline console.
+
+3. Once you have successfully created the connection, note down the ARN for the connection. This ARN will be used in later steps.
+
+##### Build and deploy VAMS using CI/CD pipeline
+
+In order to deploy VAMS using CI/CD pipeline, you need to perform a one time deployment of the CodePipeline stack. Consequent updates to VAMS can be pushed to your forked code repository and this will trigger a new build and deployment in CodePipeline automatically. 
+
+Follow the below given steps to deploy the CI/CD pipeline -
+
+1. `cd codepipeline` - The stack for deploying CodePipeline is in codepipeline folder.
+
+2. If you haven't already bootstrapped your aws account with CDK. `cdk bootstrap aws://ACCOUNT_ID/REGION` - replace with your account and region.
+
+3. Set the required environment variables.
+`export AWS_REGION=us-east-1` 
+`export STACK_NAME=dev`
+`export REPO_OWNER=REPO_OWNER`
+`export CONNECTION_ARN=ARN`
+`export VAMS_ADMIN_EMAIL=myuser@example.com`
+`export BRANCH=BRANCH_NAME`
+
+Replace with the region you would like to deploy to and the name you want to associate with the cloudformation stack that the CDK will deploy. Replace the Connection ARN with the ARN from previous step.
+
+You may also have to set DOCKER_DEFAULT_PLATFORM environment variable depending on the type of OS you are running this on. Default uses linux/amd64.
+
+4.(Optional) Set the optional feature to deploy the Point Cloud(PC) visualizer pipeline with environment variables `export pipelineActivatePCVisualizer=true` - the point cloud(PC) visualizer pipeline stack is for viewing Point Cloud files in the VAMS visualizer preview. You can optionally set this via CDK deploy context parameter. Note: This does deploy additional AWS components such as a VPC and EPV endpoints that may have additional static infrastructure costs.
+
+5. Deploy the stack 
+`cdk deploy`
+
+6. This will deploy an AWS CodePipeline in your account and the pipeline will deploy AWS CloudFormation stacks to create resources for VAMS in your AWS account. After successful deployment, an account is created in an AWS Cognito User Pool using this email address. Expect an email from no-reply@verificationemail.com with a temporary password.
+
+![CI/CD](./diagrams/codepipeline.png)
+
+#### Build and Deploy from local machine
 
 VAMS Codebase is changing frequently and we recommend you checkout the stable released version from github.
 
