@@ -110,7 +110,7 @@ Follow the below given steps to deploy the CI/CD pipeline -
 
 2. If you haven't already bootstrapped your aws account with CDK. `cdk bootstrap aws://ACCOUNT_ID/REGION` - replace with your account and region.
 
-3. Set the required environment variables.
+3. Set the required environment variables. Replace with the region you would like to deploy to and the name you want to associate with the cloudformation stack that the CDK will deploy. Replace the Connection ARN with the ARN from previous step.You may also have to set DOCKER_DEFAULT_PLATFORM environment variable depending on the type of OS you are running this on. Default uses linux/amd64.
 `export AWS_REGION=us-east-1` 
 `export STACK_NAME=dev`
 `export REPO_OWNER=REPO_OWNER`
@@ -118,11 +118,7 @@ Follow the below given steps to deploy the CI/CD pipeline -
 `export VAMS_ADMIN_EMAIL=myuser@example.com`
 `export BRANCH=BRANCH_NAME`
 
-Replace with the region you would like to deploy to and the name you want to associate with the cloudformation stack that the CDK will deploy. Replace the Connection ARN with the ARN from previous step.
-
-You may also have to set DOCKER_DEFAULT_PLATFORM environment variable depending on the type of OS you are running this on. Default uses linux/amd64.
-
-4.(Optional) Set the optional feature to deploy the Point Cloud(PC) visualizer pipeline with environment variables `export pipelineActivatePCVisualizer=true` - the point cloud(PC) visualizer pipeline stack is for viewing Point Cloud files in the VAMS visualizer preview. You can optionally set this via CDK deploy context parameter. Note: This does deploy additional AWS components such as a VPC and EPV endpoints that may have additional static infrastructure costs.
+4. (Optional) Set the optional feature to deploy the Point Cloud(PC) visualizer pipeline with environment variables `export pipelineActivatePCVisualizer=true` - the point cloud(PC) visualizer pipeline stack is for viewing Point Cloud files in the VAMS visualizer preview. You can optionally set this via CDK deploy context parameter. Note: This does deploy additional AWS components such as a VPC and EPV endpoints that may have additional static infrastructure costs.
 
 5. Deploy the stack 
 `cdk deploy`
