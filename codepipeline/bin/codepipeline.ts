@@ -5,11 +5,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import 'source-map-support/register';
-import * as cdk from 'aws-cdk-lib';
+import "source-map-support/register";
+import * as cdk from "aws-cdk-lib";
 import { AwsSolutionsChecks } from "cdk-nag";
 import { Aspects } from "aws-cdk-lib";
-import {CodePipelineStack} from "../lib/codepipeline";
+import { CodePipelineStack } from "../lib/codepipeline";
 
 const app = new cdk.App();
 const region = process.env.AWS_REGION || "us-east-1";
@@ -21,9 +21,9 @@ if (enableCdkNag) {
     Aspects.of(app).add(new AwsSolutionsChecks({ verbose: true }));
 }
 
-new CodePipelineStack(app,  `vams-code-pipeline-${process.env.DEPLOYMENT_ENV || "dev"}`, {
+new CodePipelineStack(app, `vams-code-pipeline-${process.env.DEPLOYMENT_ENV || "dev"}`, {
     stackName: `vams-code-pipeline-${process.env.DEPLOYMENT_ENV || "dev"}`,
-    env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: region }
+    env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: region },
 });
 
 app.synth();
