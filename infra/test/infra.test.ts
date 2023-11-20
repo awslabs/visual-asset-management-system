@@ -11,13 +11,13 @@ test("Empty Stack", () => {
     const app = new cdk.App();
     // WHEN
     const stack = new Infra.VAMS(app, "MyTestStack", {
-        env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: 'us-east-1' },
+        env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: "us-east-1" },
         prod: false,
         stackName: `vams--test`,
-        ssmWafArnParameterName: '',
-        ssmWafArnParameterRegion: '',
-        ssmWafArn: '',
-        stagingBucket: ''
+        ssmWafArnParameterName: "",
+        ssmWafArnParameterRegion: "",
+        ssmWafArn: "",
+        stagingBucket: "",
     });
     // THEN
     expectCDK(stack).to(
@@ -25,7 +25,7 @@ test("Empty Stack", () => {
             {
                 Resources: {},
             },
-            MatchStyle.EXACT
-        )
+            MatchStyle.EXACT,
+        ),
     );
 });
