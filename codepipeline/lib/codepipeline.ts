@@ -220,12 +220,12 @@ function addPermissions(project: PipelineProject) {
                 "arn:*:iam::*:role/*-deploy-role-*",
                 "arn:*:iam::*:role/*-publishing-role-*",
             ],
-        }),
+        })
     );
     project.addToRolePolicy(
         new PolicyStatement({
             actions: ["cloudformation:DescribeStacks", "ec2:DescribeAvailabilityZones"],
             resources: ["*"], // this is needed to check the status of the bootstrap stack when doing `cdk deploy`
-        }),
+        })
     );
 }
