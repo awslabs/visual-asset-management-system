@@ -278,7 +278,7 @@ export class VAMS extends cdk.Stack {
                 const fn = item as cdk.aws_lambda.Function;
                 // python3.9 suppressed for CDK Bucket Deployment
                 // nodejs14.x suppressed for use of custom resource to deploy saml in CustomCognitoConfigConstruct
-                if (fn.runtime.name === "python3.9" || fn.runtime.name === "nodejs14.x") {
+                if (fn.runtime.name === "python3.9" || fn.runtime.name === "nodejs14.x" || fn.runtime.name === "nodejs16.x" || fn.runtime.name === "nodejs18.x") {
                     NagSuppressions.addResourceSuppressions(fn, [
                         {
                             id: "AwsSolutions-L1",
