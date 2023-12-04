@@ -128,7 +128,7 @@
             "node_modules/(d3-.*|internmap)/.+\\.js$": "./node_modules/@cloudscape-design/jest-preset/js-transformer"
         },
         "transformIgnorePatterns": [
-            "/node_modules/(?!(d3-.*|internmap|@cloudscape-design/)).+\\.js$", 
+            "/node_modules/(?!(d3-.*|internmap|@cloudscape-design/)).+\\.js$",
             "node_modules/(?!axios)/"
         ],
         "coverageThreshold": {
