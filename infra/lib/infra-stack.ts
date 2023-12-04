@@ -214,9 +214,9 @@ export class VAMS extends cdk.Stack {
         //     wafScope: WAFScope.REGIONAL,
         // });
 
-        const location = new LocationServiceConstruct(this, "LocationService", {
-            role: cognitoResources.authenticatedRole,
-        });
+        const location = new LocationServiceConstruct(this, "LocationService", {});
+        location.addMapPermissionsToRole(cognitoResources.authenticatedRole);
+        location.addMapPermissionsToRole(cognitoResources.superAdminRole);
 
         const amplifyConfigProps: AmplifyConfigLambdaConstructProps = {
             ...props,
