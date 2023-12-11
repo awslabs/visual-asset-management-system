@@ -28,6 +28,7 @@ export function buildAuthFunctions(
     const scopeds3access = buildAuthFunction(scope, storageResources, "scopeds3access", {
         ROLE_ARN: storageBucketRole.roleArn,
         S3_BUCKET: storageResources.s3.assetBucket.bucketName,
+        S3_ASSET_VISUALIZER_BUCKET: storageResources.s3.assetVisualizerBucket.bucketName,
     });
 
     storageBucketRole.assumeRolePolicy?.addStatements(
