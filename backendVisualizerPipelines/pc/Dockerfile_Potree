@@ -9,10 +9,20 @@ WORKDIR /PotreeConverterBuild
 # install build deps, download Potree Source, and build for Potree Conveter
 RUN apk add --no-cache git cmake make gcc g++ libtbb-dev && \
     git clone --depth 1 --branch $VERSION https://github.com/potree/PotreeConverter /PotreeConverter || \
-    git clone --depth 1 https://github.com/potree/PotreeConverter /PotreeConverter && \
-    cmake /PotreeConverter && make && \
-    apk del git cmake make gcc g++ && \
-    rm -rf /PotreeConverter
+    git clone --depth 1 https://github.com/potree/PotreeConverter /PotreeConverter
+
+# Copy a git patch for the local CMakeLists.txt so we can override compiler settings
+COPY ./vams-potree-build.patch /PotreeConverter
+
+# Apply the git patch 
+WORKDIR /PotreeConverter
+RUN git apply vams-potree-build.patch
+WORKDIR /PotreeConverterBuild
+
+RUN cmake /PotreeConverter 
+RUN make && \
+   apk del git cmake make gcc g++ && \
+   rm -rf /PotreeConverter
 
 # python environment varibles
 ENV PYTHONDONTWRITEBYTECODE 1

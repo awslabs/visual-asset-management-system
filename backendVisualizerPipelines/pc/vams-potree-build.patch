@@ -1,0 +1,13 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index bc60663..61f02b4 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -3,6 +3,8 @@ set(CMAKE_SUPPRESS_REGENERATION true)
+ 
+ project(PotreeConverter LANGUAGES CXX)
+ 
++add_definitions(-D_LARGEFILE64_SOURCE)
++
+ set(CMAKE_CXX_STANDARD 20)
+ set(CMAKE_CXX_STANDARD_REQUIRED True)
+ set(CMAKE_BUILD_TYPE "Release" CACHE STRING "" FORCE)
