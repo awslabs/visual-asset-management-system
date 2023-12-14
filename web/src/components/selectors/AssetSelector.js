@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,7 +10,11 @@ import { WorkflowContext } from "../../context/WorkflowContex";
 /**
  * No viewer yet for cad and archive file formats
  */
-import { columnarFileFormats, modelFileFormats } from "../../common/constants/fileFormats";
+import {
+    columnarFileFormats,
+    modelFileFormats,
+    pcFileFormats,
+} from "../../common/constants/fileFormats";
 import Synonyms from "../../synonyms";
 
 const AssetSelector = (props) => {
@@ -41,15 +45,11 @@ const AssetSelector = (props) => {
                             return false;
                         }
                         if (pathViewType === "column" || pathViewType === "plot") {
-                            if (columnarFileFormats.includes(item.assetType)) {
-                                return true;
-                            }
-                            return false;
-                        } else if (pathViewType === "3d") {
-                            if (modelFileFormats.includes(item.assetType)) {
-                                return true;
-                            }
-                            return false;
+                            return columnarFileFormats.includes(item.assetType);
+                        } else if (pathViewType === "3d" || pathViewType === "model") {
+                            return modelFileFormats.includes(item.assetType);
+                        } else if (pathViewType === "pc") {
+                            return pcFileFormats.includes(item.assetType);
                         }
                         return false;
                     });

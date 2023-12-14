@@ -1,10 +1,10 @@
 import { Header } from "@cloudscape-design/components";
 import Button from "@cloudscape-design/components/button";
 import Container from "@cloudscape-design/components/container";
-import { Storage } from "@aws-amplify/storage";
 import { useEffect, useState } from "react";
 import ColumnLayout from "@cloudscape-design/components/column-layout";
 import { useNavigate, useParams } from "react-router";
+import { getPresignedKey } from "../../common/auth/s3";
 export class FolderActionProps {
     databaseId!: string;
     assetId!: string;
@@ -14,18 +14,22 @@ export class FolderActionProps {
     isDirectory!: boolean;
 }
 
-export default function FolderActionViewer({ name, urlKey, ...props }: FolderActionProps) {
+export default function FolderActionViewer({
+    assetId,
+    databaseId,
+    name,
+    urlKey,
+    ...props
+}: FolderActionProps) {
     const navigate = useNavigate();
     const [downloadLink, setDownloadLink] = useState<string>("");
 
     function generateDownloadLink(key: string) {
-        Storage.get(key, { download: false }).then((data) => {
-            setDownloadLink(data);
-        });
+        getPresignedKey(assetId, databaseId, key).then(setDownloadLink);
     }
 
     function navigateToAssetFilePage() {
-        navigate(`/databases/${props.databaseId}/assets/${props.assetId}/file`, {
+        navigate(`/databases/${databaseId}/assets/${assetId}/file`, {
             state: { filename: name, key: urlKey, isDirectory: props.isDirectory },
         });
     }

@@ -6,6 +6,7 @@ const ThreeDimensionalPlotter = React.lazy(() => import("../viewers/ThreeDimensi
 const ColumnarViewer = React.lazy(() => import("../viewers/ColumnarViewer"));
 const HTMLViewer = React.lazy(() => import("../viewers/HTMLViewer"));
 const ModelViewer = React.lazy(() => import("../viewers/ModelViewer"));
+const PointCloudViewer = React.lazy(() => import("../viewers/PointCloudViewer"));
 const FolderViewer = React.lazy(() => import("../viewers/FolderViewer"));
 
 interface AssetVisualizerPropTypes {
@@ -37,6 +38,8 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                 <div className="visualizer-container-canvases">
                     {props.viewType === "preview" && props.asset?.previewLocation?.Key && (
                         <ImgViewer
+                            assetId={props.asset.assetId}
+                            databaseId={props.asset.databaseId}
                             assetKey={
                                 props.asset?.generated_artifacts?.preview?.Key ||
                                 props.asset.previewLocation.Key
@@ -46,6 +49,8 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                     )}
                     {props.viewType === "model" && (
                         <ModelViewer
+                            assetId={props.asset.assetId}
+                            databaseId={props.asset.databaseId}
                             assetKey={
                                 props.asset?.generated_artifacts?.gltf?.Key ||
                                 props.asset?.assetLocation?.Key
@@ -53,17 +58,36 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                             className="visualizer-container-canvas"
                         />
                     )}
+                    {props.viewType === "pc" && (
+                        <PointCloudViewer
+                            assetKey={
+                                props.asset?.generated_artifacts?.laz?.Key ||
+                                props.asset?.assetLocation?.Key
+                            }
+                            className="visualizer-container-canvas"
+                        />
+                    )}
                     {props.viewType === "plot" && (
                         <ThreeDimensionalPlotter
+                            assetId={props.asset.assetId}
+                            databaseId={props.asset.databaseId}
                             assetKey={props.asset?.assetLocation?.Key}
                             className="visualizer-container-canvas"
                         />
                     )}
                     {props.viewType === "column" && (
-                        <ColumnarViewer assetKey={props.asset?.assetLocation?.Key} />
+                        <ColumnarViewer
+                            assetId={props.asset.assetId}
+                            databaseId={props.asset.databaseId}
+                            assetKey={props.asset?.assetLocation?.Key}
+                        />
                     )}
                     {props.viewType === "html" && (
-                        <HTMLViewer assetKey={props.asset?.assetLocation?.Key} />
+                        <HTMLViewer
+                            assetId={props.asset.assetId}
+                            databaseId={props.asset.databaseId}
+                            assetKey={props.asset?.assetLocation?.Key}
+                        />
                     )}
                     {props.viewType === "folder" && (
                         <FolderViewer

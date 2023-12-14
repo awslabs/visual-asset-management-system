@@ -126,7 +126,7 @@ def iter_Asset(body, item=None):
         version = int(asset['currentVersion']['Version']) + 1
         asset['versions'] = prevVersions
 
-    if 'previewLocation' in asset:
+    if 'previewLocation' in body and body['previewLocation'] is not None:
         asset['previewLocation'] = {
             "Bucket": body['previewLocation']['Bucket'],
             "Key": body['previewLocation']['Key']

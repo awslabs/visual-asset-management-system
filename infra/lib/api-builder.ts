@@ -29,11 +29,17 @@ import {
     buildAssetService,
     buildUploadAllAssetsFunction,
     buildUploadAssetFunction,
+    buildFetchVisualizerAssetFunction,
     buildDownloadAssetFunction,
     buildRevertAssetFunction,
     buildUploadAssetWorkflowFunction,
     buildAssetFiles,
 } from "./lambdaBuilder/assetFunctions";
+import {
+    buildAddCommentLambdaFunction,
+    buildEditCommentLambdaFunction,
+    buildCommentService,
+} from "./lambdaBuilder/commentFunctions";
 import {
     buildCreatePipelineFunction,
     buildEnablePipelineFunction,
@@ -45,6 +51,7 @@ import { buildMetadataSchemaService } from "./lambdaBuilder/metadataSchemaFuncti
 import { buildMetadataFunctions } from "./lambdaBuilder/metadataFunctions";
 import { buildUploadAssetWorkflow } from "./uploadAssetWorkflowBuilder";
 import { buildAuthFunctions } from "./lambdaBuilder/authFunctions";
+import { EnvProps } from "./infra-stack";
 
 interface apiGatewayLambdaConfiguration {
     routePath: string;
@@ -73,7 +80,8 @@ export function attachFunctionToApi(
 export function apiBuilder(
     scope: Construct,
     api: ApiGatewayV2CloudFrontConstruct,
-    storageResources: storageResources
+    storageResources: storageResources,
+    props: EnvProps
 ) {
     //config resources
     const createConfigFunction = buildConfigService(scope, storageResources.s3.assetBucket);
@@ -118,12 +126,59 @@ export function apiBuilder(
         api: api.apiGatewayV2,
     });
 
+    //Comment Resources
+    const commentService = buildCommentService(
+        scope,
+        storageResources.dynamo.commentStorageTable,
+        storageResources.dynamo.assetStorageTable
+    );
+
+    const commentServiceRoutes = [
+        "/comments/assets/{assetId}",
+        "/comments/assets/{assetId}/assetVersionId/{assetVersionId}",
+        "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
+    ];
+    for (let i = 0; i < commentServiceRoutes.length; i++) {
+        attachFunctionToApi(scope, commentService, {
+            routePath: commentServiceRoutes[i],
+            method: apigwv2.HttpMethod.GET,
+            api: api.apiGatewayV2,
+        });
+    }
+
+    attachFunctionToApi(scope, commentService, {
+        routePath: "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
+        method: apigwv2.HttpMethod.DELETE,
+        api: api.apiGatewayV2,
+    });
+
+    const addCommentFunction = buildAddCommentLambdaFunction(
+        scope,
+        storageResources.dynamo.commentStorageTable
+    );
+    attachFunctionToApi(scope, addCommentFunction, {
+        routePath: "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
+        method: apigwv2.HttpMethod.POST,
+        api: api.apiGatewayV2,
+    });
+
+    const editCommentFunction = buildEditCommentLambdaFunction(
+        scope,
+        storageResources.dynamo.commentStorageTable
+    );
+    attachFunctionToApi(scope, editCommentFunction, {
+        routePath: "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
+        method: apigwv2.HttpMethod.PUT,
+        api: api.apiGatewayV2,
+    });
+
     //Asset Resources
     const assetService = buildAssetService(
         scope,
         storageResources.dynamo.assetStorageTable,
         storageResources.dynamo.databaseStorageTable,
-        storageResources.s3.assetBucket
+        storageResources.s3.assetBucket,
+        storageResources.s3.assetVisualizerBucket
     );
     attachFunctionToApi(scope, assetService, {
         routePath: "/database/{databaseId}/assets",
@@ -203,6 +258,16 @@ export function apiBuilder(
     attachFunctionToApi(scope, uploadAllAssetFunction, {
         routePath: "/assets/all",
         method: apigwv2.HttpMethod.PUT,
+        api: api.apiGatewayV2,
+    });
+
+    const fetchVisualizerAssetFunction = buildFetchVisualizerAssetFunction(
+        scope,
+        storageResources.s3.assetVisualizerBucket
+    );
+    attachFunctionToApi(scope, fetchVisualizerAssetFunction, {
+        routePath: "/visualizerAssets/{proxy+}",
+        method: apigwv2.HttpMethod.GET,
         api: api.apiGatewayV2,
     });
 
@@ -308,7 +373,8 @@ export function apiBuilder(
         scope,
         storageResources.dynamo.workflowStorageTable,
         storageResources.s3.assetBucket,
-        uploadAllAssetFunction
+        uploadAllAssetFunction,
+        props.stackName
     );
     attachFunctionToApi(scope, createWorkflowFunction, {
         routePath: "/workflows",
@@ -358,7 +424,7 @@ export function apiBuilder(
     for (let i = 0; i < metadataSchemaMethods.length; i++) {
         attachFunctionToApi(scope, metadataSchemaFunctions, {
             routePath: "/metadataschema/{databaseId}",
-            method: methods[i],
+            method: metadataSchemaMethods[i],
             api: api.apiGatewayV2,
         });
     }
@@ -393,6 +459,13 @@ export function apiBuilder(
     });
 
     const authFunctions = buildAuthFunctions(scope, storageResources);
+
+    attachFunctionToApi(scope, authFunctions.scopeds3access, {
+        routePath: "/auth/scopeds3access",
+        method: apigwv2.HttpMethod.POST,
+        api: api.apiGatewayV2,
+    });
+
     attachFunctionToApi(scope, authFunctions.groups, {
         routePath: "/auth/groups",
         method: apigwv2.HttpMethod.GET,

@@ -497,6 +497,12 @@ paths:
               schema:
                   type: "string"
                   pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+            - name: "prefix"
+              in: query
+              required: false
+              description: "prefix of the folder/file inside a multi file asset to store the metadata on."
+              schema:
+                  type: string
     /pipelines:
         put:
             summary: "Create or update a pipeline."

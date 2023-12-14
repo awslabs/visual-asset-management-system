@@ -6,21 +6,21 @@ import boto3
 import json
 import logging
 import os
-import traceback
+from datetime import datetime
 
 # region Logging
-
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 logger = logging.getLogger()
 
 if logger.hasHandlers():
-    # The Lambda environment pre-configures a handler logging to stderr. If a handler is already configured,
-    # `.basicConfig` does not execute. Thus we set the level directly.
+    # The Lambda environment pre-configures a handler logging to stderr.
+    # If a handler is already configured, # `.basicConfig` does not
+    # execute. Thus we set the level directly.
     logger.setLevel(LOG_LEVEL)
 else:
     logging.basicConfig(level=LOG_LEVEL)
-
 # endregion
+
 
 def mask_sensitive_data(event):
     # remove sensitive data from request object before logging
@@ -33,12 +33,14 @@ def mask_sensitive_data(event):
             result[k] = "<redacted>"
         else:
             result[k] = v
-    return result;
+    return result
+
 
 def build_response(http_code, body):
     return {
         "headers": {
-            "Cache-Control": "no-cache, no-store", # tell cloudfront and api gateway not to cache the response
+            # tell cloudfront and api gateway not to cache the response
+            "Cache-Control": "no-cache, no-store",
             "Content-Type": "application/json",
         },
         "statusCode": http_code,
@@ -50,29 +52,27 @@ region = os.environ['AWS_REGION']
 dynamodb = boto3.resource('dynamodb', region_name=region)
 table = dynamodb.Table(os.environ['METADATA_STORAGE_TABLE_NAME'])
 
+
 def to_update_expr(record):
-    
-    keys= record.keys()
+    keys = record.keys()
     keys_attr_names = ["#f{n}".format(n=x) for x in range(len(keys))]
     values_attr_names = [":v{n}".format(n=x) for x in range(len(keys))]
-    
-    keys_map = { 
-        k: key 
-            for k, key in zip(keys_attr_names, keys)
+
+    keys_map = {
+        k: key for k, key in zip(keys_attr_names, keys)
     }
-    values_map = { 
-        v1: record[v] 
-            for v, v1 in zip(keys, values_attr_names)
+    values_map = {
+        v1: record[v] for v, v1 in zip(keys, values_attr_names)
     }
     expr = "SET " + ", ".join([
-        "{f} = {v}".format(f=f, v=v) 
-            for f,v in zip(keys_attr_names, values_attr_names)
+        "{f} = {v}".format(f=f, v=v)
+        for f, v in zip(keys_attr_names, values_attr_names)
     ])
     return keys_map, values_map, expr
 
 
-
 def create_or_update(databaseId, assetId, metadata):
+    metadata['_metadata_last_updated'] = datetime.now().isoformat()
     keys_map, values_map, expr = to_update_expr(metadata)
     return table.update_item(
         Key={
@@ -92,10 +92,12 @@ class ValidationError(Exception):
 
 
 def validate_event(event):
-    if "pathParameters" not in event or "assetId" not in event['pathParameters']:
-        raise ValidationError(404, { "error": "missing path parameters"})
-    if "pathParameters" not in event or "databaseId" not in event['pathParameters']:
-        raise ValidationError(404, { "error": "missing path parameters"})
+    if "pathParameters" not in event \
+            or "assetId" not in event['pathParameters']:
+        raise ValidationError(404, {"error": "missing path parameters"})
+    if "pathParameters" not in event \
+            or "databaseId" not in event['pathParameters']:
+        raise ValidationError(404, {"error": "missing path parameters"})
 
 
 def validate_body(event):
@@ -107,13 +109,21 @@ def validate_body(event):
 
     for req_field in ["metadata", "version"]:
         if req_field not in body:
-            raise ValidationError(400, {"error": "{f} field is missing".format(f=req_field)})
+            raise ValidationError(400, {
+                "error": "{f} field is missing".format(f=req_field)
+            })
 
     if body['version'] == "1":
         for k, v in body['metadata'].items():
             if not isinstance(k, str):
-                raise ValidationError(400, {"error": "metadata version 1 requires string keys and values"})
+                raise ValidationError(400, {
+                    "error":
+                        "metadata version 1 requires string keys and values"
+                })
             if not isinstance(v, str):
-                raise ValidationError(400, {"error": "metadata version 1 requires string keys and values"})
-    
+                raise ValidationError(400, {
+                    "error":
+                        "metadata version 1 requires string keys and values"
+                })
+
     return body

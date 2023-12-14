@@ -25,7 +25,7 @@ let navItems = [
             { type: "link", text: Synonyms.Databases, href: "/databases" },
             { type: "link", text: Synonyms.Assets, href: "/assets" },
             { type: "link", text: `Upload ${Synonyms.Asset}`, href: "/upload" },
-            { type: "link", text: `Search`, href: "/search" },
+            { type: "link", text: Synonyms.Comments, href: "/comments" },
         ],
     },
     {
@@ -34,6 +34,7 @@ let navItems = [
         text: "Visualize",
         items: [
             { type: "link", text: "3D Model Viewer", href: "/visualizers/model" },
+            { type: "link", text: "3D Point Cloud Viewer", href: "/visualizers/pc" },
             { type: "link", text: "3D Plotter", href: "/visualizers/plot" },
             { type: "link", text: "Columnar Viewer", href: "/visualizers/column" },
         ],
@@ -66,13 +67,6 @@ let navItems = [
                 href: "/metadataschema/create",
             },
         ],
-    },
-    {
-        type: "divider",
-    },
-    {
-        type: "link",
-        text: config.CUSTOMER_NAME || "Visual Asset Management System(VAMS)",
     },
 ];
 

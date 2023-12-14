@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -15,7 +15,8 @@ export function buildAssetService(
     scope: Construct,
     assetStorageTable: dynamodb.Table,
     databaseStorageTable: dynamodb.Table,
-    assetStorageBucket: s3.Bucket
+    assetStorageBucket: s3.Bucket,
+    assetVisualizerStorageBucket: s3.Bucket
 ): lambda.Function {
     const name = "assetService";
     const assetService = new lambda.DockerImageFunction(scope, name, {
@@ -27,9 +28,11 @@ export function buildAssetService(
         environment: {
             DATABASE_STORAGE_TABLE_NAME: databaseStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
+            S3_ASSET_VISUALIZER_BUCKET: assetVisualizerStorageBucket.bucketName,
         },
     });
     assetStorageTable.grantReadWriteData(assetService);
+    assetVisualizerStorageBucket.grantReadWrite(assetService);
     databaseStorageTable.grantReadWriteData(assetService);
     assetStorageBucket.grantReadWrite(assetService);
 
@@ -164,6 +167,26 @@ export function buildAssetColumnsFunction(
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return assetColumnsFunction;
+}
+
+export function buildFetchVisualizerAssetFunction(
+    scope: Construct,
+    assetVisualizerStorageBucket: s3.Bucket
+): lambda.Function {
+    const name = "fetchVisualizerAsset";
+    const fetchVisualizerAssetFunction = new lambda.DockerImageFunction(scope, name, {
+        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
+            cmd: [`backend.handlers.assets.${name}.lambda_handler`],
+        }),
+        timeout: Duration.minutes(15),
+        memorySize: 3008,
+        environment: {
+            ASSET_VISUALIZER_BUCKET_NAME: assetVisualizerStorageBucket.bucketName,
+        },
+    });
+    assetVisualizerStorageBucket.grantRead(fetchVisualizerAssetFunction);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
+    return fetchVisualizerAssetFunction;
 }
 
 export function buildDownloadAssetFunction(

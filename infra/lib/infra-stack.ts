@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -25,8 +25,10 @@ import { CustomCognitoConfigConstruct } from "./constructs/custom-cognito-config
 import { samlEnabled, samlSettings } from "./saml-config";
 import { LocationServiceConstruct } from "./constructs/location-service-construct";
 import { streamsBuilder } from "./streams-builder";
+import { VpcSecurityGroupGatewayVisualizerPipelineConstruct } from "./constructs/vpc-securitygroup-gateway-visualizerPipeline-construct";
+import { VisualizationPipelineConstruct } from "./constructs/visualizerPipeline-construct";
 
-interface EnvProps {
+export interface EnvProps {
     prod: boolean; //ToDo: replace with env
     env: cdk.Environment;
     stackName: string;
@@ -41,6 +43,7 @@ export class VAMS extends cdk.Stack {
         super(scope, id, { ...props, crossRegionReferences: true });
 
         const region = props.env.region || "us-east-1";
+        const account = process.env.CDK_DEFAULT_ACCOUNT;
 
         const providedAdminEmailAddress =
             process.env.VAMS_ADMIN_EMAIL || scope.node.tryGetContext("adminEmailAddress");
@@ -48,9 +51,27 @@ export class VAMS extends cdk.Stack {
         const adminEmailAddress = new cdk.CfnParameter(this, "adminEmailAddress", {
             type: "String",
             description:
-                "Email address for login and where your password is sent to. You wil be sent a temporary password for the turbine to authenticate to Cognito.",
+                "Email address for login and where your password is sent to. You will be sent a temporary password for the turbine to authenticate to Cognito.",
             default: providedAdminEmailAddress,
         });
+
+        ///Setup optional pipelines
+        //Point Cloud (PC) Visualizer Preview Pipeline
+        const pipelineActivated_PCVisualizer =
+            (process.env.PIPELINEACTIVATE_PCVISUALIZER ||
+                scope.node.tryGetContext("pipelineActivatePCVisualizer")) === "true";
+        console.log("PIPELINE_ACTIVATED_PCVISUALIZER 👉", pipelineActivated_PCVisualizer);
+
+        const pipelineActivatePCVisualizer_CDKParam = new cdk.CfnParameter(
+            this,
+            "pipelineActivatedPCVisualizer",
+            {
+                type: "String",
+                description:
+                    "Parameter for whether the Point Cloud (PC) Visualizer Pipeline is activated as part of this deployment",
+                default: pipelineActivated_PCVisualizer,
+            }
+        );
 
         const webAppBuildPath = "../web/build";
 
@@ -85,10 +106,13 @@ export class VAMS extends cdk.Stack {
             ],
         });
 
-        new cognito.CfnUserPoolGroup(this, "AdminGroup", {
+        const userPoolGroup = new cognito.CfnUserPoolGroup(this, "AdminGroup", {
             groupName: "super-admin",
             userPoolId: cognitoResources.userPoolId,
+            roleArn: cognitoResources.superAdminRole.roleArn,
         });
+
+        userPoolGroup.node.addDependency(cognitoResources);
 
         const userGroupAttachment = new cognito.CfnUserPoolUserToGroupAttachment(
             this,
@@ -100,6 +124,8 @@ export class VAMS extends cdk.Stack {
             }
         );
         userGroupAttachment.addDependency(cognitoUser);
+        userGroupAttachment.addDependency(userPoolGroup);
+
         // initialize api gateway and bind it to /api route of cloudfront
         const api = new ApiGatewayV2CloudFrontConstruct(this, "api", {
             ...props,
@@ -119,6 +145,33 @@ export class VAMS extends cdk.Stack {
         });
 
         api.addBehaviorToCloudFrontDistribution(website.cloudFrontDistribution);
+
+        ///Optional Pipeline Constructs
+        //Point Cloud (PC) Visualizer Preview Pipeline
+        if (pipelineActivated_PCVisualizer) {
+            const visualizerPipelineNetwork =
+                new VpcSecurityGroupGatewayVisualizerPipelineConstruct(
+                    this,
+                    "VisualizerPipelineNetwork",
+                    {
+                        ...props,
+                    }
+                );
+
+            const visualizerPipeline = new VisualizationPipelineConstruct(
+                this,
+                "VisualizerPipeline",
+                {
+                    ...props,
+                    storage: storageResources,
+                    vpc: visualizerPipelineNetwork.vpc,
+                    visualizerPipelineSubnets: visualizerPipelineNetwork.subnets.pipeline,
+                    visualizerPipelineSecurityGroups: [
+                        visualizerPipelineNetwork.securityGroups.pipeline,
+                    ],
+                }
+            );
+        }
 
         /**
          * When using federated identities, this list of callback urls must include
@@ -151,7 +204,7 @@ export class VAMS extends cdk.Stack {
             customCognitoWebClientConfig.node.addDependency(website);
         }
 
-        apiBuilder(this, api, storageResources);
+        apiBuilder(this, api, storageResources, props);
 
         streamsBuilder(this, cognitoResources, api, storageResources);
 
@@ -161,9 +214,9 @@ export class VAMS extends cdk.Stack {
         //     wafScope: WAFScope.REGIONAL,
         // });
 
-        const location = new LocationServiceConstruct(this, "LocationService", {
-            role: cognitoResources.authenticatedRole,
-        });
+        const location = new LocationServiceConstruct(this, "LocationService", {});
+        location.addMapPermissionsToRole(cognitoResources.authenticatedRole);
+        location.addMapPermissionsToRole(cognitoResources.superAdminRole);
 
         const amplifyConfigProps: AmplifyConfigLambdaConstructProps = {
             ...props,
@@ -190,10 +243,20 @@ export class VAMS extends cdk.Stack {
             amplifyConfigProps
         );
 
+        //Outputs
         const assetBucketOutput = new cdk.CfnOutput(this, "AssetBucketNameOutput", {
             value: storageResources.s3.assetBucket.bucketName,
             description: "S3 bucket for asset storage",
         });
+
+        const assetVisualizerBucketOutput = new cdk.CfnOutput(
+            this,
+            "AssetVisualizerBucketNameOutput",
+            {
+                value: storageResources.s3.assetVisualizerBucket.bucketName,
+                description: "S3 bucket for visualization asset storage",
+            }
+        );
 
         const artefactsBucketOutput = new cdk.CfnOutput(this, "artefactsBucketOutput", {
             value: storageResources.s3.artefactsBucket.bucketName,
@@ -209,6 +272,7 @@ export class VAMS extends cdk.Stack {
 
         cdk.Tags.of(this).add("vams:stackname", props.stackName);
 
+        //Global Nag Supressions
         this.node.findAll().forEach((item) => {
             if (item instanceof cdk.aws_lambda.Function) {
                 const fn = item as cdk.aws_lambda.Function;
@@ -261,7 +325,8 @@ export class VAMS extends cdk.Stack {
             `/${props.stackName}/pipelineService`,
             `/${props.stackName}/workflowService`,
             `/${props.stackName}/listExecutions`,
-            `/${props.stackName}/ndxng`,
+            `/${props.stackName}/idxa`,
+            `/${props.stackName}/idxm`,
         ];
         for (const path of refactorPaths) {
             const reason = `Intention is to refactor this model away moving forward 

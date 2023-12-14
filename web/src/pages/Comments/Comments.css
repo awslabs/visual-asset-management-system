@@ -1,0 +1,217 @@
+/*
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+.assetSelection {
+    width: 50%;
+    left: 0;
+}
+
+.container {
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-start;
+}
+
+.profilePicContainer {
+    margin-top: 10px;
+    margin-right: 6px;
+}
+
+.usernameTextContainer {
+    margin-top: 13px;
+}
+
+.singleCommentContainer {
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-start;
+    margin-bottom: -25px;
+    margin-top: -15px;
+}
+
+.singleNestedCommentContainer {
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-start;
+    margin-bottom: -25px;
+    margin-top: -25px;
+}
+
+.singleNestedComment {
+    margin-top: 20px;
+    margin-bottom: 15px;
+    margin-left: 30px;
+    padding-left: 10px;
+    padding-right: 10px;
+}
+
+.singleComment {
+    margin-bottom: 5px;
+    margin-top: 20px;
+    margin-left: 30px;
+    padding-left: 10px;
+    padding-right: 10px;
+}
+
+.commentTimeAgoDiv {
+    min-width: 45px;
+    margin-top: 15px;
+    margin-left: 10px;
+}
+
+.singleCommentIcons {
+    padding-top: 9px;
+    padding-left: 4px;
+    padding-right: 2px;
+}
+
+.singleNestedCommentIcons {
+    justify-content: left;
+    padding-top: 9px;
+    padding-left: 4px;
+    padding-right: 2px;
+    margin-top: 10px;
+}
+
+.nestedEditedDiv {
+    margin-top: 23px;
+}
+
+.commentEditedDiv {
+    padding-top: 5px;
+    padding-left: 10px;
+    font-size: x-small;
+    color: gray;
+}
+
+.quillEditDiv {
+    width: 77%;
+    margin-left: 40px;
+    margin-top: 20px;
+    margin-bottom: 15px;
+}
+
+.deleteCommentBorder {
+    border: #000716;
+    border-radius: 10px;
+    border-width: 1px;
+    border-style: solid;
+    margin-top: 25px;
+    margin-bottom: 10px;
+}
+
+.deleteCommentButtons {
+    margin-top: 3px;
+    margin-left: 10px;
+    font-size: 10px;
+}
+
+.deleteCommentButtonsDiv {
+    margin-top: 10px;
+    margin-left: 20px;
+}
+
+.commentSectionContainer {
+    width: 50%;
+    min-width: 400px;
+}
+
+.commentSectionDiv {
+    margin-top: 0%;
+    height: 100%;
+}
+
+.commentSectionTable {
+    width: 100%;
+    max-width: 100%;
+}
+
+.commentSectionTextBoxContainer {
+    width: 77%;
+    margin-left: 5px;
+}
+
+.commentSectionAssetsContainerTable {
+    /* max-height: 50vh; */
+    vertical-align: bottom;
+}
+
+.populateCommentsDiv {
+    height: 50vh;
+    overflow-y: auto;
+    flex-direction: column-reverse;
+    display: flex;
+}
+
+.usernameDiv {
+    min-width: 100px;
+}
+
+.commentsHeader {
+    margin-bottom: 10px;
+}
+
+.ql-container,
+.ql-editor {
+    height: auto;
+    width: auto;
+    word-wrap: normal;
+}
+
+.commentSectionSubmitButton {
+    margin-left: 10px;
+    margin-top: 20px;
+    min-width: 80px;
+    vertical-align: bottom;
+}
+
+.commentSectionTableBorder {
+    border: 1px solid #000716;
+    border-radius: 10px;
+}
+
+.vl {
+    border-left: 3px solid #000716;
+    margin-top: -5px;
+    margin-left: auto;
+    margin-right: auto;
+    height: 101vh;
+    position: relative;
+}
+
+.hide {
+    display: none;
+}
+
+.center {
+    height: 50px;
+    margin-left: auto;
+    margin-right: auto;
+    width: 100%;
+    padding: 10px;
+}
+
+div.inflow {
+    width: 20px;
+    float: right;
+    position: relative;
+}
+
+div.positioner {
+    position: absolute;
+    right: 0;
+}
+
+div.fixed {
+    width: 0px;
+    position: fixed;
+    top: 60px;
+    margin-left: 15px;
+}
+
+th,
+td {
+    padding: 15px;
+}

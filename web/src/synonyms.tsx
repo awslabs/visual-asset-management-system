@@ -12,6 +12,10 @@ const Synonyms = {
     Databases: "Databases",
     databases: "databases",
     database: "database",
+    Comment: "Comment",
+    Comments: "Comments",
+    comments: "comments",
+    comment: "comment",
 };
 
 export default Synonyms;

@@ -4,18 +4,18 @@
  */
 
 import * as iam from "aws-cdk-lib/aws-iam";
-import { CfnOutput, aws_location, Stack } from "aws-cdk-lib";
+import { aws_location, Stack } from "aws-cdk-lib";
 
 import { Construct } from "constructs";
 
-interface LocatioServiceConstructProps {
-    role: iam.Role;
-}
+// eslint-disable-next-line @typescript-eslint/no-empty-interface
+interface LocatioServiceConstructProps {}
 
 export class LocationServiceConstruct extends Construct {
     map: aws_location.CfnMap;
+    mapStreets: aws_location.CfnMap;
 
-    constructor(scope: Construct, id: string, { role }: LocatioServiceConstructProps) {
+    constructor(scope: Construct, id: string, props: LocatioServiceConstructProps) {
         super(scope, id);
 
         // const ssmLocationServiceArn = new ssm.StringParameter(this, "ssmLocationServiceArn", {
@@ -46,19 +46,6 @@ export class LocationServiceConstruct extends Construct {
             },
             mapName: `vams-map-streets-${Stack.of(scope).region}-${Stack.of(scope).stackName}`,
         });
-
-        role.addToPolicy(
-            new iam.PolicyStatement({
-                effect: iam.Effect.ALLOW,
-                actions: [
-                    "geo:GetMapTile",
-                    "geo:GetMapSprites",
-                    "geo:GetMapGlyphs",
-                    "geo:GetMapStyleDescriptor",
-                ],
-                resources: [cfnMap.attrArn, cfnMap_streets.attrArn],
-            })
-        );
 
         // const cfnIndex = new aws_location.CfnPlaceIndex(scope, "MyCfnPlaceIndex", {
         //     dataSource: "Esri",
@@ -102,6 +89,22 @@ export class LocationServiceConstruct extends Construct {
         // });
 
         this.map = cfnMap;
+        this.mapStreets = cfnMap_streets;
         // this.location = location;
+    }
+
+    public addMapPermissionsToRole(role: iam.Role): void {
+        role.addToPolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: [
+                    "geo:GetMapTile",
+                    "geo:GetMapSprites",
+                    "geo:GetMapGlyphs",
+                    "geo:GetMapStyleDescriptor",
+                ],
+                resources: [this.map.attrArn, this.mapStreets.attrArn],
+            })
+        );
     }
 }

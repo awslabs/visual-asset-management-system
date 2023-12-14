@@ -4,21 +4,17 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import { Storage } from "aws-amplify";
 import * as OV from "online-3d-viewer";
+import { getPresignedKey } from "../../common/auth/s3";
 
 export default function ModelViewer(props) {
     const engineElement = useRef(null);
-    const { assetKey } = props;
+    const { assetId, databaseId, assetKey } = props;
     const [loaded, setLoaded] = useState(false);
 
     useEffect(() => {
-        let config = {
-            download: false,
-            expires: 1000,
-        };
         const loadAsset = async () => {
-            await Storage.get(assetKey, config).then((remoteFileUrl) => {
+            await getPresignedKey(assetId, databaseId, assetKey).then((remoteFileUrl) => {
                 engineElement.current.setAttribute("model", remoteFileUrl);
                 setTimeout(() => {
                     let parentDiv = engineElement.current;
@@ -35,7 +31,7 @@ export default function ModelViewer(props) {
             loadAsset();
             setLoaded(true);
         }
-    }, [loaded, assetKey]);
+    }, [loaded, assetKey, assetId, databaseId]);
 
     return (
         <div

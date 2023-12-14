@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -72,6 +72,7 @@ export class ApiGatewayV2CloudFrontConstruct extends Construct {
                     "Authorization",
                     "Content-Type",
                     "Origin",
+                    "Range",
                     "X-Amz-Date",
                     "X-Api-Key",
                     "X-Amz-Security-Token",

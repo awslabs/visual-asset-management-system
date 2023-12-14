@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,6 +10,7 @@ import ElementDefinition from "./types/ElementDefinition";
 import DatabaseSelector from "../../selectors/DatabaseSelector";
 import {
     columnarFileFormats,
+    pcFileFormats,
     modelFileFormats,
     cadFileFormats,
     archiveFileFormats,
@@ -21,6 +22,7 @@ const fileTypeOptions = modelFileFormats
     .concat(columnarFileFormats)
     .concat(cadFileFormats)
     .concat(archiveFileFormats)
+    .concat(pcFileFormats)
     .map((fileType) => {
         return new OptionDefinition({
             value: fileType,

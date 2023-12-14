@@ -65,6 +65,14 @@ export function createPapaParseConfig(
             );
             setRawControlData(results.data);
         },
+        error: (error) => {
+            if (error.message === "Not Found") {
+                setControlledLists({});
+                setRawControlData([]);
+            } else {
+                console.error(error);
+            }
+        },
     };
     return config;
 }

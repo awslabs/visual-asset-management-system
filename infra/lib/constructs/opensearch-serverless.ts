@@ -110,6 +110,7 @@ export class OpensearchServerlessConstruct extends Construct {
                 collectionName: collection.name,
                 indexName: "assets1236",
                 stackName: cdk.Stack.of(this).stackName,
+                version: "1",
             },
         });
     }

@@ -51,6 +51,7 @@ const FileUploadTableColumnDefinitions = [
                 {item.status}{" "}
             </StatusIndicator>
         ),
+        sortingField: "status",
         isRowHeader: true,
     },
 ];
@@ -270,6 +271,7 @@ export const FileUploadTable = ({
                         <CollectionPreferences
                             {...collectionPreferencesProps}
                             preferences={preferences}
+                            contentDisplayPreference={{ options: [] }}
                             //@ts-ignore
                             onConfirm={({ detail }) => setPreferences(detail)}
                         />

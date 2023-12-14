@@ -28,18 +28,14 @@ const update = async (
     files: File[],
     setProgress: (progress: number) => void,
     setError: (error: { isError: boolean; message: string }) => void,
-    setComplete: (complete: boolean) => void,
-    onComplete: () => void
+    setComplete: (complete: boolean) => void
 ) => {
-    console.log("Updating asset");
     let uploadBody = Object.assign({}, updatedAsset);
     uploadBody.bucket = updatedAsset.assetLocation.Bucket;
     uploadBody.key = updatedAsset.assetLocation.Key;
     uploadBody.Comment = updatedAsset.currentVersion.Comment;
 
-    let isError = false;
     if (files && files.length > 0) {
-        console.log(files[0].name.split(".").pop());
         const newKey =
             "previews" +
             "/" +
@@ -49,41 +45,47 @@ const update = async (
             "." +
             files[0].name.split(".").pop();
 
-        console.log(newKey);
+        uploadBody.previewLocation = {
+            Bucket: updatedAsset.assetLocation.Bucket,
+            Key: newKey,
+        };
         await Storage.put(newKey, files[0], {
             resumable: true,
             customPrefix: {
                 public: "",
             },
             progressCallback(progress) {
-                console.log(`Uploaded: ${progress.loaded}/${progress.total}`);
                 setProgress(Math.floor((progress.loaded / progress.total) * 100));
             },
             errorCallback: (err) => {
-                isError = true;
-                console.error("Unexpected error while uploading", err);
                 setError({ isError: true, message: err });
             },
             completeCallback: (event) => {
-                console.log(`Successfully uploaded ${event.key}`);
-                setComplete(true);
+                const body: Partial<UploadAssetWorkflowApi> = { uploadAssetBody: uploadBody };
+                return API.post("api", "assets/uploadAssetWorkflow", {
+                    "Content-type": "application/json",
+                    body,
+                })
+                    .then((res) => {
+                        setComplete(true);
+                    })
+                    .catch((err) => {
+                        setError({ isError: true, message: err });
+                    });
             },
         });
-        uploadBody.previewLocation = {
-            Bucket: updatedAsset.assetLocation.Bucket,
-            Key: newKey,
-        };
-    }
-    const body: Partial<UploadAssetWorkflowApi> = { uploadAssetBody: uploadBody };
-    console.log(body);
-
-    if (!isError) {
-        return API.post("api", "assets/uploadAssetWorkflow", {
+    } else {
+        const body: Partial<UploadAssetWorkflowApi> = { uploadAssetBody: uploadBody };
+        API.post("api", "assets/uploadAssetWorkflow", {
             "Content-type": "application/json",
             body,
-        }).then(() => {
-            console.log("Calling API");
-        });
+        })
+            .then((res) => {
+                setComplete(true);
+            })
+            .catch((err) => {
+                setError({ isError: true, message: err });
+            });
     }
 };
 export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
@@ -98,6 +100,9 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     }, [asset]);
 
     const [value, setValue] = useState<File[]>([]);
+    if (complete) {
+        props.onComplete();
+    }
     return (
         <Modal
             onDismiss={() => props.onClose()}
@@ -107,18 +112,13 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
             footer={
                 <Box float="right">
                     <SpaceBetween direction="horizontal" size="xs">
-                        <Button variant="link">Cancel</Button>
+                        <Button variant="link" onClick={() => props.onClose()}>
+                            Cancel
+                        </Button>
                         <Button
                             variant="primary"
                             onClick={() =>
-                                update(
-                                    assetDetail,
-                                    value,
-                                    setProgress,
-                                    setError,
-                                    setComplete,
-                                    props.onComplete
-                                )
+                                update(assetDetail, value, setProgress, setError, setComplete)
                             }
                         >
                             Update Asset

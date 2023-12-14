@@ -41,11 +41,13 @@ describe("Navigation", () => {
             wrapper,
             "/assets",
             "/upload",
+            "/comments",
             "/pipelines",
             "/workflows",
             "/auth/constraints",
             "/visualizers/column",
             "/visualizers/model",
+            "/visualizers/pc",
             "/visualizers/plot"
         );
     });
@@ -59,8 +61,10 @@ describe("Navigation", () => {
             wrapper,
             "/assets",
             "/upload",
+            "/comments",
             "/visualizers/column",
             "/visualizers/model",
+            "/visualizers/pc",
             "/visualizers/plot"
         );
         expectNoSideNavLinks(wrapper, "/pipelines", "/workflows", "/auth/constraints");
@@ -76,9 +80,11 @@ describe("Navigation", () => {
             wrapper,
             "/assets",
             "/upload",
+            "/comments",
             "/workflows",
             "/auth/constraints",
             "/visualizers/model",
+            "/visualizers/pc",
             "/visualizers/plot",
             "visualizers/column"
         );
@@ -93,10 +99,12 @@ describe("Navigation", () => {
         expectNoSideNavLinks(
             wrapper,
             "/assets",
+            "/comments",
             "/pipelines",
             "/auth/constraints",
             "/visualizers/column",
             "/visualizers/model",
+            "/visualizers/pc",
             "/visualizers/plot"
         );
     });
@@ -112,10 +120,12 @@ describe("Navigation", () => {
         expectSideNavLinks(
             wrapper,
             "/assets",
+            "/comments",
             "/pipelines",
             "/workflows",
             "/visualizers/column",
             "/visualizers/model",
+            "/visualizers/pc",
             "/visualizers/plot"
         );
         expectNoSideNavLinks(wrapper, "/auth/constraints");
