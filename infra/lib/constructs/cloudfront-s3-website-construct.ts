@@ -100,6 +100,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
 
         const connectSrc = [
             "'self'",
+            "blob:",
             props.cognitoDomain,
             `https://cognito-idp.${props.env?.region}.amazonaws.com/`,
             `https://cognito-identity.${props.env?.region}.amazonaws.com/`,
@@ -146,8 +147,8 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
                             `default-src 'none'; style-src 'self' 'unsafe-inline'; ` +
                             `connect-src ${connectSrc.join(" ")}; ` +
                             `script-src ${scriptSrc.join(" ")}; ` +
-                            `img-src 'self' data: https://${props.assetBucketUrl}; ` +
-                            `media-src 'self' data: https://${props.assetBucketUrl}; ` +
+                            `img-src 'self' blob: data: https://${props.assetBucketUrl}; ` +
+                            `media-src 'self' blob: data: https://${props.assetBucketUrl}; ` +
                             `object-src 'none'; ` +
                             `frame-ancestors 'none'; font-src 'self'; ` +
                             `manifest-src 'self'`,

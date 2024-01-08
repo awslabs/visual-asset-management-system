@@ -64,7 +64,9 @@
         "nth-check": "^2.0.1",
         "fast-xml-parser": "^4.2.5",
         "semver": "^7.5.2",
-        "tough-cookie": "^4.1.3"
+        "tough-cookie": "^4.1.3",
+        "postcss": "^8.4.31",
+        "axios": "^1.6.0"
     },
     "scripts": {
         "start": "react-scripts start",
@@ -126,8 +128,15 @@
             "node_modules/(d3-.*|internmap)/.+\\.js$": "./node_modules/@cloudscape-design/jest-preset/js-transformer"
         },
         "transformIgnorePatterns": [
-            "/node_modules/(?!(d3-.*|internmap|@cloudscape-design/)).+\\.js$"
+            "/node_modules/(?!(d3-.*|internmap|@cloudscape-design/)).+\\.js$",
+            "node_modules/(?!axios)/",
+            "node_modules/(?!(react-leaflet|@react-leaflet|d3-*|axios))",
+            "node_modules/(?!(d3-.*|internmap|@cloudscape-design/)).+\\.js$",
+            "!node_modules/"
         ],
+        "moduleNameMapper": {
+            "^axios$": "axios/dist/axios.js"
+        },
         "coverageThreshold": {
             "global": {
                 "branches": 6,

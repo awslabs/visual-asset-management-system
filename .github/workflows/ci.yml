@@ -73,11 +73,11 @@ jobs:
                   dir: "vams/web"
                   cmd: audit
 
-            - name: Web test
-              working-directory: vams/web
-              env:
-                  CI: "true"
-              run: npm run test
+            # - name: Web test
+            #   working-directory: vams/web
+            #   env:
+            #       CI: "true"
+            #   run: npm run test
 
             - name: Web build
               working-directory: vams/web

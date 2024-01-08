@@ -94,7 +94,7 @@ You can identify stable releases by their tag. Fetch the tags `git fetch --all -
 
 1. `cd ./web && nvm use` - make sure you're node version matches the project. Make sure Docker daemon is running.
 
-2. `yarn install` - make sure you install the packages required by the web app
+2. `yarn install` - make sure you install the packages required by the web app (Take note, `npm install` does not result in a working build of the application - please use yarn).
 
 3. `npm run build` - build the web app.
 
