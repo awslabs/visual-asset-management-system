@@ -26,7 +26,7 @@ ROLE_ARN = os.environ['ROLE_ARN']
 
 def _add_if_not_none(value, ary):
     if value is not None and "Bucket" in value and "Key" in value:
-        ary.append(f"{value['Bucket']}/{value['Key']}")
+        ary.append(f"arn:aws:s3:::{value['Bucket']}/{value['Key']}")
 
 
 def lambda_handler(event, context):
@@ -87,7 +87,7 @@ def lambda_handler(event, context):
         asset_record = get_asset(databaseId=databaseId, assetId=assetId)
 
         keys_for_resources = []
-
+        
         _add_if_not_none(
             asset_record.get("assetLocation", None),
             keys_for_resources)
