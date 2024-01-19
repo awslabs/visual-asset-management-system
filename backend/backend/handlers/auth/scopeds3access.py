@@ -87,7 +87,7 @@ def lambda_handler(event, context):
         asset_record = get_asset(databaseId=databaseId, assetId=assetId)
 
         keys_for_resources = []
-        
+
         _add_if_not_none(
             asset_record.get("assetLocation", None),
             keys_for_resources)
