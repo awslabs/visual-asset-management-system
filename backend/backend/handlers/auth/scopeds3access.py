@@ -88,12 +88,18 @@ def lambda_handler(event, context):
 
         keys_for_resources = []
 
-        _add_if_not_none(
-            asset_record.get("assetLocation", None),
-            keys_for_resources)
-        _add_if_not_none(
-            asset_record.get("previewLocation", None).get("Key", None),
-            keys_for_resources)
+        if asset_record:
+            key = None;
+            pl = asset_record.get("previewLocation", None)
+            if pl:
+                key = pl.get("Key", None)
+
+            _add_if_not_none(
+                asset_record.get("assetLocation", None),
+                keys_for_resources)
+            _add_if_not_none(
+                key,
+                keys_for_resources)
 
         # generate a policy scoped to the assetId as the s3 key prefix
         # to be passed to assume_role
