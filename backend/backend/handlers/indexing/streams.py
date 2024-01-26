@@ -134,12 +134,12 @@ class MetadataTable():
                 "databaseId": databaseId,
                 "assetId": assetId,
             },
-            UpdateExpression="SET #asset_table_updated = :asset_table_updated",
+            UpdateExpression="SET #_asset_table_updated = :_asset_table_updated",
             ExpressionAttributeNames={
-                "#asset_table_updated": "asset_table_updated",
+                "#_asset_table_updated": "_asset_table_updated",
             },
             ExpressionAttributeValues={
-                ":asset_table_updated": Decimal(time.time()),
+                ":_asset_table_updated": Decimal(time.time()),
             },
         )
 
