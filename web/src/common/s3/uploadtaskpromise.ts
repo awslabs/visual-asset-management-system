@@ -28,6 +28,7 @@ export default async function getUploadTaskPromise(
     const config = Cache.getItem("config");
 
     const em = new events.EventEmitter();
+    console.log(key);
     const uploadTask = new S3Upload({
         credentialsProvider: creds.getCredentials.bind(creds),
         params: {
