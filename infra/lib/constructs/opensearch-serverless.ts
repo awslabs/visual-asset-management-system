@@ -34,7 +34,7 @@ export class OpensearchServerlessConstruct extends Construct {
                 bundling: {
                     externalModules: ["aws-sdk"],
                 },
-                runtime: lambda.Runtime.NODEJS_18_X,
+                runtime: lambda.Runtime.NODEJS_20_X,
             }
         );
 

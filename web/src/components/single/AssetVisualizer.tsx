@@ -14,6 +14,7 @@ interface AssetVisualizerPropTypes {
     asset: any;
     viewerMode: string;
     onViewerModeChange: (viewMode: string) => void;
+    assetKey?: string;
 }
 
 function AssetVisualizer(props: AssetVisualizerPropTypes) {
@@ -41,6 +42,7 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                             assetId={props.asset.assetId}
                             databaseId={props.asset.databaseId}
                             assetKey={
+                                props.assetKey ||
                                 props.asset?.generated_artifacts?.preview?.Key ||
                                 props.asset.previewLocation.Key
                             }
@@ -52,6 +54,7 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                             assetId={props.asset.assetId}
                             databaseId={props.asset.databaseId}
                             assetKey={
+                                props.assetKey ||
                                 props.asset?.generated_artifacts?.gltf?.Key ||
                                 props.asset?.assetLocation?.Key
                             }
@@ -61,6 +64,7 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                     {props.viewType === "pc" && (
                         <PointCloudViewer
                             assetKey={
+                                props.assetKey ||
                                 props.asset?.generated_artifacts?.laz?.Key ||
                                 props.asset?.assetLocation?.Key
                             }
@@ -71,7 +75,7 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                         <ThreeDimensionalPlotter
                             assetId={props.asset.assetId}
                             databaseId={props.asset.databaseId}
-                            assetKey={props.asset?.assetLocation?.Key}
+                            assetKey={props.assetKey || props.asset?.assetLocation?.Key}
                             className="visualizer-container-canvas"
                         />
                     )}
@@ -79,14 +83,14 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                         <ColumnarViewer
                             assetId={props.asset.assetId}
                             databaseId={props.asset.databaseId}
-                            assetKey={props.asset?.assetLocation?.Key}
+                            assetKey={props.assetKey || props.asset?.assetLocation?.Key}
                         />
                     )}
                     {props.viewType === "html" && (
                         <HTMLViewer
                             assetId={props.asset.assetId}
                             databaseId={props.asset.databaseId}
-                            assetKey={props.asset?.assetLocation?.Key}
+                            assetKey={props.assetKey || props.asset?.assetLocation?.Key}
                         />
                     )}
                     {props.viewType === "folder" && (
@@ -94,7 +98,7 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                             assetId={props.asset?.assetId}
                             databaseId={props.asset?.databaseId}
                             assetName={props.asset?.assetName}
-                            isDistributable={props.asset?.isDistributable}
+                            isDistributable={props.assetKey || props.asset?.isDistributable}
                         />
                     )}
                 </div>

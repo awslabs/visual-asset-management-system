@@ -14,6 +14,7 @@ export default function ModelViewer(props) {
 
     useEffect(() => {
         const loadAsset = async () => {
+            console.log(assetKey);
             await getPresignedKey(assetId, databaseId, assetKey).then((remoteFileUrl) => {
                 engineElement.current.setAttribute("model", remoteFileUrl);
                 setTimeout(() => {

@@ -33,6 +33,7 @@ import { ErrorBoundary } from "react-error-boundary";
 import Synonyms from "../../synonyms";
 
 const checkFileFormat = (fileName, isDirectory) => {
+    console.log(fileName);
     if (isDirectory) {
         return "folder";
     }
@@ -212,6 +213,7 @@ export default function ViewFile() {
                                             <AssetVisualizer
                                                 viewType={viewType}
                                                 asset={asset}
+                                                assetKey={key}
                                                 viewerMode={viewerMode}
                                                 onViewerModeChange={(newViewerMode) =>
                                                     changeViewerMode(newViewerMode)

@@ -18,7 +18,7 @@ import StatusIndicator from "@cloudscape-design/components/status-indicator";
 const FileUploadTableColumnDefinitions = [
     {
         id: "progress",
-        header: "Upload Progress",
+        header: "Progress",
         cell: (item: FileUploadTableItem) => (
             <ProgressBar
                 label={item.relativePath}
@@ -44,7 +44,7 @@ const FileUploadTableColumnDefinitions = [
     },
     {
         id: "status",
-        header: "Upload Status",
+        header: "Status",
         cell: (item: FileUploadTableItem) => (
             <StatusIndicator type={getStatusIndicator(item.status)}>
                 {" "}
@@ -62,6 +62,7 @@ interface FileUploadTableProps {
     resume: boolean;
     columnDefinitions?: typeof FileUploadTableColumnDefinitions;
     showCount?: boolean;
+    mode?: "Upload" | "Download" | "Delete";
 }
 
 /**
@@ -198,19 +199,24 @@ function getCompletedItemsCount(allItems: FileUploadTableItem[]) {
     return allItems.filter((item) => item.status === "Completed").length;
 }
 
-function getActions(allItems: FileUploadTableItem[], resume: boolean, onRetry?: () => void) {
+function getActions(
+    allItems: FileUploadTableItem[],
+    resume: boolean,
+    onRetry?: () => void,
+    mode: "Upload" | "Download" | "Delete" = "Upload"
+) {
     const failed = allItems.filter((item) => item.status === "Failed").length;
     const notCompleted = allItems.filter((item) => item.status !== "Completed").length;
-    if (!resume && failed > 0) {
+    if (failed > 0) {
         return (
             <Button variant={"primary"} onClick={onRetry}>
-                Reupload {failed} Items
+                {mode} {failed} failed Items
             </Button>
         );
     } else if (resume) {
         return (
             <Button variant={"primary"} onClick={onRetry}>
-                Reupload {notCompleted} Items
+                {mode} {notCompleted} Items
             </Button>
         );
     } else {
@@ -224,6 +230,7 @@ export const FileUploadTable = ({
     resume,
     columnDefinitions,
     showCount,
+    mode = "Upload",
 }: FileUploadTableProps) => {
     let visibleContent = ["filesize", "status", "progress"];
     if (!columnDefinitions) {
@@ -255,9 +262,9 @@ export const FileUploadTable = ({
                                     ? `${getCompletedItemsCount(allItems)}/${allItems.length}`
                                     : `(${allItems.length})`
                             }
-                            actions={getActions(allItems, resume, onRetry)}
+                            actions={getActions(allItems, true, onRetry, mode)}
                         >
-                            Files to upload
+                            Files
                         </Header>
                     }
                     columnDefinitions={columnDefinitions}

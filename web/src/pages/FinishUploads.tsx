@@ -1,13 +1,16 @@
-import { Box, Grid, Link, SpaceBetween, TextContent } from "@cloudscape-design/components";
+import { Box, Grid, SpaceBetween, TextContent } from "@cloudscape-design/components";
 import Header from "@cloudscape-design/components/header";
-import React, { useEffect, useState } from "react";
+import React, { useContext, useEffect, useRef, useState } from "react";
 import { AssetDetail } from "./AssetUpload";
-import { useParams } from "react-router";
+import { useLocation, useParams } from "react-router";
 import localforage from "localforage";
 import { FileUploadTable, FileUploadTableItem } from "./AssetUpload/FileUploadTable";
 import { createAssetUploadPromises, executeUploads } from "./AssetUpload/onSubmit";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
 import Synonyms from "../synonyms";
+import { FileInfo, MultiFileSelect } from "../components/multifile/MultiFileSelect";
+import { AssetDetailContext, AssetDetailContextType } from "../context/AssetDetailContext";
+import { Link } from "@cloudscape-design/components";
 
 export async function verifyPermission(fileHandle: any, readWrite: any) {
     const options = {};
@@ -27,39 +30,34 @@ export async function verifyPermission(fileHandle: any, readWrite: any) {
     return false;
 }
 
-const FinishUploads = () => {
-    const [assetDetail, setAssetDetail] = useState<AssetDetail | null>(null);
-    const [fileUploadTableItems, setFileUploadTableItems] = useState<FileUploadTableItem[]>([]);
+interface FinishUploadsProps {
+    assetDetailState: AssetDetail;
+    keyPrefix: string;
+    // uploadItems: FileUploadTableItem[]
+}
+
+const FinishUploads = ({ assetDetailState, keyPrefix }: FinishUploadsProps) => {
     const [reuploadClicked, setReuploadClicked] = useState(false);
-    const { assetId } = useParams();
+    const [assetDetail, setAssetDetail] = useState(assetDetailState);
 
     const get_completed_items = (items: FileUploadTableItem[]) => {
         return items.filter((item) => item.status === "Completed");
     };
 
     useEffect(() => {
-        if (assetId) {
-            localforage.getItem<AssetDetail>(assetId).then((assetDetail) => {
-                setAssetDetail(assetDetail);
-                if (assetDetail?.Asset) {
-                    setFileUploadTableItems(assetDetail.Asset);
-                }
-                console.log("local asset found");
-            });
-        }
-    }, [assetId]);
+        setAssetDetail(assetDetailState);
+    }, [assetDetailState]);
+
     useEffect(() => {
-        if (assetDetail && assetDetail.assetId && fileUploadTableItems.length > 0) {
-            //@ts-ignore
-            setAssetDetail((assetDetail) => {
-                return { ...assetDetail, Asset: fileUploadTableItems };
-            });
+        if (assetDetail && assetDetail.assetId) {
             localforage
-                .setItem(assetDetail.assetId, { ...assetDetail, Asset: fileUploadTableItems })
-                .then(() => {})
+                .setItem(assetDetail.assetId!, assetDetail)
+                .then(() => {
+                    // console.log("local asset saved", assetDetail)
+                })
                 .catch((error) => {});
         }
-    }, [fileUploadTableItems]);
+    }, [assetDetail]);
 
     const getUpdatedItemAfterProgress = (
         item: FileUploadTableItem,
@@ -97,81 +95,93 @@ const FinishUploads = () => {
         }
     };
     const updateProgressForFileUploadItem = (index: number, loaded: number, total: number) => {
-        setFileUploadTableItems((prevState) => {
-            return prevState.map((item) =>
-                item.index === index ? getUpdatedItemAfterProgress(item, loaded, total) : item
-            );
+        setAssetDetail((prevAssetDetail: AssetDetail) => {
+            return {
+                ...prevAssetDetail,
+                //@ts-ignore
+                Asset: prevAssetDetail.Asset.map((item) =>
+                    item.index === index ? getUpdatedItemAfterProgress(item, loaded, total) : item
+                ),
+            };
         });
     };
 
     const fileUploadComplete = (index: number, event: any) => {
-        setFileUploadTableItems((prevState) => {
-            return prevState.map((item) =>
-                item.index === index ? { ...item, status: "Completed", progress: 100 } : item
-            );
+        setAssetDetail((prevAssetDetail: AssetDetail) => {
+            return {
+                ...prevAssetDetail,
+                //@ts-ignore
+                Asset: prevAssetDetail.Asset.map((item) =>
+                    item.index === index ? { ...item, status: "Completed", progress: 100 } : item
+                ),
+            };
         });
     };
 
     const fileUploadError = (index: number, event: any) => {
-        setFileUploadTableItems((prevState) => {
-            return prevState.map((item) =>
-                item.index === index ? { ...item, status: "Failed" } : item
-            );
+        setAssetDetail((prevAssetDetail: AssetDetail) => {
+            return {
+                ...prevAssetDetail,
+                //@ts-ignore
+                Asset: prevAssetDetail.Asset.map((item) =>
+                    item.index === index ? { ...item, status: "Failed" } : item
+                ),
+            };
         });
     };
 
     const moveToQueued = (index: number) => {
-        setFileUploadTableItems((prevState) => {
-            return prevState.map((item) =>
-                item.index === index ? { ...item, status: "Queued" } : item
-            );
+        setAssetDetail((prevAssetDetail: AssetDetail) => {
+            return {
+                ...prevAssetDetail,
+                //@ts-ignore
+                Asset: prevAssetDetail.Asset.map((item) =>
+                    item.index === index ? { ...item, status: "Queued" } : item
+                ),
+            };
         });
     };
 
     const onRetry = () => {
         console.log("Calling on retry");
-        let handle;
-        if (assetDetail && assetDetail.Asset && assetDetail.Asset.length === 1) {
-            handle = assetDetail.Asset[0].handle;
-        } else {
-            handle = assetDetail?.DirectoryHandle;
-        }
-        verifyPermission(handle, true).then((result: boolean) => {
-            if (
-                result &&
-                assetDetail &&
-                assetDetail.key &&
-                assetDetail.assetId &&
-                assetDetail.databaseId &&
-                fileUploadTableItems
-            ) {
-                setReuploadClicked(true);
-                const uploads = createAssetUploadPromises(
-                    assetDetail.isMultiFile,
-                    fileUploadTableItems,
-                    assetDetail.key,
-                    {
-                        assetId: assetDetail.assetId,
-                        databaseId: assetDetail.databaseId,
-                    },
-                    moveToQueued,
-                    (index: number, progress: any) => {
-                        updateProgressForFileUploadItem(index, progress.loaded, progress.total);
-                    },
-                    (index: number, event: any) => {
-                        console.log("Completed Upload");
-                        fileUploadComplete(index, event);
-                    },
-                    (index: number, event: any) => {
-                        console.log("Error Uploading", event);
-                        fileUploadError(index, event);
-                    }
-                );
-                executeUploads(uploads).catch((err: any) => {
+        console.log(assetDetail);
+        if (
+            // result &&
+            assetDetail &&
+            assetDetail.key &&
+            assetDetail.assetId &&
+            assetDetail.databaseId &&
+            assetDetail.Asset
+        ) {
+            setReuploadClicked(true);
+            const uploads = createAssetUploadPromises(
+                assetDetail.isMultiFile,
+                assetDetail.Asset,
+                keyPrefix === "/" ? assetDetail.key : assetDetail.key + keyPrefix + "/",
+                {
+                    assetId: assetDetail.assetId,
+                    databaseId: assetDetail.databaseId,
+                },
+                moveToQueued,
+                (index: number, progress: any) => {
+                    updateProgressForFileUploadItem(index, progress.loaded, progress.total);
+                },
+                (index: number, event: any) => {
+                    console.log("Completed Upload");
+                    fileUploadComplete(index, event);
+                },
+                (index: number, event: any) => {
+                    console.log("Error Uploading", event);
+                    fileUploadError(index, event);
+                }
+            );
+            executeUploads(uploads)
+                .then(() => {})
+                .catch((err: any) => {
                     return Promise.reject(err);
                 });
-            }
-        });
+        }
+        //});
     };
     return (
         <>
@@ -179,16 +189,13 @@ const FinishUploads = () => {
                 <SpaceBetween direction="vertical" size="l">
                     <Box variant="awsui-key-label">
                         Upload Progress for {Synonyms.Asset}
-                        <Link
-                            href={`/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`}
-                            target="_blank"
-                        >
-                            {` ${assetDetail.assetName}`}
-                        </Link>
+                        {/* <Link href={`/databases/${assetDetailState.databaseId}/assets/${assetDetailState.assetId}`} target="_blank">
+                            { assetDetailState.assetName || ""}
+                        </Link> */}
                     </Box>
                     <ProgressBar
                         status={
-                            get_completed_items(assetDetail.Asset).length ==
+                            get_completed_items(assetDetail.Asset).length ===
                             assetDetail.Asset.length
                                 ? "success"
                                 : "in-progress"
@@ -212,18 +219,64 @@ const FinishUploads = () => {
     );
 };
 
+const convertToFileUploadTableItems = (fileInfo: FileInfo[]): FileUploadTableItem[] => {
+    return fileInfo.map((file, index) => {
+        return {
+            index: index,
+            name: file.path,
+            size: 0,
+            status: "Queued",
+            progress: 0,
+            loaded: 0,
+            total: 0,
+            startedAt: 0,
+            handle: file.handle,
+            relativePath: file.path,
+        };
+    });
+};
+
 export default function FinishUploadsPage() {
+    const { state } = useLocation();
+    // const { assetDetailState } = state
+    const [assetDetail, setAssetDetail] = useState(state.assetDetailState);
+    console.log(state);
+
     return (
         <Box padding={{ top: false ? "s" : "m", horizontal: "l" }}>
-            <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
-                <div>
-                    <TextContent>
-                        <Header variant="h1">Finish Pending Uploads </Header>
-                    </TextContent>
+            <SpaceBetween size={"s"} direction={"vertical"}>
+                <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
+                    <div>
+                        <TextContent>
+                            <Header variant="h1"> Pending Uploads </Header>
+                        </TextContent>
+                        <FinishUploads
+                            assetDetailState={assetDetail}
+                            keyPrefix={state.fileTree.keyPrefix}
+                        />
+                    </div>
+                </Grid>
+                <h1> Add more files </h1>
+                <MultiFileSelect
+                    onChange={(fileSelection) => {
+                        const selectedItems = convertToFileUploadTableItems(fileSelection);
+                        // console.log(selectedItems)
+                        const uploadItems = selectedItems; //mergeItems(assetDetail.Asset, selectedItems)
+                        // console.log(uploadItems)
 
-                    <FinishUploads />
-                </div>
-            </Grid>
+                        //@ts-ignore
+                        setAssetDetail((assetDetail) => {
+                            // console.log(assetDetail)
+                            // console.log(uploadItems)
+                            return {
+                                ...assetDetail,
+                                Asset: uploadItems,
+                                isMultiFile: assetDetail?.isMultiFile || uploadItems.length > 0,
+                            };
+                        });
+                    }}
+                />
+            </SpaceBetween>
         </Box>
     );
 }

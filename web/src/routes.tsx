@@ -25,6 +25,7 @@ const Constraints = React.lazy(() => import("./pages/auth/Constraints"));
 const FinishUploadsPage = React.lazy(() => import("./pages/FinishUploads"));
 const MetadataSchema = React.lazy(() => import("./pages/MetadataSchema"));
 const ViewFile = React.lazy(() => import("./components/single/ViewFile"));
+const AssetDownloadsPage = React.lazy(() => import("./pages/AssetDownload"));
 
 interface RouteOption {
     path: string;
@@ -48,6 +49,12 @@ const routeTable: RouteOption[] = [
     {
         path: "/databases/:databaseId/assets/:assetId",
         Page: ViewAsset,
+        active: "/assets",
+        roles: ["assets"],
+    },
+    {
+        path: "/databases/:databaseId/assets/:assetId/download",
+        Page: AssetDownloadsPage,
         active: "/assets",
         roles: ["assets"],
     },
