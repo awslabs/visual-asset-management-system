@@ -132,6 +132,7 @@ export function createAssetUploadPromises(
             }
         }
     }
+    console.log("uploads", uploads);
     return uploads;
 }
 

@@ -283,18 +283,18 @@
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M236.73,-207.31C246.82,-230.05 272.09,-290.52 281,-344 282.97,-355.84 281.23,-1198.85 289,-1208 291.94,-1211.46 295.44,-1214.23 299.31,-1216.42"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="298.46,-1218.35 304.78,-1219.08 300.29,-1214.57 298.46,-1218.35"/>
 </g>
-<!-- src/components/single/ViewAsset.js -->
+<!-- src/components/single/ViewAsset.tsx -->
 <g id="node60" class="node">
-<title>src/components/single/ViewAsset.js</title>
-<g id="a_node60"><a xlink:href="src/components/single/ViewAsset.js" xlink:title="ViewAsset.js">
+<title>src/components/single/ViewAsset.tsx</title>
+<g id="a_node60"><a xlink:href="src/components/single/ViewAsset.tsx" xlink:title="ViewAsset.tsx">
 <path fill="#ffffcc" stroke="black" d="M694.5,-594C694.5,-594 638.5,-594 638.5,-594 635.5,-594 632.5,-591 632.5,-588 632.5,-588 632.5,-582 632.5,-582 632.5,-579 635.5,-576 638.5,-576 638.5,-576 694.5,-576 694.5,-576 697.5,-576 700.5,-579 700.5,-582 700.5,-582 700.5,-588 700.5,-588 700.5,-591 697.5,-594 694.5,-594"/>
-<text text-anchor="start" x="640.5" y="-582.8" font-family="Helvetica,sans-Serif" font-size="9.00">ViewAsset.js</text>
+<text text-anchor="start" x="640.5" y="-582.8" font-family="Helvetica,sans-Serif" font-size="9.00">ViewAsset.tsx</text>
 </a>
 </g>
 </g>
-<!-- src/routes.js&#45;&gt;src/components/single/ViewAsset.js -->
+<!-- src/routes.js&#45;&gt;src/components/single/ViewAsset.tsx -->
 <g id="edge120" class="edge">
-<title>src/routes.js&#45;&gt;src/components/single/ViewAsset.js</title>
+<title>src/routes.js&#45;&gt;src/components/single/ViewAsset.tsx</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M236.22,-207.04C245.38,-229.69 269.12,-290.82 281,-344 287.54,-373.27 274.53,-384.73 289,-411 357.59,-535.47 544.19,-571.44 626.08,-581.39"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="626.06,-583.5 632.26,-582.11 626.55,-579.33 626.06,-583.5"/>
 </g>
@@ -1282,33 +1282,33 @@
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M864.77,-1290.08C871.49,-1291.78 878.22,-1293.74 884.5,-1296 897.5,-1300.66 911.23,-1307.74 922.02,-1313.85"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="921.13,-1315.76 927.38,-1316.94 923.23,-1312.12 921.13,-1315.76"/>
 </g>
-<!-- src/components/single/ViewAsset.js&#45;&gt;src/common/fileFormats.js -->
+<!-- src/components/single/ViewAsset.tsx&#45;&gt;src/common/fileFormats.js -->
 <g id="edge82" class="edge">
-<title>src/components/single/ViewAsset.js&#45;&gt;src/common/fileFormats.js</title>
+<title>src/components/single/ViewAsset.tsx&#45;&gt;src/common/fileFormats.js</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M700.79,-584.53C711.39,-582.61 722.14,-578.45 729,-570 746.58,-548.33 719.07,-340.38 737,-319 811.73,-229.89 966.06,-233.71 1039.48,-241.36"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1039.29,-243.45 1045.48,-242.01 1039.74,-239.28 1039.29,-243.45"/>
 </g>
-<!-- src/components/single/ViewAsset.js&#45;&gt;src/services/APIService.js -->
+<!-- src/components/single/ViewAsset.tsx&#45;&gt;src/services/APIService.js -->
 <g id="edge83" class="edge">
-<title>src/components/single/ViewAsset.js&#45;&gt;src/services/APIService.js</title>
+<title>src/components/single/ViewAsset.tsx&#45;&gt;src/services/APIService.js</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M700.54,-583.62C710.88,-581.58 721.52,-577.59 729,-570 740.2,-558.64 728.38,-548.43 737,-535 782.91,-463.53 873.17,-411.84 916.98,-389.81"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="918.15,-391.57 922.59,-387.02 916.28,-387.81 918.15,-391.57"/>
 </g>
-<!-- src/components/single/ViewAsset.js&#45;&gt;src/components/list/TableList.js -->
+<!-- src/components/single/ViewAsset.tsx&#45;&gt;src/components/list/TableList.js -->
 <g id="edge85" class="edge">
-<title>src/components/single/ViewAsset.js&#45;&gt;src/components/list/TableList.js</title>
+<title>src/components/single/ViewAsset.tsx&#45;&gt;src/components/list/TableList.js</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M700.71,-577.73C712.2,-575.25 725.16,-572.47 737,-570 749.43,-567.41 763.04,-564.64 775.19,-562.21"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="775.92,-564.2 781.39,-560.96 775.1,-560.08 775.92,-564.2"/>
 </g>
-<!-- src/components/single/ViewAsset.js&#45;&gt;src/components/list/list&#45;definitions/WorkflowListDefinition.js -->
+<!-- src/components/single/ViewAsset.tsx&#45;&gt;src/components/list/list&#45;definitions/WorkflowListDefinition.js -->
 <g id="edge84" class="edge">
-<title>src/components/single/ViewAsset.js&#45;&gt;src/components/list/list&#45;definitions/WorkflowListDefinition.js</title>
+<title>src/components/single/ViewAsset.tsx&#45;&gt;src/components/list/list&#45;definitions/WorkflowListDefinition.js</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M677.5,-594.12C690.32,-605.29 713.68,-623.96 737,-634 740.66,-635.58 744.5,-636.99 748.42,-638.26"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="747.86,-640.28 754.21,-640.01 749.08,-636.26 747.86,-640.28"/>
 </g>
-<!-- src/components/single/ViewAsset.js&#45;&gt;src/components/selectors/AssetSelectorWithModal.js -->
+<!-- src/components/single/ViewAsset.tsx&#45;&gt;src/components/selectors/AssetSelectorWithModal.js -->
 <g id="edge86" class="edge">
-<title>src/components/single/ViewAsset.js&#45;&gt;src/components/selectors/AssetSelectorWithModal.js</title>
+<title>src/components/single/ViewAsset.tsx&#45;&gt;src/components/selectors/AssetSelectorWithModal.js</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M669.8,-594.02C679.27,-631.57 715.33,-779.2 729,-903 732.37,-933.49 727.06,-1149.97 737,-1179 749.38,-1215.15 779.42,-1249.34 797.34,-1267.49"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="795.89,-1269.01 801.62,-1271.75 798.85,-1266.03 795.89,-1269.01"/>
 </g>
@@ -1321,9 +1321,9 @@
 </a>
 </g>
 </g>
-<!-- src/components/single/ViewAsset.js&#45;&gt;src/components/viewers/3dViewer.js -->
+<!-- src/components/single/ViewAsset.tsx&#45;&gt;src/components/viewers/3dViewer.js -->
 <g id="edge87" class="edge">
-<title>src/components/single/ViewAsset.js&#45;&gt;src/components/viewers/3dViewer.js</title>
+<title>src/components/single/ViewAsset.tsx&#45;&gt;src/components/viewers/3dViewer.js</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M668.69,-594.03C674.29,-635.24 699.37,-804.83 737,-840 746.77,-849.14 760.49,-853.39 773.5,-855.19"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="773.61,-857.32 779.81,-855.89 774.08,-853.14 773.61,-857.32"/>
 </g>
@@ -1336,9 +1336,9 @@
 </a>
 </g>
 </g>
-<!-- src/components/single/ViewAsset.js&#45;&gt;src/components/viewers/ColumnarViewer.js -->
+<!-- src/components/single/ViewAsset.tsx&#45;&gt;src/components/viewers/ColumnarViewer.js -->
 <g id="edge88" class="edge">
-<title>src/components/single/ViewAsset.js&#45;&gt;src/components/viewers/ColumnarViewer.js</title>
+<title>src/components/single/ViewAsset.tsx&#45;&gt;src/components/viewers/ColumnarViewer.js</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M667.27,-594.45C666.97,-629.1 670.88,-750.24 737,-810 743.16,-815.57 750.8,-819.31 758.81,-821.78"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="758.66,-823.91 764.99,-823.43 759.74,-819.85 758.66,-823.91"/>
 </g>
@@ -1351,9 +1351,9 @@
 </a>
 </g>
 </g>
-<!-- src/components/single/ViewAsset.js&#45;&gt;src/components/viewers/ThreeDimensionalPlotter.js -->
+<!-- src/components/single/ViewAsset.tsx&#45;&gt;src/components/viewers/ThreeDimensionalPlotter.js -->
 <g id="edge89" class="edge">
-<title>src/components/single/ViewAsset.js&#45;&gt;src/components/viewers/ThreeDimensionalPlotter.js</title>
+<title>src/components/single/ViewAsset.tsx&#45;&gt;src/components/viewers/ThreeDimensionalPlotter.js</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M669.41,-594.06C675.32,-620.35 695.51,-697.92 737,-747 750.09,-762.49 769.46,-774.75 785.16,-783.01"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="784.46,-785.01 790.76,-785.86 786.37,-781.27 784.46,-785.01"/>
 </g>
