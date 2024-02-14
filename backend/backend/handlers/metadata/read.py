@@ -8,6 +8,7 @@ from backend.handlers.metadata import logger, mask_sensitive_data, \
     build_response, table, validate_event, ValidationError
 from backend.handlers.auth import get_database_set, request_to_claims
 
+from decimal import Decimal
 
 def generate_prefixes(path):
     prefixes = []
@@ -52,6 +53,12 @@ def get_metadata(databaseId, assetId):
     )
     if "Item" not in resp:
         raise ValidationError(404, "Item Not Found")
+
+    # Convert values that are of type decimal to string (to prevent JSON parse errors on response return)
+    for key, value in resp['Item'].items():
+        if isinstance(value, Decimal):
+            resp['Item'][key] = str(value)
+
     return resp['Item']
 
 

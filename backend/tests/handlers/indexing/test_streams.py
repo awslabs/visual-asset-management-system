@@ -373,6 +373,38 @@ def test_make_prefixes2():
         ] == MetadataTable.generate_prefixes2("one/two/three")
 
 
+def test_index_handler_asset_insert2():
+
+    fixture_file = path.join(
+        "tests", "handlers", "indexing", "test_streams_fixtures",
+        "insert_asset_event.json")
+
+    with open(fixture_file, "r") as fh:
+        insert_event = json.load(fh)
+
+    lambda_handler_mock = Mock()
+    index = Mock()
+    lambda_handler_mock.return_value = index
+    index.process_item = Mock()
+    index.delete_item = Mock()
+    index.delete_item_by_query = Mock()
+
+    meta_table = Mock()
+    meta_table.write_asset_table_updated_event = Mock()
+
+    meta_table_mock = Mock()
+    meta_table_mock.return_value = meta_table
+
+    lambda_handler_a(insert_event, {},
+                     index=lambda_handler_mock,
+                     metadataTable_fn=meta_table_mock)
+
+    meta_table.write_asset_table_updated_event.assert_called_with(
+                        "gltfsamples",
+                        "x64ec1b1e-0ad2-4533-a19a-08af9cf5145c"
+                    )
+
+
 def test_index_handler_asset_remove():
     assetId = 'x9ac611fd-4930-457d-9288-b2f95c391af5'
     remove_event = {
@@ -405,8 +437,13 @@ def test_index_handler_asset_remove():
     index.delete_item = Mock()
     index.delete_item_by_query = Mock()
 
+    meta_table = Mock()
+    meta_table_mock = Mock()
+    meta_table_mock.return_value = meta_table
+
     lambda_handler_a(remove_event, {},
-                     index=lambda_handler_mock)
+                     index=lambda_handler_mock,
+                     metadataTable_fn=meta_table)
 
     index.process_item.assert_not_called()
     index.delete_item.assert_not_called()
@@ -447,8 +484,13 @@ def test_lambda_handler_asset_insert():
     index.delete_item = Mock()
     index.delete_item_by_query = Mock()
 
+    meta_table = Mock()
+    meta_table_mock = Mock()
+    meta_table_mock.return_value = meta_table
+
     lambda_handler_a(insert_event, {},
-                     index=lambda_handler_mock)
+                     index=lambda_handler_mock,
+                     metadataTable_fn=meta_table)
 
     # ignore this event
     index.process_item.assert_not_called()

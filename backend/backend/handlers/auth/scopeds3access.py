@@ -8,6 +8,8 @@ import boto3
 import os
 from datetime import datetime
 
+from backend.handlers.assets.assetService import get_asset
+
 """
 given a assetId, databaseId determine if a user has access to mutate s3
 objects for that asset
@@ -20,6 +22,11 @@ POST /auth/scopeds3access
 """
 
 ROLE_ARN = os.environ['ROLE_ARN']
+
+
+def _add_if_not_none(value, ary):
+    if value is not None and "Bucket" in value and "Key" in value:
+        ary.append(f"arn:aws:s3:::{value['Bucket']}/{value['Key']}")
 
 
 def lambda_handler(event, context):
@@ -77,6 +84,23 @@ def lambda_handler(event, context):
 
         timeout = 900
 
+        asset_record = get_asset(databaseId=databaseId, assetId=assetId)
+
+        keys_for_resources = []
+
+        if asset_record:
+            key = None;
+            pl = asset_record.get("previewLocation", None)
+            if pl:
+                key = pl.get("Key", None)
+
+            _add_if_not_none(
+                asset_record.get("assetLocation", None),
+                keys_for_resources)
+            _add_if_not_none(
+                key,
+                keys_for_resources)
+
         # generate a policy scoped to the assetId as the s3 key prefix
         # to be passed to assume_role
         policy = {
@@ -100,7 +124,7 @@ def lambda_handler(event, context):
                     os.environ['S3_BUCKET'] + "/" + assetId + "/*",
                     "arn:aws:s3:::" +
                     os.environ['S3_BUCKET'] + "/previews/" + assetId + "/*"
-                ]
+                ] + keys_for_resources
             }, {
                 "Sid": "Stmt2",
                 "Effect": "Allow",

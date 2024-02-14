@@ -1,0 +1,90 @@
+{
+    "Records": [
+        {
+            "eventID": "ec9b10ed0aa027560b5474e1dfe3f72d",
+            "eventName": "INSERT",
+            "eventVersion": "1.1",
+            "eventSource": "aws:dynamodb",
+            "awsRegion": "us-east-1",
+            "dynamodb": {
+                "ApproximateCreationDateTime": 1692215805.0,
+                "Keys": {
+                    "assetId": {
+                        "S": "x64ec1b1e-0ad2-4533-a19a-08af9cf5145c"
+                    },
+                    "databaseId": {
+                        "S": "gltfsamples"
+                    }
+                },
+                "NewImage": {
+                    "assetLocation": {
+                        "M": {
+                            "Bucket": {
+                                "S": "vams-dev-us-east-1-assetbucket1d025086-mni68vdh11fh"
+                            },
+                            "Key": {
+                                "S": "x64ec1b1e-0ad2-4533-a19a-08af9cf5145c/boombox.glb"
+                            }
+                        }
+                    },
+                    "executionId": {
+                        "S": ""
+                    },
+                    "assetId": {
+                        "S": "x64ec1b1e-0ad2-4533-a19a-08af9cf5145c"
+                    },
+                    "assetName": {
+                        "S": "boombox"
+                    },
+                    "description": {
+                        "S": "A boombox without spaces in the name"
+                    },
+                    "isDistributable": {
+                        "BOOL": true
+                    },
+                    "specifiedPipelines": {
+                        "L": []
+                    },
+                    "databaseId": {
+                        "S": "gltfsamples"
+                    },
+                    "isMultiFile": {
+                        "BOOL": false
+                    },
+                    "currentVersion": {
+                        "M": {
+                            "Comment": {
+                                "S": "no comment"
+                            },
+                            "S3Version": {
+                                "S": ""
+                            },
+                            "Version": {
+                                "S": "1"
+                            },
+                            "description": {
+                                "S": "A boombox without spaces in the name"
+                            },
+                            "specifiedPipelines": {
+                                "L": []
+                            },
+                            "DateModified": {
+                                "S": "August 16 2023 - 19:56:45"
+                            }
+                        }
+                    },
+                    "assetType": {
+                        "S": ".glb"
+                    },
+                    "pipelineId": {
+                        "S": ""
+                    }
+                },
+                "SequenceNumber": "139717300000000018566568970",
+                "SizeBytes": 565,
+                "StreamViewType": "NEW_IMAGE"
+            },
+            "eventSourceARN": "arn:aws:dynamodb:us-east-1:123123123123:table/vams-dev-us-east-1-AssetStorageTable53D33AD8-8UT44213TTZ4/stream/2023-07-18T09:46:27.940"
+        }
+    ]
+}

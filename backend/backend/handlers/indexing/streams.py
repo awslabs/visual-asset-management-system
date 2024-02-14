@@ -128,6 +128,21 @@ class MetadataTable():
 
         return resp['Item']
 
+    def write_asset_table_updated_event(self, databaseId, assetId):
+        self.table.update_item(
+            Key={
+                "databaseId": databaseId,
+                "assetId": assetId,
+            },
+            UpdateExpression="SET #_asset_table_updated = :_asset_table_updated",
+            ExpressionAttributeNames={
+                "#_asset_table_updated": "_asset_table_updated",
+            },
+            ExpressionAttributeValues={
+                ":_asset_table_updated": Decimal(time.time()),
+            },
+        )
+
 
 class AOSSIndexS3Objects():
     def __init__(self, bucketName, s3client,
@@ -469,11 +484,13 @@ def get_asset_fields(keys):
 def lambda_handler_a(event, context,
                      index=AOSSIndexAssetMetadata.from_env,
                      s3index=AOSSIndexS3Objects.from_env,
+                     metadataTable_fn=MetadataTable.from_env,
                      get_asset_fields_fn=get_asset_fields):
 
     print("asset table event", event)
     # we need to catch delete events here and delete by query on aoss.
     client = index()
+    metadataTable = metadataTable_fn()
 
     if event.get("eventName") == "REMOVE":
         client.delete_item_by_query(event['dynamodb']['Keys']['assetId']['S'])
@@ -485,6 +502,15 @@ def lambda_handler_a(event, context,
         if record['eventName'] == 'REMOVE':
             client.delete_item_by_query(
                 record['dynamodb']['Keys']['assetId']['S'])
+
+        for record in event["Records"]:
+            print("record", record)
+            if record.get("eventName") == "INSERT":
+                print("insert")
+                databaseId = record['dynamodb']['Keys']['databaseId']['S']
+                assetId = record['dynamodb']['Keys']['assetId']['S']
+                metadataTable.write_asset_table_updated_event(
+                    databaseId, assetId)
 
 
 def handle_s3_event_record_removed(record, s3, s3index_fn):
