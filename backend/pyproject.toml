@@ -12,7 +12,7 @@ protobuf = "3.20.*"
 aws-lambda-powertools = "^2.7.1"
 pydantic = "^1.10.4"
 boto3-stubs = {extras = ["stepfunctions"], version = "^1.26.69"}
-Werkzeug = "^3.0.1"
+Werkzeug = "^3.0.3"
 certifi = "2023.7.22"
 opensearch-py = "^2.2.0"
 
