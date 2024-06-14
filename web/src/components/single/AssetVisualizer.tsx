@@ -49,25 +49,25 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                             altAssetKey={props.asset.previewLocation.Key}
                         />
                     )}
+                    {props.viewType === "image" && (
+                        <ImgViewer
+                            assetId={props.asset.assetId}
+                            databaseId={props.asset.databaseId}
+                            assetKey={props.assetKey || props.asset?.assetLocation?.Key}
+                            altAssetKey={props.assetKey || props.asset?.assetLocation?.Key}
+                        />
+                    )}
                     {props.viewType === "model" && (
                         <ModelViewer
                             assetId={props.asset.assetId}
                             databaseId={props.asset.databaseId}
-                            assetKey={
-                                props.assetKey ||
-                                props.asset?.generated_artifacts?.gltf?.Key ||
-                                props.asset?.assetLocation?.Key
-                            }
+                            assetKey={props.assetKey || props.asset?.assetLocation?.Key}
                             className="visualizer-container-canvas"
                         />
                     )}
                     {props.viewType === "pc" && (
                         <PointCloudViewer
-                            assetKey={
-                                props.assetKey ||
-                                props.asset?.generated_artifacts?.laz?.Key ||
-                                props.asset?.assetLocation?.Key
-                            }
+                            assetKey={props.assetKey || props.asset?.assetLocation?.Key}
                             className="visualizer-container-canvas"
                         />
                     )}

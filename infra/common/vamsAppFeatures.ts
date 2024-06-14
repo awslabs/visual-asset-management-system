@@ -1,0 +1,14 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
+/*
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+export enum VAMS_APP_FEATURES {
+    GOVCLOUD = "GOVCLOUD",
+    LOCATIONSERVICES = "LOCATIONSERVICES",
+    ALBDEPLOY = "ALBDEPLOY",
+    NOOPENSEARCH = "NOOPENSEARCH",
+    AUTHPROVIDER_COGNITO = "AUTHPROVIDER_COGNITO",
+    AUTHPROVIDER_COGNITO_SAML = "AUTHPROVIDER_COGNITO_SAML",
+    AUTHPROVIDER_EXTERNALOATHIDP = "AUTHPROVIDER_EXTERNALOATHIDP",
+}

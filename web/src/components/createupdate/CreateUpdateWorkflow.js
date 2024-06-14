@@ -19,6 +19,7 @@ import {
     BreadcrumbGroup,
 } from "@cloudscape-design/components";
 import React, { useEffect, useState, Suspense } from "react";
+import { useNavigate } from "react-router";
 import { useParams } from "react-router";
 import CreatePipeline from "./CreatePipeline";
 import WorkflowPipelineSelector from "../selectors/WorkflowPipelineSelector";
@@ -33,6 +34,7 @@ const WorkflowEditor = React.lazy(() => import("../interactive/WorkflowEditor"))
 
 export default function CreateUpdateWorkflow(props) {
     const { databaseId, workflowId } = useParams();
+    const navigate = useNavigate();
     const [reload, setReload] = useState(true);
     const [loaded, setLoaded] = useState(!workflowId);
     const [saving, setSaving] = useState(false);
@@ -184,7 +186,7 @@ export default function CreateUpdateWorkflow(props) {
             if (result[0] === false) {
                 setRunWorkflowError(`Unable to run workflow. Error: ${result[1]}`);
             } else {
-                window.location = result[1];
+                navigate(result[1]);
                 setSaving(false);
             }
         }
@@ -227,10 +229,10 @@ export default function CreateUpdateWorkflow(props) {
                 <SpaceBetween direction="vertical" size="xs">
                     <BreadcrumbGroup
                         items={[
-                            { text: Synonyms.Databases, href: "/databases/" },
+                            { text: Synonyms.Databases, href: "#/databases/" },
                             {
                                 text: databaseId,
-                                href: "/databases/" + databaseId + "/workflows/",
+                                href: "#/databases/" + databaseId + "/workflows/",
                             },
                             { text: "Create Workflow" },
                         ]}

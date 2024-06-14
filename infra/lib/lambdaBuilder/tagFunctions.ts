@@ -1,0 +1,77 @@
+/*
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
+import * as path from "path";
+import { Construct } from "constructs";
+import { Duration } from "aws-cdk-lib";
+import { LayerVersion } from "aws-cdk-lib/aws-lambda";
+import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
+import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
+import * as kms from "aws-cdk-lib/aws-kms";
+import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../helper/security";
+import * as Config from "../../config/config";
+
+export function buildTagService(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources
+): lambda.Function {
+    const name = "tagService";
+    const tagService = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.tags.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        environment: {
+            TAGS_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName,
+            TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+        },
+    });
+
+    storageResources.dynamo.tagStorageTable.grantReadWriteData(tagService);
+    storageResources.dynamo.tagTypeStorageTable.grantReadWriteData(tagService);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(tagService);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(tagService);
+    kmsKeyLambdaPermissionAddToResourcePolicy(tagService, storageResources.encryption.kmsKey);
+    return tagService;
+}
+
+export function buildCreateTagFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources
+): lambda.Function {
+    const name = "createTag";
+    const createTagFunction = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.tags.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        environment: {
+            TAGS_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName,
+            TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+        },
+    });
+
+    storageResources.dynamo.tagStorageTable.grantReadWriteData(createTagFunction);
+    storageResources.dynamo.tagTypeStorageTable.grantReadWriteData(createTagFunction);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(createTagFunction);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(createTagFunction);
+    kmsKeyLambdaPermissionAddToResourcePolicy(
+        createTagFunction,
+        storageResources.encryption.kmsKey
+    );
+    return createTagFunction;
+}

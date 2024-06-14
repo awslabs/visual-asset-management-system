@@ -162,7 +162,7 @@ export default function CommentTableList(props) {
                             {
                                 header: "Failed to Delete",
                                 type: "error",
-                                content: result[1],
+                                content: result[1] + ". " + result[2],
                                 dismissible: true,
                                 dismissLabel: "Dismiss message",
                                 onDismiss: () => setDeleteResult([]),

@@ -232,7 +232,6 @@ export default function AssetGrid(props) {
             body: Object.assign(currentAsset, {
                 databaseId: database,
                 assetId: currentAsset.assetId,
-                bucket: currentAsset?.assetLocation?.Bucket,
                 key: currentAsset?.assetLocation?.Key,
                 version: version,
             }),

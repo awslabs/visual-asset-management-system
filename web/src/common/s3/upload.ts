@@ -399,6 +399,7 @@ class S3Upload {
         const s3 = new S3Client({
             credentials,
             region: this.region,
+            forcePathStyle: true,
         });
 
         return s3;

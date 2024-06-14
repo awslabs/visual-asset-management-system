@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,27 +10,59 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
-import { suppressCdkNagErrorsByGrantReadWrite } from "../security";
-import { storageResources } from "../storage-builder";
+import { suppressCdkNagErrorsByGrantReadWrite } from "../helper/security";
+import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
+import { Service, IAMArn } from "../helper/service-helper";
+import { LayerVersion } from "aws-cdk-lib/aws-lambda";
+import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
+import * as Config from "../../config/config";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as kms from "aws-cdk-lib/aws-kms";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    kmsKeyPolicyStatementGenerator,
+    generateUniqueNameHash,
+} from "../helper/security";
+import * as logs from "aws-cdk-lib/aws-logs";
+import * as cdk from "aws-cdk-lib";
+
 export function buildWorkflowService(
     scope: Construct,
-    storageResources: storageResources
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "workflowService";
-    const workflowService = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.workflows.${name}.lambda_handler`],
-        }),
+    const workflowService = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.workflows.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
-        memorySize: 3008,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
             WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
         },
     });
     storageResources.dynamo.databaseStorageTable.grantReadData(workflowService);
     storageResources.dynamo.workflowStorageTable.grantReadWriteData(workflowService);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(workflowService);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(workflowService);
+    kmsKeyLambdaPermissionAddToResourcePolicy(workflowService, storageResources.encryption.kmsKey);
     workflowService.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -39,74 +71,121 @@ export function buildWorkflowService(
                 "states:DescribeStateMachine",
                 "states:UpdateStateMachine",
             ],
-            resources: ["*"],
+            resources: [IAMArn("*vams*").statemachine],
         })
     );
     return workflowService;
 }
 
-export function buildRunProcessingJobFunction(scope: Construct): lambda.Function {
-    const name = "runProcessingJob";
-    const runProcessingJobFunction = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.workflows.${name}.lambda_handler`],
-        }),
-        timeout: Duration.minutes(15),
-        memorySize: 3008,
-        environment: {},
-    });
-    return runProcessingJobFunction;
-}
-
 export function buildListlWorkflowExecutionsFunction(
     scope: Construct,
-    workflowExecutionStorageTable: dynamodb.Table
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "listExecutions";
-    const listAllWorkflowsFunction = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.workflows.${name}.lambda_handler`],
-        }),
+    const listAllWorkflowsFunction = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.workflows.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
-        memorySize: 3008,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
-            WORKFLOW_EXECUTION_STORAGE_TABLE_NAME: workflowExecutionStorageTable.tableName,
+            WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
+                storageResources.dynamo.workflowExecutionStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
         },
     });
-    workflowExecutionStorageTable.grantReadData(listAllWorkflowsFunction);
+    storageResources.dynamo.workflowExecutionStorageTable.grantReadData(listAllWorkflowsFunction);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(listAllWorkflowsFunction);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(listAllWorkflowsFunction);
+    storageResources.dynamo.assetStorageTable.grantReadData(listAllWorkflowsFunction);
     listAllWorkflowsFunction.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["states:DescribeExecution"],
-            resources: ["*"],
+            resources: [IAMArn("*vams*").statemachine, IAMArn("*vams*").statemachineExecution],
         })
     );
+    kmsKeyLambdaPermissionAddToResourcePolicy(
+        listAllWorkflowsFunction,
+        storageResources.encryption.kmsKey
+    );
+
     return listAllWorkflowsFunction;
 }
 
 export function buildCreateWorkflowFunction(
     scope: Construct,
-    workflowStorageTable: dynamodb.Table,
-    assetStorageBucket: s3.Bucket,
+    lambdaCommonServiceSDKLayer: LayerVersion,
+    storageResources: storageResources,
     uploadAllAssetFunction: lambda.Function,
-    stackName: string
+    stackName: string,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const role = buildWorkflowRole(scope, assetStorageBucket, uploadAllAssetFunction);
+    const logGroupWorkflows = new logs.LogGroup(scope, "vamsPipelineWorkflows", {
+        logGroupName:
+            "/aws/vendedlogs/vamsPipelineWorkflows" + //important to have 'vams' in the name as resource access looks for this
+            generateUniqueNameHash(
+                config.env.coreStackName,
+                config.env.account,
+                "vamsPipelineWorkflows",
+                10
+            ),
+        retention: logs.RetentionDays.TEN_YEARS,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    const role = buildWorkflowRole(
+        scope,
+        storageResources.s3.assetBucket,
+        uploadAllAssetFunction,
+        storageResources.encryption.kmsKey
+    );
     const name = "createWorkflow";
-    const createWorkflowFunction = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.workflows.${name}.lambda_handler`],
-        }),
+    const createWorkflowFunction = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.workflows.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonServiceSDKLayer],
         timeout: Duration.minutes(15),
-        memorySize: 3008,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
-            WORKFLOW_STORAGE_TABLE_NAME: workflowStorageTable.tableName,
+            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
             UPLOAD_ALL_LAMBDA_FUNCTION_NAME: uploadAllAssetFunction.functionName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             VAMS_STACK_NAME: stackName,
             LAMBDA_ROLE_ARN: role.roleArn,
+            LOG_GROUP_ARN: logGroupWorkflows.logGroupArn,
         },
     });
-    workflowStorageTable.grantReadWriteData(createWorkflowFunction);
+    storageResources.dynamo.workflowStorageTable.grantReadWriteData(createWorkflowFunction);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(createWorkflowFunction);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(createWorkflowFunction);
     createWorkflowFunction.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -115,15 +194,26 @@ export function buildCreateWorkflowFunction(
                 "states:DescribeStateMachine",
                 "states:UpdateStateMachine",
             ],
-            resources: ["*"],
+            resources: [IAMArn("*vams*").statemachine],
         })
     );
     createWorkflowFunction.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["iam:PassRole"],
-            resources: ["arn:aws:iam::*:role/*VAMS*"],
+            resources: [IAMArn("*VAMS*").role],
         })
+    );
+    createWorkflowFunction.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["iam:PassRole"],
+            resources: [IAMArn("*vams*").role],
+        })
+    );
+    kmsKeyLambdaPermissionAddToResourcePolicy(
+        createWorkflowFunction,
+        storageResources.encryption.kmsKey
     );
     suppressCdkNagErrorsByGrantReadWrite(createWorkflowFunction);
     return createWorkflowFunction;
@@ -131,37 +221,57 @@ export function buildCreateWorkflowFunction(
 
 export function buildRunWorkflowFunction(
     scope: Construct,
-    workflowStorageTable: dynamodb.Table,
-    pipelineStorageTable: dynamodb.Table,
-    assetStorageTable: dynamodb.Table,
-    workflowExecutionStorageTable: dynamodb.Table,
-    assetStorageBucket: s3.Bucket
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "executeWorkflow";
-    const runWorkflowFunction = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.workflows.${name}.lambda_handler`],
-        }),
+    const runWorkflowFunction = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.workflows.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
-        memorySize: 3008,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
-            WORKFLOW_STORAGE_TABLE_NAME: workflowStorageTable.tableName,
-            PIPELINE_STORAGE_TABLE_NAME: pipelineStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
-            WORKFLOW_EXECUTION_STORAGE_TABLE_NAME: workflowExecutionStorageTable.tableName,
+            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
+            PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
+                storageResources.dynamo.workflowExecutionStorageTable.tableName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
         },
     });
-    workflowStorageTable.grantReadData(runWorkflowFunction);
-    pipelineStorageTable.grantReadData(runWorkflowFunction);
-    assetStorageTable.grantReadData(runWorkflowFunction);
-    workflowExecutionStorageTable.grantReadWriteData(runWorkflowFunction);
-    assetStorageBucket.grantReadWrite(runWorkflowFunction);
+    storageResources.dynamo.workflowStorageTable.grantReadData(runWorkflowFunction);
+    storageResources.dynamo.pipelineStorageTable.grantReadData(runWorkflowFunction);
+    storageResources.dynamo.assetStorageTable.grantReadData(runWorkflowFunction);
+    storageResources.dynamo.workflowExecutionStorageTable.grantReadWriteData(runWorkflowFunction);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(runWorkflowFunction);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(runWorkflowFunction);
+    storageResources.s3.assetBucket.grantReadWrite(runWorkflowFunction);
+    kmsKeyLambdaPermissionAddToResourcePolicy(
+        runWorkflowFunction,
+        storageResources.encryption.kmsKey
+    );
     suppressCdkNagErrorsByGrantReadWrite(runWorkflowFunction);
+
     runWorkflowFunction.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["states:StartExecution", "states:DescribeStateMachine"],
-            resources: ["*"],
+            resources: [IAMArn("*vams*").statemachine, IAMArn("*vams*").statemachineExecution],
         })
     );
     return runWorkflowFunction;
@@ -170,52 +280,58 @@ export function buildRunWorkflowFunction(
 export function buildWorkflowRole(
     scope: Construct,
     assetStorageBucket: s3.Bucket,
-    uploadAllAssetFunction: lambda.Function
+    uploadAllAssetFunction: lambda.Function,
+    kmsKey?: kms.IKey
 ): iam.Role {
     const createWorkflowPolicy = new iam.PolicyDocument({
         statements: [
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
+                actions: ["states:CreateStateMachine"],
+                resources: [IAMArn("*vams*").statemachine],
+            }),
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["events:PutTargets", "events:PutRule", "events:DescribeRule"],
+                resources: [IAMArn("*vams*").stateMachineEvents],
+            }),
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
                 actions: [
-                    "states:CreateStateMachine",
-                    "events:PutTargets",
-                    "events:PutRule",
-                    "events:DescribeRule",
+                    "logs:CreateLogDelivery",
+                    "logs:GetLogDelivery",
+                    "logs:UpdateLogDelivery",
+                    "logs:DeleteLogDelivery",
+                    "logs:ListLogDeliveries",
+                    "logs:PutResourcePolicy",
+                    "logs:DescribeResourcePolicies",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents",
+                    "logs:CreateLogGroup",
+                    "logs:DescribeLogStreams",
+                    "logs:DescribeLogGroups",
                 ],
+                //"*"" Resource policy required as per AWS documentation as CloudWatch API doesn't support resource types
+                //https://docs.aws.amazon.com/step-functions/latest/dg/cw-logs.html
                 resources: ["*"],
             }),
         ],
     });
 
+    //https://docs.aws.amazon.com/step-functions/latest/dg/stepfunctions-iam.html
     const runWorkflowPolicy = new iam.PolicyDocument({
         statements: [
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: [
-                    "sagemaker:CreateProcessingJob",
-                    "ecr:Describe*",
-                    "sagemaker:DescribeEndpointConfig",
-                    "sagemaker:DescribeModel",
-                    "sagemaker:InvokeEndpoint",
-                    "sagemaker:ListTags",
-                    "sagemaker:DescribeEndpoint",
-                    "sagemaker:CreateModel",
-                    "sagemaker:CreateEndpointConfig",
-                    "sagemaker:CreateEndpoint",
-                    "sagemaker:DeleteModel",
-                    "sagemaker:DeleteEndpointConfig",
-                    "sagemaker:DeleteEndpoint",
-                    "sagemaker:AddTags",
                     "cloudwatch:PutMetricData",
                     "logs:CreateLogStream",
                     "logs:PutLogEvents",
                     "logs:CreateLogGroup",
                     "logs:DescribeLogStreams",
-                    "ecr:GetAuthorizationToken",
-                    "ecr:BatchCheckLayerAvailability",
-                    "ecr:GetDownloadUrlForLayer",
-                    "ecr:BatchGetImage",
                 ],
+                //"*"" Resource policy required as per AWS documentation as CloudWatch API doesn't support resource types
+                //https://docs.aws.amazon.com/step-functions/latest/dg/cw-logs.html
                 resources: ["*"],
             }),
             new iam.PolicyStatement({
@@ -232,28 +348,41 @@ export function buildWorkflowRole(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["lambda:InvokeFunction"],
-                resources: ["*"],
+                resources: [IAMArn("*vams*").lambda],
             }),
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["iam:PassRole"],
-                resources: ["arn:aws:iam::*:role/*VAMS*"],
+                resources: [IAMArn("*VAMS*").role],
+            }),
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["iam:PassRole"],
+                resources: [IAMArn("*vams*").role],
             }),
         ],
     });
 
+    //Add KMS key use if provided
+    if (kmsKey) {
+        runWorkflowPolicy.addStatements(kmsKeyPolicyStatementGenerator(kmsKey));
+    }
+
     const role = new iam.Role(scope, "VAMSWorkflowIAMRole", {
         assumedBy: new iam.CompositePrincipal(
-            new iam.ServicePrincipal("lambda.amazonaws.com"),
-            new iam.ServicePrincipal("sagemaker.amazonaws.com"),
-            new iam.ServicePrincipal("states.amazonaws.com")
+            Service("LAMBDA").Principal,
+            Service("STATES").Principal
         ),
         description: "VAMS Workflow IAM Role.",
         inlinePolicies: {
             createWorkflowPolicy: createWorkflowPolicy,
             runWorkflowPolicy: runWorkflowPolicy,
         },
-        managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName("AWSLambdaExecute")],
+        managedPolicies: [
+            iam.ManagedPolicy.fromAwsManagedPolicyName(
+                "service-role/AWSLambdaVPCAccessExecutionRole"
+            ),
+        ],
     });
 
     return role;

@@ -10,6 +10,7 @@ def test_get_all_comments(comments_table, monkeypatch):
     """
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
     import backend.handlers.comments.commentService as commentService
+    from backend.common.dynamodb import validate_pagination_info
 
     # Generate two seperate comments for testing
     test_valid_comment = TestComment().get_comment()
@@ -28,7 +29,7 @@ def test_get_all_comments(comments_table, monkeypatch):
 
     # call get all comments function
     query_params = {}
-    commentService.set_pagination_info(query_params)
+    validate_pagination_info(query_params)
     response = commentService.get_all_comments(query_params)
     assert test_valid_comment in response["Items"]
     assert test_valid_comment_2 in response["Items"]

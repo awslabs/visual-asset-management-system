@@ -5,7 +5,9 @@ import os
 import boto3
 import json
 import datetime
+from customLogging.logger import safeLogger
 
+logger = safeLogger(service="OpenPipelineVisualizer")
 
 sfn = boto3.client(
     'stepfunctions',
@@ -25,12 +27,12 @@ def lambda_handler(event, context):
     SFN input parsed from input SNS Topic event data
     """
 
-    print(f"Event: {event}")
-    print(f"Context: {context}")
+    logger.info(f"Event: {event}")
+    logger.info(f"Context: {context}")
 
     # if no records in message return no files response
     if not event['Records']:
-        print(f"Error: Unable to retrieve SNS Records. No files to process.")
+        logger.error(f"Error: Unable to retrieve SNS Records. No files to process.")
         return {
             'statusCode': 500,
             'body': {
@@ -43,14 +45,14 @@ def lambda_handler(event, context):
     # Loop through S3 Uploads Records in SNS Message Input
     records = event['Records']
     for sns_record in records:
-        print(f"SNS Record: {sns_record}")
+        logger.info(f"SNS Record: {sns_record}")
 
         try:
             # Parse SNS Message to retrieve S3 Records
             s3_records = json.loads(sns_record["Sns"]["Message"])['Records']
-            print(f"S3 Records: {s3_records}")
+            logger.info(f"S3 Records: {s3_records}")
         except:
-            print(f"Error: Unable to parse SNS Message. No S3 Records to process.")
+            logger.exception(f"Error: Unable to parse SNS Message. No S3 Records to process.")
             response.append({
                 'statusCode': 500,
                 'body': {
@@ -59,7 +61,7 @@ def lambda_handler(event, context):
             })
 
         for record in s3_records:
-            print(f"S3 Record: {record}")
+            logger.info(f"S3 Record: {record}")
 
             # Extract S3 file or files (if coming from a non S3 event source where you can group files to process)
             # TODO: Upgrade this to support multiple files. For now it can take an array but still only grabs the first item
@@ -106,8 +108,8 @@ def lambda_handler(event, context):
 
             try:
                 # Start the Step Functions state machine with the bucket key and name
-                print(f"Starting SFN State Machine: {STATE_MACHINE_ARN}")
-                print(f"SFN Input: {json.dumps(sfn_input)}")
+                logger.info(f"Starting SFN State Machine: {STATE_MACHINE_ARN}")
+                logger.info(f"SFN Input: {json.dumps(sfn_input)}")
 
                 sfn_response = sfn.start_execution(
                     stateMachineArn=STATE_MACHINE_ARN,
@@ -115,7 +117,7 @@ def lambda_handler(event, context):
                     input=json.dumps(sfn_input)
                 )
 
-                print(f"SFN Response: {sfn_response}")
+                logger.info(f"SFN Response: {sfn_response}")
 
                 # response datetime not JSON serializable
                 sfn_response["startDate"] = sfn_response["startDate"].strftime('%m-%d-%Y %H:%M:%S')
@@ -128,15 +130,15 @@ def lambda_handler(event, context):
                     }
                 })
             except Exception as e:
-                print(f"Error: {str(e)}")
+                logger.exception(e)
                 responses.append({
-                    'statusCode': 200,
+                    'statusCode': 500,
                     'body': {
-                        "error": f"Error: {str(e)}",
+                        "message": "Internal Server Error",
                     }
                 })
 
-    print(f"Responses: {responses}")
+    logger.info(f"Responses: {responses}")
 
     # Loop through responses and see if any have errors; If so return 500 error response
     for response in responses:

@@ -19,7 +19,6 @@ def sample_request():
             databaseId='1',
             assetId='test',
             assetName='test',
-            bucket='test_bucket',
             key='test_file',
             assetType='step',
             description='Testing',
@@ -27,7 +26,6 @@ def sample_request():
             specifiedPipelines=[],
             Comment='Testing',
             previewLocation=AssetPreviewLocationModel(
-                Bucket='test_bucket',
                 Key='test_preview_key'
             )
         ),
@@ -55,7 +53,6 @@ def only_required():
             databaseId='1',
             assetId='test',
             assetName='test',
-            bucket='test_bucket',
             key='test_file',
             assetType='step',
             description='Testing',
@@ -63,7 +60,6 @@ def only_required():
             specifiedPipelines=[],
             Comment='Testing',
             previewLocation=AssetPreviewLocationModel(
-                Bucket='test_bucket',
                 Key='test_preview_key'
             )
         )
@@ -77,7 +73,6 @@ def without_preview():
             databaseId='1',
             assetId='test',
             assetName='test',
-            bucket='test_bucket',
             key='test_file',
             assetType='step',
             description='Testing',

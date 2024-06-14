@@ -44,7 +44,6 @@ export function LocationEntity(props) {
 }
 
 LocationEntity.propTypes = {
-    Bucket: EntityPropTypes.STRING_256,
     Key: EntityPropTypes.STRING_256,
 };
 
@@ -53,7 +52,6 @@ export default function AssetEntity(props) {
         assetId,
         databaseId,
         description,
-        bucket,
         key,
         assetType,
         specifiedPipelines,
@@ -66,7 +64,6 @@ export default function AssetEntity(props) {
     this.assetId = assetId;
     this.databaseId = databaseId;
     this.description = description;
-    this.bucket = bucket;
     this.key = key;
     this.assetType = assetType;
     this.specifiedPipelines = specifiedPipelines;
@@ -81,7 +78,6 @@ AssetEntity.propTypes = {
     assetId: EntityPropTypes.ENTITY_ID,
     databaseId: EntityPropTypes.ENTITY_ID,
     description: EntityPropTypes.STRING_256,
-    bucket: EntityPropTypes.STRING_256,
     key: EntityPropTypes.STRING_256,
     assetType: EntityPropTypes.FILE_TYPE,
     specifiedPipelines: EntityPropTypes.ENTITY_ID_ARRAY,

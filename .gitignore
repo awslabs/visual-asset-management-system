@@ -144,7 +144,8 @@ fabric.properties
 .LSOverride
 
 # Icon must end with two \r
-Icon
+Icon
+
 
 # Thumbnails
 ._*
@@ -324,8 +325,7 @@ Sessionx.vim
 
 # Temporary
 .netrwhist
-# Auto-generated tag files
-tags
+
 # Persistent undo
 [._]*.un~
 
@@ -335,3 +335,6 @@ tags
 
 report
 *.orig
+
+# ENV
+venv/

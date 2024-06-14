@@ -33,10 +33,11 @@ export async function verifyPermission(fileHandle: any, readWrite: any) {
 interface FinishUploadsProps {
     assetDetailState: AssetDetail;
     keyPrefix: string;
+    isNewFiles: boolean;
     // uploadItems: FileUploadTableItem[]
 }
 
-const FinishUploads = ({ assetDetailState, keyPrefix }: FinishUploadsProps) => {
+const FinishUploads = ({ assetDetailState, keyPrefix, isNewFiles = false }: FinishUploadsProps) => {
     const [reuploadClicked, setReuploadClicked] = useState(false);
     const [assetDetail, setAssetDetail] = useState(assetDetailState);
 
@@ -142,9 +143,21 @@ const FinishUploads = ({ assetDetailState, keyPrefix }: FinishUploadsProps) => {
         });
     };
 
-    const onRetry = () => {
-        console.log("Calling on retry");
+    function getBasePathPrefix(filePath: string): string {
+        // Ensure path ends with a trailing slash for consistent handling
+        const normalizedPath = filePath.endsWith("/") ? filePath : filePath + "/";
+        // Find the last index of the path separator (/)
+        const lastIndex = normalizedPath.lastIndexOf("/");
+        // Extract the base folder path, ensuring a trailing slash
+        const basePath = normalizedPath.slice(0, lastIndex + 1);
+        return basePath;
+    }
+
+    const onUpload = () => {
+        console.log("Calling on Upload Try");
+        // console.log("KeyPrefix:" + assetDetail.key === "/" ? assetDetail.key : isNewFiles ? getBasePathPrefix(assetDetail.key!) : assetDetail.key)
         console.log(assetDetail);
+
         if (
             // result &&
             assetDetail &&
@@ -157,7 +170,11 @@ const FinishUploads = ({ assetDetailState, keyPrefix }: FinishUploadsProps) => {
             const uploads = createAssetUploadPromises(
                 assetDetail.isMultiFile,
                 assetDetail.Asset,
-                keyPrefix === "/" ? assetDetail.key : assetDetail.key + keyPrefix + "/",
+                assetDetail.key === "/"
+                    ? assetDetail.key
+                    : isNewFiles
+                    ? getBasePathPrefix(assetDetail.key)
+                    : assetDetail.key,
                 {
                     assetId: assetDetail.assetId,
                     databaseId: assetDetail.databaseId,
@@ -183,15 +200,19 @@ const FinishUploads = ({ assetDetailState, keyPrefix }: FinishUploadsProps) => {
         }
         //});
     };
+
     return (
         <>
             {assetDetail?.Asset && (
                 <SpaceBetween direction="vertical" size="l">
                     <Box variant="awsui-key-label">
                         Upload Progress for {Synonyms.Asset}
-                        {/* <Link href={`/databases/${assetDetailState.databaseId}/assets/${assetDetailState.assetId}`} target="_blank">
-                            { assetDetailState.assetName || ""}
-                        </Link> */}
+                        <Link
+                            href={`#/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`}
+                            target="_blank"
+                        >
+                            {` ${assetDetail.assetName}`}
+                        </Link>
                     </Box>
                     <ProgressBar
                         status={
@@ -209,7 +230,7 @@ const FinishUploads = ({ assetDetailState, keyPrefix }: FinishUploadsProps) => {
                     />
                     <FileUploadTable
                         allItems={assetDetail?.Asset}
-                        onRetry={onRetry}
+                        onRetry={onUpload}
                         resume={!reuploadClicked}
                         showCount={true}
                     />
@@ -253,6 +274,7 @@ export default function FinishUploadsPage() {
                         <FinishUploads
                             assetDetailState={assetDetail}
                             keyPrefix={state.fileTree.keyPrefix}
+                            isNewFiles={state.isNewFiles ? state.isNewFiles : false}
                         />
                     </div>
                 </Grid>

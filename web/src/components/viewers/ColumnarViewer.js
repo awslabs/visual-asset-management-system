@@ -5,11 +5,11 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { getPresignedKey } from "../../common/auth/s3";
 import { readRemoteFile } from "react-papaparse";
 import DataGrid from "react-data-grid";
 import FCS from "fcs";
 import arrayBufferToBuffer from "arraybuffer-to-buffer";
+import { downloadAsset } from "../../services/APIService";
 
 //@todo refactor without side effects, abstract common parts with other visualizers to higher level
 const readFcsFile = (remoteFileUrl, setColumns, setRows) => {
@@ -89,18 +89,30 @@ export default function ColumnarViewer(props) {
 
     useEffect(() => {
         const loadAsset = async () => {
-            await getPresignedKey(assetId, databaseId, assetKey).then((remoteFileUrl) => {
-                if (assetKey.indexOf(".fcs") !== -1) {
-                    try {
-                        readFcsFile(remoteFileUrl, setColumns, setRows);
-                    } catch (error) {
-                        console.log(error);
-                    }
-                } else {
-                    try {
-                        readCsvFile(remoteFileUrl, setColumns, setRows);
-                    } catch (error) {
-                        console.log(error);
+            await downloadAsset({
+                assetId: assetId,
+                databaseId: databaseId,
+                key: assetKey,
+                version: "",
+            }).then((response) => {
+                if (response !== false && Array.isArray(response)) {
+                    if (response[0] === false) {
+                        // TODO: error handling (response[1] has error message)
+                        console.error(response);
+                    } else {
+                        if (assetKey.indexOf(".fcs") !== -1) {
+                            try {
+                                readFcsFile(response[1], setColumns, setRows);
+                            } catch (error) {
+                                console.log(error);
+                            }
+                        } else {
+                            try {
+                                readCsvFile(response[1], setColumns, setRows);
+                            } catch (error) {
+                                console.log(error);
+                            }
+                        }
                     }
                 }
             });

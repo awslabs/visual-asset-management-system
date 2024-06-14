@@ -31,6 +31,7 @@ import ListPageNoDatabase from "./ListPageNoDatabase";
 import { NonCancelableEventHandler } from "@cloudscape-design/components/internal/events";
 import { useNavigate, useParams } from "react-router";
 import DatabaseSelectorWithModal from "../components/selectors/DatabaseSelectorWithModal";
+import { fetchDatabaseMetadataSchema } from "../services/APIService";
 
 export interface SchemaContextData {
     schemas: MetadataSchemaFields[];
@@ -302,7 +303,6 @@ function CreateMetadataField({ open, setOpen, setReload, initState }: CreateMeta
                                 console.log("sending state", formState);
                                 formState.required = formState.required ? true : false;
                                 API.post("api", `metadataschema/${databaseId}`, {
-                                    // API.post("api", `metadataschema/all`, {
                                     body: formState,
                                 })
                                     .then((res) => {
@@ -465,7 +465,7 @@ export const MetadataSchemaListDefinition = new ListDefinition({
     visibleColumns: ["field", "dataType", "required", "sequenceNumber"],
     filterColumns: [{ name: "field", placeholder: "Field" }],
     elementId: "id",
-    deleteFunction: async (item: any): Promise<[boolean, string]> => {
+    deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         try {
             console.log("delete item", item);
             const response: any = await API.del(
@@ -473,10 +473,10 @@ export const MetadataSchemaListDefinition = new ListDefinition({
                 `metadataschema/${item.databaseId}/${item.field}`,
                 {}
             );
-            return [true, response.message];
+            return [true, response.message, ""];
         } catch (error: any) {
             console.log(error);
-            return [false, error?.message];
+            return [false, error?.message, error?.response.data.message];
         }
     },
     columnDefinitions: [
@@ -515,59 +515,59 @@ class ProgressCallbackArgs {
     total!: number;
 }
 
-async function uploadAssetToS3(
-    file: File,
-    key: string,
-    metadata: { [k: string]: string },
-    progressCallback: (progress: ProgressCallbackArgs) => void
-) {
-    console.log("upload", key, file);
-    return Storage.put(key, file, { metadata, progressCallback });
-}
+// async function uploadAssetToS3(
+//     file: File,
+//     key: string,
+//     metadata: { [k: string]: string },
+//     progressCallback: (progress: ProgressCallbackArgs) => void
+// ) {
+//     console.log("upload", key, file);
+//     return Storage.put(key, file, { metadata, progressCallback });
+// }
 
-function ControlledListFileUpload() {
-    const { databaseId } = useParams();
-    const [file, setFile] = useState<File[]>([]);
+// function ControlledListFileUpload() {
+//     const { databaseId } = useParams();
+//     const [file, setFile] = useState<File[]>([]);
 
-    const schemaKey = `metadataschema/${databaseId}/controlledlist.csv`;
+//     const schemaKey = `metadataschema/${databaseId}/controlledlist.csv`;
 
-    // form that takes a single file upload and places the file in s3 using Storage.put.
-    // the file is then uploaded to the database's s3 bucket.
+//     // form that takes a single file upload and places the file in s3 using Storage.put.
+//     // the file is then uploaded to the database's s3 bucket.
 
-    return (
-        <Form>
-            <FormField label="File Upload">
-                <FileUpload
-                    accept=".csv"
-                    multiple={false}
-                    value={file}
-                    i18nStrings={{
-                        uploadButtonText: (e) => (e ? "Choose files" : "Choose file"),
-                        dropzoneText: (e) => (e ? "Drop files to upload" : "Drop file to upload"),
-                        removeFileAriaLabel: (e) => `Remove file ${e + 1}`,
-                        limitShowFewer: "Show fewer files",
-                        limitShowMore: "Show more files",
-                        errorIconAriaLabel: "Error",
-                    }}
-                    onChange={({ detail }) => {
-                        setFile(detail.value);
-                        uploadAssetToS3(
-                            detail.value[0],
-                            schemaKey,
-                            {},
-                            (progress: ProgressCallbackArgs) => {
-                                console.log("progress", progress);
-                            }
-                        ).then((result: any) => {
-                            console.log("result", result);
-                        });
-                        console.log("file upload", detail);
-                    }}
-                />
-            </FormField>
-        </Form>
-    );
-}
+//     return (
+//         <Form>
+//             <FormField label="File Upload">
+//                 <FileUpload
+//                     accept=".csv"
+//                     multiple={false}
+//                     value={file}
+//                     i18nStrings={{
+//                         uploadButtonText: (e) => (e ? "Choose files" : "Choose file"),
+//                         dropzoneText: (e) => (e ? "Drop files to upload" : "Drop file to upload"),
+//                         removeFileAriaLabel: (e) => `Remove file ${e + 1}`,
+//                         limitShowFewer: "Show fewer files",
+//                         limitShowMore: "Show more files",
+//                         errorIconAriaLabel: "Error",
+//                     }}
+//                     onChange={({ detail }) => {
+//                         setFile(detail.value);
+//                         uploadAssetToS3(
+//                             detail.value[0],
+//                             schemaKey,
+//                             {},
+//                             (progress: ProgressCallbackArgs) => {
+//                                 console.log("progress", progress);
+//                             }
+//                         ).then((result: any) => {
+//                             console.log("result", result);
+//                         });
+//                         console.log("file upload", detail);
+//                     }}
+//                 />
+//             </FormField>
+//         </Form>
+//     );
+// }
 
 export default function MetadataSchema() {
     const { databaseId } = useParams();
@@ -578,7 +578,15 @@ export default function MetadataSchema() {
 
     const [schemas, setSchemas] = useState<MetadataSchemaFields[]>([]);
     async function fetchAll(api = API) {
-        const resp = await api.get("api", `metadataschema/${databaseId}`, {});
+        const respRaw = await fetchDatabaseMetadataSchema({
+            databaseId: databaseId,
+        });
+
+        const resp = {
+            schemas: respRaw,
+            databaseId: databaseId,
+        };
+
         if (resp.schemas) {
             // sort resp.schemas wrt sequenceNumber
             // undefined values go last
@@ -613,7 +621,7 @@ export default function MetadataSchema() {
 
     return (
         <SchemaContext.Provider value={{ schemas, databaseId }}>
-            <Box padding={{ top: "m", horizontal: "l" }}>
+            {/* <Box padding={{ top: "m", horizontal: "l" }}>
                 <Grid gridDefinition={[{ colspan: 6 }]}>
                     <div>
                         <TextContent>
@@ -622,7 +630,7 @@ export default function MetadataSchema() {
                         <ControlledListFileUpload />
                     </div>
                 </Grid>
-            </Box>
+            </Box> */}
             <ListPageNoDatabase
                 singularName={"Metadata Schema Field"}
                 singularNameTitleCase={"Metadata Schema Field"}

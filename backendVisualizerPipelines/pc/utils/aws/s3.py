@@ -25,7 +25,7 @@ def download(bucket_name, object_key, file_path):
         with open(file_path, "wb") as data:
             client.download_fileobj(bucket_name, object_key, data)
     except ClientError as e:
-        logger.error(e)
+        logger.exception(e)
         return None
     return file_path
 
@@ -48,7 +48,7 @@ def uploadV2(bucket_name, object_key, file_path):
                                    Callback=ProgressPercentage(file_path)
                                    )
     except ClientError as e:
-        logger.error(e)
+        logger.exception(e)
         return None
     return object_key
 
@@ -102,7 +102,7 @@ def upload(bucket_name, object_key, file_path):
                 UploadId=multipart_upload['UploadId'],
             )
         except ClientError as e:
-            logger.error(e)
+            logger.exception(e)
             return None
         return object_key
 
@@ -111,7 +111,7 @@ def upload(bucket_name, object_key, file_path):
             with open(file_path, "rb") as data:
                 client.upload_fileobj(data, bucket_name, object_key)
         except ClientError as e:
-            logger.error(e)
+            logger.exception(e)
             return None
         return object_key
 
@@ -134,7 +134,7 @@ def delete(bucket_name, object_key):
     try:
         client.delete_object(Bucket=bucket_name, Key=object_key)
     except ClientError as e:
-        logger.error(e)
+        logger.exception(e)
         return None
     return object_key
 

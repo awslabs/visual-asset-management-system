@@ -35,8 +35,8 @@ Note: All container logic and AWS SDK use is controlled with Python scripts that
 
 Before getting started with the container, verify the following are installed.
 
--   Python >3.10: https://www.python.org/downloads/
--   Docker (CLI and/or Desktop): https://www.docker.com/
+-   Python >3.10: <https://www.python.org/downloads/>
+-   Docker (CLI and/or Desktop): <https://www.docker.com/>
 
 ### Building the Container Image
 
@@ -62,7 +62,7 @@ The initial build can take a significant amount of time. To speed this up for fu
 
 ### Running the Container Image
 
-> NOTE: The container is intended to be run in AWS and has dependencies on Amazon S3 and AWS Step Functions. To run the container locally, the application will need to be modified to allow for supplied AWS credentials. For this, refer to the AWS docs for assuming an IAM role with temporary credentials: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp.html
+> NOTE: The container is intended to be run in AWS and has dependencies on Amazon S3 and AWS Step Functions. To run the container locally, the application will need to be modified to allow for supplied AWS credentials. For this, refer to the AWS docs for assuming an IAM role with temporary credentials: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp.html>
 
 To manually run the container, the input payload schema must be in the following form and quotes are required to be escaped.
 
@@ -121,6 +121,6 @@ Note: Potree 2.0 octree output files are generally larger (1.1x - 8x) than the o
 
 ## References
 
--   PDAL - Point Data Abstraction Library, is a C++ library for translating and manipulating point cloud data. https://pdal.io/
--   Potree Converter - Converter of point cloud data to Potree 2.0 format: https://github.com/potree/PotreeConverter
--   Potree 2.0 - Point Cloud files in the Octree LOD format for streaming and real-time rendering of massive point clouds. Whitepaper: https://www.cg.tuwien.ac.at/research/publications/2020/SCHUETZ-2020-MPC/
+-   PDAL - Point Data Abstraction Library, is a C++ library for translating and manipulating point cloud data. <https://pdal.io/>
+-   Potree Converter - Converter of point cloud data to Potree 2.0 format: <https://github.com/potree/PotreeConverter>
+-   Potree 2.0 - Point Cloud files in the Octree LOD format for streaming and real-time rendering of massive point clouds. Whitepaper: <https://www.cg.tuwien.ac.at/research/publications/2020/SCHUETZ-2020-MPC/>

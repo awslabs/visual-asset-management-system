@@ -1,0 +1,330 @@
+import os
+import boto3
+import json
+from botocore.config import Config
+from datetime import datetime
+from handlers.metadata import to_update_expr
+from common.constants import STANDARD_JSON_RESPONSE
+from common.validators import validate
+from handlers.authz import CasbinEnforcer
+from handlers.auth import request_to_claims
+from customLogging.logger import safeLogger
+from common.s3 import validateS3AssetExtensionsAndContentType
+
+region = os.environ['AWS_REGION']
+s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'})
+s3 = boto3.client('s3', region_name=region, config=s3_config)
+
+lambda_client = boto3.client('lambda')
+dynamodb_client = boto3.client('dynamodb')
+logger = safeLogger(service_name="IngestAsset")
+
+main_rest_response = STANDARD_JSON_RESPONSE
+
+
+try:
+    bucket_name = os.environ["S3_ASSET_STORAGE_BUCKET"]
+    asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    upload_asset_lambda = os.environ["UPLOAD_LAMBDA_FUNCTION_NAME"]
+except:
+    logger.exception("Failed loading environment variables")
+    main_rest_response['body']['message'] = "Failed Loading Environment Variables"
+
+
+def calculate_num_parts(file_size, max_part_size=12 * 1024 * 1024):
+    return -(-file_size // max_part_size)
+
+
+def generate_presigned_url(key, upload_id, part_number, expiration=3600):
+    url = s3.generate_presigned_url(
+        ClientMethod='upload_part',
+        Params={
+            'Bucket': bucket_name,
+            'Key': key,
+            'PartNumber': part_number,
+            'UploadId': upload_id
+        },
+        ExpiresIn=expiration
+    )
+    return url
+
+
+def generate_upload_asset_payload(event):
+    database_id = event['body']['databaseId']
+    assetName = event['body']['assetName']
+    event_asset_id = event["body"].get("assetId")
+    key = event['body']['key']
+    description = event['body']['description']
+
+    payload = {
+        "body": {
+            "databaseId": database_id,
+            "assetId": event_asset_id,
+            "assetName": assetName,
+            "pipelineId": None,
+            "executionId": None,
+            "tags": [],
+            "key": key,
+            "assetType": f".{key.split('.')[-1]}",
+            "description": description,
+            "specifiedPipelines": [],
+            "isDistributable": True,
+            "Comment": "",
+            "assetLocation": {
+                "Key": key
+            },
+            "previewLocation": {
+                "Key": key
+            }
+        },
+        "returnAsset": True
+    }
+    return payload
+
+
+def lambda_handler(event, context):
+    response = STANDARD_JSON_RESPONSE
+    # logger.info("API_KEY", event.get('requestContext', {}).get('api-key'))
+    #TODO: uncomment the below lines once we add apiKey to API Gateway
+    """
+    api_key = event.get('headers', {}).get('x-api-key')
+    if not api_key or api_key != event.get('requestContext', {}).get('api-key'):
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": "Forbidden"})
+        return response
+    """
+
+    global claims_and_roles
+    claims_and_roles = request_to_claims(event)
+
+    if isinstance(event['body'], str):
+        event['body'] = json.loads(event['body'])
+
+    if 'databaseId' not in event['body']:
+        message = "No databaseId in API Call"
+        logger.error(message)
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": message})
+        return response
+    
+    if 'assetId' not in event['body']:
+        message = "No assetId in API Call"
+        logger.error(message)
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": message})
+        return response
+
+    if 'assetName' not in event['body']:
+        message = "No assetName in API Call"
+        logger.error(message)
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": message})
+        return response
+    
+    if 'key' not in event['body']:
+        message = "No key (file name path) in API Call"
+        logger.error(message)
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": message})
+        return response
+
+    logger.info("Validating parameters")
+    (valid, message) = validate({
+        'assetPathKey': {
+            'value': event['body']['key'],
+            'validator': 'ASSET_PATH'
+        },
+        'databaseId': {
+            'value': event['body']['databaseId'],
+            'validator': 'ID'
+        },
+        'assetId': {
+            'value': event['body']['assetId'],
+            'validator': 'ID'
+        },
+        'assetName': {
+            'value': event['body']['assetName'],
+            'validator': 'OBJECT_NAME'
+        },
+        'description': {
+            'value': event['body']['description'],
+            'validator': 'STRING_256'
+        }
+    })
+    if not valid:
+        logger.error(message)
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        return response
+    
+    #Split object key by path and return the first value (the asset ID)
+    asset_idFromPath = event['body']['key'].split("/")[0]
+
+    #Check if the asset ID is the same as the asset ID from the path
+    if asset_idFromPath != event['body']['assetId']:
+        response['body'] = json.dumps({"message": "Asset ID from path does not match the asset ID"})
+        response['statusCode'] = 400
+        return response
+
+    #ABAC Checks
+    http_method = event['requestContext']['http']['method']
+    operation_allowed_on_asset = False
+    request_object = {
+        "object__type": "api",
+        "route__path": event['requestContext']['http']['path'] #"/" + event['requestContext']['http']['path'].split("/")[1]
+    }
+    logger.info(request_object)
+
+    asset = {
+        "object__type": "asset",
+        "databaseId": event['body']['databaseId'],
+        "assetId": event['body']['assetId'],
+        "assetName": event['body']['assetName'],
+    }
+
+    logger.info(asset)
+
+    for user_name in claims_and_roles["tokens"]:
+        casbin_enforcer = CasbinEnforcer(user_name)
+        if casbin_enforcer.enforce(f"user::{user_name}", asset, "PUT") and casbin_enforcer.enforce(
+                f"user::{user_name}", request_object, http_method):
+            operation_allowed_on_asset = True
+            break
+
+    if operation_allowed_on_asset:
+        try:
+            if http_method == 'POST':
+                if "parts" in event['body']:
+                    logger.info("Stage 2 - complete upload")
+
+                    """ Sample request format
+                    {
+                    "parts": [
+                            {"PartNumber": 1, "ETag": "exampleETag1"},
+                            {"PartNumber": 2, "ETag": "exampleETag2"}
+                        ],
+                    "upload_id": "upload_id",
+                    "key": "assetId/file_name",
+                    ..... Other Asset upload related attribute like databaseId, assetName, description
+                    }
+                    """
+                    resp = s3.complete_multipart_upload(
+                        Bucket=bucket_name,
+                        Key=event['body']['key'],
+                        UploadId=event['body'].get("upload_id"),
+                        MultipartUpload={'Parts': event['body'].get("parts", [])}
+                    )
+                    logger.info(resp)
+
+                    if resp['ResponseMetadata']['HTTPStatusCode'] // 100 == 2:
+                        logger.info("Multipart upload completed successfully.")
+
+                        try:
+                            if 'databaseId' in event['body'] and 'description' in event['body']:
+                                logger.info(event)
+
+                                #Do MIME check on whatever is uploaded to S3 at this point for this asset, before we do DynamoDB insertion, to validate it's not malicious
+                                if(not validateS3AssetExtensionsAndContentType(bucket_name, event['body']['assetId'])):
+                                    #TODO: Delete asset and all versions of it from bucket
+                                    #TODO: Change workflow so files get uplaoded first and then this function/workflow should run, error if no asset files are uploaded yet when running this
+                                    response['statusCode'] = 403
+                                    response['body'] = json.dumps({"message": "An uploaded asset contains a potentially malicious executable type object. Unable to process asset upload."})
+                                    return response
+
+                                payload = generate_upload_asset_payload(event)
+                                payload.update({
+                                    "requestContext": {
+                                        "http": {
+                                            "path": event['requestContext']['http']['path'],
+                                            "method": event['requestContext']['http']['method']
+                                        },
+                                        "authorizer": event['requestContext']['authorizer']
+                                            # "jwt": {
+                                            #     "claims": {
+                                            #         "vams:externalAttributes": json.dumps([]),
+                                            #         "vams:roles": json.dumps([]),
+                                            #         "vams:tokens": json.dumps(["asset_ingest_lambda_vams"])
+                                            #     }
+                                            # }
+                                    }
+                                })
+                                logger.info("Payload:")
+                                logger.info(payload)
+
+                                logger.info("Invoking Asset Lambda .........")
+                                lambda_response = lambda_client.invoke(FunctionName=upload_asset_lambda,
+                                                                    InvocationType='RequestResponse',
+                                                                    Payload=json.dumps(payload).encode('utf-8'))
+                                logger.info("lambda response")
+                                logger.info(lambda_response)
+                                logger.info("Invoke Asset Lambda Successfully.")
+
+                                dynamodb = boto3.resource('dynamodb')
+                                table = dynamodb.Table(os.environ['METADATA_STORAGE_TABLE_NAME'])
+
+                                metadata = {'_metadata_last_updated': datetime.now().isoformat()}
+                                keys_map, values_map, expr = to_update_expr(metadata)
+                                table.update_item(
+                                    Key={
+                                        "databaseId": event['body']['databaseId'],
+                                        "assetId": event['body']['assetId'],
+                                    },
+                                    ExpressionAttributeNames=keys_map,
+                                    ExpressionAttributeValues=values_map,
+                                    UpdateExpression=expr,
+                                )
+                                logger.info("Created metadata successfully")
+
+                                response['statusCode'] = 200
+                                response['body'] = json.dumps({"message": "Multipart upload completed successfully."})
+                            else:
+                                response['statusCode'] = 400
+                                response['body'] = json.dumps({"message": "DatabaseId, Description are required."})
+                        except Exception as e:
+                            logger.exception("Error invoking upload Asset Lambda function:")
+                            response['statusCode'] = 500
+                            response['body'] = json.dumps({"message": "Error invoking upload Asset Lambda function. "})
+                    else:
+                        response['statusCode'] = 400
+                        response['body'] = json.dumps({"message": "Multipart upload completion failed."})
+                else:
+                    logger.info("Stage 1 - initiatlize upload")
+                    file_size = int(event['body']['file_size'])
+                    num_parts = calculate_num_parts(file_size)
+                    key = event['body']['key']
+
+                    resp = s3.create_multipart_upload(
+                        Bucket=bucket_name,
+                        Key=key,
+                        ContentType='application/octet-stream',
+                        Metadata={
+                            "databaseid": event['body']['databaseId'],
+                            "assetid": event['body']['assetId']
+                        }
+                    )
+                    upload_id = resp['UploadId']
+
+                    # Generate pre-signed URLs for part uploads
+                    part_urls = [generate_presigned_url(bucket_name, key, upload_id, part_number) for part_number in range(1, num_parts + 1)]
+
+                    response['body'] = json.dumps({"message": {
+                        'uploadId': upload_id,
+                        'numParts': num_parts,
+                        'partUploadUrls': part_urls
+                    }})
+                    response['statusCode'] = 200
+            else:
+                response['statusCode'] = 403
+                response['body'] = json.dumps({"message": "Only POST Supported"})
+
+            return response
+
+        except Exception as e:
+            response['statusCode'] = 500
+            response['body'] = json.dumps({"message": "Internal Server Error"})
+            return response
+        
+    else:
+        response['statusCode'] = 403
+        response['body'] = json.dumps({"message": "Not Authorized"})
+        return response

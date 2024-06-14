@@ -2,13 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import traceback
-
-from backend.handlers.metadata import logger, mask_sensitive_data, \
-    build_response, table, validate_event, ValidationError
-from backend.handlers.auth import get_database_set, request_to_claims
-
+from handlers.metadata import build_response, table, validate_event, ValidationError
+from handlers.auth import request_to_claims
+from handlers.authz import CasbinEnforcer
+from customLogging.logger import safeLogger
+from common.dynamodb import get_asset_object_from_id
 from decimal import Decimal
+from common.dynamodb import validate_pagination_info
+
+
+claims_and_roles = {}
+logger = safeLogger(service="ReadMetadata")
+
 
 def generate_prefixes(path):
     prefixes = []
@@ -53,7 +58,7 @@ def get_metadata(databaseId, assetId):
     )
     if "Item" not in resp:
         raise ValidationError(404, "Item Not Found")
-
+    
     # Convert values that are of type decimal to string (to prevent JSON parse errors on response return)
     for key, value in resp['Item'].items():
         if isinstance(value, Decimal):
@@ -63,7 +68,8 @@ def get_metadata(databaseId, assetId):
 
 
 def lambda_handler(event, context):
-    logger.info(mask_sensitive_data(event))
+    global claims_and_roles
+    logger.info(event)
     try:
         validate_event(event)
         databaseId = event['pathParameters']['databaseId']
@@ -73,31 +79,59 @@ def lambda_handler(event, context):
                 and 'prefix' in event['queryStringParameters']):
             prefix = (event['queryStringParameters']
                       and event['queryStringParameters']['prefix'])
+            
+        queryParameters = event.get('queryStringParameters', {})
+        validate_pagination_info(queryParameters)
 
         claims_and_roles = request_to_claims(event)
-        databases = get_database_set(claims_and_roles['tokens'])
-        if (databaseId in databases
-                or "super-admin" in claims_and_roles['roles']):
+        http_method = event['requestContext']['http']['method']
+        method_allowed_on_api = False
+        request_object = {
+            "object__type": "api",
+            "route__path": event['requestContext']['http']['path']
+        }
+        for user_name in claims_and_roles["tokens"]:
+            casbin_enforcer = CasbinEnforcer(user_name)
+            if casbin_enforcer.enforce(f"user::{user_name}", request_object, http_method):
+                method_allowed_on_api = True
+                break
 
-            metadata = get_metadata_with_prefix(databaseId, assetId, prefix)
+        if method_allowed_on_api:
+            asset_of_metadata = get_asset_object_from_id(assetId)
+            if asset_of_metadata:
+                allowed = False
+                # Add Casbin Enforcer to check if the current user has permissions to GET the asset:
+                asset_of_metadata.update({
+                    "object__type": "asset"
+                })
+                for user_name in claims_and_roles["tokens"]:
+                    casbin_enforcer = CasbinEnforcer(user_name)
+                    if casbin_enforcer.enforce(f"user::{user_name}", asset_of_metadata, "GET"):
+                        allowed = True
+                        break
 
-            # remove private keys that start with underscores
-            for key in list(metadata.keys()):
-                if key.startswith("_"):
-                    del metadata[key]
+                if allowed:
+                    metadata = get_metadata_with_prefix(databaseId, assetId, prefix)
 
-            return build_response(200, json.dumps({
-                "version": "1",
-                "metadata": metadata,
-            }))
+                    # remove private keys that start with underscores
+                    for key in list(metadata.keys()):
+                        if key.startswith("_"):
+                            del metadata[key]
+
+                    return build_response(200, json.dumps({
+                        "version": "1",
+                        "metadata": metadata,
+                    }))
+                else:
+                    raise ValidationError(403, "Not Authorized")
+            else:
+                raise ValidationError(403, "Not Authorized")
         else:
-            print("raising 403 databaseId not in claims and roles?",
-                  databaseId, claims_and_roles, databases)
             raise ValidationError(403, "Not Authorized")
 
     except ValidationError as ex:
-        logger.info(traceback.format_exc())
+        logger.exception(ex)
         return build_response(ex.code, json.dumps(ex.resp))
-    except Exception:
-        logger.error(traceback.format_exc())
-        return build_response(500, "Server Error")
+    except Exception as e:
+        logger.exception(e)
+        return build_response(500, "Internal Server Error")

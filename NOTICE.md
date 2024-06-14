@@ -1,6 +1,6 @@
 Amazon VAMS
 
-Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
 ---
 
@@ -45,7 +45,9 @@ Javascript Libraries:
 | styled-components        | styled-components@5.3.6                                              | MIT                     |
 | typescript               | typescript@4.4.4                                                     | Apache-2.0              |
 | web-vitals               | web-vitals@1.1.2                                                     | Apache-2.0              |
+| esbuild                  | esbuild@0.19.9                                                       | MIT                     |
 | online-3d-viewer         | [online-3d-viewer@0.8.22](https://github.com/kovacsv/Online3DViewer) | MIT                     |
+| PotreeViewer             | [potree@develop-latest](https://github.com/potree/potree)            | BSD-2-Clause            |
 | pickr                    | [pickr@1.8.2](https://github.com/Simonwep/pickr)                     | MIT                     |
 | draco                    | [draco@1.5.6](https://github.com/google/draco)                       | Apache-2.0              |
 | rhino3dm                 | [rhino3dm@7.15.0](https://github.com/mcneel/rhino3dm)                | MIT                     |
@@ -61,7 +63,6 @@ Python Libraries
 | importlib-metadata  | 4.12.0    | Apache Software License              |
 | requests            | 2.28.1    | Apache Software License              |
 | s3transfer          | 0.6.0     | Apache Software License              |
-| sagemaker           | 2.75.1    | Apache Software License              |
 | smdebug-rulesconfig | 1.0.1     | Apache Software License              |
 | stepfunctions       | 2.3.0     | Apache Software License              |
 | packaging           | 21.3      | Apache Software License; BSD License |
@@ -86,3 +87,11 @@ Python Libraries
 | zipp                | 3.8.1     | MIT License                          |
 | certifi             | 2022.6.15 | Mozilla Public License 2.0 (MPL 2.0) |
 | protobuf3-to-dict   | 0.1.5     | Public Domain                        |
+
+Other Libraries
+
+| Name            | Version                                                                      | Licenses     |
+| :-------------- | :--------------------------------------------------------------------------- | :----------- |
+| PDAL            | [pdal@master-latest] (https://github.com/PDAL/PDAL)                          | BSD          |
+| PotreeConverter | [potreeconverter@develop-latest] (https://github.com/potree/PotreeConverter) | BSD-2-Clause |
+| Casbin          | [casbin@2.29.0] (https://github.com/casbin/casbin)                           | Apache-2.0   |

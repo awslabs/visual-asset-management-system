@@ -58,9 +58,14 @@ interface Config {
      */
     federatedConfig?: AmplifyConfigFederatedIdentityProps;
     /**
-     * bucket
+     * S3 Asset bucket
      */
     bucket?: string;
+
+    /**
+     * VAMS Features that are enabled
+     */
+    featuresEnabled?: string;
 
     stackName: string;
 }
@@ -234,15 +239,17 @@ const VAMSAuth: React.FC<AuthProps> = (props) => {
     const [user, setUser] = useState(null);
     const [useLocal, setUseLocal] = useState(false);
     const [userWantsLocal, setUserWantsLocal] = useState(false);
+    const [config, setConfig] = useState(Cache.getItem("config"));
 
-    const [config, setConfig] = useState<any>(Cache.getItem("config"));
     const [ampInit, setAmpInit] = useState(false);
 
     console.log("useLocal", useLocal);
+    console.log("basePath", basePath);
     useEffect(() => {
-        if (config && !config.bucket && user) {
+        if (config && (!config.bucket || !config.featuresEnable) && user) {
             API.get("api", `secure-config`, {}).then((value) => {
                 config.bucket = value.bucket;
+                config.featuresEnabled = value.featuresEnabled;
                 Cache.setItem("config", config);
                 setConfig(config);
             });
@@ -287,12 +294,12 @@ const VAMSAuth: React.FC<AuthProps> = (props) => {
         if (!ampInit) return;
 
         Auth.currentSession()
-            .then((user) =>
+            .then((user) => {
                 setState({
                     email: user.getIdToken().decodePayload().email,
                     authenticated: true,
-                })
-            )
+                });
+            })
             .catch((e) => {
                 setState({ authenticated: false });
             });

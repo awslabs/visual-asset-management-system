@@ -1,17 +1,20 @@
-#  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
 import os
 import boto3
-import sys
+import botocore
 import json
-from boto3.dynamodb.conditions import Key, Attr
 import datetime
-from decimal import Decimal
-from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 import os
 import uuid
-from backend.common.validators import validate
+import random
+import string
+from common.validators import validate
+from common.constants import STANDARD_JSON_RESPONSE
+from handlers.auth import request_to_claims
+from handlers.authz import CasbinEnforcer
+from customLogging.logger import safeLogger
 
 import stepfunctions
 from stepfunctions.steps import (
@@ -20,43 +23,55 @@ from stepfunctions.steps import (
     LambdaStep
 )
 from stepfunctions.workflow import Workflow
-from sagemaker.processing import ProcessingInput, ProcessingOutput
-from sagemaker.processing import Processor
 
+# ########################################### NOTE############################################
+# Due to the unique library imports of stepfunctions, this function is assigned
+# its own lambda layer due to library sizes (close to the 250mb layer limit by itself).
+# --------------------------------------------------------------------------------------------
+# Please be cautious of adding anymore new library references, including downstream references
+# when importing VAMS common files that use other libraries.
+# ############################################################################################
 
+# Set boto environment variable to use regional STS endpoint
+# (https://stackoverflow.com/questions/71255594/request-times-out-when-try-to-assume-a-role-with-aws-sts-from-a-private-subnet-u)
+# AWS_STS_REGIONAL_ENDPOINTS='regional'
+os.environ["AWS_STS_REGIONAL_ENDPOINTS"] = 'regional'
+
+logger = safeLogger(service="CreateWorkflow")
+
+main_rest_response = STANDARD_JSON_RESPONSE
+
+claims_and_roles = {}
+lambda_client= boto3.client('lambda')
+sf_client = boto3.client('stepfunctions')
+#sts_client = boto3.client('sts')
 dynamodb = boto3.resource('dynamodb')
 
-response = {
-    'statusCode': 200,
-    'body': '',
-    'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Credentials': True,
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type',
-            'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
-    }
-}
-
-client = boto3.client('lambda')
-sf_client = boto3.client('stepfunctions')
 try:
     workflow_Database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
     stack_name = os.environ["VAMS_STACK_NAME"]
     upload_all_function = os.environ['UPLOAD_ALL_LAMBDA_FUNCTION_NAME']
+    region = os.environ['AWS_REGION']
+    role = os.environ['LAMBDA_ROLE_ARN']
+    logGroupArn = os.environ['LOG_GROUP_ARN']
 except:
-    print("Failed Loading Environment Variables")
-    response['body'] = json.dumps({
+    logger.exception("Failed loading environment variables")
+    main_rest_response['body'] = json.dumps({
         "message": "Failed Loading Environment Variables"
     })
+
+def generate_random_string(length=8):
+    """Generates a random character alphanumeric string with a set input length."""
+    chars = string.ascii_letters + string.digits
+    return ''.join(random.choice(chars) for i in range(length))
 
 
 def create_workflow(payload):
     workflow_arn = create_step_function(
         payload['specifiedPipelines']['functions'], payload['databaseId'], payload['workflowId'])
     table = dynamodb.Table(workflow_Database)
-    print("Payload")
-    print(payload)
+    logger.info("Payload")
+    logger.info(payload)
     dtNow = datetime.datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
     Item = {
         'databaseId': payload['databaseId'],
@@ -71,109 +86,27 @@ def create_workflow(payload):
     )
     return json.dumps({"message": 'Succeeded'})
 
-
-def lambda_handler(event, context):
-    print(event)
-    response = {
-        'statusCode': 200,
-        'body': '',
-        'headers': {
-            'Content-Type': 'application/json',
-                'Access-Control-Allow-Credentials': True,
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type',
-                'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
-        }
-    }
-    if isinstance(event['body'], str):
-        event['body'] = json.loads(event['body'])
-    # event['body']=json.loads(event['body'])
-    try:
-        # TODO: Validate if database and pipelines exist before proceeding
-        if 'databaseId' not in event['body']:
-            message = "No databaseId in API Call"
-            response['body'] = json.dumps({"message": message})
-            print(response['body'])
-            return response
-        if 'specifiedPipelines' not in event['body'] or len(event['body']['specifiedPipelines']) == 0:
-            message = "No pipelines in API Call"
-            response['body'] = json.dumps({"message": message})
-            print(response['body'])
-            return response
-
-        pipelineArray = []
-        for pipeline in event['body']['specifiedPipelines']['functions']:
-            pipelineArray.append(pipeline['name'])
-
-        (valid, message) = validate({
-            'databaseId': {
-                'value': event['body']['databaseId'],
-                'validator': 'ID'
-            },
-            'pipelineId': {
-                'value': pipelineArray,
-                'validator': 'ID_ARRAY'
-            },
-            'workflowId': {
-                'value': event['body']['workflowId'],
-                'validator': 'ID'
-            },
-            'description': {
-                'value': event['body']['description'],
-                'validator': 'STRING_256'
-            },
-        })
-        if not valid:
-            print(message)
-            response['body'] = json.dumps({"message": message})
-            response['statusCode'] = 400
-            return response
-
-        print("Trying to get Data")
-        response['body'] = create_workflow(event['body'])
-        print(response)
-        return response
-    except Exception as e:
-        response['statusCode'] = 500
-        print("Error!", e.__class__, "occurred.")
-        try:
-            print(e)
-            response['body'] = json.dumps({"message": str(e)})
-        except:
-            print("Can't Read Error")
-            response['body'] = json.dumps(
-                {"message": "An unexpected error occurred while executing the request"})
-        return response
-
-
 def create_step_function(pipelines, databaseId, workflowId):
-    print("Creating state machine")
-    region = os.environ['AWS_REGION']
+    logger.info("Creating state machine flow")
 
-    # SageMaker Execution Role
-    # You can use sagemaker.get_execution_role() if running inside sagemaker's notebook instance
-    role = os.environ['LAMBDA_ROLE_ARN']
-    #step_role = "arn:aws:iam::611143256665:role/AmazonSageMaker-StepFunctionsWorkflowExecutionRole"
-
-    client = boto3.client('sts')
-    account_id = client.get_caller_identity()['Account']
+    #account_id = sts_client.get_caller_identity()['Account']
 
     # Generate unique names for Pre-Processing Job, Training Job, and Model Evaluation Job for the Step Functions Workflow
     job_names = [
         # Each Training Job requires a unique name
-        x['name']+"-{}".format(uuid.uuid1().hex) for x in pipelines
+        x['name'] + "-{}".format(uuid.uuid1().hex) for x in pipelines
     ]
-    print(job_names)
-    instance_type = os.getenv("INSTANCE_TYPE", "ml.m5.large")
+    logger.info(job_names)
+    # instance_type = os.getenv("INSTANCE_TYPE", "ml.m5.large")
 
     # Step function failed state
-    failed_state_sagemaker_processing_failure = stepfunctions.steps.states.Fail(
-        "Workflow failed", cause="SageMakerProcessingJobFailed"
+    failed_state_processing_failure = stepfunctions.steps.states.Fail(
+        "Workflow failed", cause="WorkflowProcessingJobFailed"
     )
 
     catch_state_processing = stepfunctions.steps.states.Catch(
         error_equals=["States.TaskFailed"],
-        next_step=failed_state_sagemaker_processing_failure,
+        next_step=failed_state_processing_failure,
     )
 
     steps = []
@@ -183,12 +116,11 @@ def create_step_function(pipelines, databaseId, workflowId):
         else:
             input_s3_uri = output_s3_uri
 
-        output_s3_uri = "States.Format('s3://{}/pipelines/" + pipeline["name"] + "/" + job_names[i]+ "/output/{}/', $.bucket, $$.Execution.Name)"
-        print(output_s3_uri)
+        output_s3_uri = "States.Format('s3://{}/pipelines/" + \
+                        pipeline["name"] + "/" + job_names[i] + "/output/{}/', $.bucket, $$.Execution.Name)"
+        logger.info(output_s3_uri)
         if ('pipelineType' in pipeline and pipeline['pipelineType'] == 'Lambda'):
             step = create_lambda_step(pipeline, input_s3_uri, output_s3_uri)
-        else:
-            step = create_sagemaker_step(databaseId, region, role, account_id, job_names, instance_type, i, pipeline, input_s3_uri, output_s3_uri)
         step.add_retry(retry=stepfunctions.steps.Retry(
             error_equals=["States.ALL"],
             interval_seconds=5,
@@ -204,7 +136,8 @@ def create_step_function(pipelines, databaseId, workflowId):
                 "assetId.$": "$.assetId",
                 "workflowId.$": "$.workflowId",
                 "bucket.$": "$.bucket",
-                "key.$": "States.Format('pipelines/" + pipeline["name"] +"/"+ job_names[i] + "/output/{}/', $$.Execution.Name)",
+                "key.$": "States.Format('pipelines/" + pipeline["name"] + "/" + job_names[
+                    i] + "/output/{}/', $$.Execution.Name)",
                 "description": f'Output from {pipeline["name"]}',
                 "executionId.$": "$$.Execution.Name",
                 "pipeline": pipeline["name"],
@@ -219,11 +152,24 @@ def create_step_function(pipelines, databaseId, workflowId):
             }
         ))
 
+    #Generate unique name for the Step Functions Workflow with randomization
+    #Workflow name must have 'vams' in it for permissiong
+    # Make sure workFlowName is not longer than 80 characters
+    workFlowName = workflowId
+    if len(workFlowName) > 66:
+        workFlowName = workFlowName[-66:]  # use 66 characters
+    workFlowName = workFlowName + generate_random_string(8)
+    workFlowName = "vams-"+ workFlowName 
+    if len(workFlowName) > 80:
+        workFlowName = workFlowName[-79:]  # use 79 characters for buffer
+
+    logger.info("Submitting state machine flow 1")
+
     workflow_graph = Chain(steps)
     branching_workflow = Workflow(
-        name=stack_name + "-" + workflowId,
+        name=workFlowName,
         definition=workflow_graph,
-        role=role,
+        role=role
     )
 
     workflow_arn = branching_workflow.create()
@@ -237,21 +183,24 @@ def create_step_function(pipelines, databaseId, workflowId):
 
             if original_workflow["States"][step_name]["Type"] == "Task":
                 original_workflow["States"][step_name]["ResultPath"] = "$." + \
-                    step_name+".output"
+                                                                       step_name + ".output"
 
             pipelineName = step_name.split("-")[0]
             original_workflow["States"][step_name]["Parameters"].pop(
                 "ProcessingJobName")
             # Two jobs cant have the same name, appending job name with ExecutionId
-            original_workflow["States"][step_name]["Parameters"]["ProcessingJobName.$"] = "States.Format('"+pipelineName+"-"+str(
-                i)+"-{}', $$.Execution.Name)"
+            original_workflow["States"][step_name]["Parameters"][
+                "ProcessingJobName.$"] = "States.Format('" + pipelineName + "-" + str(
+                i) + "-{}', $$.Execution.Name)"
 
             original_workflow["States"][step_name]["Parameters"]["ProcessingInputs"][0]['S3Input']["S3Uri.$"] = \
                 original_workflow["States"][step_name]["Parameters"]["ProcessingInputs"][0]['S3Input'].pop(
                     "S3Uri")
 
-            original_workflow["States"][step_name]["Parameters"]["ProcessingOutputConfig"]['Outputs'][0]['S3Output']["S3Uri.$"] = \
-                original_workflow["States"][step_name]["Parameters"]["ProcessingOutputConfig"]['Outputs'][0]['S3Output'].pop(
+            original_workflow["States"][step_name]["Parameters"]["ProcessingOutputConfig"]['Outputs'][0]['S3Output'][
+                "S3Uri.$"] = \
+                original_workflow["States"][step_name]["Parameters"]["ProcessingOutputConfig"]['Outputs'][0][
+                    'S3Output'].pop(
                     "S3Uri")
 
         except KeyError:
@@ -259,85 +208,46 @@ def create_step_function(pipelines, databaseId, workflowId):
 
     new_workflow = json.dumps(original_workflow, indent=2)
 
+    logger.info("Submitting state machine flow 2")
+
     sf_client.update_state_machine(
         stateMachineArn=workflow_arn,
         definition=new_workflow,
-        roleArn=role
+        roleArn=role,
+        loggingConfiguration={
+            'destinations': [{
+                'cloudWatchLogsLogGroup': {
+                    'logGroupArn': logGroupArn
+                }}],
+            'level': 'ALL'
+        },
+        tracingConfiguration={
+            'enabled': True
+        }
     )
-    print("State machine created successfully")
+    logger.info("State machine created successfully")
     return workflow_arn
 
 
-def create_sagemaker_step(databaseId, region, role, account_id, job_names, instance_type, i, pipeline, input_s3_uri, output_s3_uri):
-
-    try: 
-        userResource = json.loads(pipeline['userProvidedResource'])
-        if userResource['isProvided'] == False:    
-            image_uri = account_id+'.dkr.ecr.'+region + \
-                '.amazonaws.com/'+pipeline['name']
-        else:
-            image_uri = userResource['resourceId']
-    except KeyError: #For pipelines created before user provided resources were implemented
-        image_uri = account_id+'.dkr.ecr.'+region + \
-                '.amazonaws.com/'+pipeline['name']
-
-    processor = Processor(
-        role=role,
-        image_uri=image_uri,
-        instance_count=1,
-        instance_type=instance_type,
-        base_job_name=databaseId,
-        volume_size_in_gb=32
-    )
-
-    inputs = [
-        ProcessingInput(
-            input_name='input',
-            source=input_s3_uri,
-            destination='/opt/ml/processing/input')
-    ]
-    outputs = [
-        ProcessingOutput(
-            output_name='output',
-            source='/opt/ml/processing/output',
-            destination=output_s3_uri
-        )
-    ]
-
-    # preprocessing_job_name = generate_job_name()
-    step = ProcessingStep(
-        job_names[i],
-        processor=processor,
-        job_name=job_names[i],
-        inputs=inputs,
-        outputs=outputs,
-        container_arguments=None
-    )
-
-    return step
-
-
 def create_lambda_step(pipeline, input_s3_uri, output_s3_uri):
-    try:
-        userResource = json.loads(pipeline['userProvidedResource'])
-        if userResource['isProvided'] == False:
-            functionName = pipeline['name']
-        else:
-            functionName = userResource['resourceId']
-    except KeyError: #For pipelines created before user provided resources were implemented
-        functionName = pipeline['name']
+
+    userResource = json.loads(pipeline['userProvidedResource'])
+    functionName = userResource['resourceId']
 
     lambda_payload = {
         "body": {
             "inputPath.$": input_s3_uri,
-            "outputPath.$": output_s3_uri,
-            "TaskToken.$": "$$.Task.Token",
+            "outputPath.$": output_s3_uri
         }
     }
 
     callback_args = {}
     if 'waitForCallback' in pipeline and pipeline['waitForCallback'] == 'Enabled':
         callback_args['wait_for_callback'] = True
+
+        #Add taskToken parameter to lambda payload
+        lambda_payload['body']['TaskToken.$'] = "$$.Task.Token"
+
         f = 'taskTimeout'
         if f in pipeline and pipeline[f].isdigit() and int(pipeline[f]) > 0:
             callback_args['timeout_seconds'] = int(pipeline[f])
@@ -355,3 +265,144 @@ def create_lambda_step(pipeline, input_s3_uri, output_s3_uri):
         },
         **callback_args,
     )
+
+
+def lambda_handler(event, context):
+    global claims_and_roles
+    response = STANDARD_JSON_RESPONSE
+    claims_and_roles = request_to_claims(event)
+    logger.info(event)
+    if isinstance(event['body'], str):
+        event['body'] = json.loads(event['body'])
+    # event['body']=json.loads(event['body'])
+    try:
+        httpMethod = event['requestContext']['http']['method']
+
+        method_allowed_on_api = False
+        request_object = {
+            "object__type": "api",
+            "route__path": event['requestContext']['http']['path']
+        }
+        for user_name in claims_and_roles["tokens"]:
+            casbin_enforcer = CasbinEnforcer(user_name)
+            if casbin_enforcer.enforce(f"user::{user_name}", request_object, httpMethod):
+                method_allowed_on_api = True
+                break
+
+        if method_allowed_on_api:
+            # TODO: Validate if database and pipelines exist before proceeding
+            if 'databaseId' not in event['body']:
+                message = "No databaseId in API Call"
+                response['statusCode'] = 400
+                response['body'] = json.dumps({"message": message})
+                logger.info(response['body'])
+                return response
+            if 'specifiedPipelines' not in event['body'] or len(event['body']['specifiedPipelines']) == 0:
+                message = "No pipelines in API Call"
+                response['statusCode'] = 400
+                response['body'] = json.dumps({"message": message})
+                logger.info(response['body'])
+                return response
+
+            pipelineArray = []
+            for pipeline in event['body']['specifiedPipelines']['functions']:
+                logger.info("pipeline in workflow creation: ")
+                logger.info(pipeline)
+                # Add Casbin Enforcer to check if the current user has permissions to GET the pipeline:
+                pipeline_allowed = False
+                pipeline.update({
+                    "object__type": "pipeline",
+                    "databaseId": event['body']['databaseId'],
+                    "pipelineId": pipeline['name'],
+                    "pipelineType": pipeline['pipelineType'],
+                })
+                for user_name in claims_and_roles["tokens"]:
+                    casbin_enforcer = CasbinEnforcer(user_name)
+                    if casbin_enforcer.enforce(f"user::{user_name}", pipeline, "GET"):
+                        pipeline_allowed = True
+                        break
+
+                if pipeline_allowed:
+                    pipelineArray.append(pipeline['name'])
+                else:
+                    response['statusCode'] = 403
+                    response['body'] = json.dumps({"message": "Not Authorized to read the pipeline"})
+                    return response
+
+            # Check for missing fields - TODO: would need to keep these synchronized
+            #
+            required_field_names = ['databaseId', 'workflowId', 'description']
+            missing_field_names = list(set(required_field_names).difference(event['body']))
+            if missing_field_names:
+                message = 'Missing body parameter(s) (%s) in API call' % (', '.join(missing_field_names))
+                response['body'] = json.dumps({"message": message})
+                response['statusCode'] = 400
+                logger.error(response)
+                return response
+
+            (valid, message) = validate({
+                'databaseId': {
+                    'value': event['body']['databaseId'],
+                    'validator': 'ID'
+                },
+                'pipelineId': {
+                    'value': pipelineArray,
+                    'validator': 'ID_ARRAY'
+                },
+                'workflowId': {
+                    'value': event['body']['workflowId'],
+                    'validator': 'ID'
+                },
+                'description': {
+                    'value': event['body']['description'],
+                    'validator': 'STRING_256'
+                },
+            })
+            if not valid:
+                logger.error(message)
+                response['body'] = json.dumps({"message": message})
+                response['statusCode'] = 400
+                return response
+
+            logger.info("Trying to get Data")
+            workflow_allowed = False
+            # Add Casbin Enforcer to check if the current user has permissions to PUT the workflow:
+            workflow = {
+                "object__type": "workflow",
+                'databaseId': event['body']['databaseId'],
+                'workflowId': event['body']['workflowId'],
+            }
+            for user_name in claims_and_roles["tokens"]:
+                casbin_enforcer = CasbinEnforcer(user_name)
+                if casbin_enforcer.enforce(f"user::{user_name}", workflow, "PUT"):
+                    workflow_allowed = True
+                    break
+
+            if workflow_allowed:
+                response['body'] = create_workflow(event['body'])
+                logger.info(response)
+                return response
+            else:
+                response['statusCode'] = 403
+                response['body'] = json.dumps({"message": "Not Authorized"})
+                return response
+        else:
+            response['statusCode'] = 403
+            response['body'] = json.dumps({"message": "Not Authorized"})
+            return response
+    except botocore.exceptions.ClientError as err:
+        if err.response['Error']['Code'] == 'LimitExceededException' or err.response['Error']['Code'] == 'ThrottlingException': 
+            logger.exception("Throttling Error")
+            response['statusCode'] = err.response['ResponseMetadata']['HTTPStatusCode']
+            response['body'] = json.dumps({"message": "ThrottlingException: Too many requests within a given period."})
+            return response
+        else:
+            logger.exception(err)
+            response['statusCode'] = 500
+            response['body'] = json.dumps({"message": "Internal Server Error"})
+            return response
+    except Exception as e:
+        logger.exception(e)
+        response['statusCode'] = 500
+        response['body'] = json.dumps({"message": "Internal Server Error"})
+        return response

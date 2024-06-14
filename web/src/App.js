@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -7,18 +7,20 @@ import { useEffect, useState } from "react";
 import ReactDOM from "react-dom";
 import { Cache } from "aws-amplify";
 import { Authenticator } from "@aws-amplify/ui-react";
-import { BrowserRouter } from "react-router-dom";
+import { BrowserRouter, HashRouter } from "react-router-dom";
 import { TopNavigation } from "@cloudscape-design/components";
 import { AppRoutes } from "./routes";
 import logoWhite from "./resources/img/logo_white.png";
 import "@aws-amplify/ui-react/styles.css";
 
+import { GlobalHeader } from "./common/GlobalHeader";
 import { Header } from "./authenticator/Header";
 import { Footer } from "./authenticator/Footer";
 import { SignInHeader } from "./authenticator/SignInHeader";
 import { SignInFooter } from "./authenticator/SignInFooter";
 
 const components = {
+    GlobalHeader,
     Header,
     SignIn: {
         Header: SignInHeader,
@@ -59,9 +61,11 @@ function App() {
             {({ signOut, user }) => {
                 const menuText =
                     user.signInUserSession?.idToken?.payload?.name || user.username || user.email;
+                localStorage.setItem("email", menuText);
                 return (
                     <>
                         <HeaderPortal>
+                            <GlobalHeader />
                             <TopNavigation
                                 identity={{
                                     href: "/",
@@ -89,13 +93,13 @@ function App() {
                                 }}
                             />
                         </HeaderPortal>
-                        <BrowserRouter>
+                        <HashRouter>
                             <AppRoutes
                                 navigationOpen={navigationOpen}
                                 user={user}
                                 setNavigationOpen={setNavigationOpen}
                             />
-                        </BrowserRouter>
+                        </HashRouter>
                     </>
                 );
             }}

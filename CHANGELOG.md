@@ -2,6 +2,172 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.0.0] (2024-6-14)
+
+This major version represents an overhaul to the CDK constructs to support more scalable deployment configurations with many additional CDK deployment features. It adds a new VAMS permission system with new Attribute-Based Access Control (ABAC) and Role-Based Access Control (RBAC) systems. Lastly, the overhaul has added business logic features to support new data structures around asset storage.
+
+Recommended Upgrade Path: A/B Stack Deployment with data migration using staging bucket configuration and upgrade migration scripts for DynamoDB tables in `./infra/upgradeMigrationScripts`
+
+### Highlights
+
+1. **CDK Infrastructure Overhaul**: This release represents a major overhaul of the CDK constructs, splitting the core logic into multiple nested stacks to support more scalable deployment configurations.
+2. **Configuration System**: A new CDK configuration system has been introduced using `config.json` and `cdk.json` files. Many previously implemented features, such as OpenSearch or Location Services, can now be turned on or off.
+3. **New Configuration Options**: Numerous new configuration options have been added, such as VPC/subnet management, Application Load Balancer (ALB) static web support instead of CloudFront, KMS encryption, OpenSearch configurations (including the ability to turn off OpenSearch), and more. These options can be toggled based on specific deployment requirements.
+4. **Security Controls**: A major aspect of this release focuses on security tightening and controls. Implementers will now be able to deploy across AWS partitions, including GovCloud, and have more control over WAF, FIPS, Lambdas in VPCs, and Docker SSL Proxy configurations.
+5. **New Access Control System**: A new Attribute-Based Access Control (ABAC) and Role-Based Access Control (RBAC) system has been implemented, replacing the previous Cognito group-based access control. This provides fine-grained access control to various VAMS resources.
+6. **Asset Tagging and Linking**: A new mechanism for adding tags and tag types to assets has been introduced, along with the ability to create parent/child and related-to links between assets within the same database.
+7. **Image and PointCloud Viewers**: Support for Image and PointCloud file visualizations has been added, including an infrastructure data pipeline to support viewer conversions for LAS, LAZ, and E57 input formats.
+8. **Upgraded File Manager**: The web assets viewer has a new file manager UI/UX for viewing asset files and provides functionality for uploading multiple asset files within folders.
+9. **Email Subscription System**: A new email subscription system has been implemented which allows VAMS users to subscribe to various data changes. Asset data objects are the first to be implemented as part of this version to allow users to receive notifications when new asset file versions are uploaded.
+10. **Performance and Bug Fixes**: Various performance improvements and bug fixes have been implemented, including API input validations, optimizations for OpenSearch indexing, log group naming, unique resource naming, and workflow execution handling.
+11. **Deprecations and Removals**: SageMaker pipeline types have been removed to focus development efforts on Lambda pipelines.
+
+### ⚠ BREAKING CHANGES
+
+-   **Possible break** CDK configuration and feature switch system using `./infra/config/config.json` file. Some backwards compatibility with existing CDK deployment commands.
+-   CDK overhaul to split core logic into 10+ nested stacks means that an in-place upgrade for existing stack deployments is not possible, use A/B deployment.
+-   Lambdas converted into inline code functions with layers (away from Lambda ECR-backed containers).
+-   (SEO breakage) Switch Web infrastructure to use React hash router instead of web router to support ALB configuration option, which breaks search engine optimizations (SEO).
+-   New ABAC/RBAC systems will require new roles and constraints to be set up to allow application access. Existing Cognito groups will no longer be recognized, and user memberships must be transferred to the role and constraint mechanisms.
+-   SageMaker is no longer a pipeline type available. Existing SageMaker pipelines should be converted to be executed from a lambda pipeline.
+-   Restrict VAMS workflow pipelines to only have permission to lambdas that contain `vams` in the function name by default. If you have external pipeline lambdas, please add invoke permissions for them to the appropriate workflow execution role or update your lambda function name to contain `vams`.
+-   Pipelines created using the default lambda artifact sample will now need to be re-created and re-inserted into workflows due to using different database fields to store the name of these.
+-   `/assets/all` (PUT) API call is deprecated in favor of using the existing `/assets` (PUT) and the newer `/ingestAsset` (POST) API.
+-   Previously created workflows of pipelines that had pipeline nodes that didn't use `wait_for_callback` need to be re-created/re-saved from the VAMS UI or modified in the AWS Console to remove `TaskToken.$` from node tasks parameters if there is no callback on that node.
+-   API response bodies for data retrieval calls that return several records have been standardized to `responseBody: {message: {Items, NextToken}}`.
+
+### Features
+
+-   Implement CDK configuration system using `./infra/config/config.json` file.
+-   -   Implement local Docker package build file configuration override to support customization in `./infra/config/docker/Dockerfile-customDependencyBuildConfig` (such as in cases of HTTPS SSL proxy certificate support).
+-   -   Add default template files for various configuration environments (commercial (default- config.json), GovCloud).
+-   Implement new CDK environment system variables using `./infra/cdk.json` file.
+-   -   Add global stack resource tagging.
+-   -   Add global new role permission boundary support.
+-   -   Add global new role name prefix tagging.
+-   Implement feature switch system and storage for Web feature toggling (new DynamoDB table).
+-   -   **Web** Load/cache enabledFeatures as part of the backend web configuration load to the frontend.
+-   Implement GovCloud feature switch which toggles other features on/off based on GovCloud service support and certain best practices.
+-   Implement FIPS support configuration option.
+-   Implement WAF configuration option (existing WAF functionality, ability to now toggle off).
+-   Implement Global VPC configuration option used for particular configuration needs.
+-   -   Support new VPC/Subnet generation.
+-   -   Support an option for external VPC/subnet imports (instead of new VPC generation).
+-   -   -   Added implementation of LoadContext Deployment configuration to support VPC context loading before main deployment.
+-   -   Support an option for auto-adding*new VPC endpoints based on other configuration switches (*with some exceptions in particular configurations that will still auto-add regardless of this flag).
+-   -   Support putting all deployed lambdas behind VPC (FedRamp best practices for GovCloud).
+-   Implement ALB configuration option for static WebApp delivery (replaces CloudFront when enabled).
+-   -   Requirement Note: ALB tied to a registered domain that must be provided.
+-   -   Support WAF (if used) to deploy globally or regionally based on ALB/CloudFront deployments.
+-   -   Support for using public private subnets for ALB.
+-   -   Support/Requirement for SSL/TLS ACM certificate import for ALB.
+-   -   Support for optional externally imported Route53 HostedZone updating for ALB deployment.
+-   Implement KMS CMK encryption configuration option for all*at-rest storage (*with some S3 bucket exceptions in particular configurations such as ALB use).
+-   -   Support new key generation on stack deploy.
+-   -   Support option for external CMK key import instead of new key generation.
+-   -   Disable all KMS CMK keys use implemented previously when configuration feature disabled (e.g., S3 bucket SNS notification queues). Uses default/AWS-managed encryption when KMS CMK disabled.
+-   Implement OpenSearch provisioned, serverless, or no (neither serverless nor provisioned enabled) open search configuration options; No open search will disable VAMS asset search functionality.
+-   Implement location service configuration option and feature switch (existing location service functionality, ability to now toggle off).
+-   -   **Web** Hides Map view from Assets web page when turned off.
+-   Implement point cloud visualization configuration option (existing pipeline functionality, ability to now toggle off through configuration file).
+-   Add VAMS upgrade migration scripts to support A/B deployments and data migration between stack deployments in `./infra/deploymentDataMigration`.
+-   (Future Full-Implementation) Implement authentication provider configuration option and feature switch. Note: Currently, only the Cognito `useSaml` configuration flag is observed (moved from `saml-config.ts` file), other auth types will cause an unimplemented error.
+-   Implement new initial ABAC/RBAC access control systems to allow for fine-grained access to various VAMS resources (built on the Casbin open-source library).
+-   -   ABAC defines the primary constraints and access controls.
+-   -   -   ABAC currently supports resources of Databases, Assets, and "APIs".
+-   -   -   **Note** Databases and Assets control primary VAMS storage resources. APIs control access to top-level system functionality (administrative pages, pipelines/workflows, etc.).
+-   -   RBAC roles map to ABAC constraints to allow for backward compatibility with role/group-based access systems.
+-   -   ABAC constraints can also map directly to users if organizations choose to go solely with the ABAC system.
+-   -   Removed the previous Cognito group and constraint system.
+-   -   -   **Note** Starts to reduce dependency on Cognito functionalities.
+-   -   Created default admin role and constraint groups on new VAMS deployment. Stack deployment user will be auto-added to this new role group.
+-   -   All lambdas now check access against the new ABAC constraints system.
+-   -   **Web** Allowed Web routes controlled by ABAC constraints.
+-   -   **Web** Administrative UI pages to support roles, role membership, constraints, and constraint membership modifications.
+-   Implement new tag and tag type mechanism for adding additional information on assets (tags/tag types are currently global across all databases).
+-   -   **Note** Requirement that Tags must have a tag type assigned.
+-   -   **Web** Ability to search tags on assets on the asset search page.
+-   -   **Web** Ability to assign/unassign tags to assets on asset creation and asset editing pages.
+-   -   **Web** Administrative UI pages to support system tag and tag type modifications.
+-   Implement asset linking functionality to support parent/child and related-to links between assets in the same database. Limit set to 500 of any asset link types per asset.
+-   -   **Web** Ability to add/remove links to assets on asset creation and asset editing pages.
+-   Implement asset email notification subscriptions on asset modification.
+-   -   **Note** Users must confirm the subscription for each asset subscribed to in their inbox due to the current SNS topic implementation method.
+-   -   **Web** Ability to add/remove user subscription to an asset on the asset viewing page.
+-   -   **Web** Administrative UI pages to support global asset email list changes.
+-   Enhance asset ingestion API to support better pushing of assets from external systems into VAMS.
+-   -   **Note** The current implementation does not yet support API Key implementation for authentication and must still have a JWT authentication token to validate the calling system.
+-   -   **Web** Administrative UI debug pages to allow organization administrators to call the API with various JSON payload inputs from the VAMS webpage.
+-   **Web** Added PointCloud viewer support with Potree Viewer and an optional infrastructure pipeline configuration option for Potree conversions for .laz, .las, and .e57 file types uploads.
+-   The AssetName field now has a new restriction to only support up to 256 characters with the following regex: `^[a-zA-Z0-9\-._\s]{1,256}$`.
+-   Email user IDs now follow the new restriction to only support the following regex: `^[\w\-\.\+]+@([\w-]+\.)+[\w-]{2,4}$`.
+-   Implement Cognito client USER_PASSWORD_AUTH configuration option as `useUserPasswordAuthFlow` for organizations who cannot perform SRP calculations on some of their VAMS integrations. By default, this configuration option is set to false.
+-   Upgrade Cognito to insert VAMS claims tokens into both ID and Access tokens, which helps with confusion on 500 service errors when using the Cognito access token for API authentication.
+-   **Web** Add a new file manager viewer on the view asset page to provide a better visualization and upload experience for multiple files and folders.
+-   **Web** Add a new Image viewer for image type assets (non-preview files). Preview images are still supplemental on image asset files, which can be used for thumbnails, as an example.
+
+### Bug Fixes
+
+-   OpenSearch indexes now properly update when asset details are changed.
+-   Change certain log group names to add the `/aws/vendedlogs` prefix to fix the issue of reaching the maximum CloudWatch policy character count on AWS accounts with many current/past resource deployments.
+-   Fix the unique name generator for certain resources to fix character count limit issues and be more deterministic across VAMS (re-)deployments.
+-   Added additional parameter input validations for API calls and fixed various 500 service errors based on malformed requests.
+-   Fix workflow execution bug that caused errors across all workflow executions that didn't use the `wait_for_callback` flag in a lambda pipeline. This bug fix requires the re-creation/re-saving of all applicable workflows from the VAMS UI or manual adjustment in the AWS Console of created state machines to remove `TaskToken.$` from tasks parameters if there is no callback. This error was due to an AWS Step Functions service logic change.
+-   Fixed OpenSearch query parameters to discard `#deleted` assets during the OpenSearch query and not just as a post-processing step. This should help prevent inconsistent results when wanting to limit search results to a single or a handful of total records.
+-   Fixed OpenSearch asset searching to look at the passed-in searchbar 'query' value and properly search across all asset indexed fields (including all asset metadata). Previously, this did not work at all and just returned all results, all the time.
+
+### Chores
+
+-   Renamed VAMS stack to 'VAMS core' and changed the overall user-stack naming scheme, updated resource naming across the board to meet the new CDK construct rebuild
+-   Upgraded lambdas and custom resources to use Python 3.10 and NodeJS 18_X runtimes
+-   -   Consolidated runtime container deployment constant to the code configuration file
+-   Broke up CDK constructs into 10+ nested stacks for scalability, compartmentalization, and fixing stack resource limit constraints
+-   -   Restructured the infra folder to meet the new nested stack and constructs breakup
+-   Converted lambdas into inline code functions with layers (away from Lambda ECR-backed containers)
+-   -   Split lambdas into 2 layers depending on dependency package need. This reduces deployment sizes per lambda and improves runtime performance.
+-   -   Added lambda layer package reduction logic to remove test/cache data in dependencies to further reduce layer MB size
+-   -   Updated/Added backend folder structure and yarn packages to support new inline support and layer support
+-   Used the 'esbuild' package library instead of docker for any NodeJS lambda deployment packaging
+-   **Web** Switched Web infrastructure to use React hash router instead of web router to support the ALB configuration option
+-   -   **Web** Added hash route deduplication code to help prevent/notify of possible link/navigate improper usage with `#` link prefixes
+-   Switched CloudFront to use OAC instead of OAI for better security and functionality support for S3 origin support
+-   Implemented Service ARN/Principal switcher and constants file to support different AWS partition, region, and FIPS use deployments
+-   -   Introduced the genEndpoints script to update the service ARN/principal constants file. Note: Does not have all services, so some have to be added manually back to the constants file. Use with caution.
+-   Switched Pipeline Visualizer lambdas to look at the "Add Lambdas to VPC" configuration flag to determine if they are in a VPC
+-   Added all-around error checking and various deployment warnings on the CDK infrastructure configuration system flags
+-   Modified the stagingBucket configuration tree entry to allow for future upgrades to support more different types of staging buckets
+-   **Web** Removed file viewer options from the main web menu as they don't fit with the application web flow anymore
+-   Updated CDK deployment outputs to match configuration options
+-   Updated prettier/lint ignore files to ignore certain configuration and CloudFormation template files
+-   Updated documentation/diagrams for configuration/environment/deployment modes along with different edge-case scenario deployments such as HTTPS SSL proxy certificate support
+-   -   Updated pricing information for various configuration modes
+-   Updated documentation to support the new outlined features
+-   Added Casbin@1.34.0 (Apache-2 License) backend library package to dependency files
+-   Restricted workflow pipelines to only have permission to lambdas that contain `vams` in the function name by default
+-   Workflow pipelines created using the default lambda will now generate with a part-randomized string name to prevent same-name overlap
+-   -   Note: Pipelines created using the default lambda artifact sample will now need to be re-created and re-inserted into workflows due to using different database fields to store the name of these.
+-   Workflows created will now generate a state machine with a part-randomized string name to prevent same-name overlap
+-   Added file extension and MIME content type checks on various upload and download file APIs. Currently checking for execution or script files which will be unallowed from VAMS.
+-   Fixed the asset download API (and modified some of the parameters) which previously was not working, limited s3 scoped access STS call permissions to only be able to upload files. Expect the scoped s3 call to go away entirely as upload/download is revamped in future updates.
+-   Added pagination query params and max limits to all API data fetches that don't return single item results. This also standardizes the response bodies to `responseBody: {message: {Items, NextToken}}`. This should allow VAMS to grow into a larger system that can support more than 1500 assets/records.
+-   -   **Web** Added client-side pagination aggregation of total results. Full REACT page view with dynamic fetching not yet implemented.
+-   **Web** Changed the front-end to use the download API for generating Presigned URLs instead of using the Amplify client logic with s3ScopedAccess
+-   -   Starting to phase out s3ScopedAccess by reducing permissions and logic depending on it from the Amplify/client side. Expect full deprecation of this in the future.
+-   **Web** Updated the 3D Model Viewer package to v0.12.0 and related dependencies
+-   **Web** File model viewer now looks at a separate constants variable for file types to use with 3D Online Viewer (<https://github.com/kovacsv/Online3DViewer>)
+-   -   **Note** This allows customers who wish to accept the opencascade LPGL license to view some CAD formats. These file types are excluded by default. See the documentation on how to enable.
+
+### Deprecation / Feature Removal
+
+-   SageMaker pipeline types have been removed from the available pipelines to run. Existing SageMaker pipelines should now be called via a lambda execution layer. This is due to better security implementation and the focusing of development efforts on lambda executions which can launch any other needed service.
+-   The `/assets/all` (PUT) API call is deprecated in favor of using the existing `/assets` (PUT) and the newer `/ingestAsset` (POST) API. Backend business logic code for generating lambda components remains for use in the workflow API currently.
+-   The S3 `bucket` field is no longer a needed input or response field for working with asset APIs. The bucket will now be fetched from environment variables instead, based on solution permissions.
+
+### Known Outstanding Issues
+
+-   Although v2 split the monolithic stack architecture from v1.5 and below into nested stacks, CDK deployment warnings may show up with certain configuration option combinations that the maximum resource count for the API nested stack is approaching the maximum limit (1000).
+-   Uploading of asset files from the UI can cause time-outs if files are too large or networks are too slow due to the current hard limitation of 1 hour STS credentials using the s3ScopedAccess method. Using s3ScopedAccess can also cause synchronization issues due to race conditions between uploading and calling the asset upload APIs. Expect a future re-write to use solely pre-signed storage URLs for upload and a 3/4-step guided API call process for this to resolve this issue, similar to `ingestAsset` API used to test the core of this new method.
+
 ## [1.4.0](https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/vams/compare/v1.3.1...v1.4.0) (2023-07-28)
 
 ### ⚠ BREAKING CHANGES

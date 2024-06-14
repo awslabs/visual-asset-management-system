@@ -3,15 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Suspense } from "react";
-import { Route, Routes } from "react-router-dom";
+import React, { Suspense, useEffect, useState } from "react";
+import { Route, Routes, useLocation } from "react-router-dom";
+import { API } from "aws-amplify";
 import AppLayout from "@cloudscape-design/components/app-layout";
 import { Navigation } from "./layout/Navigation";
 import LandingPage from "./pages/LandingPage";
 import Spinner from "@cloudscape-design/components/spinner";
+import { useNavigate } from "react-router";
 
 const Databases = React.lazy(() => import("./pages/Databases"));
 const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
+const Assets = React.lazy(() => import("./pages/Assets")); //Deprecated
 const Comments = React.lazy(() => import("./pages/Comments/Comments"));
 const AssetUploadPage = React.lazy(() => import("./pages/AssetUpload"));
 const ViewAsset = React.lazy(() => import("./components/single/ViewAsset"));
@@ -22,107 +25,123 @@ const CreateUpdateWorkflow = React.lazy(
     () => import("./components/createupdate/CreateUpdateWorkflow")
 );
 const Constraints = React.lazy(() => import("./pages/auth/Constraints"));
+const Tags = React.lazy(() => import("./pages/Tag/Tags"));
+const Subscriptions = React.lazy(() => import("./pages/Subscription/Subscriptions"));
+const Roles = React.lazy(() => import("./pages/auth/Roles"));
+const UserRoles = React.lazy(() => import("./pages/auth/UserRoles"));
 const FinishUploadsPage = React.lazy(() => import("./pages/FinishUploads"));
 const MetadataSchema = React.lazy(() => import("./pages/MetadataSchema"));
 const ViewFile = React.lazy(() => import("./components/single/ViewFile"));
+const AssetIngestion = React.lazy(() => import("./components/single/AssetIngestion"));
 const AssetDownloadsPage = React.lazy(() => import("./pages/AssetDownload"));
 
 interface RouteOption {
     path: string;
     Page: React.FC;
     active: string;
-    roles?: string[];
 }
 
 const routeTable: RouteOption[] = [
     { path: "/", Page: LandingPage, active: "/" },
     { path: "/search", Page: SearchPage, active: "/" },
-    { path: "/search/:databaseId/assets", Page: SearchPage, active: "/", roles: ["assets"] },
-    { path: "/assets", Page: SearchPage, active: "/assets", roles: ["assets"] },
-    { path: "/databases", Page: Databases, active: "/databases", roles: ["assets"] },
+    { path: "/search/:databaseId/assets", Page: SearchPage, active: "/" },
+    { path: "/assets", Page: SearchPage, active: "#/assets/" },
+    { path: "/databases", Page: Databases, active: "#/databases/" },
     {
         path: "/databases/:databaseId/assets",
         Page: SearchPage,
-        active: "/assets",
-        roles: ["assets"],
+        active: "#/assets/",
     },
     {
         path: "/databases/:databaseId/assets/:assetId",
         Page: ViewAsset,
         active: "/assets",
-        roles: ["assets"],
     },
     {
         path: "/databases/:databaseId/assets/:assetId/download",
         Page: AssetDownloadsPage,
         active: "/assets",
-        roles: ["assets"],
     },
     {
         path: "/databases/:databaseId/assets/:assetId/uploads",
         Page: FinishUploadsPage,
-        active: "/assets",
-        roles: ["assets", "upload"],
+        active: "#/assets/",
     },
     {
         path: "/databases/:databaseId/assets/:assetId/file",
         Page: ViewFile,
-        active: "/assets",
-        roles: ["assets", "upload"],
+        active: "#/assets/",
     },
-    { path: "/assets/:assetId", Page: ViewAsset, active: "/assets", roles: ["assets"] },
+    { path: "/assets/:assetId", Page: ViewAsset, active: "#/assets/" },
     {
         path: "/upload/:databaseId",
         Page: AssetUploadPage,
-        active: "/upload",
-        roles: ["assets", "upload"],
+        active: "#/upload/",
     },
-    { path: "/comments", Page: Comments, active: "/comments" },
-    { path: "/upload", Page: AssetUploadPage, active: "/upload", roles: ["assets", "upload"] },
-    { path: "/visualizers/:pathViewType", Page: ViewAsset, active: "/assets", roles: ["assets"] },
+    { path: "/comments", Page: Comments, active: "#/comments/" },
+    { path: "/upload", Page: AssetUploadPage, active: "#/upload/" },
+    //{ path: "/visualizers/:pathViewType", Page: ViewAsset, active: "/assets"},
     {
         path: "/databases/:databaseId/pipelines",
         Page: Pipelines,
-        active: "/pipelines",
-        roles: ["pipelines"],
+        active: "#/pipelines/",
     },
-    { path: "/pipelines", Page: Pipelines, active: "/pipelines", roles: ["pipelines"] },
+    { path: "/pipelines", Page: Pipelines, active: "#/pipelines/" },
     {
         path: "/pipelines/:pipelineName",
         Page: ViewPipeline,
-        active: "/pipelines",
-        roles: ["pipelines"],
+        active: "#/pipelines/",
     },
     {
         path: "/databases/:databaseId/workflows",
         Page: Workflows,
-        active: "/workflows",
-        roles: ["workflows"],
+        active: "#/workflows/",
     },
-    { path: "/workflows", Page: Workflows, active: "/workflows", roles: ["workflows"] },
+    { path: "/workflows", Page: Workflows, active: "#/workflows/" },
     {
         path: "/databases/:databaseId/workflows/:workflowId",
         Page: CreateUpdateWorkflow,
-        active: "/workflows",
-        roles: ["workflows"],
+        active: "#/workflows/",
     },
     {
         path: "/workflows/create",
         Page: CreateUpdateWorkflow,
-        active: "/workflows",
-        roles: ["workflows"],
+        active: "#/workflows/",
     },
     {
         path: "/databases/:databaseId/workflows/create",
         Page: CreateUpdateWorkflow,
-        active: "/workflows",
-        roles: ["workflows"],
+        active: "#/workflows/",
     },
     {
         path: "/auth/constraints",
         Page: Constraints,
-        active: "/auth/constraints",
-        roles: ["super-admin"],
+        active: "#/auth/constraints/",
+    },
+    {
+        path: "/auth/tags",
+        Page: Tags,
+        active: "#/auth/tags/",
+    },
+    {
+        path: "/auth/subscriptions",
+        Page: Subscriptions,
+        active: "#/auth/subscriptions/",
+    },
+    {
+        path: "/auth/roles",
+        Page: Roles,
+        active: "#/auth/roles/",
+    },
+    {
+        path: "/assetIngestion",
+        Page: AssetIngestion,
+        active: "#/assetIngestion",
+    },
+    {
+        path: "/auth/userroles",
+        Page: UserRoles,
+        active: "#/auth/userroles/",
     },
     {
         path: "*",
@@ -132,12 +151,12 @@ const routeTable: RouteOption[] = [
     {
         path: "/metadataschema/create",
         Page: MetadataSchema,
-        active: "/metadataschema",
+        active: "#/metadataschema",
     },
     {
         path: "/metadataschema/:databaseId/create",
         Page: MetadataSchema,
-        active: "/metadataschema",
+        active: "#/metadataschema",
     },
 ];
 
@@ -165,6 +184,80 @@ function CenterSpinner() {
 }
 
 export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutesProps) => {
+    const location = useLocation();
+    const navigate = useNavigate();
+
+    const [loading, setLoading] = useState(true);
+
+    //Used to detect duplicate/stacked hash route pathing and correct
+    //Note: This will null out any state passing for the naviagation and may break a a state passing page if triggered
+    useEffect(() => {
+        console.log("Location changed: ", window.location.href);
+
+        const hashes = window.location.href.match(/#/g) || [];
+        console.log("Hash Count in URL: ", hashes.length);
+
+        if (hashes.length > 1) {
+            const { state } = location;
+            console.log("Previous State Recorded: ", state);
+
+            const segments = window.location.href.split("#/");
+
+            //console.log('Total URL Segments Found: ', segments);
+
+            const fragmentWeWant = segments.pop();
+            console.log(
+                "HashRoute Duplicate Detected, Re-routing to Last Hash:",
+                `#/${fragmentWeWant}`
+            );
+
+            const url = new URL(window.location.href);
+            url.hash = `#/${fragmentWeWant}`;
+
+            console.log("Full URL Redirect:", url.href);
+
+            window.location.href = url.toString();
+        }
+    }, [location, navigate]);
+
+    let allAllowedRoutes: string[] = [];
+    const [allowedRoutes, setAllowedRoutes] = useState<string[]>(
+        routeTable.map((route) => {
+            return route.path;
+        })
+    );
+
+    useEffect(() => {
+        let allRoutes = [];
+        for (let route of routeTable) {
+            if (route.path) {
+                allRoutes.push({
+                    method: "GET",
+                    route__path: route.path,
+                });
+            }
+        }
+
+        try {
+            API.post("api", `auth/routes`, {
+                body: {
+                    routes: allRoutes,
+                },
+            }).then((value) => {
+                for (let allowedRoute of value.allowedRoutes) {
+                    allAllowedRoutes.push(allowedRoute.route__path);
+                }
+
+                //If allowed routes doesn't contain * or / for the landing page, add that back so all users can get to the landing information page
+                if (!allAllowedRoutes.includes("/")) allAllowedRoutes.push("/");
+                if (!allAllowedRoutes.includes("*")) allAllowedRoutes.push("*");
+
+                setAllowedRoutes(allAllowedRoutes);
+                setLoading(false);
+            });
+        } catch (e) {}
+    }, []);
+
     const buildRoute = (routeOptions: RouteOption, i: number = 0) => {
         const { path, active, Page } = routeOptions;
         return (
@@ -175,9 +268,13 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                     <AppLayout
                         disableContentPaddings={navigationOpen}
                         content={
-                            <Suspense fallback={<CenterSpinner />}>
-                                <Page />
-                            </Suspense>
+                            loading ? (
+                                <CenterSpinner />
+                            ) : (
+                                <Suspense fallback={<CenterSpinner />}>
+                                    <Page />
+                                </Suspense>
+                            )
                         }
                         navigation={<Navigation activeHref={active} user={user} />}
                         navigationOpen={navigationOpen}
@@ -189,15 +286,8 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
         );
     };
 
-    const roles = JSON.parse(user.signInUserSession.idToken.payload["vams:roles"]);
-
     const filterRoute = (routeOptions: RouteOption) => {
-        if (routeOptions.roles) {
-            if (roles.includes("super-admin")) return true;
-            return routeOptions.roles.some((role) => roles.includes(role));
-        } else {
-            return true;
-        }
+        return allowedRoutes.includes(routeOptions.path);
     };
 
     return <Routes>{routeTable.filter(filterRoute).map(buildRoute)}</Routes>;

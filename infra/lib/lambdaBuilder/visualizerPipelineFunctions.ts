@@ -11,20 +11,39 @@ import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as sns from "aws-cdk-lib/aws-sns";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
+import { LayerVersion } from "aws-cdk-lib/aws-lambda";
+import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
+import * as Config from "../../config/config";
+import * as kms from "aws-cdk-lib/aws-kms";
+import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../helper/security";
 
 export function buildExecuteVisualizerPCPipelineFunction(
     scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
     assetBucket: s3.Bucket,
     assetVisualizerBucket: s3.Bucket,
-    pipelineSNSTopic: sns.Topic
+    pipelineSNSTopic: sns.Topic,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "executeVisualizerPCPipeline";
-    const fun = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.visualizerpipelines.${name}.lambda_handler`],
-        }),
-        timeout: Duration.minutes(1),
-        memorySize: 256,
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.visualizerpipelines.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(5),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
             DEST_BUCKET_NAME: assetVisualizerBucket.bucketName,
             SNS_VISUALIZER_PIPELINE_PC_TOPICARN: pipelineSNSTopic.topicArn,
@@ -34,32 +53,43 @@ export function buildExecuteVisualizerPCPipelineFunction(
     assetBucket.grantRead(fun);
     assetVisualizerBucket.grantRead(fun);
     pipelineSNSTopic.grantPublish(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
 
     return fun;
 }
 
 export function buildOpenPipelineFunction(
     scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
     assetBucket: s3.Bucket,
     assetVisualizerBucket: s3.Bucket,
     pipelineStateMachine: sfn.StateMachine,
     allowedPipelineInputExtensions: string,
-    vpc: ec2.Vpc,
-    pipelineSubnets: ec2.ISubnet[]
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "openPipeline";
     const vpcSubnets = vpc.selectSubnets({
-        subnets: pipelineSubnets,
+        subnets: subnets,
     });
 
-    const fun = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.visualizerpipelines.${name}.lambda_handler`],
-        }),
-        timeout: Duration.minutes(1),
-        memorySize: 256,
-        vpc: vpc,
-        vpcSubnets: vpcSubnets,
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.visualizerpipelines.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(5),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
             SOURCE_BUCKET_NAME: assetBucket.bucketName,
             DEST_BUCKET_NAME: assetVisualizerBucket.bucketName,
@@ -71,57 +101,86 @@ export function buildOpenPipelineFunction(
     assetBucket.grantRead(fun);
     assetVisualizerBucket.grantRead(fun);
     pipelineStateMachine.grantStartExecution(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
 
     return fun;
 }
 
 export function buildConstructPipelineFunction(
     scope: Construct,
-    vpc: ec2.Vpc,
-    pipelineSubnets: ec2.ISubnet[],
-    pipelineSecurityGroups: ec2.SecurityGroup[]
+    lambdaCommonBaseLayer: LayerVersion,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    pipelineSecurityGroups: ec2.ISecurityGroup[],
+    kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "constructPipeline";
     const vpcSubnets = vpc.selectSubnets({
-        subnets: pipelineSubnets,
+        subnets: subnets,
     });
 
-    const fun = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.visualizerpipelines.${name}.lambda_handler`],
-        }),
-        timeout: Duration.minutes(1),
-        memorySize: 128,
-        vpc: vpc,
-        securityGroups: pipelineSecurityGroups,
-        vpcSubnets: vpcSubnets,
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.visualizerpipelines.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(5),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        securityGroups:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? pipelineSecurityGroups
+                : undefined,
     });
+
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
 
     return fun;
 }
 
 export function buildPipelineEndFunction(
     scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
     assetBucket: s3.Bucket,
     assetVisualizerBucket: s3.Bucket,
-    vpc: ec2.Vpc,
-    pipelineSubnets: ec2.ISubnet[],
-    pipelineSecurityGroups: ec2.SecurityGroup[]
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    pipelineSecurityGroups: ec2.ISecurityGroup[],
+    kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "pipelineEnd";
     const vpcSubnets = vpc.selectSubnets({
-        subnets: pipelineSubnets,
+        subnets: subnets,
     });
 
-    const fun = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.visualizerpipelines.${name}.lambda_handler`],
-        }),
-        timeout: Duration.minutes(1),
-        memorySize: 256,
-        vpc: vpc,
-        vpcSubnets: vpcSubnets,
-        securityGroups: pipelineSecurityGroups,
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.visualizerpipelines.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(5),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        securityGroups:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? pipelineSecurityGroups
+                : undefined,
         environment: {
             SOURCE_BUCKET_NAME: assetBucket.bucketName,
             DEST_BUCKET_NAME: assetVisualizerBucket.bucketName,
@@ -130,6 +189,7 @@ export function buildPipelineEndFunction(
 
     assetBucket.grantRead(fun);
     assetVisualizerBucket.grantRead(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
 
     return fun;
 }

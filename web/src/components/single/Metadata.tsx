@@ -5,7 +5,15 @@
 
 import React, { useEffect, useState } from "react";
 import { API } from "aws-amplify";
-import { Button, Header, Table, Input, Box, SpaceBetween } from "@cloudscape-design/components";
+import {
+    Button,
+    Header,
+    Table,
+    Input,
+    Box,
+    SpaceBetween,
+    Alert,
+} from "@cloudscape-design/components";
 
 export class MetadataApi {
     version!: string;
@@ -95,6 +103,8 @@ const MetadataTable = ({ assetId, databaseId, store, prefix, initialState }: Met
 
     const [items, setItems] = useState<TableRow[]>([]);
     const [loading, setLoading] = useState(true);
+    const [showAlert, setShowAlert] = useState(false);
+    const [alertMessage, setAlertMessage] = useState("");
 
     useEffect(() => {
         if (!loading) {
@@ -208,6 +218,19 @@ const MetadataTable = ({ assetId, databaseId, store, prefix, initialState }: Met
                         >
                             Metadata
                         </Header>
+                        {showAlert && (
+                            <Alert
+                                statusIconAriaLabel="Error"
+                                type="error"
+                                header="Forbidden"
+                                dismissible={true}
+                                onDismiss={() => {
+                                    setShowAlert(false);
+                                }}
+                            >
+                                {alertMessage}
+                            </Alert>
+                        )}
                     </>
                 }
                 loading={loading}
@@ -225,7 +248,16 @@ const MetadataTable = ({ assetId, databaseId, store, prefix, initialState }: Met
                     }
                     setItems(next);
 
-                    await _store(databaseId, assetId, tableRowToMeta(next), prefix);
+                    try {
+                        await _store(databaseId, assetId, tableRowToMeta(next), prefix);
+                    } catch (error: any) {
+                        setShowAlert(true);
+                        setAlertMessage(error.message);
+                        setLoading(true);
+                        setTimeout(() => {
+                            setShowAlert(false);
+                        }, 10000);
+                    }
                 }}
                 items={items}
                 empty={
@@ -268,7 +300,7 @@ const MetadataTable = ({ assetId, databaseId, store, prefix, initialState }: Met
                     },
                     {
                         id: "description",
-                        header: "Description",
+                        header: "Value",
                         cell: (e) => e.description,
                         editConfig: {
                             ariaLabel: "Description",

@@ -5,69 +5,108 @@ import os
 import boto3
 import json
 from boto3.dynamodb.conditions import Key, Attr
+from boto3.dynamodb.types import TypeDeserializer
 from botocore.config import Config
 from botocore.exceptions import ClientError
-from backend.common.validators import validate
+from common.constants import STANDARD_JSON_RESPONSE
+from common.validators import validate
+from handlers.authz import CasbinEnforcer
+from handlers.auth import request_to_claims
+from customLogging.logger import safeLogger
+from common.s3 import validateS3AssetExtensionsAndContentType
 
+claims_and_roles = {}
+logger = safeLogger(service_name="DownlaodAsset")
 dynamodb = boto3.resource('dynamodb')
-response = {
-    'statusCode': 200,
-    'body': '',
-    'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Credentials': True,
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type',
-            'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
-    }
-}
+
+main_rest_response = STANDARD_JSON_RESPONSE
 asset_Database = None
+bucket_name = None
 unitTest = {
     "body": {
         "databaseId": "Unit_Test"
     }
 }
-unitTest['body']=json.dumps(unitTest['body'])
+unitTest['body'] = json.dumps(unitTest['body'])
 
 try:
     asset_Database = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    bucket_name = os.environ["S3_ASSET_STORAGE_BUCKET"]
     region = os.environ['AWS_REGION']
+    #s3Endpoint = os.environ['S3_ENDPOINT']
 except:
-    print("Failed Loading Environment Variables")
-    response['body']['message'] = "Failed Loading Environment Variables"
+    logger.exception("Failed Loading Environment Variables")
+    main_rest_response['body'] = json.dumps(
+        {"message": "Failed Loading Environment Variables"})
 
-s3_config = Config(signature_version='s3v4')
-s3_client = boto3.client('s3', region_name=region, endpoint_url=f'https://s3.{region}.amazonaws.com', config=s3_config)
+#s3_config = Config(signature_version='s3v4')
+#s3_client = boto3.client('s3', region_name=region, endpoint_url=s3Endpoint, config=s3_config)
+s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'})
+s3_client = boto3.client('s3', region_name=region, config=s3_config)
+
 
 def get_Assets(databaseId, assetId):
+    #deserializer = TypeDeserializer()
     table = dynamodb.Table(asset_Database)
-    # indexName = 'databaseId-assetId-index'
-    response = table.query(
+    db_response = table.query(
         KeyConditionExpression=Key('databaseId').eq(
             databaseId) & Key('assetId').eq(assetId),
         ScanIndexForward=False
     )
-    return response['Items']
+    items = []
+    for item in db_response['Items']:
+        #USE COMMENTED OUT CODE WHEN USING: dynamodb client w/ paginator, not resource w/ table
+        # deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
+
+        # # Add Casbin Enforcer to check if the current user has permissions to GET the asset:
+        # deserialized_document.update({
+        #     "object__type": "asset"
+        # })
+        # for user_name in claims_and_roles["tokens"]:
+        #     casbin_enforcer = CasbinEnforcer(user_name)
+        #     if casbin_enforcer.enforce(f"user::{user_name}", deserialized_document, "GET"):
+        #         items.append(deserialized_document)
+        #         break
+
+        # Add Casbin Enforcer to check if the current user has permissions to GET the asset:
+        item.update({
+            "object__type": "asset"
+        })
+        for user_name in claims_and_roles["tokens"]:
+            casbin_enforcer = CasbinEnforcer(user_name)
+            if casbin_enforcer.enforce(f"user::{user_name}", item, "GET"):
+                items.append(item)
+                break
+
+    return items
 
 
-def get_Asset(databaseId, assetId, version):
+def get_Asset(databaseId, assetId, key, version):
     items = get_Assets(databaseId, assetId)
     if not items and len(items) == 0:
-        return "Error: Asset not found"
+        return "Error: Asset not found or not authorized to view the assets"
     item = items[0]
-    bucket = item['assetLocation']['Bucket']
-    key = item['assetLocation']['Key']
+
+    #Override key with data from tables instead if not provided (base asset file)
+    if(key is None or key is ""):
+        key = item['assetLocation']['Key']
+
     isDistributable = item['isDistributable']
     if isinstance(isDistributable, bool):
         if not isDistributable:
             return "Error: Asset not distributable"
     else:
         # invalid type of isDistributable is treated as asset not distributable
-        print("isDistributable invalid type: ", isDistributable, type(isDistributable))
+        logger.error("isDistributable invalid type")
         return "Error: Asset not distributable"
-    if version != "Latest" or version != "" or version != item['currentVersion']['Version']:
+    
+    #Validate for malicious content type
+    if not validateS3AssetExtensionsAndContentType(bucket_name, key):
+        return "Error: Unallowed file extention or content type in asset file. Unable to download file."
+
+    if version is None or version == "" or (version != "" and (version == "Latest" or version == item['currentVersion']['Version'])):
         return s3_client.generate_presigned_url('get_object', Params={
-            'Bucket': bucket,
+            'Bucket': bucket_name,
             'Key': key
         }, ExpiresIn=3600)
     else:
@@ -75,79 +114,126 @@ def get_Asset(databaseId, assetId, version):
         for i in versions:
             if i['Version'] == version:
                 return s3_client.generate_presigned_url('get_object', Params={
-                    'Bucket': bucket,
+                    'Bucket': bucket_name,
                     'Key': key,
                     'VersionId': i['S3Version']
                 }, ExpiresIn=3600)
-        return "Error: Asset not found"
+        return "Error: Asset not found or not authorized to view the assets"
 
 
 def lambda_handler(event, context):
-    print(event)
-    response = {
-        'statusCode': 200,
-        'body': '',
-        'headers': {
-            'Content-Type': 'application/json',
-                'Access-Control-Allow-Credentials': True,
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type',
-                'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
-        }
-    }
-    event['body'] = json.loads(event['body'])
-    if 'databaseId' not in event['body'] or 'assetId' not in event['body']:
-        message = "DatabaseId or assetId not in API Call"
+    global claims_and_roles
+    response = STANDARD_JSON_RESPONSE
+    claims_and_roles = request_to_claims(event)
+    logger.info(event)
+
+    if isinstance(event['body'], str):
+        event['body'] = json.loads(event['body'])
+
+    pathParameters = event.get('pathParameters', {})
+    queryParameters = event.get('queryStringParameters', {})
+
+    if 'assetId' not in pathParameters or 'databaseId' not in pathParameters:
+        message = "DatabaseId or assetId not in API Call Path"
         response['body'] = json.dumps({"message": message})
-        print(response)
+        response['statusCode'] = 400
+        logger.error(response)
         return response
     try:
-        print("Validating parameters")
+        logger.info("Validating parameters")
         (valid, message) = validate({
             'databaseId': {
-                'value': event['body']['databaseId'], 
+                'value': pathParameters['databaseId'],
                 'validator': 'ID'
             },
             'assetId': {
-                'value': event['body']['assetId'], 
+                'value': pathParameters['assetId'],
                 'validator': 'ID'
             },
         })
         if not valid:
-            print(message)
+            logger.exception(message)
             response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
             return response
+        
+        #optional params
+        if 'key' in event['body'] and event['body']['key'] is not None:
+            (valid, message) = validate({
+                'assetPathKey': {
+                    'value': event['body']['key'],
+                    'validator': 'ASSET_PATH'
+                }
+            })
+            if not valid:
+                logger.error(message)
+                response['body'] = json.dumps({"message": message})
+                response['statusCode'] = 400
+                return response
 
-        print("Listing Assets")
-        if 'version' in event['body']:
-            url = get_Asset(event['body']['databaseId'], event['body']['assetId'], event['body']['version'])
-            if url == "Error: Asset not found":
+            #Split object key by path and return the first value (the asset ID)
+            asset_idFromKeyPath = event['body']['key'].split("/")[0]
+
+            #If we are downloading a preview file, go down the path chain by 1
+            if(asset_idFromKeyPath == "previews"):
+                asset_idFromKeyPath = event['body']['key'].split("/")[1]
+
+            #Check if the asset ID is the same as the asset ID from the path
+            if asset_idFromKeyPath != pathParameters['assetId']:
+                response['body'] = json.dumps({"message": "Asset ID from path does not match the asset ID"})
+                response['statusCode'] = 400
+                return response
+
+        http_method = event['requestContext']['http']['method']
+        method_allowed_on_api = False
+        request_object = {
+            "object__type": "api",
+            "route__path": event['requestContext']['http']['path']
+        }
+        for user_name in claims_and_roles["tokens"]:
+            casbin_enforcer = CasbinEnforcer(user_name)
+            if casbin_enforcer.enforce(f"user::{user_name}", request_object, http_method):
+                method_allowed_on_api = True
+                break
+
+        if method_allowed_on_api:
+            logger.info("Getting Assets")
+
+            key = ""
+            if 'key' in event['body'] and event['body']['key'] is not None:
+                key = event['body']['key']
+                logger.info("Key Provided: " + key)
+
+            version = ""
+            if 'version' in event['body'] and event['body']['version'] is not None:
+                version = event['body']['version']
+                logger.info("Version Provided: " + version)
+
+            url = get_Asset(pathParameters['databaseId'], pathParameters['assetId'], key, version)
+            response['statusCode'] = 200
+
+            if url == "Error: Asset not found or not authorized to view the assets":
                 response['statusCode'] = 404
             elif url == "Error: Asset not distributable":
                 response['statusCode'] = 401
+            elif url == "Error: Unallowed file extention or content type in asset file. Unable to download file.":
+                response['statusCode'] = 401
             response['body'] = json.dumps({"message": url})
+
+            logger.info(response)
+            return response
         else:
-            url = get_Asset(event['body']['databaseId'], event['body']['assetId'], "")
-            if url == "Error: Asset not found":
-                response['statusCode'] = 404
-            elif url == "Error: Asset not distributable":
-                response['statusCode'] = 401
-            response['body'] = json.dumps({"message": url})
-
-        print(response)
-        return response
+            response['statusCode'] = 403
+            response['body'] = json.dumps({"message": "Not Authorized"})
+            return response
     except (ClientError, Exception) as e:
         response['statusCode'] = 500
-        print("Error!", e.__class__, "occurred.")
-        try:
-            print(e)
-            response['body'] = json.dumps({"message": str(e)})
-        except:
-            print("Can't Read Error")
-            response['body'] = json.dumps({"message": "An unexpected error occurred while executing the request"})
+        logger.exception(e)
+        response['body'] = json.dumps({"message": "Internal Server Error"})
+
         return response
+
 
 if __name__ == "__main__":
     test_response = lambda_handler(None, None)
-    print(test_response)
+    logger.info(test_response)

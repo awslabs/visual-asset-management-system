@@ -1,11 +1,11 @@
 #  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-from fileinput import filename
 import json
 import os
-import uuid
+from customLogging.logger import safeLogger
 
+logger = safeLogger(service="ConstructPipelineVisualizer")
 
 def lambda_handler(event, context):
     """
@@ -13,8 +13,8 @@ def lambda_handler(event, context):
     Builds pipeline input definition to run the Batch application
     """
 
-    print(f"Event: {event}")
-    print(f"Context: {context}")
+    logger.info(f"Event: {event}")
+    logger.info(f"Context: {context}")
 
     extension = event.get("sourceFileExtension")
 
@@ -28,11 +28,11 @@ def lambda_handler(event, context):
             "error": "Unsupported file type for point cloud visualization pipeline conversion. Currently only supports E57, LAZ, and LAS."
         }
 
-    print(f"Definition: {definition}")
+    logger.info(f"Definition: {definition}")
 
     return {
         "jobName": event.get("jobName"),
-        #"externalSfnTaskToken": event.get("externalSfnTaskToken"),
+        # "externalSfnTaskToken": event.get("externalSfnTaskToken"),
         "pipeline": {
             "type": definition["stages"][0]["type"],
             "definition": [json.dumps(definition)]

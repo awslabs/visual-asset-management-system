@@ -5,7 +5,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import * as OV from "online-3d-viewer";
-import { getPresignedKey } from "../../common/auth/s3";
+import { downloadAsset } from "../../services/APIService";
 
 export default function ModelViewer(props) {
     const engineElement = useRef(null);
@@ -14,20 +14,40 @@ export default function ModelViewer(props) {
 
     useEffect(() => {
         const loadAsset = async () => {
-            console.log(assetKey);
-            await getPresignedKey(assetId, databaseId, assetKey).then((remoteFileUrl) => {
-                engineElement.current.setAttribute("model", remoteFileUrl);
-                setTimeout(() => {
-                    let parentDiv = engineElement.current;
-                    let viewer = new OV.EmbeddedViewer(parentDiv, {
-                        backgroundColor: new OV.RGBAColor(182, 182, 182, 182),
-                        defaultColor: new OV.RGBColor(200, 200, 200),
-                        edgeSettings: new OV.EdgeSettings(true, new OV.RGBColor(0, 0, 255), 1),
-                    });
-                    viewer.LoadModelFromUrlList([remoteFileUrl]);
-                }, 100);
-            });
+            try {
+                console.log(assetKey);
+                const response = await downloadAsset({
+                    assetId: assetId,
+                    databaseId: databaseId,
+                    key: assetKey,
+                    version: "",
+                });
+
+                if (response !== false && Array.isArray(response)) {
+                    if (response[0] === false) {
+                        // TODO: error handling (response[1] has error message)
+                    } else {
+                        engineElement.current.setAttribute("model", response[1]);
+                        setTimeout(() => {
+                            let parentDiv = engineElement.current;
+                            let viewer = new OV.EmbeddedViewer(parentDiv, {
+                                backgroundColor: new OV.RGBAColor(182, 182, 182, 182),
+                                defaultColor: new OV.RGBColor(200, 200, 200),
+                                edgeSettings: new OV.EdgeSettings(
+                                    true,
+                                    new OV.RGBColor(0, 0, 255),
+                                    1
+                                ),
+                            });
+                            viewer.LoadModelFromUrlList([response[1]]);
+                        }, 100);
+                    }
+                }
+            } catch (error) {
+                console.error(error);
+            }
         };
+
         if (!loaded && assetKey !== "") {
             loadAsset();
             setLoaded(true);

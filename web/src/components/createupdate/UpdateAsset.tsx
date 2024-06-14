@@ -1,4 +1,10 @@
-import { FileUpload, Modal, Select, SpaceBetween } from "@cloudscape-design/components";
+import {
+    FileUpload,
+    Modal,
+    Select,
+    SpaceBetween,
+    Multiselect,
+} from "@cloudscape-design/components";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import FormField from "@cloudscape-design/components/form-field";
@@ -10,6 +16,7 @@ import { Storage, API } from "aws-amplify";
 import { AssetDetail } from "../../pages/AssetUpload";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
 import { UploadAssetWorkflowApi } from "../../pages/AssetUpload/onSubmit";
+import { fetchTags } from "../../services/APIService";
 
 interface UpdateAssetProps {
     asset: any;
@@ -23,6 +30,9 @@ const isDistributableOptions: OptionDefinition[] = [
     { label: "No", value: "false" },
 ];
 
+var tags: any[] = [];
+var assetTags: any[] = [];
+
 const update = async (
     updatedAsset: any,
     files: File[],
@@ -31,7 +41,6 @@ const update = async (
     setComplete: (complete: boolean) => void
 ) => {
     let uploadBody = Object.assign({}, updatedAsset);
-    uploadBody.bucket = updatedAsset.assetLocation.Bucket;
     uploadBody.key = updatedAsset.assetLocation.Key;
     uploadBody.Comment = updatedAsset.currentVersion.Comment;
 
@@ -46,7 +55,6 @@ const update = async (
             files[0].name.split(".").pop();
 
         uploadBody.previewLocation = {
-            Bucket: updatedAsset.assetLocation.Bucket,
             Key: newKey,
         };
         await Storage.put(newKey, files[0], {
@@ -93,16 +101,41 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     const [progress, setProgress] = useState(0);
     const [error, setError] = useState({ isError: false, message: "" });
     const [complete, setComplete] = useState(false);
+
     useEffect(() => {
-        return () => {
-            setAssetDetail(asset);
-        };
+        setAssetDetail(asset);
+        fetchTags().then((res) => {
+            tags = [];
+            if (res && Array.isArray(res)) {
+                Object.values(res).map((x: any) => {
+                    tags.push({ label: `${x.tagName} (${x.tagTypeName})`, value: x.tagName });
+                });
+            }
+            return tags;
+        });
+
+        const tagTypesString = localStorage.getItem("tagTypes");
+        const tagTypes = tagTypesString ? JSON.parse(tagTypesString) : [];
+        const initTags = asset.tags
+            ? asset.tags.map((tagName: string) => {
+                  const tagType = tagTypes.find((type: any) => type.tags.includes(tagName));
+                  const label = tagType ? `${tagName} (${tagType.tagTypeName})` : tagName;
+
+                  return {
+                      label: label,
+                      value: tagName,
+                  };
+              })
+            : [];
+
+        setSelectedTags(initTags);
     }, [asset]);
 
     const [value, setValue] = useState<File[]>([]);
     if (complete) {
         props.onComplete();
     }
+    const [selectedTags, setSelectedTags] = useState<OptionDefinition[]>([]);
     return (
         <Modal
             onDismiss={() => props.onClose()}
@@ -112,14 +145,19 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
             footer={
                 <Box float="right">
                     <SpaceBetween direction="horizontal" size="xs">
-                        <Button variant="link" onClick={() => props.onClose()}>
+                        <Button
+                            variant="link"
+                            onClick={() => {
+                                props.onClose();
+                            }}
+                        >
                             Cancel
                         </Button>
                         <Button
                             variant="primary"
-                            onClick={() =>
-                                update(assetDetail, value, setProgress, setError, setComplete)
-                            }
+                            onClick={() => {
+                                update(assetDetail, value, setProgress, setError, setComplete);
+                            }}
                         >
                             Update Asset
                         </Button>
@@ -174,6 +212,24 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                         filteringType="auto"
                         selectedAriaLabel="Selected"
                         data-testid="isDistributable-select"
+                    />
+                </FormField>
+                <FormField label="Tags">
+                    <Multiselect
+                        selectedOptions={selectedTags}
+                        placeholder="Tags"
+                        options={tags}
+                        onChange={({ detail }) => {
+                            setSelectedTags(detail.selectedOptions as OptionDefinition[]);
+                            assetTags = [];
+                            detail.selectedOptions.forEach((x: any) => {
+                                assetTags.push(x.value);
+                            });
+                            setAssetDetail((assetDetail: any) => ({
+                                ...assetDetail,
+                                tags: assetTags,
+                            }));
+                        }}
                     />
                 </FormField>
                 <FormField label="Preview">

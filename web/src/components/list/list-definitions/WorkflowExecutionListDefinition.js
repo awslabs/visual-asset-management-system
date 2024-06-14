@@ -45,7 +45,7 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
                     return <>outputs:</>;
                 }
                 return (
-                    <Link href={`/databases/${item?.databaseId}/workflows/${item?.name}`}>
+                    <Link href={`#/databases/${item?.databaseId}/workflows/${item?.name}`}>
                         {props.children}
                     </Link>
                 );
@@ -58,7 +58,7 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
             cellWrapper: (props) => {
                 const { item } = props;
                 return (
-                    <Link href={`/databases/${item.databaseId}/workflows/`}>{props.children}</Link>
+                    <Link href={`#/databases/${item.databaseId}/workflows/`}>{props.children}</Link>
                 );
             },
             sortingField: "databaseId",
@@ -92,7 +92,7 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
                                     return (
                                         <li key={i}>
                                             <Link
-                                                href={`/databases/${listItem?.databaseId}/assets/${listItem?.assetId}`}
+                                                href={`#/databases/${listItem?.databaseId}/assets/${listItem?.assetId}`}
                                             >
                                                 {listItem?.assetName}
                                             </Link>
@@ -124,11 +124,13 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
             id: "startDate",
             header: "Started",
             cellWrapper: (props) => <>{props?.item?.startDate}</>,
+            sortingField: "startDate",
         }),
         new ColumnDefinition({
             id: "stopDate",
             header: "Stopped",
             cellWrapper: (props) => <>{props?.item?.stopDate}</>,
+            sortingField: "stopDate",
         }),
         new ColumnDefinition({
             id: "executionStatus",

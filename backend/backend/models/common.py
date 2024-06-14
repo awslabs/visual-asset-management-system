@@ -15,7 +15,6 @@ class APIGatewayProxyResponseV2(TypedDict):
 def commonHeaders() -> Dict[str, str]:
     return {
         'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
     }
 
 
@@ -28,7 +27,7 @@ def success(status_code: int = 200, body: Any = {'message': 'Success'}) -> APIGa
     )
 
 
-def validation_error(status_code: int = 422, body: dict = {'message': 'Validation Error'}) -> APIGatewayProxyResponseV2:
+def validation_error(status_code: int = 400, body: dict = {'message': 'Validation Error'}) -> APIGatewayProxyResponseV2:
     return APIGatewayProxyResponseV2(
         isBase64Encoded=False,
         statusCode=status_code,

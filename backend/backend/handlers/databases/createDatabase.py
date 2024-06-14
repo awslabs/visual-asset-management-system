@@ -3,31 +3,23 @@
 
 import os
 import boto3
-import sys
 import json
-from boto3.dynamodb.conditions import Key, Attr, AttributeNotExists
 from botocore.exceptions import ClientError
-
 import datetime
-from decimal import Decimal
-from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
-from backend.common.validators import validate
-from backend.common.dynamodb import to_update_expr
+from common.constants import STANDARD_JSON_RESPONSE
+from common.validators import validate
+from common.dynamodb import to_update_expr
+from handlers.auth import request_to_claims
+from handlers.authz import CasbinEnforcer
+from customLogging.logger import safeLogger
+
+claims_and_roles = {}
+logger = safeLogger(service="CreateDatabase")
 
 dynamodb = boto3.resource('dynamodb')
 s3c = boto3.client('s3')
 
-response = {
-    'statusCode': 200,
-    'body': '',
-    'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Credentials': True,
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type',
-            'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
-    }
-}
+main_rest_response = STANDARD_JSON_RESPONSE
 
 unitTest = {
     "body": {
@@ -41,22 +33,21 @@ db_Database = None
 try:
     db_Database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
 except:
-    print("Failed Loading Environment Variables")
-    response['statusCode'] = 500
-    response['body'] = json.dumps({
+    logger.exception("Failed loading environment variables")
+    main_rest_response['statusCode'] = 500
+    main_rest_response['body'] = json.dumps({
         "message": "Failed Loading Environment Variables"
     })
 
 
 def upload_Asset(body):
-    print("Setting Table")
+    logger.info("Setting Table")
     table = dynamodb.Table(db_Database)
-    print("Setting Time Stamp")
+    logger.info("Setting Time Stamp")
     dtNow = datetime.datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
 
     item = {
         'description': body['description'],
-        'acl': body['acl'],
         # 'dateCreated': json.dumps(dtNow),
         # 'assetCount': json.dumps(0)
     }
@@ -85,7 +76,7 @@ def upload_Asset(body):
             ConditionExpression="attribute_not_exists(assetCount)"
         )
     except ClientError as ex:
-        # this just means the record already exists and we are updating an existing record
+        # this just means the record already exists, and we are updating an existing record
         if ex.response['Error']['Code'] == 'ConditionalCheckFailedException':
             pass
         else:
@@ -95,29 +86,23 @@ def upload_Asset(body):
 
 
 def lambda_handler(event, context):
-    print(event)
-    response = {
-        'statusCode': 200,
-        'body': '',
-        'headers': {
-            'Content-Type': 'application/json',
-                'Access-Control-Allow-Credentials': True,
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type',
-                'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
-        }
-    }
+
+    global claims_and_roles
+    response = STANDARD_JSON_RESPONSE
+    claims_and_roles = request_to_claims(event)
+
+    logger.info(event)
     if isinstance(event['body'], str):
         event['body'] = json.loads(event['body'])
-    # event['body']=json.loads(event['body'])
     try:
         if 'databaseId' not in event['body']:
             message = "No databaseId in API Call"
+            response['statusCode'] = 400
             response['body'] = json.dumps({"message": message})
-            print(response['body'])
+            logger.info(response['body'])
             return response
 
-        print("Validating parameters")
+        logger.info("Validating parameters")
         (valid, message) = validate({
             'databaseId': {
                 'value': event['body']['databaseId'],
@@ -130,28 +115,49 @@ def lambda_handler(event, context):
         })
 
         if not valid:
-            print(message)
+            logger.error(message)
             response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
             return response
 
-        print("Trying to get Data")
-        response['body'] = upload_Asset(event['body'])
-        print(response)
+        logger.info("Trying to get Data")
+
+        allowed = False
+        # Add Casbin Enforcer to check if the current user has permissions to PUT the database:
+        database = {
+            "object__type": "database",
+            "databaseId": event['body']['databaseId']
+        }
+        http_method = event['requestContext']['http']['method']
+        request_object = {
+            "object__type": "api",
+            "route__path": event['requestContext']['http']['path']
+        }
+        for user_name in claims_and_roles["tokens"]:
+            # There should be a constraint which allows PUT on this (or all)
+            # databases (can use contains .* in the constraint to allow for all)
+            # AND also allow PUT method on this API
+            casbin_enforcer = CasbinEnforcer(user_name)
+            if (casbin_enforcer.enforce(f"user::{user_name}", database, "PUT")
+                    and casbin_enforcer.enforce(f"user::{user_name}", request_object, http_method)):
+                allowed = True
+                break
+
+        if allowed:
+            response['body'] = upload_Asset(event['body'])
+        else:
+            response['body'] = json.dumps({"message": "Not allowed to create/update database"})
+            response['statusCode'] = 403
+        logger.info(response)
         return response
     except Exception as e:
-        print(str(e))
+        logger.exception(e)
         if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
-            response['statusCode'] = 500
-            response['body'] = json.dumps({"message": "Database "+str(event['body']['databaseId']+" already exists.")})
-            return response
+            response['statusCode'] = 400
+            response['body'] = json.dumps(
+                {"message": "Database " + str(event['body']['databaseId'] + " already exists.")})
         else:
             response['statusCode'] = 500
-            print("Error!", e.__class__, "occurred.")
-            try:
-                print(e)
-                response['body'] = json.dumps({"message": str(e)})
-            except:
-                print("Can't Read Error")
-                response['body'] = json.dumps({"message": "An unexpected error occurred while executing the request"})
-            return response
+            logger.exception(e)
+            response['body'] = json.dumps({"message": "Internal Server Error"})
+        return response

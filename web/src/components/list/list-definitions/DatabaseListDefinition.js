@@ -10,6 +10,7 @@ import ColumnDefinition from "./types/ColumnDefinition";
 import Synonyms from "../../../synonyms";
 
 export const DatabaseListDefinition = new ListDefinition({
+    singularNameTitleCase: Synonyms.Database,
     pluralName: Synonyms.databases,
     pluralNameTitleCase: Synonyms.Databases,
     visibleColumns: ["databaseId", "description", "assetCount"],
@@ -25,7 +26,9 @@ export const DatabaseListDefinition = new ListDefinition({
             header: "Name",
             cellWrapper: (props) => {
                 const { item } = props;
-                return <Link href={`/databases/${item.databaseId}/assets/`}>{props.children}</Link>;
+                return (
+                    <Link href={`#/databases/${item.databaseId}/assets/`}>{props.children}</Link>
+                );
             },
             sortingField: "databaseId",
         }),

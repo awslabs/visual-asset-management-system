@@ -1,0 +1,70 @@
+{
+    "name": "vams",
+    "env": {
+        "account": null,
+        "region": null,
+        "loadContextIgnoreVPCStacks": false
+    },
+    "app": {
+        "baseStackName": "prod",
+        "bucketMigrationStaging": {
+            "assetBucketName": null
+        },
+        "adminEmailAddress": "adminEmail@example.com",
+        "useFips": false,
+        "useWaf": true,
+        "useKmsCmkEncryption": {
+            "enabled": false,
+            "optionalExternalCmkArn": null
+        },
+        "govCloud": {
+            "enabled": false
+        },
+        "useGlobalVpc": {
+            "enabled": false,
+            "useForAllLambdas": false,
+            "addVpcEndpoints": true,
+            "optionalExternalVpcId": null,
+            "optionalExternalPrivateSubnetIds": null,
+            "optionalExternalPublicSubnetIds": null,
+            "vpcCidrRange": "10.1.0.0/16"
+        },
+        "openSearch": {
+            "useServerless": {
+                "enabled": true
+            },
+            "useProvisioned": {
+                "enabled": false,
+                "dataNodeInstanceType": "r6g.large.search",
+                "masterNodeInstanceType": "r6g.large.search",
+                "ebsInstanceNodeSizeGb": 120
+            }
+        },
+        "useLocationService": {
+            "enabled": true
+        },
+        "useAlb": {
+            "enabled": false,
+            "usePublicSubnet": false,
+            "domainHost": "vams1.example.com",
+            "certificateArn": "arn:aws-us-gov:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>",
+            "optionalHostedZoneId": null
+        },
+        "pipelines": {
+            "usePointCloudVisualization": {
+                "enabled": false
+            }
+        },
+        "authProvider": {
+            "useCognito": {
+                "enabled": true,
+                "useSaml": false,
+                "useUserPasswordAuthFlow": false
+            },
+            "useExternalOathIdp": {
+                "enabled": false,
+                "idpAuthProviderUrl": null
+            }
+        }
+    }
+}

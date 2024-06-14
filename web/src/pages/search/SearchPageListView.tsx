@@ -27,23 +27,39 @@ import Synonyms from "../../synonyms";
 import { EmptyState } from "../../common/common-components";
 import { useNavigate } from "react-router-dom";
 import DatabaseSelector from "../../components/selectors/DatabaseSelector";
+import { useEffect, useState } from "react";
+import { API } from "aws-amplify";
+import { fetchtagTypes } from "../../services/APIService";
+var tagTypes: any;
 
 function columnRender(e: any, name: string, value: any) {
     if (name === "str_databaseid") {
         return (
             <Box>
-                <Link href={`/databases/${e["str_databaseid"]}/assets/`}>{value}</Link>
+                <Link href={`#/databases/${e["str_databaseid"]}/assets/`}>{value}</Link>
             </Box>
         );
     }
     if (name === "str_assetname") {
         return (
             <Box>
-                <Link href={`/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`}>
+                <Link href={`#/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`}>
                     {value}
                 </Link>
             </Box>
         );
+    } else if (name === "list_tags" && Array.isArray(value)) {
+        const tagsWithType = value.map((tag) => {
+            if (tagTypes)
+                for (const tagType of tagTypes) {
+                    if (tagType.tags.includes(tag)) {
+                        return `${tag} (${tagType.tagTypeName})`;
+                    }
+                }
+            return tag;
+        });
+
+        return <Box>{tagsWithType.join(", ")}</Box>;
     } else if (
         name.indexOf("str") === 0 ||
         name.indexOf("date_") === 0 ||
@@ -56,6 +72,12 @@ function columnRender(e: any, name: string, value: any) {
 function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
     // identify all the names of columns from state.result.hits.hits
     // create a column definition for each column
+
+    useEffect(() => {
+        fetchtagTypes().then((res) => {
+            tagTypes = res;
+        });
+    }, []);
     const navigate = useNavigate();
 
     if (!state?.initialResult) {
@@ -87,6 +109,15 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
             return {
                 id: name,
                 header: "Type",
+                cell: (e: any) => columnRender(e, name, e[name]),
+                sortingField: name,
+                isRowHeader: false,
+            };
+        }
+        if (name === "list_tags") {
+            return {
+                id: name,
+                header: "Tags",
                 cell: (e: any) => columnRender(e, name, e[name]),
                 sortingField: name,
                 isRowHeader: false,
@@ -419,13 +450,13 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                                 variant="link"
                                 onClick={() => dispatch({ type: "clicked-cancel-delete" })}
                             >
-                                Cancel
+                                No
                             </Button>
                             <Button
                                 variant="primary"
                                 onClick={() => deleteSelected({ state, dispatch })}
                             >
-                                Delete
+                                Yes
                             </Button>
                         </SpaceBetween>
                     </Box>
@@ -433,7 +464,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
             >
                 <SpaceBetween direction="vertical" size="xs">
                     <Box variant="p">
-                        Delete{" "}
+                        Do you want to delete{" "}
                         {state?.selectedItems?.length > 1 ? (
                             <b>
                                 {state?.selectedItems?.length} {Synonyms.Assets}
@@ -443,10 +474,6 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                         )}
                         ?
                     </Box>
-                    <Alert statusIconAriaLabel="Info">
-                        Proceeding with this action will delete the selected {Synonyms.Assets} and
-                        archive associated files.
-                    </Alert>
                 </SpaceBetween>
             </Modal>
         </>

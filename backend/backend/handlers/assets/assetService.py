@@ -4,30 +4,27 @@
 import os
 import boto3
 import json
-
 import botocore.exceptions
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
-from backend.common.validators import validate
-from backend.handlers.assets.assetCount import update_asset_count
-from backend.handlers.auth import create_ddb_filter, get_database_set, request_to_claims
+from common.constants import STANDARD_JSON_RESPONSE
+from common.validators import validate
+from handlers.assets.assetCount import update_asset_count
+from handlers.auth import request_to_claims
+from handlers.authz import CasbinEnforcer
+from customLogging.logger import safeLogger
+from common.dynamodb import validate_pagination_info
 
+claims_and_roles = {}
+
+logger = safeLogger(service_name="AssetService")
+main_rest_response = STANDARD_JSON_RESPONSE
 dynamodb = boto3.resource('dynamodb')
 dynamodb_client = boto3.client('dynamodb')
-response = {
-    'statusCode': 200,
-    'body': '',
-    'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Credentials': True,
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type',
-            'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
-    }
-}
 asset_database = None
 db_database = None
 s3_assetVisualizer_bucket = None
+bucket_name = None
 unitTest = {
     "body": {
         "databaseId": "Unit_Test"
@@ -38,56 +35,21 @@ unitTest['body'] = json.dumps(unitTest['body'])
 try:
     asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
     db_database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
+    bucket_name = os.environ["S3_ASSET_STORAGE_BUCKET"]
     s3_assetVisualizer_bucket = os.environ["S3_ASSET_VISUALIZER_BUCKET"]
+
 except:
-    print("Failed Loading Environment Variables")
-    response['body']['message'] = "Failed Loading Environment Variables"
+    logger.exception("Failed Loading Environment Variables")
+    main_rest_response['body'] = json.dumps(
+        {"message": "Failed Loading Environment Variables"})
 
 
-def get_all_assets_with_database_filter(queryParams, databaseList):
-    deserializer = TypeDeserializer()
-
-    paginator = dynamodb_client.get_paginator('scan')
-
-    if len(databaseList) < 1:
-        return {
-            'Items': [],
-        }
-
-    kwargs = {
-        "TableName": asset_database,
-        "PaginationConfig": {
-            'MaxItems': int(queryParams['maxItems']),
-            'PageSize': int(queryParams['pageSize']),
-            'StartingToken': queryParams['startingToken']
-        }
-    }
-    kwargs.update(create_ddb_filter(databaseList))
-
-    print(kwargs)
-    pageIterator = paginator.paginate(
-        **kwargs,
-    ).build_full_result()
-
-    print("Fetching results")
-    result = {}
-    items = []
-    for item in pageIterator['Items']:
-        deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
-        items.append(deserialized_document)
-    result['Items'] = items
-
-    if 'NextToken' in pageIterator:
-        result['NextToken'] = pageIterator['NextToken']
-    return result
-
-
-def get_all_assets(queryParams, showDeleted=False):
+def get_all_assets(event, query_params, show_deleted=False):
     deserializer = TypeDeserializer()
 
     paginator = dynamodb_client.get_paginator('scan')
     operator = "NOT_CONTAINS"
-    if showDeleted:
+    if show_deleted:
         operator = "CONTAINS"
     filter = {
         "databaseId": {
@@ -96,49 +58,99 @@ def get_all_assets(queryParams, showDeleted=False):
         }
     }
 
-    pageIterator = paginator.paginate(
+    page_iterator = paginator.paginate(
         TableName=asset_database,
         ScanFilter=filter,
         PaginationConfig={
-            'MaxItems': int(queryParams['maxItems']),
-            'PageSize': int(queryParams['pageSize']),
-            'StartingToken': queryParams['startingToken']
+            'MaxItems': int(query_params['maxItems']),
+            'PageSize': int(query_params['pageSize']),
+            'StartingToken': query_params['startingToken']
         }
     ).build_full_result()
 
-    print("Fetching results")
+    logger.info("Fetching results")
     result = {}
     items = []
-    for item in pageIterator['Items']:
+    for item in page_iterator['Items']:
         deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
-        items.append(deserialized_document)
+
+        # Add Casbin Enforcer to check if the current user has permissions to GET the asset:
+        deserialized_document.update({
+            "object__type": "asset"
+        })
+        for user_name in claims_and_roles["tokens"]:
+            casbin_enforcer = CasbinEnforcer(user_name)
+            if casbin_enforcer.enforce(f"user::{user_name}", deserialized_document, "GET"):
+                items.append(deserialized_document)
+                break
+
     result['Items'] = items
 
-    if 'NextToken' in pageIterator:
-        result['NextToken'] = pageIterator['NextToken']
+    if 'NextToken' in page_iterator:
+        result['NextToken'] = page_iterator['NextToken']
     return result
 
 
-def get_assets(databaseId, showDeleted=False):
-    table = dynamodb.Table(asset_database)
-    # indexName = 'databaseId-assetId-index'
+def get_assets(databaseId, query_params, showDeleted=False):
+    paginator = dynamodb.meta.client.get_paginator('query')
 
     if showDeleted:
         databaseId = databaseId + "#deleted"
-    response = table.query(
+
+    page_iterator = paginator.paginate(
+        TableName=asset_database,
         KeyConditionExpression=Key('databaseId').eq(databaseId),
         ScanIndexForward=False,
-        Limit=1000
-    )
-    return response['Items']
+        PaginationConfig={
+            'MaxItems': int(query_params['maxItems']),
+            'PageSize': int(query_params['pageSize']),
+            'StartingToken': query_params['startingToken']
+        }
+    ).build_full_result()
+
+    logger.info("Fetching results")
+    result = {}
+    items = []
+    for item in page_iterator['Items']:
+
+        # Add Casbin Enforcer to check if the current user has permissions to GET the asset:
+        item.update({
+            "object__type": "asset"
+        })
+        for user_name in claims_and_roles["tokens"]:
+            casbin_enforcer = CasbinEnforcer(user_name)
+            if casbin_enforcer.enforce(f"user::{user_name}", item, "GET"):
+                items.append(item)
+                break
+
+    result["Items"] = items
+
+    if "NextToken" in page_iterator:
+        result["NextToken"] = page_iterator["NextToken"]
+    return result
 
 
 def get_asset(databaseId, assetId, showDeleted=False):
+    #Get single asset - no pagination needed
     table = dynamodb.Table(asset_database)
     if showDeleted:
         databaseId = databaseId + "#deleted"
     response = table.get_item(Key={'databaseId': databaseId, 'assetId': assetId})
-    return response.get('Item', {})
+    asset = response.get('Item', {})
+    allowed = False
+
+    if asset:
+        # Add Casbin Enforcer to check if the current user has permissions to GET the asset:
+        asset.update({
+            "object__type": "asset"
+        })
+        for user_name in claims_and_roles["tokens"]:
+            casbin_enforcer = CasbinEnforcer(user_name)
+            if casbin_enforcer.enforce(f"user::{user_name}", asset, "GET"):
+                allowed = True
+                break
+
+    return asset if allowed else {}
 
 
 def delete_asset(databaseId, assetId, queryParameters):
@@ -149,101 +161,118 @@ def delete_asset(databaseId, assetId, queryParameters):
     table = dynamodb.Table(asset_database)
     if "#deleted" in databaseId:
         return response
-    item = get_asset(databaseId, assetId)
+
+    db_response = table.get_item(Key={'databaseId': databaseId, 'assetId': assetId})
+    item = db_response.get('Item', {})
+
     if item:
-        print("Deleting asset: ", item)
-        if "assetLocation" in item:
-            if item['isMultiFile']:
-                archive_multi_file(item['assetLocation'], databaseId, assetId)
-                delete_assetVisualizer_files(item['assetLocation'])
-            else:
-                archive_file(item['assetLocation'], databaseId, assetId)
-                delete_assetVisualizer_files(item['assetLocation'])
-        if "previewLocation" in item:
-            archive_file(item['previewLocation'], databaseId, assetId)
-        item['databaseId'] = databaseId + "#deleted"
-        table.put_item(
-            Item=item
-        )
-        result = table.delete_item(Key={'databaseId': databaseId, 'assetId': assetId})
-        # update assetCount after successful deletion of an asset
-        update_asset_count(db_database, asset_database, queryParameters, databaseId)
-        print(result)
-        response['statusCode'] = 200
-        response['message'] = "Asset deleted"
+        allowed = False
+        # Add Casbin Enforcer to check if the current user has permissions to DELETE the asset:
+        item.update({
+            "object__type": "asset"
+        })
+        for user_name in claims_and_roles["tokens"]:
+            casbin_enforcer = CasbinEnforcer(user_name)
+            if casbin_enforcer.enforce(f"user::{user_name}", item, "DELETE"):
+                allowed = True
+                break
+
+        if allowed:
+            logger.info("Deleting asset: ")
+            logger.info(item)
+            if "assetLocation" in item:
+                if item['isMultiFile']:
+                    archive_multi_file(item['assetLocation'], databaseId, assetId)
+                    delete_assetVisualizer_files(item['assetLocation'])
+                else:
+                    archive_file(item['assetLocation'], databaseId, assetId)
+                    delete_assetVisualizer_files(item['assetLocation'])
+            if "previewLocation" in item:
+                archive_file(item['previewLocation'], databaseId, assetId)
+            item['databaseId'] = databaseId + "#deleted"
+            table.put_item(
+                Item=item
+            )
+            result = table.delete_item(Key={'databaseId': databaseId, 'assetId': assetId})
+            # update assetCount after successful deletion of an asset
+            update_asset_count(db_database, asset_database, queryParameters, databaseId)
+            logger.info(result)
+            response['statusCode'] = 200
+            response['message'] = "Asset deleted"
+        else:
+            response['statusCode'] = 403
+            response['message'] = "Action not allowed"
+    else:
+        response['statusCode'] = 404
+        response['message'] = "Record not found"
     return response
 
 
 def archive_multi_file(location, databaseId, assetId):
     s3 = boto3.client('s3')
-    bucket = ""
     prefix = ""
-    if "Bucket" in location:
-        bucket = location['Bucket']
     if "Key" in location:
         prefix = location['Key']
-    if len(bucket) == 0 or len(prefix) == 0:
+    if len(prefix) == 0:
         return
-    print('Archiving folder with multiple files')
+    logger.info('Archiving folder with multiple files')
 
     paginator = s3.get_paginator('list_objects_v2')
     files = []
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+    for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
         for obj in page.get('Contents', []):
             files.append(obj['Key'])
 
     for key in files:
         try:
-            response = move_to_glacier_and_mark_deleted(bucket, key, databaseId, assetId)
-            print("S3 response: ", response)
+            response = move_to_glacier_and_mark_deleted(key, databaseId, assetId)
+            logger.info("S3 response: ")
+            logger.info(response)
 
         except s3.exceptions.InvalidObjectState as ios:
-            print("S3 object already archived: ", key)
-            print(ios)
+            logger.exception("S3 object already archived: " + key)
+            logger.exception(ios)
 
         except botocore.exceptions.ClientError as e:
             # TODO: Most likely an error when the key doesnt exist
-            print("Error occurred: ", e)
+            logger.exception(e)
 
     return
 
 
 def archive_file(location, databaseId, assetId):
     s3 = boto3.client('s3')
-
-    bucket = ""
     key = ""
-    if "Bucket" in location:
-        bucket = location['Bucket']
     if "Key" in location:
         key = location['Key']
 
-    if len(bucket) == 0 or len(key) == 0:
+    if len(key) == 0:
         return
-    print("Archiving item: ", bucket, ":", key)
+    logger.info("Archiving item: " + bucket_name +":" + key)
 
     try:
-        response = move_to_glacier_and_mark_deleted(bucket, key, databaseId, assetId)
-        print("S3 response: ", response)
+        response = move_to_glacier_and_mark_deleted(key, databaseId, assetId)
+        logger.info("S3 response: ")
+        logger.info(response)
 
     except s3.exceptions.InvalidObjectState as ios:
-        print("S3 object already archived: ", key)
-        print(ios)
+        logger.exception("S3 object already archived: "+ key)
+        logger.exception(ios)
 
     except botocore.exceptions.ClientError as e:
         # TODO: Most likely an error when the key doesnt exist
-        print("Error occurred: ", e)
+        logger.exception(e)
     return
 
 
-def move_to_glacier_and_mark_deleted(bucket, key, assetId, databaseId):
+def move_to_glacier_and_mark_deleted(key, assetId, databaseId):
     s3 = boto3.client('s3')
     return s3.copy_object(
         CopySource={
-            "Bucket": bucket,
+            "Bucket": bucket_name,
             "Key": key,
         },
-        Bucket=bucket,
+        Bucket=bucket_name,
         Key=key,
         MetadataDirective='REPLACE',
         Metadata={
@@ -255,243 +284,83 @@ def move_to_glacier_and_mark_deleted(bucket, key, assetId, databaseId):
     )
 
 
-def set_pagination_info(queryParameters):
-    if 'maxItems' not in queryParameters:
-        queryParameters['maxItems'] = 100
-        queryParameters['pageSize'] = 100
-    else:
-        queryParameters['pageSize'] = queryParameters['maxItems']
-    if 'startingToken' not in queryParameters:
-        queryParameters['startingToken'] = None
+def get_handler(event, response, path_parameters, query_parameters):
+    show_deleted = False
 
+    if 'showDeleted' in query_parameters:
+        show_deleted = query_parameters['showDeleted']
 
-def get_handler_with_tokens(event, response, pathParameters, queryParameters, tokens):
-    requestid = event['requestContext']['requestId']
-    if "assetId" in pathParameters and "databaseId" in pathParameters:
-
-        print("Validating parameters")
-        (valid, message) = validate({
-            'databaseId': {
-                'value': pathParameters['databaseId'],
-                'validator': 'ID'
-            },
-            'assetId': {
-                'value': pathParameters['assetId'],
-                'validator': 'ID'
-            },
-        })
-        if not valid:
-            print(message)
-            response['body'] = json.dumps({"message": message})
-            response['statusCode'] = 400
-            return response
-
-        databases = get_database_set(tokens)
-        if pathParameters['databaseId'] not in databases:
-            response['body'] = json.dumps({
-                "message": "Not Authorized",
-                "requestid": requestid,
-            })
-            response['statusCode'] = 403
-            return response
-
-        print("Getting Asset: ", pathParameters['assetId'])
-        response['body'] = json.dumps({
-            "message": get_asset(pathParameters['databaseId'],
-                                 pathParameters['assetId'], ),
-            "requestid": requestid,
-        })
-        print(response)
-        return response
-
-    if "databaseId" in pathParameters:
-        print("Validating parameters")
-        (valid, message) = validate({
-            'databaseId': {
-                'value': pathParameters['databaseId'],
-                'validator': 'ID',
-            }
-        })
-        if not valid:
-            print(message)
-            response['body'] = json.dumps({
-                "message": message,
-                "requestid": requestid,
-            })
-            response['statusCode'] = 400
-            return response
-
-        databases = get_database_set(tokens)
-        if pathParameters['databaseId'] not in databases:
-            response['body'] = json.dumps({
-                "message": "Not Authorized",
-                "requestid": requestid,
-            })
-            response['statusCode'] = 403
-            return response
-
-        print("Listing Assets for Database: ", pathParameters['databaseId'])
-        response['body'] = json.dumps({
-            "message": get_assets(pathParameters['databaseId'], ),
-            "requestid": requestid,
-        })
-        print(response)
-        return response
-
-    if "assetId" in pathParameters and not "databaseId" in pathParameters:
-        message = "No database ID in API Call"
-        response['body'] = json.dumps({"message": message, "requestid": requestid})
-        response['statusCode'] = 400
-        print(response)
-        return response
-
-    databases = get_database_set(tokens)
-    if len(databases) > 0:
-        print("Listing All Assets with filter")
-        response['body'] = json.dumps({
-            "message": get_all_assets_with_database_filter(queryParameters, databases),
-            "requestid": requestid,
-        })
-    else:
-        print("database list was empty, returning empty")
-        response['body'] = json.dumps({
-            "message": [],
-            "requestid": requestid,
-        })
-
-    print(response)
-    return response
-
-
-def get_handler(response, pathParameters, queryParameters):
-
-    showDeleted = False
-
-    if 'showDeleted' in queryParameters:
-        showDeleted = queryParameters['showDeleted']
-
-    if 'assetId' not in pathParameters:
-        if 'databaseId' in pathParameters:
-            print("Validating parameters")
+    if 'assetId' not in path_parameters:
+        if 'databaseId' in path_parameters:
+            logger.info("Validating parameters")
             (valid, message) = validate({
                 'databaseId': {
-                    'value': pathParameters['databaseId'],
+                    'value': path_parameters['databaseId'],
                     'validator': 'ID'
                 }
             })
             if not valid:
-                print(message)
+                logger.error(message)
                 response['body'] = json.dumps({"message": message})
                 response['statusCode'] = 400
                 return response
 
-            print("Listing Assets for Database: ", pathParameters['databaseId'])
-            response['body'] = json.dumps({"message": get_assets(pathParameters['databaseId'], showDeleted)})
-            print(response)
+            logger.info("Listing Assets for Database: " + path_parameters['databaseId'])
+            response['body'] = json.dumps({"message": get_assets(path_parameters['databaseId'], query_parameters, show_deleted)})
+            logger.info(response)
             return response
         else:
-            print("Listing All Assets")
-            response['body'] = json.dumps({"message": get_all_assets(queryParameters, showDeleted)})
-            print(response)
+            logger.info("Listing All Assets")
+            response['body'] = json.dumps({"message": get_all_assets(event, query_parameters, show_deleted)})
+            logger.info(response)
             return response
     else:
-        if 'databaseId' not in pathParameters:
+        if 'databaseId' not in path_parameters:
             message = "No database ID in API Call"
             response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
-            print(response)
+            logger.error(response)
             return response
 
-        print("Validating parameters")
+        logger.info("Validating parameters")
         (valid, message) = validate({
             'databaseId': {
-                'value': pathParameters['databaseId'],
+                'value': path_parameters['databaseId'],
                 'validator': 'ID'
             },
             'assetId': {
-                'value': pathParameters['assetId'],
+                'value': path_parameters['assetId'],
                 'validator': 'ID'
             },
         })
         if not valid:
-            print(message)
+            logger.error(message)
             response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
             return response
 
-        print("Getting Asset: ", pathParameters['assetId'])
+        logger.info("Getting Asset: " + path_parameters['assetId'])
         response['body'] = json.dumps({"message": get_asset(
-            pathParameters['databaseId'], pathParameters['assetId'], showDeleted)})
-        print(response)
+            path_parameters['databaseId'], path_parameters['assetId'], show_deleted)})
+        logger.info(response)
         return response
-
-
-def delete_handler_with_tokens(event, response, pathParameters, queryParameters, tokens):
-    requestid = event['requestContext']['requestId']
-
-    if 'databaseId' not in pathParameters:
-        message = "No database ID in API Call"
-        response['body'] = json.dumps({"message": message})
-        response['statusCode'] = 400
-        print(response)
-        return response
-    if 'assetId' not in pathParameters:
-        message = "No asset ID in API Call"
-        response['body'] = json.dumps({"message": message})
-        response['statusCode'] = 400
-        print(response)
-        return response
-
-    print("Validating parameters")
-    (valid, message) = validate({
-        'databaseId': {
-            'value': pathParameters['databaseId'],
-            'validator': 'ID'
-        },
-        'assetId': {
-            'value': pathParameters['assetId'],
-            'validator': 'ID'
-        },
-    })
-    if not valid:
-        print(message)
-        response['body'] = json.dumps({"message": message})
-        response['statusCode'] = 400
-        return response
-
-    databases = get_database_set(tokens)
-    if pathParameters['databaseId'] not in databases:
-        response['body'] = json.dumps({
-            "message": "Not Authorized",
-            "requestid": requestid,
-        })
-        response['statusCode'] = 403
-        return response
-
-    print("Deleting Asset: ", pathParameters['assetId'])
-    result = delete_asset(pathParameters['databaseId'], pathParameters['assetId'], queryParameters)
-    response['body'] = json.dumps({"message": result['message']})
-    response['statusCode'] = result['statusCode']
-    print(response)
-    return response
 
 
 def delete_handler(response, pathParameters, queryParameters):
-
     if 'databaseId' not in pathParameters:
         message = "No database ID in API Call"
         response['body'] = json.dumps({"message": message})
         response['statusCode'] = 400
-        print(response)
+        logger.error(response)
         return response
     if 'assetId' not in pathParameters:
         message = "No asset ID in API Call"
         response['body'] = json.dumps({"message": message})
         response['statusCode'] = 400
-        print(response)
+        logger.error(response)
         return response
 
-    print("Validating parameters")
+    logger.info("Validating parameters")
     (valid, message) = validate({
         'databaseId': {
             'value': pathParameters['databaseId'],
@@ -503,16 +372,16 @@ def delete_handler(response, pathParameters, queryParameters):
         },
     })
     if not valid:
-        print(message)
+        logger.error(message)
         response['body'] = json.dumps({"message": message})
         response['statusCode'] = 400
         return response
 
-    print("Deleting Asset: ", pathParameters['assetId'])
+    logger.info("Deleting Asset: " + pathParameters['assetId'])
     result = delete_asset(pathParameters['databaseId'], pathParameters['assetId'], queryParameters)
     response['body'] = json.dumps({"message": result['message']})
     response['statusCode'] = result['statusCode']
-    print(response)
+    logger.info(response)
     return response
 
 
@@ -529,7 +398,7 @@ def delete_assetVisualizer_files(assetLocation):
     # Add the folder deliminiator to the end of the key
     key = key + '/'
 
-    print("Deleting Temporary Asset Visualizer Files Under Folder: ", s3_assetVisualizer_bucket, ":", key)
+    logger.info("Deleting Temporary Asset Visualizer Files Under Folder: " + s3_assetVisualizer_bucket + ":"+ key)
 
     try:
         # Get all assets in assetVisualizer bucket (unversioned, temporary files for the web visualizers) for deletion
@@ -539,67 +408,56 @@ def delete_assetVisualizer_files(assetLocation):
         for page in paginator.paginate(Bucket=s3_assetVisualizer_bucket, Prefix=key):
             for item in page['Contents']:
                 assetVisualizerBucketFilesDeleted.append(item['Key'])
-                print("Deleting visualizer asset file: ", item['Key'])
+                logger.info("Deleting visualizer asset file: " + item['Key'])
                 s3.delete_object(Bucket=s3_assetVisualizer_bucket, Key=item['Key'])
-                # print(item)
 
     except Exception as e:
-        print("Error: ", e)
+        logger.exception(e)
 
     return
 
 
 def lambda_handler(event, context):
-    print(event)
-    response = {
-        'statusCode': 200,
-        'body': '',
-        'headers': {
-            'Content-Type': 'application/json',
-                'Access-Control-Allow-Credentials': True,
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type',
-                'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
-        }
-    }
+    response = STANDARD_JSON_RESPONSE
+    logger.info(event)
     pathParameters = event.get('pathParameters', {})
     queryParameters = event.get('queryStringParameters', {})
 
-    set_pagination_info(queryParameters)
+    validate_pagination_info(queryParameters)
 
     try:
         httpMethod = event['requestContext']['http']['method']
-        print(httpMethod)
+        logger.info(httpMethod)
 
+        global claims_and_roles
         claims_and_roles = request_to_claims(event)
 
-        if "super-admin" in claims_and_roles['roles']:
-            if httpMethod == 'GET':
-                return get_handler(response, pathParameters, queryParameters)
-            if httpMethod == 'DELETE':
-                return delete_handler(response, pathParameters, queryParameters)
-        elif "assets" in claims_and_roles['roles']:
-            if httpMethod == 'GET':
-                return get_handler_with_tokens(event, response, pathParameters, queryParameters, claims_and_roles['tokens'])
-            if httpMethod == 'DELETE':
-                return delete_handler_with_tokens(event, response, pathParameters, queryParameters, claims_and_roles['tokens'])
+        method_allowed_on_api = False
+        request_object = {
+            "object__type": "api",
+            "route__path": event['requestContext']['http']['path']
+        }
+        for user_name in claims_and_roles["tokens"]:
+            casbin_enforcer = CasbinEnforcer(user_name)
+            if casbin_enforcer.enforce(f"user::{user_name}", request_object, httpMethod):
+                method_allowed_on_api = True
+                break
+
+        if httpMethod == 'GET' and method_allowed_on_api:
+            return get_handler(event, response, pathParameters, queryParameters)
+        elif httpMethod == 'DELETE' and method_allowed_on_api:
+            return delete_handler(response, pathParameters, queryParameters)
         else:
             response['statusCode'] = 403
             response['body'] = json.dumps({"message": "Not Authorized"})
             return response
-
     except Exception as e:
         response['statusCode'] = 500
-        print("Error!", e.__class__, "occurred.")
-        try:
-            print(e)
-            response['body'] = json.dumps({"message": str(e)})
-        except:
-            print("Can't Read Error")
-            response['body'] = json.dumps({"message": "An unexpected error occurred while executing the request"})
+        logger.exception(e)
+        response['body'] = json.dumps({"message": "Internal Server Error"})
         return response
 
 
 if __name__ == "__main__":
     test_response = lambda_handler(None, None)
-    print(test_response)
+    logger.info(test_response)
