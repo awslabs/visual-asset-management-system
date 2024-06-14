@@ -595,7 +595,7 @@ export function apiBuilder(
         vpc,
         subnets
     );
-    
+
     // attachFunctionToApi(scope, uploadAllAssetFunction, {
     //     routePath: "/assets/all",
     //     method: apigwv2.HttpMethod.PUT,
