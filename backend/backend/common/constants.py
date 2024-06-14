@@ -32,7 +32,7 @@ UNALLOWED_FILE_EXTENSION_LIST = [
     ".vbs",
     ".ps1",
     ".bat"
-]
+] 
 
 #Unallowed MIME type list for many of the equivilent file extensions in UNALLOWED_FILE_EXTENSION_LIST:
 UNALLOWED_MIME_LIST = [
