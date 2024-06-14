@@ -4,7 +4,7 @@ Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
 ---
 
-THIRD PARTY COMPONENTS
+THIRD PARTY COMPONENTS - CORE VAMS
 
 ---
 
@@ -87,11 +87,32 @@ Python Libraries
 | zipp                | 3.8.1     | MIT License                          |
 | certifi             | 2022.6.15 | Mozilla Public License 2.0 (MPL 2.0) |
 | protobuf3-to-dict   | 0.1.5     | Public Domain                        |
+| Casbin              | 2.29.0    | Apache-2.0                           |
 
 Other Libraries
 
-| Name            | Version                                                                      | Licenses     |
-| :-------------- | :--------------------------------------------------------------------------- | :----------- |
-| PDAL            | [pdal@master-latest] (https://github.com/PDAL/PDAL)                          | BSD          |
-| PotreeConverter | [potreeconverter@develop-latest] (https://github.com/potree/PotreeConverter) | BSD-2-Clause |
-| Casbin          | [casbin@2.29.0] (https://github.com/casbin/casbin)                           | Apache-2.0   |
+| Name | Version | Licenses |
+| :--- | :------ | :------- |
+
+---
+
+THIRD PARTY COMPONENTS - USE-CASE SPECIFIC PIPELINE IMPLEMENTATIONS
+
+---
+
+This software includes third party software subject to the following copyrights:
+
+Python Libraries
+
+| Name   | Version | Related Pipeline             | License                |
+| ------ | ------- | ---------------------------- | ---------------------- |
+| pillow | 10.3.0  | GENAI 3D METADATA GENERATION | HPND--MIT/3-Clause-BSD |
+| NumPy  | latest  | GENAI 3D METADATA GENERATION | BSD-3-Clause           |
+
+Other Libraries
+
+| Name            | Version                                                                      | Related Pipeline             | Licenses     |
+| :-------------- | :--------------------------------------------------------------------------- | :--------------------------- | :----------- |
+| PDAL            | [pdal@master-latest] (https://github.com/PDAL/PDAL)                          | POTREE VIEWER                | BSD          |
+| PotreeConverter | [potreeconverter@develop-latest] (https://github.com/potree/PotreeConverter) | POTREE VIEWER                | BSD-2-Clause |
+| Blender         | [blender@master-latest] (https://github.com/blender)                         | GENAI 3D METADATA GENERATION | GNU GPLv3    |

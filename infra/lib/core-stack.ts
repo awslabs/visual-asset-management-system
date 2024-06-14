@@ -19,7 +19,7 @@ import { SearchBuilderNestedStack } from "./nestedStacks/search/searchBuilder-ne
 import { StaticWebBuilderNestedStack } from "./nestedStacks/staticWebApp/staticWebBuilder-nestedStack";
 import * as Config from "../config/config";
 import { VAMS_APP_FEATURES } from "../common/vamsAppFeatures";
-import { VisualizerPipelineBuilderNestedStack } from "./nestedStacks/visualizerPipelines/visualizerPipelineBuilder-nestedStack";
+import { PipelineBuilderNestedStack } from "./nestedStacks/pipelines/pipelineBuilder-nestedStack";
 import { LambdaLayersBuilderNestedStack } from "./nestedStacks/apiLambda/lambdaLayersBuilder-nestedStack";
 import { VPCBuilderNestedStack } from "./nestedStacks/vpc/vpcBuilder-nestedStack";
 import { IamRoleTransform } from "./aspects/iam-role-transform.aspect";
@@ -216,18 +216,19 @@ export class CoreVAMSStack extends cdk.Stack {
             }
 
             ///Optional Pipelines (Nested Stack)
-            if (props.config.app.pipelines.usePointCloudVisualization.enabled) {
-                const visualizerPipelineNetworkNestedStack =
-                    new VisualizerPipelineBuilderNestedStack(this, "VisualizerPipelineBuilder", {
-                        ...props,
-                        config: props.config,
-                        storageResources: storageResourcesNestedStack.storageResources,
-                        lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
-                        vpc: this.vpc,
-                        vpceSecurityGroup: this.vpceSecurityGroup,
-                        subnets: this.subnetsPrivate,
-                    });
-            }
+            const pipelineBuilderNestedStack = new PipelineBuilderNestedStack(
+                this,
+                "PipelineBuilder",
+                {
+                    ...props,
+                    config: props.config,
+                    storageResources: storageResourcesNestedStack.storageResources,
+                    lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
+                    vpc: this.vpc,
+                    vpceSecurityGroup: this.vpceSecurityGroup,
+                    subnets: this.subnetsPrivate,
+                }
+            );
 
             //Write final output configurations (pulling forward from nested stacks)
             const endPointURLParamsOutput = new cdk.CfnOutput(this, "WebsiteEndpointURLOutput", {
@@ -351,13 +352,14 @@ export class CoreVAMSStack extends cdk.Stack {
             description: "S3 bucket for asset storage",
         });
 
-        const assetVisualizerBucketOutput = new cdk.CfnOutput(
+        const assetAuxiliaryBucketOutput = new cdk.CfnOutput(
             this,
-            "AssetVisualizerS3BucketNameOutput",
+            "AssetAuxiliaryS3BucketNameOutput",
             {
-                value: storageResourcesNestedStack.storageResources.s3.assetVisualizerBucket
+                value: storageResourcesNestedStack.storageResources.s3.assetAuxiliaryBucket
                     .bucketName,
-                description: "S3 bucket for visualization asset storage",
+                description:
+                    "S3 bucket for auto-generated auxiliary working objects associated with asset storage to include auto-generated previews, visualizer files, temporary storage for pipelines",
             }
         );
 

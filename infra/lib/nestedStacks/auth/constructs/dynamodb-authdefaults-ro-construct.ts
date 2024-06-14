@@ -481,7 +481,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                     S: "starts_with",
                                 },
                                 value: {
-                                    S: "/visualizerAssets",
+                                    S: "/auxiliaryPreviewAssets",
                                 },
                             },
                         },

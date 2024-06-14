@@ -46,7 +46,8 @@ const PipelineSelector = (props) => {
                             tags: [
                                 `input:${item.assetType}`,
                                 `output:${item.outputType}`,
-                                `type:${item.pipelineType}`,
+                                `pipelineType:${item.pipelineType}`,
+                                `pipelineExecutionType:${item.pipelineExecutionType}`,
                             ],
                         };
                     })}

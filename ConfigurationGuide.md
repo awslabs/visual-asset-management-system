@@ -48,7 +48,8 @@ Some configuration options can be overriden at time of deployment with either en
 -   `app.useAlb.certificateARN` | default: arn:aws-us-gov:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID> | #Specifies the existing ACM certificate to use for the ALB for HTTPS connections. ACM certificate must be for the `domainHost` specified and reside in the same region being deployed to. Required to be filled out to use ALB.
 -   `app.useAlb.optionalHostedZoneID` | default: NULL | #Optional route53 zone host ID to automatically create an alias for the `domainHost` specified to the created ALB.
 
--   `app.pipelines.usePointCloudVisualization.enabled` | default: false | #Feature to create a point cloud visualization processing pipeline to support point cloud file type viewing within the VAMS web UI. This will enable the global VPC option and all pipeline components will be put behind the VPC.
+-   `app.pipelines.usePreviewPcPotreeViewer.enabled` | default: false | #Feature to create a point cloud potree viewer processing pipeline to support point cloud file type viewing within the VAMS web UI. This will enable the global VPC option and all pipeline components will be put behind the VPC.
+-   `app.pipelines.useGenAiMetadata3dExtraction.enabled` | default: false | #Feature to create a generative AI metadata extraction for glb, fbx, and obj files. This will enable the global VPC option and all pipeline components will be put behind the VPC.
 
 -   `app.authProvider.useCognito.enabled` | default: true | #Feature to use Cognito Use Pools should be used for VAMS user management and authentication. At least 1 authProvider must be enabled in the configuration.
 -   `app.authProvider.useCognito.useSaml` | default: false | #Specifies if Cognito User Pools use a federated SAML from an external IDP integration.
@@ -62,25 +63,27 @@ Some configuration options can be overriden at time of deployment with either en
 -   `OpenSearch` - If both serverless and provisioned are not enabled, no OpenSearch will be enabled which will reduce the functionality in the application to not have any search capabilities on assets. All authorized assets will be returned always on the assets page.
 -   `OpenSearch - Provisioned` - This service is very sensitive to VPC Subnet Availabilty Zone selection. If using an external VPC, make sure the provided private subnets are a minimum of 3 and are each in their own availability zone. OpenSearch Provisioned CDK creates service-linked roles althoguh sometimes these don't get recognized right away during a first-time deployment by receiving the following error: `Invalid request provided: Before you can proceed, you must enable a service-linked role to give Amazon OpenSearch Service permissions to access your VPC.`. Wait 5 minutes minutes after your first run and then re-run your deployment (after clearing out any previous stack in CloudFormation). If you continue seeing issues, run the following CLI command manually to try to create these roles by hand: `aws iam create-service-linked-role --aws-service-name es.amazonaws.com`, `aws iam create-service-linked-role --aws-service-name opensearchservice.amazonaws.com`
 
--   `Global VPC` - Will auto be enabled if ALB, OpenSearch Provisioned, or Point Cloud Visualizer Pipeline is enabled. OpenSearch Serverless endpoints and associated lambdas will also be put behind the VPC if toggling on the VPC and using for all lambdas.
+-   `Global VPC` - Will auto be enabled if ALB, OpenSearch Provisioned, or Use-case Pipelines is enabled. OpenSearch Serverless endpoints and associated lambdas will also be put behind the VPC if toggling on the VPC and using for all lambdas.
 -   -   IPs Used per Feature:
 -   -   ALB: 8 IPs per subnet (public or private) [needs up to 8 during runtime to scale, may be less during low-use]
--   -   VisualizerPipeline: ~2 IPs per subnet deployed running an active pipeline workflow execution (based on application demand)
+-   -   Use-case Pipelines: ~2 IPs per subnet deployed running an active pipeline workflow execution (based on application demand)
 -   -   Lambda in VPC: 1 IP per deployed CDK lambda functions per subnet (v2.0: ~66)
 -   -   VPC Interface Endpoints: 1 IP per endpoint per subnet (based on overall configuration needs, see `Global VPC Endpoints` below)
 -   `Global VPC Subnets` - Each Subnet to subnet-type (relevent to public or private) used should reside in it's own AZ within the region. Subnets should be configured for IPv4. CDK will probably deploy/create to the amount of AZs and related subnets. When importing an existing VPC/subnets, make sure each subnet provided is located within its own AZ (otherwise errors may occur). The minimum amount of AZs/Subnets needed are (use the higher number): 3 - when using Open Search Provisioned, 2 - when using ALB, 1 - for all other configurations. Reccomended to have at least 128 IPs (IPv4) available per subnet for deployment to support current VAMS usage (max configuration) and growth.
 -   `Global VPC Endpoints` - When using a Global VPC, interface/gateway endpoints are needed. The following is the below chart of VPC Endpoints created (when using addVpcEndpoints config option) or are needed otherwise. Some endpoints have special creation conditions that are noted below.
 -   -   (Interface) KMS - Deployed/used with Use KMS CMK Encryption Features
 -   -   (Interface) KMS FIPS - Deployed/used with Use KMS CMK Encryption and Use FIPS Features
--   -   (Interface) ECR - Deployed/used with "Use with All Lambda" and Visualizer Point Cloud Pipeline Features
--   -   (Interface) ECR Docker - Deployed/used with "Use with All Lambda" and Visualizer Point Cloud Pipeline Features
--   -   (Interface) CloudWatch Logs - Deployed/used with "Use with All Lambda" and Visualizer Point Cloud Pipeline Features
--   -   (Interface) SNS - Deployed/used with "Use with All Lambda" and Visualizer Point Cloud Pipeline Features
--   -   (Interface) SFN - Deployed/used with "Use with All Lambda" and Visualizer Point Cloud Pipeline Features
+-   -   (Interface) ECR - Deployed/used with "Use with All Lambda" and Use-case Pipeline Features
+-   -   (Interface) ECR Docker - Deployed/used with "Use with All Lambda" and Use-casePipeline Features
+-   -   (Interface) CloudWatch Logs - Deployed/used with "Use with All Lambda" and Use-case Pipeline Features
+-   -   (Interface) SNS - Deployed/used with "Use with All Lambda" and Use-case Pipeline Features
+-   -   (Interface) SFN - Deployed/used with "Use with All Lambda" and Use-case Pipeline Features
+-   -   (Interface) Bedrock Runtime - Deployed/used with "Use with All Lambda" and Use-case Pipeline Features
+-   -   (Interface) Rekognition - Deployed/used with "Use with All Lambda" and Use-case Pipeline Features
 -   -   (Interface) SSM - Deployed/used with "Use with All Lambda" and Open Search Provisioned Features
 -   -   (Interface) Lambda - Deployed/used with "Use with All Lambda" Feature
 -   -   (Interface) STS - Deployed/used with "Use with All Lambda" Feature
--   -   (Interface) Batch - Deployed/used with Visualizer Point Cloud Pipeline Feature
+-   -   (Interface) Batch - Deployed/used with Use-case Pipeline Feature
 -   -   (Interface) OpenSearch Serverless - Deployed/used with OpenSearch Serverless Feature
 -   -   (Interface) S3 (ALB-Special) - Always created on VPC when using ALB as it's specially setup with the ALB IPs and targets
 -   -   (Gateway) S3 - Due to no pricing implications, deployed/used across all features that require VPC

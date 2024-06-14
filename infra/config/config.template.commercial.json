@@ -51,7 +51,10 @@
             "optionalHostedZoneId": null
         },
         "pipelines": {
-            "usePointCloudVisualization": {
+            "usePreviewPcPotreeViewer": {
+                "enabled": false
+            },
+            "useGenAiMetadata3dExtraction": {
                 "enabled": false
             }
         },

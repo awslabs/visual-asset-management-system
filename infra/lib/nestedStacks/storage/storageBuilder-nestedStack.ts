@@ -25,11 +25,11 @@ export interface storageResources {
     };
     s3: {
         assetBucket: s3.Bucket;
-        assetVisualizerBucket: s3.Bucket;
+        assetAuxiliaryBucket: s3.Bucket;
         artefactsBucket: s3.Bucket;
         accessLogsBucket: s3.Bucket;
         assetStagingBucket?: s3.IBucket;
-        //assetVisualizerStagingBucket?: s3.IBucket;
+        //assetAuxiliaryStagingBucket?: s3.IBucket;
     };
     sns: {
         assetBucketObjectCreatedTopic: sns.Topic;
@@ -113,18 +113,19 @@ export class StorageResourcesBuilderNestedStack extends NestedStack {
             description: "S3 bucket for asset storage",
         });
 
-        const assetVisualizerBucketOutput = new cdk.CfnOutput(
+        const assetAuxiliaryBucketOutput = new cdk.CfnOutput(
             this,
-            "AssetVisualizerBucketNameOutput",
+            "AssetAuxiliaryBucketNameOutput",
             {
-                value: this.storageResources.s3.assetVisualizerBucket.bucketName,
-                description: "S3 bucket for visualization asset storage",
+                value: this.storageResources.s3.assetAuxiliaryBucket.bucketName,
+                description:
+                    "S3 bucket for auto-generated auxiliary working objects associated with asset storage to include auto-generated previews, visualizer files, temporary storage for pipelines",
             }
         );
 
         const artefactsBucketOutput = new cdk.CfnOutput(this, "ArtefactsBucketNameOutput", {
             value: this.storageResources.s3.artefactsBucket.bucketName,
-            description: "S3 bucket for template notebooks",
+            description: "S3 bucket for artefacts",
         });
     }
 }
@@ -301,7 +302,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
 
     EventEmailSubscriptionTopic.addToResourcePolicy(EventEmailSubscriptionTopicPolicy);
 
-    const assetVisualizerBucket = new s3.Bucket(scope, "AssetVisualizerBucket", {
+    const assetAuxiliaryBucket = new s3.Bucket(scope, "AssetAuxiliaryBucket", {
         ...s3DefaultProps,
         cors: [
             {
@@ -317,9 +318,9 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
             },
         ],
         serverAccessLogsBucket: accessLogsBucket,
-        serverAccessLogsPrefix: "assetVisualizer-bucket-logs/",
+        serverAccessLogsPrefix: "assetAuxiliary-bucket-logs/",
     });
-    requireTLSAndAdditionalPolicyAddToResourcePolicy(assetVisualizerBucket, config);
+    requireTLSAndAdditionalPolicyAddToResourcePolicy(assetAuxiliaryBucket, config);
 
     const artefactsBucket = new s3.Bucket(scope, "ArtefactsBucket", {
         ...s3DefaultProps,
@@ -341,9 +342,9 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
             config.app.bucketMigrationStaging.assetBucketName
         );
 
-    // let assetVisualizerStagingBucket = undefined;
-    // if (config.app.bucketMigrationStaging.assetVisualizerBucketName && config.app.bucketMigrationStaging.assetVisualizerBucketName != "" && config.app.bucketMigrationStaging.assetVisualizerBucketName != "UNDEFINED")
-    //     assetVisualizerStagingBucket = s3.Bucket.fromBucketName(scope, "Asset Visualizer Staging Bucket", config.app.bucketMigrationStaging.assetVisualizerBucketName);
+    // let assetAuxiliaryStagingBucket = undefined;
+    // if (config.app.bucketMigrationStaging.assetAuxiliaryBucketName && config.app.bucketMigrationStaging.assetAuxiliaryBucketName != "" && config.app.bucketMigrationStaging.assetAuxiliaryBucketName != "UNDEFINED")
+    //     assetAuxiliaryStagingBucket = s3.Bucket.fromBucketName(scope, "Asset Visualizer Staging Bucket", config.app.bucketMigrationStaging.assetAuxiliaryBucketName);
 
     new s3deployment.BucketDeployment(scope, "DeployArtefacts", {
         sources: [s3deployment.Source.asset("./lib/artefacts")],
@@ -579,11 +580,11 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         },
         s3: {
             assetBucket: assetBucket,
-            assetVisualizerBucket: assetVisualizerBucket,
+            assetAuxiliaryBucket: assetAuxiliaryBucket,
             artefactsBucket: artefactsBucket,
             accessLogsBucket: accessLogsBucket,
             assetStagingBucket: assetStagingBucket,
-            //assetVisualizerStagingBucket: assetVisualizerStagingBucket,
+            //assetAuxiliaryStagingBucket: assetAuxiliaryStagingBucket,
         },
         sns: {
             assetBucketObjectCreatedTopic: S3AssetsObjectCreatedTopic,

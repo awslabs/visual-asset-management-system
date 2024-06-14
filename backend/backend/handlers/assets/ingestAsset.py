@@ -74,7 +74,7 @@ def generate_upload_asset_payload(event):
                 "Key": key
             },
             "previewLocation": {
-                "Key": key
+                "Key": None
             }
         },
         "returnAsset": True
@@ -169,11 +169,6 @@ def lambda_handler(event, context):
     #ABAC Checks
     http_method = event['requestContext']['http']['method']
     operation_allowed_on_asset = False
-    request_object = {
-        "object__type": "api",
-        "route__path": event['requestContext']['http']['path'] #"/" + event['requestContext']['http']['path'].split("/")[1]
-    }
-    logger.info(request_object)
 
     asset = {
         "object__type": "asset",
@@ -186,8 +181,7 @@ def lambda_handler(event, context):
 
     for user_name in claims_and_roles["tokens"]:
         casbin_enforcer = CasbinEnforcer(user_name)
-        if casbin_enforcer.enforce(f"user::{user_name}", asset, "PUT") and casbin_enforcer.enforce(
-                f"user::{user_name}", request_object, http_method):
+        if casbin_enforcer.enforce(f"user::{user_name}", asset, "PUT") and casbin_enforcer.enforceAPI(event):
             operation_allowed_on_asset = True
             break
 
@@ -233,20 +227,7 @@ def lambda_handler(event, context):
 
                                 payload = generate_upload_asset_payload(event)
                                 payload.update({
-                                    "requestContext": {
-                                        "http": {
-                                            "path": event['requestContext']['http']['path'],
-                                            "method": event['requestContext']['http']['method']
-                                        },
-                                        "authorizer": event['requestContext']['authorizer']
-                                            # "jwt": {
-                                            #     "claims": {
-                                            #         "vams:externalAttributes": json.dumps([]),
-                                            #         "vams:roles": json.dumps([]),
-                                            #         "vams:tokens": json.dumps(["asset_ingest_lambda_vams"])
-                                            #     }
-                                            # }
-                                    }
+                                    "requestContext": event['requestContext']
                                 })
                                 logger.info("Payload:")
                                 logger.info(payload)

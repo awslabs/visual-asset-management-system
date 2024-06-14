@@ -128,18 +128,13 @@ def lambda_handler(event, context):
             "object__type": "database",
             "databaseId": event['body']['databaseId']
         }
-        http_method = event['requestContext']['http']['method']
-        request_object = {
-            "object__type": "api",
-            "route__path": event['requestContext']['http']['path']
-        }
         for user_name in claims_and_roles["tokens"]:
             # There should be a constraint which allows PUT on this (or all)
             # databases (can use contains .* in the constraint to allow for all)
             # AND also allow PUT method on this API
             casbin_enforcer = CasbinEnforcer(user_name)
             if (casbin_enforcer.enforce(f"user::{user_name}", database, "PUT")
-                    and casbin_enforcer.enforce(f"user::{user_name}", request_object, http_method)):
+                    and casbin_enforcer.enforceAPI(event)):
                 allowed = True
                 break
 

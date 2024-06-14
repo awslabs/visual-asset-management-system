@@ -281,17 +281,11 @@ def lambda_handler(
 
         #ABAC Checks
         claims_and_roles = request_to_claims(event)
-        http_method = event['requestContext']['http']['method']
-        request_object = {
-            "object__type": "api",
-            "route__path": event['requestContext']['http']['path']
-            }
 
         operation_allowed_on_asset = False
         for user_name in claims_and_roles["tokens"]:
             casbin_enforcer = CasbinEnforcer(user_name)
-            if  casbin_enforcer.enforce(
-                    f"user::{user_name}", request_object, http_method):
+            if  casbin_enforcer.enforceAPI(event):
                 operation_allowed_on_asset = True
                 break
 

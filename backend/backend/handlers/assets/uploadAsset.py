@@ -241,7 +241,7 @@ def iter_Asset(body, item=None):
     return asset
 
 
-def upload_Asset(body, queryParameters, http_path, returnAsset=False):
+def upload_Asset(event, body, queryParameters, returnAsset=False):
     table = dynamodb.Table(asset_database)
     try:
         db_response = table.query(
@@ -262,14 +262,11 @@ def upload_Asset(body, queryParameters, http_path, returnAsset=False):
                 "assetName": body.get('assetName', body['assetId']),
                 "tags": body.get('tags', [])
             }
-            request_object = {
-                "object__type": "api",
-                "route__path": http_path
-            }
+
             for user_name in claims_and_roles["tokens"]:
                 casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", asset, http_method) and casbin_enforcer.enforce(
-                        f"user::{user_name}", request_object, http_method):
+                if casbin_enforcer.enforce(f"user::{user_name}", asset, http_method) and casbin_enforcer.enforceAPI(
+                            event):
                     operation_allowed_on_asset = True
                     break
 
@@ -302,14 +299,10 @@ def upload_Asset(body, queryParameters, http_path, returnAsset=False):
                 asset.update({
                     "object__type": "asset"
                 })
-                request_object = {
-                    "object__type": "api",
-                    "route__path": http_path
-                }
                 for user_name in claims_and_roles["tokens"]:
                     casbin_enforcer = CasbinEnforcer(user_name)
-                    if casbin_enforcer.enforce(f"user::{user_name}", asset, http_method) and casbin_enforcer.enforce(
-                            f"user::{user_name}", request_object, http_method):
+                    if casbin_enforcer.enforce(f"user::{user_name}", asset, http_method) and casbin_enforcer.enforceAPI(
+                            event):
                         operation_allowed_on_asset = True
                         break
 
@@ -350,7 +343,6 @@ def lambda_handler(event, context):
     global claims_and_roles
     claims_and_roles = request_to_claims(event)
     logger.info("claims and roles", claims_and_roles)
-    http_path = event['requestContext']['http']['path']
 
     if isinstance(event['body'], str):
         event['body'] = json.loads(event['body'])
@@ -404,8 +396,9 @@ def lambda_handler(event, context):
         if 'previewLocation' in event['body'] and event['body']['previewLocation'] is not None:
             (valid, message) = validate({
                 'assetPathKey': {
-                    'value': event['body']['previewLocation']['Key'],
-                    'validator': 'ASSET_PATH'
+                    'value': event['body'].get("previewLocation", {}).get('Key', ""),
+                    'validator': 'ASSET_PATH',
+                    'optional': True
                 }
             })
             if not valid:
@@ -430,7 +423,7 @@ def lambda_handler(event, context):
         if 'startingToken' not in queryParameters:
             queryParameters['startingToken'] = None
 
-        response.update(upload_Asset(event['body'], queryParameters, http_path, returnAsset))
+        response.update(upload_Asset(event, event['body'], queryParameters, returnAsset))
         logger.info(response)
         return response
     except Exception as e:

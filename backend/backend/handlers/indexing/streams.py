@@ -283,11 +283,8 @@ class AOSIndexAssetMetadata():
 
     @staticmethod
     def from_env(env=os.environ):
-        logger.info("env", env.get("METADATA_STORAGE_TABLE_NAME"))
-        logger.info("env", env.get("ASSET_STORAGE_TABLE_NAME"))
-        logger.info("env", env.get("DATABASE_STORAGE_TABLE_NAME"))
-        logger.info("env", env.get("AOS_ENDPOINT"))
-        logger.info("env", env.get("AWS_REGION"))
+        logger.info(env.get("AOS_ENDPOINT"))
+        logger.info(env.get("AWS_REGION"))
         region = env.get('AWS_REGION')
         service = env.get('AOS_TYPE')  # aoss (serverless) or es (provisioned)
         credentials = boto3.Session().get_credentials()
@@ -308,8 +305,7 @@ class AOSIndexAssetMetadata():
 
         if data is None:
             return "str"
-        
-        #logger.info("_determine_field_type input ", data)
+    
 
         try:
             j = re.compile(r"^{.*}$")

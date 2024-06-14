@@ -42,7 +42,7 @@ Sample use cases that have leveraged early iterations of VAMS include:
 
 ## 3D Asset Types Supported for In-Browser Viewing
 
-VAMS currently integrates with several different asset viewers and supports the following formats for viewing assets interactively.
+VAMS currently integrates with several different asset viewers and supports the following formats for viewing 3D assets interactively.
 
 | Name                              | Extension | Type   | Viewer             | Excluded Library |
 | :-------------------------------- | :-------- | :----- | :----------------- | :--------------- |
@@ -222,12 +222,12 @@ Federated authentication with SAML is available with additional configuration. S
 
 ### Code Layout
 
-| component        | folder                     |
-| ---------------- | -------------------------- |
-| web application  | web                        |
-| cdk deployment   | infra                      |
-| api and backend  | backend                    |
-| pipeline backend | backendVisualizerPipelines |
+| component                 | folder           |
+| ------------------------- | ---------------- |
+| web application           | web              |
+| cdk deployment            | infra            |
+| api and backend           | backend          |
+| use-case pipeline backend | backendPipelines |
 
 ## Demo and Workshop
 
@@ -239,7 +239,7 @@ To know more about how VAMS works and for instructions on configuring pipeline &
 
 ## Writing your own VAMS pipelines
 
-Refer to the [Writing your own pipelines section in the Developer Guide](./DeveloperGuide.md/#adding-your-own-pipelines).
+Refer to the ![Writing your own pipelines section in the Developer Guide](./DeveloperGuide.md/#adding-your-own-pipelines).
 
 ## Security
 
@@ -279,7 +279,7 @@ Configuration Options:
 2. C-2: Deploy OpenSearch with Serverless (Default), Provisioned, or No Open Search. Provisioned requires VPC with 3 AZ
 3. C-3: Deploy all Lambdas in VPC (Optional). Requires VPC with 1 AZ
 4. C-4: Deploy with location services (Default).
-5. C-5: Deploy visualizer point cloud pipeline (Optional). Requires VPC with 1 AZ.
+5. C-5: Deploy use-case specific pipelines [i.e. PotreeViewer Pipelines, GenAI Metadata generation] (Optional). Requires VPC with 1 AZ.
 
 An approximate monthly cost breakdown is below (excluding some free tier inclusions):
 
@@ -299,13 +299,15 @@ An approximate monthly cost breakdown is below (excluding some free tier inclusi
 | Amazon Open Search Provisioned (C-2,Optional) | 3x Data (r6g.large.search), 3x Master (r6g.large.search), 240GB EBS | $743.66           | $915.52         |
 | Amazon Location Service (C-4,Default)         | 1000 Map tiles Retrieved                                            | $40.00            | N/A             |
 
-Below are the additional costs for including the point cloud visualizer pipeline feature in your deployment (C-5, Optional):
+Below are the additional costs for including use-case specific pipeline features in your deployment (C-5, Optional):
 
-| Service           | Quantity                                     | Cost (Commercial) | Cost (GovCloud) |
-| :---------------- | :------------------------------------------- | :---------------- | :-------------- |
-| Batch Fargate     | 10 hours of processing                       | $3.56             | $4.88           |
-| Amazon S3         | 300 GB storage, 30GB transfer out            | $9.60             | $16.34          |
-| Amazon Cloudwatch | 1GB logs - VPC Flowlogs/API Gateway/Pipeline | $3.28             | $4.12           |
+| Service            | Quantity                                     | Cost (Commercial) | Cost (GovCloud) |
+| :----------------- | :------------------------------------------- | :---------------- | :-------------- |
+| Batch Fargate      | 10 hours of processing                       | $3.56             | $4.88           |
+| Amazon S3          | 300 GB storage, 30GB transfer out            | $9.60             | $16.34          |
+| Amazon Cloudwatch  | 1GB logs - VPC Flowlogs/API Gateway/Pipeline | $3.28             | $4.12           |
+| Amazon Bedrock     | 1M Tokens - Claude Sonnet                    | $18               | $NA             |
+| Amazon Rekognition | 10k Image Processing                         | $7.50             | $9              |
 
 ## License
 

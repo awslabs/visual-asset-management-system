@@ -99,8 +99,8 @@ export function getConfig(app: cdk.App): Config {
         config.app.openSearch.useProvisioned.enabled = false;
     }
 
-    if (config.app.pipelines.usePointCloudVisualization.enabled == undefined) {
-        config.app.pipelines.usePointCloudVisualization.enabled = false;
+    if (config.app.pipelines.usePreviewPcPotreeViewer.enabled == undefined) {
+        config.app.pipelines.usePreviewPcPotreeViewer.enabled = false;
     }
 
     if (config.app.authProvider.useCognito.useUserPasswordAuthFlow == undefined) {
@@ -142,15 +142,16 @@ export function getConfig(app: cdk.App): Config {
         config.app.useLocationService.enabled = false;
     }
 
-    //If using ALB, visualizer pipelines, or opensearch provisioned, make sure Global VPC is on as this needs to be in a VPC
+    //If using ALB, data pipelines , or opensearch provisioned, make sure Global VPC is on as this needs to be in a VPC
     if (
         config.app.useAlb.enabled ||
-        config.app.pipelines.usePointCloudVisualization.enabled ||
+        config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
+        config.app.pipelines.useGenAiMetadata3dExtraction.enabled ||
         config.app.openSearch.useProvisioned.enabled
     ) {
         if (!config.app.useGlobalVpc.enabled) {
             console.warn(
-                "Configuration Warning: Due to ALB, Visualization Pipeline, or OpenSearch Provisioned being enabled, auto-enabling Use Global VPC flag"
+                "Configuration Warning: Due to ALB, Data Pipelines, or OpenSearch Provisioned being enabled, auto-enabling Use Global VPC flag"
             );
         }
 
@@ -359,7 +360,10 @@ export interface ConfigPublic {
             optionalHostedZoneId: string;
         };
         pipelines: {
-            usePointCloudVisualization: {
+            usePreviewPcPotreeViewer: {
+                enabled: boolean;
+            };
+            useGenAiMetadata3dExtraction: {
                 enabled: boolean;
             };
         };
