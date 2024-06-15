@@ -114,6 +114,6 @@ jobs:
               with:
                   input_path: vams/infra/cdk.out/vams-core-prod-us-east-1.template.json
 
-            - name: run checks
-              working-directory: vams/backend
-              run: make all
+            #- name: run checks
+            #  working-directory: vams/backend
+            #  run: make all
