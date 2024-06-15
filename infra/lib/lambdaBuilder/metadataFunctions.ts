@@ -7,84 +7,74 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as path from "path";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
-import { storageResources } from "../storage-builder";
+import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import * as cdk from "aws-cdk-lib";
+import { LayerVersion } from "aws-cdk-lib/aws-lambda";
+import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
+import * as Service from "../../lib/helper/service-helper";
+import * as Config from "../../config/config";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as kms from "aws-cdk-lib/aws-kms";
+import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../helper/security";
 
 export function buildMetadataFunctions(
     scope: Construct,
-    storageResources: storageResources
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
 ): lambda.Function[] {
     return ["create", "read", "update", "delete"].map((f) =>
-        buildMetadataFunction(scope, storageResources, f)
+        buildMetadataFunction(
+            scope,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets,
+            f
+        )
     );
 }
 
 export function buildMetadataFunction(
     scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
     name: string
 ): lambda.Function {
-    const fun = new lambda.DockerImageFunction(scope, name + "-metadata", {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.metadata.${name}.lambda_handler`],
-        }),
+    const fun = new lambda.Function(scope, name + "-metadata", {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.metadata.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
-        memorySize: 3008,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
             METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
         },
     });
     storageResources.dynamo.metadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
-    return fun;
-}
-
-export function buildMetadataIndexingFunction(
-    scope: Construct,
-    storageResources: storageResources,
-    aossEndpoint: string,
-    indexNameParam: string,
-    handlerType: "a" | "m"
-): lambda.Function {
-    const fun = new lambda.DockerImageFunction(scope, "idx" + handlerType, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.indexing.streams.lambda_handler_${handlerType}`],
-        }),
-        timeout: Duration.minutes(15),
-        memorySize: 3008,
-        environment: {
-            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            ASSET_BUCKET_NAME: storageResources.s3.assetBucket.bucketName,
-            AOSS_ENDPOINT_PARAM: aossEndpoint,
-            AOSS_INDEX_NAME_PARAM: indexNameParam,
-        },
-    });
-
-    // add access to read the parameter store param aossEndpoint
-    fun.role?.addToPrincipalPolicy(
-        new cdk.aws_iam.PolicyStatement({
-            actions: ["ssm:GetParameter"],
-            resources: [
-                `arn:aws:ssm:${cdk.Stack.of(scope).region}:${
-                    cdk.Stack.of(scope).account
-                }:parameter/${cdk.Stack.of(scope).stackName}/*`,
-            ],
-        })
-    );
-
-    storageResources.dynamo.metadataStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
-    storageResources.s3.assetBucket.grantRead(fun);
-
-    // trigger the lambda from the dynamodb db streams
-    storageResources.dynamo.metadataStorageTable.grantStreamRead(fun);
-    storageResources.dynamo.assetStorageTable.grantStreamRead(fun);
-
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     return fun;
 }

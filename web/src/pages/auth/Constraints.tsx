@@ -3,26 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// import { fetchConstraints } from "../../services/APIService";
 import CreateConstraint from "./CreateConstraint";
 import ListDefinition from "../../components/list/list-definitions/types/ListDefinition";
 import ColumnDefinition from "../../components/list/list-definitions/types/ColumnDefinition";
 import { API } from "aws-amplify";
 import ListPageNoDatabase from "../ListPageNoDatabase";
-
-async function fetchConstraints(api = API) {
-    try {
-        const response = await api.get("api", "auth/constraints", {});
-        if (response.constraints) {
-            return response.constraints;
-        } else {
-            return false;
-        }
-    } catch (error: any) {
-        console.log(error);
-        return error?.message;
-    }
-}
+import { fetchConstraints } from "../../services/APIService";
 
 export const ConstraintsListDefinition = new ListDefinition({
     pluralName: "constraints",
@@ -30,13 +16,13 @@ export const ConstraintsListDefinition = new ListDefinition({
     visibleColumns: ["name", "description"],
     filterColumns: [{ name: "name", placeholder: "Name" }],
     elementId: "name",
-    deleteFunction: (item: any): [boolean, string] => {
+    deleteFunction: (item: any): [boolean, string, string] => {
         try {
             const response: any = API.del("api", `auth/constraints/${item.constraintId}`, {});
-            return [true, response.message];
+            return [true, response.message, ""];
         } catch (error: any) {
             console.log(error);
-            return [false, error?.message];
+            return [false, error?.message, error?.response.data.message];
         }
     },
     columnDefinitions: [
@@ -60,10 +46,10 @@ export const ConstraintsListDefinition = new ListDefinition({
 export default function Constraints() {
     return (
         <ListPageNoDatabase
-            singularName={"constraint"}
-            singularNameTitleCase={"Constraint"}
-            pluralName={"constraints"}
-            pluralNameTitleCase={"Constraints"}
+            singularName={"access control constraint"}
+            singularNameTitleCase={"Access Control Constraint"}
+            pluralName={"access control constraints"}
+            pluralNameTitleCase={"Access Control Constraints"}
             listDefinition={ConstraintsListDefinition}
             CreateNewElement={CreateConstraint}
             fetchElements={fetchConstraints}

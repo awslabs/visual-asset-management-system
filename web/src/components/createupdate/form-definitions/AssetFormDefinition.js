@@ -59,10 +59,8 @@ export const AssetFormDefinition = new FormDefinition({
         const previewExtension = `.${previewFile?.name.split(".").pop()}`;
         const previewFileKey = `${assetId}${previewExtension}`;
         const config = Cache.getItem("config");
-        newFormValues.bucket = config.bucket;
         newFormValues.key = assetFileKey;
         newFormValues.previewLocation = {
-            Bucket: config.bucket,
             Key: previewFileKey,
         };
         newFormValues.assetType = assetExtension;

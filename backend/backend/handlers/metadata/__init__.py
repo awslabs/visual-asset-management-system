@@ -4,37 +4,14 @@
 
 import boto3
 import json
-import logging
 import os
 from datetime import datetime
+from customLogging.logger import safeLogger
+from common.validators import validate
 
 # region Logging
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-logger = logging.getLogger()
-
-if logger.hasHandlers():
-    # The Lambda environment pre-configures a handler logging to stderr.
-    # If a handler is already configured, # `.basicConfig` does not
-    # execute. Thus we set the level directly.
-    logger.setLevel(LOG_LEVEL)
-else:
-    logging.basicConfig(level=LOG_LEVEL)
+logger = safeLogger(service="InitMetadata")
 # endregion
-
-
-def mask_sensitive_data(event):
-    # remove sensitive data from request object before logging
-    keys_to_redact = ["authorization"]
-    result = {}
-    for k, v in event.items():
-        if isinstance(v, dict):
-            result[k] = mask_sensitive_data(v)
-        elif k in keys_to_redact:
-            result[k] = "<redacted>"
-        else:
-            result[k] = v
-    return result
-
 
 def build_response(http_code, body):
     return {
@@ -94,11 +71,39 @@ class ValidationError(Exception):
 def validate_event(event):
     if "pathParameters" not in event \
             or "assetId" not in event['pathParameters']:
-        raise ValidationError(404, {"error": "missing path parameters"})
+        raise ValidationError(404, {"error": "missing asset ID path parameters"})
     if "pathParameters" not in event \
             or "databaseId" not in event['pathParameters']:
-        raise ValidationError(404, {"error": "missing path parameters"})
+        raise ValidationError(404, {"error": "missing database ID path parameters"})
+    logger.info("Validating required parameters")
+    
+    (valid, message) = validate({
+        'databaseId': {
+            'value': event['pathParameters']['databaseId'],
+            'validator': 'ID'
+        },
+        'assetId': {
+            'value': event['pathParameters']['assetId'],
+            'validator': 'ID'
+        },
+    })
 
+    if not valid:
+        logger.error(message)
+        raise ValidationError(400, {"message": message})
+
+    if ('queryStringParameters' in event and 'prefix' in event['queryStringParameters']):
+        logger.info("Validating optional parameters")
+        (valid, message) = validate({
+            'assetPath': {
+                'value': event['queryStringParameters']['prefix'],
+                'validator': 'ASSET_PATH'
+            }
+        })
+
+        if not valid:
+            logger.error(message)
+            raise ValidationError(400, {"message": message})
 
 def validate_body(event):
 

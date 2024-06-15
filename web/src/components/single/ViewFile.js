@@ -1,6 +1,6 @@
 /* eslint-disable jsx-a11y/anchor-is-valid */
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -24,6 +24,8 @@ import { fetchAsset } from "../../services/APIService";
 import {
     columnarFileFormats,
     modelFileFormats,
+    imageFileFormats,
+    onlineViewer3DFileFormats,
     pcFileFormats,
     presentationFileFormats,
 } from "../../common/constants/fileFormats";
@@ -40,11 +42,17 @@ const checkFileFormat = (fileName, isDirectory) => {
 
     let filetype = fileName.split(".").pop();
     filetype = filetype.toLowerCase();
-    if (modelFileFormats.includes(filetype) || modelFileFormats.includes("." + filetype)) {
+    if (
+        onlineViewer3DFileFormats.includes(filetype) ||
+        onlineViewer3DFileFormats.includes("." + filetype)
+    ) {
         return "model";
     }
     if (pcFileFormats.includes(filetype) || pcFileFormats.includes("." + filetype)) {
         return "pc";
+    }
+    if (imageFileFormats.includes(filetype) || imageFileFormats.includes("." + filetype)) {
+        return "image";
     }
     if (columnarFileFormats.includes(filetype) || columnarFileFormats.includes("." + filetype)) {
         return "plot";
@@ -146,6 +154,8 @@ export default function ViewFile() {
                         newViewerOptions.push({ text: "Model", id: "model" });
                     } else if (defaultViewType === "pc") {
                         newViewerOptions.push({ text: "Point Cloud", id: "pc" });
+                    } else if (defaultViewType === "image") {
+                        newViewerOptions.push({ text: "Image", id: "image" });
                     } else if (defaultViewType === "html") {
                         newViewerOptions.push({ text: "HTML", id: "html" });
                     } else if (defaultViewType === "folder") {
@@ -170,14 +180,14 @@ export default function ViewFile() {
                         <SpaceBetween direction="vertical" size="l">
                             <BreadcrumbGroup
                                 items={[
-                                    { text: Synonyms.Databases, href: "/databases/" },
+                                    { text: Synonyms.Databases, href: "#/databases/" },
                                     {
                                         text: databaseId,
-                                        href: "/databases/" + databaseId + "/assets/",
+                                        href: "#/databases/" + databaseId + "/assets/",
                                     },
                                     {
                                         text: asset?.assetName,
-                                        href: "/databases/" + databaseId + "/assets/" + assetId,
+                                        href: "#/databases/" + databaseId + "/assets/" + assetId,
                                     },
                                     { text: "view " + filename },
                                 ]}

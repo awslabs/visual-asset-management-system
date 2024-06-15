@@ -6,35 +6,65 @@
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as path from "path";
+import * as sns from "aws-cdk-lib/aws-sns";
+import * as iam from "aws-cdk-lib/aws-iam";
+import * as cdk from "aws-cdk-lib";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
-import { suppressCdkNagErrorsByGrantReadWrite } from "../security";
+import { suppressCdkNagErrorsByGrantReadWrite } from "../helper/security";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
+import { LayerVersion } from "aws-cdk-lib/aws-lambda";
+import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
+import * as Service from "../../lib/helper/service-helper";
+import * as Config from "../../config/config";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
+import { buildSendEmailFunction } from "./sendEmailFunctions";
+import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
+import * as kms from "aws-cdk-lib/aws-kms";
+import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../helper/security";
+
 export function buildAssetService(
     scope: Construct,
-    assetStorageTable: dynamodb.Table,
-    databaseStorageTable: dynamodb.Table,
-    assetStorageBucket: s3.Bucket,
-    assetVisualizerStorageBucket: s3.Bucket
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "assetService";
-    const assetService = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.assets.${name}.lambda_handler`],
-        }),
+    const assetService = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.assets.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
-        memorySize: 3008,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+
         environment: {
-            DATABASE_STORAGE_TABLE_NAME: databaseStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
-            S3_ASSET_VISUALIZER_BUCKET: assetVisualizerStorageBucket.bucketName,
+            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
+            S3_ASSET_VISUALIZER_BUCKET: storageResources.s3.assetVisualizerBucket.bucketName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
         },
     });
-    assetStorageTable.grantReadWriteData(assetService);
-    assetVisualizerStorageBucket.grantReadWrite(assetService);
-    databaseStorageTable.grantReadWriteData(assetService);
-    assetStorageBucket.grantReadWrite(assetService);
+    storageResources.dynamo.assetStorageTable.grantReadWriteData(assetService);
+    storageResources.s3.assetVisualizerBucket.grantReadWrite(assetService);
+    storageResources.dynamo.databaseStorageTable.grantReadWriteData(assetService);
+    storageResources.s3.assetBucket.grantReadWrite(assetService);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(assetService);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(assetService);
+    kmsKeyLambdaPermissionAddToResourcePolicy(assetService, storageResources.encryption.kmsKey);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
@@ -43,24 +73,42 @@ export function buildAssetService(
 
 export function buildAssetFiles(
     scope: Construct,
-    assetStorageTable: dynamodb.Table,
-    databaseStorageTable: dynamodb.Table,
-    assetStorageBucket: s3.Bucket
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "assetFiles";
-    const assetService = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.assets.${name}.lambda_handler`],
-        }),
+    const assetService = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.assets.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
-        memorySize: 3008,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+
         environment: {
-            ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
         },
     });
-    assetStorageTable.grantReadWriteData(assetService);
-    databaseStorageTable.grantReadWriteData(assetService);
-    assetStorageBucket.grantReadWrite(assetService);
+    storageResources.dynamo.assetStorageTable.grantReadWriteData(assetService);
+    storageResources.dynamo.databaseStorageTable.grantReadWriteData(assetService);
+    storageResources.s3.assetBucket.grantRead(assetService);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(assetService);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(assetService);
+    kmsKeyLambdaPermissionAddToResourcePolicy(assetService, storageResources.encryption.kmsKey);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
@@ -69,144 +117,292 @@ export function buildAssetFiles(
 
 export function buildUploadAssetFunction(
     scope: Construct,
-    assetStorageBucket: s3.Bucket,
-    databaseStorageTable: dynamodb.Table,
-    assetStorageTable: dynamodb.Table
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "uploadAsset";
-    const uploadAssetFunction = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.assets.${name}.lambda_handler`],
-        }),
+    const assetTopicWildcardArn = cdk.Fn.sub(`arn:${Service.Partition()}:sns:*:*:AssetTopic*`);
+    const sendEmailFunction = buildSendEmailFunction(
+        scope,
+        lambdaCommonBaseLayer,
+        storageResources
+    );
+    const uploadAssetFunction = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.assets.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
-        memorySize: 3008,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
-            DATABASE_STORAGE_TABLE_NAME: databaseStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
+            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            SUBSCRIPTIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.subscriptionsStorageTable.tableName,
+            ASSET_LINKS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetLinksStorageTable.tableName,
+            SEND_EMAIL_FUNCTION_NAME: sendEmailFunction.functionName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
         },
     });
-    assetStorageBucket.grantReadWrite(uploadAssetFunction);
-    databaseStorageTable.grantReadWriteData(uploadAssetFunction);
-    assetStorageTable.grantReadWriteData(uploadAssetFunction);
+    uploadAssetFunction.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["sns:CreateTopic", "sns:ListTopics"],
+            resources: [assetTopicWildcardArn],
+        })
+    );
+
+    storageResources.s3.assetBucket.grantReadWrite(uploadAssetFunction);
+    storageResources.dynamo.databaseStorageTable.grantReadWriteData(uploadAssetFunction);
+    storageResources.dynamo.assetStorageTable.grantReadWriteData(uploadAssetFunction);
+    storageResources.dynamo.subscriptionsStorageTable.grantReadWriteData(uploadAssetFunction);
+    storageResources.dynamo.assetLinksStorageTable.grantReadWriteData(uploadAssetFunction);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(uploadAssetFunction);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(uploadAssetFunction);
+    kmsKeyLambdaPermissionAddToResourcePolicy(
+        uploadAssetFunction,
+        storageResources.encryption.kmsKey
+    );
     suppressCdkNagErrorsByGrantReadWrite(scope);
+    sendEmailFunction.grantInvoke(uploadAssetFunction);
     return uploadAssetFunction;
 }
 
 export function buildUploadAllAssetsFunction(
     scope: Construct,
-    assetStorageBucket: s3.Bucket,
-    databaseStorageTable: dynamodb.Table,
-    assetStorageTable: dynamodb.Table,
-    workflowExecutionTable: dynamodb.Table,
-    uploadAssetLambdaFunction: lambda.Function
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    uploadAssetLambdaFunction: lambda.Function,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "uploadAllAssets";
-    const uploadAllAssetFunction = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.assets.${name}.lambda_handler`],
-        }),
+    const uploadAllAssetFunction = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.assets.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
-        memorySize: 3008,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
-            DATABASE_STORAGE_TABLE_NAME: databaseStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
-            WORKFLOW_EXECUTION_STORAGE_TABLE_NAME: workflowExecutionTable.tableName,
+            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
+                storageResources.dynamo.workflowExecutionStorageTable.tableName,
             UPLOAD_LAMBDA_FUNCTION_NAME: uploadAssetLambdaFunction.functionName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
         },
     });
     uploadAssetLambdaFunction.grantInvoke(uploadAllAssetFunction);
-    assetStorageBucket.grantReadWrite(uploadAllAssetFunction);
-    databaseStorageTable.grantReadWriteData(uploadAllAssetFunction);
-    assetStorageTable.grantReadData(uploadAllAssetFunction);
-    workflowExecutionTable.grantReadWriteData(uploadAllAssetFunction);
+    storageResources.s3.assetBucket.grantReadWrite(uploadAllAssetFunction);
+    storageResources.dynamo.databaseStorageTable.grantReadWriteData(uploadAllAssetFunction);
+    storageResources.dynamo.assetStorageTable.grantReadData(uploadAllAssetFunction);
+    storageResources.dynamo.workflowExecutionStorageTable.grantReadWriteData(
+        uploadAllAssetFunction
+    );
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(uploadAllAssetFunction);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(uploadAllAssetFunction);
+    kmsKeyLambdaPermissionAddToResourcePolicy(
+        uploadAllAssetFunction,
+        storageResources.encryption.kmsKey
+    );
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return uploadAllAssetFunction;
 }
 
 export function buildAssetMetadataFunction(
     scope: Construct,
-    assetStorageBucket: s3.Bucket,
-    assetStorageTable: dynamodb.Table
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
 ) {
     const name = "metadata";
-    const assetMetadataFunction = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.assets.${name}.lambda_handler`],
-        }),
+    const assetMetadataFunction = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.assets.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
-        memorySize: 3008,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
-            ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
         },
     });
-    assetStorageBucket.grantRead(assetMetadataFunction);
-    assetStorageTable.grantReadData(assetMetadataFunction);
-
+    storageResources.s3.assetBucket.grantRead(assetMetadataFunction);
+    storageResources.dynamo.assetStorageTable.grantReadData(assetMetadataFunction);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(assetMetadataFunction);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(assetMetadataFunction);
+    kmsKeyLambdaPermissionAddToResourcePolicy(
+        assetMetadataFunction,
+        storageResources.encryption.kmsKey
+    );
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return assetMetadataFunction;
 }
 
 export function buildAssetColumnsFunction(
     scope: Construct,
-    assetStorageBucket: s3.Bucket,
-    assetStorageTable: dynamodb.Table
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
 ) {
     const name = "assetColumns";
-    const assetColumnsFunction = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.assets.${name}.lambda_handler`],
-        }),
+    const assetColumnsFunction = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.assets.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
-        memorySize: 3008,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
-            ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
         },
     });
-    assetStorageBucket.grantRead(assetColumnsFunction);
-    assetStorageTable.grantReadData(assetColumnsFunction);
-
+    storageResources.s3.assetBucket.grantRead(assetColumnsFunction);
+    storageResources.dynamo.assetStorageTable.grantReadData(assetColumnsFunction);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(assetColumnsFunction);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(assetColumnsFunction);
+    kmsKeyLambdaPermissionAddToResourcePolicy(
+        assetColumnsFunction,
+        storageResources.encryption.kmsKey
+    );
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return assetColumnsFunction;
 }
 
 export function buildFetchVisualizerAssetFunction(
     scope: Construct,
-    assetVisualizerStorageBucket: s3.Bucket
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "fetchVisualizerAsset";
-    const fetchVisualizerAssetFunction = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.assets.${name}.lambda_handler`],
-        }),
+    const fetchVisualizerAssetFunction = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.assets.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
-        memorySize: 3008,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
-            ASSET_VISUALIZER_BUCKET_NAME: assetVisualizerStorageBucket.bucketName,
+            ASSET_VISUALIZER_BUCKET_NAME: storageResources.s3.assetVisualizerBucket.bucketName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
         },
     });
-    assetVisualizerStorageBucket.grantRead(fetchVisualizerAssetFunction);
+    storageResources.s3.assetVisualizerBucket.grantRead(fetchVisualizerAssetFunction);
+    storageResources.dynamo.assetStorageTable.grantReadData(fetchVisualizerAssetFunction);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fetchVisualizerAssetFunction);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fetchVisualizerAssetFunction);
+    kmsKeyLambdaPermissionAddToResourcePolicy(
+        fetchVisualizerAssetFunction,
+        storageResources.encryption.kmsKey
+    );
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return fetchVisualizerAssetFunction;
 }
 
 export function buildDownloadAssetFunction(
     scope: Construct,
-    assetStorageBucket: s3.Bucket,
-    assetStorageTable: dynamodb.Table
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
 ) {
     const name = "downloadAsset";
-    const downloadAssetFunction = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.assets.${name}.lambda_handler`],
-        }),
+    const downloadAssetFunction = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.assets.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
-        memorySize: 3008,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
-            ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            //S3_ENDPOINT: Service.Service("S3").Endpoint,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
         },
     });
-    assetStorageBucket.grantRead(downloadAssetFunction);
-    assetStorageTable.grantReadData(downloadAssetFunction);
+    storageResources.s3.assetBucket.grantRead(downloadAssetFunction);
+    storageResources.dynamo.assetStorageTable.grantReadData(downloadAssetFunction);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(downloadAssetFunction);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(downloadAssetFunction);
+    kmsKeyLambdaPermissionAddToResourcePolicy(
+        downloadAssetFunction,
+        storageResources.encryption.kmsKey
+    );
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return downloadAssetFunction;
@@ -214,49 +410,141 @@ export function buildDownloadAssetFunction(
 
 export function buildRevertAssetFunction(
     scope: Construct,
-    assetStorageBucket: s3.Bucket,
-    databaseStorageTable: dynamodb.Table,
-    assetStorageTable: dynamodb.Table
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "revertAsset";
-    const revertAssetFunction = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.assets.${name}.lambda_handler`],
-        }),
+    const revertAssetFunction = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.assets.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
-        memorySize: 3008,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
-            DATABASE_STORAGE_TABLE_NAME: databaseStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
+            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
         },
     });
-    assetStorageBucket.grantReadWrite(revertAssetFunction);
-    databaseStorageTable.grantReadData(revertAssetFunction);
-    assetStorageTable.grantReadWriteData(revertAssetFunction);
+    storageResources.s3.assetBucket.grantReadWrite(revertAssetFunction);
+    storageResources.dynamo.databaseStorageTable.grantReadData(revertAssetFunction);
+    storageResources.dynamo.assetStorageTable.grantReadWriteData(revertAssetFunction);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(revertAssetFunction);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(revertAssetFunction);
+    kmsKeyLambdaPermissionAddToResourcePolicy(
+        revertAssetFunction,
+        storageResources.encryption.kmsKey
+    );
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return revertAssetFunction;
 }
 
 export function buildUploadAssetWorkflowFunction(
     scope: Construct,
-    uploadAssetWorkflowStateMachine: sfn.StateMachine
+    lambdaCommonBaseLayer: LayerVersion,
+    uploadAssetWorkflowStateMachine: sfn.StateMachine,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "upload_asset_workflow";
 
     //TODO: Need to send separpate PR for actual code.
     //TODO: Currently only passing this as part of the infra change.
-    const uploadAssetWorkflowFunction = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.functions.assets.${name}.lambda_handler.lambda_handler`],
-        }),
+    const uploadAssetWorkflowFunction = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `functions.assets.${name}.lambda_handler.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
-        memorySize: 3008,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
             UPLOAD_WORKFLOW_ARN: uploadAssetWorkflowStateMachine.stateMachineArn,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
         },
     });
+
     uploadAssetWorkflowStateMachine.grantStartExecution(uploadAssetWorkflowFunction);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(uploadAssetWorkflowFunction);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(uploadAssetWorkflowFunction);
+    kmsKeyLambdaPermissionAddToResourcePolicy(uploadAssetWorkflowFunction, kmsKey);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return uploadAssetWorkflowFunction;
+}
+
+export function buildIngestAssetFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    uploadAssetLambdaFunction: lambda.Function,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    kmsKey?: kms.IKey
+): lambda.Function {
+    const name = "ingestAsset";
+    const ingestAssetService = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.assets.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+
+        environment: {
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+            S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
+            UPLOAD_LAMBDA_FUNCTION_NAME: uploadAssetLambdaFunction.functionName,
+            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+        },
+    });
+
+    storageResources.dynamo.assetStorageTable.grantReadWriteData(ingestAssetService);
+    storageResources.dynamo.databaseStorageTable.grantReadWriteData(ingestAssetService);
+    storageResources.dynamo.metadataStorageTable.grantReadWriteData(ingestAssetService);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(ingestAssetService);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(ingestAssetService);
+    storageResources.s3.assetBucket.grantReadWrite(ingestAssetService);
+    uploadAssetLambdaFunction.grantInvoke(ingestAssetService);
+    kmsKeyLambdaPermissionAddToResourcePolicy(ingestAssetService, kmsKey);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
+
+    return ingestAssetService;
 }

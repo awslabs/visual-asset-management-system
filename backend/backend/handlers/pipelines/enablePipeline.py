@@ -4,91 +4,141 @@
 import os
 import boto3
 import json
-from boto3.dynamodb.conditions import Key, Attr
-from backend.common.validators import validate
+from common.constants import STANDARD_JSON_RESPONSE
+from common.validators import validate
+from handlers.auth import request_to_claims
+from handlers.authz import CasbinEnforcer
+from customLogging.logger import safeLogger
 
-response = {
-    'statusCode': 200,
-    'body': '',
-    'headers': {
-        'Content-Type': 'application/json',
-            'Access-Control-Allow-Credentials': True,
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type',
-            'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
-    }
-}
+claims_and_roles = {}
+logger = safeLogger(service="EnablePipeline")
+main_rest_response = STANDARD_JSON_RESPONSE
 dynamodb = boto3.resource('dynamodb')
 try:
     pipeline_Database = os.environ["PIPELINE_STORAGE_TABLE_NAME"]
 except:
-    print("Failed Loading Environment Variables")
-    
-    response['body'] =json.dumps({"message":"Failed Loading Environment Variables"}) 
+    logger.exception("Failed loading environment variables")
+
+    main_rest_response['body'] = json.dumps({"message": "Failed Loading Environment Variables"})
+
 
 def enablePipeline(databaseId, pipelineId):
+    status_code = None
     table = dynamodb.Table(pipeline_Database)
-    print("Enabling pipeline")
-    response = table.update_item(
-        Key={
-            'databaseId': databaseId, 
-            'pipelineId': pipelineId
-        }, 
-        UpdateExpression='SET #enabled = :true',
-        ExpressionAttributeNames = {
-            '#enabled': 'enabled'
-        },
-        ExpressionAttributeValues = {
-            ':true': True
-        }
-    )
-    print(response)
+    db_response = table.get_item(Key={'databaseId': databaseId, 'pipelineId': pipelineId})
+    pipeline = db_response.get("Item", {})
+    allowed = False
+
+    if pipeline:
+        # Add Casbin Enforcer to check if the current user has permissions to POST the pipeline:
+        pipeline.update({
+            "object__type": "pipeline"
+        })
+        for user_name in claims_and_roles["tokens"]:
+            casbin_enforcer = CasbinEnforcer(user_name)
+            if casbin_enforcer.enforce(f"user::{user_name}", pipeline, "POST"):
+                allowed = True
+                break
+
+        if allowed:
+            status_code = 200
+            table = dynamodb.Table(pipeline_Database)
+            logger.info("Enabling pipeline")
+            table.update_item(
+                Key={
+                    'databaseId': databaseId,
+                    'pipelineId': pipelineId
+                },
+                UpdateExpression='SET #enabled = :true',
+                ExpressionAttributeNames={
+                    '#enabled': 'enabled'
+                },
+                ExpressionAttributeValues={
+                    ':true': True
+                }
+            )
+            logger.info("Pipeline is enabled")
+            message = "Pipeline enabled"
+            #logger.info(response)
+        else:
+            status_code = 403
+            message = "Not Authorized"
+    else:
+        status_code = 404
+        message = "Pipeline not found"
+    
+    logger.info(message)
+    return {
+        "statusCode": status_code,
+        "body": json.dumps({"message": message})
+    }
+
 
 def lambda_handler(event, context):
-    print(event)
-    if 'pipelineId' not in event:
-        response['statusCode'] = 500
-        print("Pipeline id not provided")
-        return response
-    if 'databaseId' not in event:
-        response['statusCode'] = 500
-        print("databaseId id not provided")
-        return response
-    else:
-        print("Validating Parameters")
-        (valid, message) = validate({
-            'databaseId': {
-                'value': event['body']['databaseId'], 
-                'validator': 'ID'
-            },
-            'pipelineId': {
-                'value': event['body']['pipelineId'], 
-                'validator': 'ID'
-            }
-        })
-        if not valid:
-            print(message)
-            response['body']=json.dumps({"message": message})
+    response = STANDARD_JSON_RESPONSE
+    logger.info(event)
+
+    try:
+        if 'pipelineId' not in event:
             response['statusCode'] = 400
+            logger.error("Pipeline id not provided")
             return response
-        try: 
-            enablePipeline(event['databaseId'], event['pipelineId'])
-            print("Pipeline is enabled")
-            response['body'] = json.dumps({"message": "Success"})
+        if 'databaseId' not in event:
+            response['statusCode'] = 400
+            logger.error("databaseId id not provided")
             return response
-        except Exception as e:
-            response['statusCode'] = 500
-            print("Error!", e.__class__, "occurred.")
-            try:
-                print(e)
-                response['body'] = json.dumps({"message": str(e)})
-            except:
-                print("Can't Read Error")
-                response['body'] = json.dumps({"message": "An unexpected error occurred while executing the request"})
-            return response
+        else:
+            logger.info("Validating Parameters")
+            (valid, message) = validate({
+                'databaseId': {
+                    'value': event['body']['databaseId'],
+                    'validator': 'ID'
+                },
+                'pipelineId': {
+                    'value': event['body']['pipelineId'],
+                    'validator': 'ID'
+                }
+            })
+            if not valid:
+                logger.error(message)
+                response['body'] = json.dumps({"message": message})
+                response['statusCode'] = 400
+                return response
 
+            global claims_and_roles
+            claims_and_roles = request_to_claims(event)
 
+            http_method = event['requestContext']['http']['method']
+            method_allowed_on_api = False
+            request_object = {
+                "object__type": "api",
+                "route__path": event['requestContext']['http']['path']
+            }
+            for user_name in claims_and_roles["tokens"]:
+                casbin_enforcer = CasbinEnforcer(user_name)
+                if casbin_enforcer.enforce(f"user::{user_name}", request_object, http_method):
+                    method_allowed_on_api = True
+                    break
+            if method_allowed_on_api:
+                try:
+                    response.update(enablePipeline(event['databaseId'], event['pipelineId']))
+                    return response
+                except Exception as e:
+                    response['statusCode'] = 500
+                    logger.exception(e)
+                    response['body'] = json.dumps({"message": "Internal Server Error"})
+
+                    return response
+            else:
+                response['statusCode'] = 403
+                response['body'] = json.dumps({"message": "Not Authorized"})
+                return response
+    except Exception as e:
+        logger.exception(e)
+        response['statusCode'] = 500
+        response['body'] = json.dumps({"message": "Internal Server Error"})
+        return response
 
 if __name__ == "__main__":
     test_response = lambda_handler(None, None)
-    print(test_response)
+    logger.info(test_response)

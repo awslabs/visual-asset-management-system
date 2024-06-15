@@ -11,6 +11,7 @@ import DatabaseSelector from "../../selectors/DatabaseSelector";
 import {
     columnarFileFormats,
     pcFileFormats,
+    imageFileFormats,
     modelFileFormats,
     cadFileFormats,
     archiveFileFormats,
@@ -23,6 +24,7 @@ const fileTypeOptions = modelFileFormats
     .concat(cadFileFormats)
     .concat(archiveFileFormats)
     .concat(pcFileFormats)
+    .concat(imageFileFormats)
     .map((fileType) => {
         return new OptionDefinition({
             value: fileType,
@@ -31,10 +33,6 @@ const fileTypeOptions = modelFileFormats
     });
 
 const pipelineTypeOptions = [
-    {
-        label: "SageMaker",
-        value: "SageMaker",
-    },
     {
         label: "Lambda",
         value: "Lambda",
@@ -51,7 +49,7 @@ export const PipelineFormDefinition = new FormDefinition({
             label: "Pipeline Name",
             id: "pipelineId",
             constraintText:
-                "Required. All lower case, no special chars or spaces except - and _ only letters for first character min 4 and max 64. For sagemaker pipelines _ are not allowed.",
+                "Required. All lower case, no special chars or spaces except - and _ only letters for first character min 4 and max 64.",
             elementDefinition: new ElementDefinition({
                 formElement: Input,
                 elementProps: { autoFocus: true },
@@ -141,18 +139,6 @@ export const PipelineFormDefinition = new FormDefinition({
                 },
             }),
             appearsWhen: ["waitForCallback", "Yes"],
-        }),
-        new ControlDefinition({
-            label: "Container Uri (Optional)",
-            id: "containerUri",
-            constraintText:
-                "ACCOUNT_NUMBER.dkr.ecr.REGION.amazonaws.com/IMAGE_NAME. If you do not provide an image stored in Amazon ECR, an Amazon Sagemaker notebook instance will be provisioned on your behalf with steps to deploy one.",
-            elementDefinition: new ElementDefinition({
-                formElement: Input,
-                elementProps: { autoFocus: false },
-            }),
-            appearsWhen: ["pipelineType", "SageMaker"],
-            required: false,
         }),
         new ControlDefinition({
             label: "Lambda Function Name (Optional)",

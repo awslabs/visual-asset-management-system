@@ -16,15 +16,6 @@ body = {
     "outputType": ".stl"
 }
 
-body_sagemaker = {
-    "waitForCallback": "",
-    "pipelineType": "SageMaker",
-    "pipelineId": "sagemakerdemo",
-    "databaseId": "default",
-    "description": "demo",
-    "assetType": ".stl",
-    "outputType": ".stl"
-}
 
 env = {
     "PIPELINE_STORAGE_TABLE_NAME": "pipeline_storage",
@@ -32,8 +23,6 @@ env = {
     "ENABLE_PIPELINE_FUNCTION_ARN":
         "0000000000000000000000000000000000000:function:enable_pipeline",
     'S3_BUCKET': 'pipeline-bucket',
-    'SAGEMAKER_BUCKET_NAME': 'sagemaker-bucket',
-    'SAGEMAKER_BUCKET_ARN': 'sagemaker-bucket-arn',
     'ASSET_BUCKET_ARN': 'asset-bucket-arn',
     'ROLE_TO_ATTACH_TO_LAMBDA_PIPELINE': 'role-to-attach-to-lambda-pipeline',
     'LAMBDA_PIPELINE_SAMPLE_FUNCTION_BUCKET':
@@ -68,7 +57,7 @@ def test_create_pipeline():
             'S3Key': 'lambda-pipeline-sample-function-key',
         },
         Handler='lambda_function.lambda_handler',
-        Runtime='python3.8')
+        Runtime='python3.10')
 
 
 def test_upload_pipeline():
@@ -107,49 +96,3 @@ def test_upload_pipeline():
     )
     assert create_pipeline.createLambdaPipeline.call_count == 1
     assert create_pipeline.createLambdaPipeline.call_args == call(body)
-
-
-def test_upload_pipeline_sagemaker():
-    dynamodb = Mock()
-    table = Mock()
-    dynamodb.Table = Mock(return_value=table)
-    table.put_item = Mock()
-    cloudformation = Mock()
-    lambda_client = Mock()
-    lambda_client.create_function = Mock()
-
-    create_pipeline = CreatePipeline(dynamodb=dynamodb,
-                                     cloudformation=cloudformation,
-                                     lambda_client=lambda_client, env=env)
-    date_created = "June 14 2023 - 19:53:45"
-    create_pipeline._now = Mock(return_value=date_created)
-    create_pipeline.createLambdaPipeline = Mock()
-    create_pipeline.createSagemakerPipeline = Mock()
-
-    create_pipeline.upload_Pipeline(body_sagemaker)
-
-    assert table.put_item.call_count == 1
-
-    item_arg = {
-        'dateCreated': '"{}"'.format(date_created),
-        'userProvidedResource': '{"isProvided": false, "resourceId": ""}',
-        'enabled': False,
-    }
-    item_arg.update(body_sagemaker)
-
-    assert table.put_item.call_count == 1
-
-    item_arg = {
-        'dateCreated': '"{}"'.format(date_created),
-        'userProvidedResource': '{"isProvided": false, "resourceId": ""}',
-        'enabled': False,
-    }
-    item_arg.update(body_sagemaker)
-
-    assert table.put_item.call_args == call(
-        Item=item_arg,
-        ConditionExpression='attribute_not_exists(databaseId) and attribute_not_exists(pipelineId)'
-    )
-    assert create_pipeline.createLambdaPipeline.call_count == 0
-    assert create_pipeline.createSagemakerPipeline.call_count == 1
-    assert create_pipeline.createSagemakerPipeline.call_args == call(body_sagemaker)

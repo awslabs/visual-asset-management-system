@@ -16,6 +16,9 @@ import {
     TextFilter,
     Flashbar,
     SpaceBetween,
+    Modal,
+    Box,
+    Alert,
 } from "@cloudscape-design/components";
 import { EmptyState } from "../../common/common-components";
 import ListDefinition from "./list-definitions/types/ListDefinition";
@@ -31,6 +34,7 @@ export default function TableList(props) {
         createNewElement,
         UpdateSelectedElement,
         editEnabled,
+        onReload,
     } = props;
     const {
         columnDefinitions,
@@ -38,6 +42,7 @@ export default function TableList(props) {
         filterColumns,
         pluralName,
         pluralNameTitleCase,
+        singularNameTitleCase,
         deleteFunction,
     } = listDefinition;
     const filteredVisibleColumns = visibleColumns.filter((columnName) => {
@@ -52,6 +57,7 @@ export default function TableList(props) {
     });
     //state
     const [editOpen, setEditOpen] = useState(false);
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
 
     const [activeFilters, setActiveFilters] = useState(
         filteredFilterColumns.reduce((acc, cur) => {
@@ -157,10 +163,14 @@ export default function TableList(props) {
                             {
                                 header: "Failed to Delete",
                                 type: "error",
-                                content: result[1],
+                                content: result[1] + ". " + result[2],
                                 dismissible: true,
                                 dismissLabel: "Dismiss message",
-                                onDismiss: () => setDeleteResult([]),
+                                onDismiss: () =>
+                                    setDeleteResult({
+                                        result: "",
+                                        items: [],
+                                    }),
                             },
                         ],
                     });
@@ -174,7 +184,79 @@ export default function TableList(props) {
         }
         setDeleting(false);
         setReload(true);
+        if (onReload) {
+            onReload();
+        }
     };
+
+    function DeleteModal({ selectedItems, onCancel, onOk }) {
+        let length = selectedItems.length;
+        let title = length > 1 ? pluralNameTitleCase : singularNameTitleCase;
+        const shouldHideCancelButton = pluralName === "tag types";
+        let itemNames = [];
+        if (pluralName === "tag types") {
+            for (let i = 0; i < length; i++) {
+                itemNames[i] = selectedItems[i]?.tagTypeName || "unknown";
+            }
+        }
+        if (pluralName === "tags") {
+            for (let i = 0; i < length; i++) {
+                itemNames[i] = selectedItems[i]?.tagName || "unknown";
+            }
+        }
+        if (pluralName === "Subscriptions") {
+            for (let i = 0; i < length; i++) {
+                itemNames[i] = selectedItems[i]?.entityValue || "unknown";
+            }
+        }
+        if (pluralName === "Roles") {
+            for (let i = 0; i < length; i++) {
+                itemNames[i] = selectedItems[i]?.roleName || "unknown";
+            }
+        }
+        if (pluralName === "databases") {
+            for (let i = 0; i < length; i++) {
+                itemNames[i] = selectedItems[i]?.databaseId || "unknown";
+            }
+        }
+        if (pluralName === "Users in Roles") {
+            for (let i = 0; i < length; i++) {
+                itemNames[i] = selectedItems[i]?.userId || "unknown";
+            }
+        }
+        const showFeatureComingSoonModal = shouldHideCancelButton;
+        return (
+            <>
+                <Modal
+                    onDismiss={onCancel}
+                    visible={showDeleteModal}
+                    size="medium"
+                    footer={
+                        <Box float="right">
+                            <SpaceBetween direction="horizontal" size="xs">
+                                <Button variant="link" onClick={onCancel}>
+                                    No
+                                </Button>
+                                <Button variant="primary" onClick={onOk}>
+                                    Yes
+                                </Button>
+                            </SpaceBetween>
+                        </Box>
+                    }
+                    header={"Delete " + title}
+                >
+                    <div>
+                        <p>
+                            {`Do you want to delete ${title}?: '`}
+                            <i>{itemNames.join(", ")}</i>
+                            {`' ?`}
+                        </p>
+                    </div>
+                </Modal>
+            </>
+        );
+    }
+
     return (
         <>
             <Flashbar items={deleteResult.items} />
@@ -195,21 +277,19 @@ export default function TableList(props) {
                                             deleting || collectionProps.selectedItems?.length !== 1
                                         }
                                         onClick={() => {
-                                            console.log("Edit", collectionProps.selectedItems[0]);
                                             setEditOpen(true);
                                         }}
                                     >
                                         Edit
                                     </Button>
                                 )}
-
                                 <Button
                                     disabled={
                                         deleting || collectionProps.selectedItems.length === 0
                                     }
-                                    onClick={() =>
-                                        handleDeleteElements(collectionProps.selectedItems)
-                                    }
+                                    onClick={() => {
+                                        setShowDeleteModal(true);
+                                    }}
                                 >
                                     Delete Selected
                                 </Button>
@@ -249,7 +329,6 @@ export default function TableList(props) {
                 items={items}
                 loading={loading}
                 selectionType={"multi"}
-                //@todo add aria pagination label
                 pagination={<Pagination {...paginationProps} />}
                 filter={
                     <Grid
@@ -280,48 +359,66 @@ export default function TableList(props) {
                             >
                                 {filteredFilterColumns.map((filterColumn, i) => {
                                     const selectedValue = activeFilters[filterColumn.name];
-                                    return (
-                                        <Select
-                                            key={i}
-                                            selectedOption={
-                                                !selectedValue
-                                                    ? null
-                                                    : {
-                                                          label: selectedValue,
-                                                          value: selectedValue,
-                                                      }
-                                            }
-                                            onChange={({ detail }) => {
-                                                handleFilterSelected(
-                                                    filterColumn.name,
-                                                    detail?.selectedOption?.value
-                                                );
-                                            }}
-                                            options={[
-                                                {
-                                                    label: <em>all</em>,
-                                                    value: null,
-                                                },
-                                            ].concat(
-                                                [
-                                                    ...new Set(
-                                                        allItems.map(
-                                                            (row) => row[filterColumn.name]
-                                                        )
-                                                    ),
-                                                ].map((cellValue) => {
-                                                    return { label: cellValue, value: cellValue };
-                                                })
-                                            )}
-                                            placeholder={filterColumn.placeholder}
-                                            selectedAriaLabel="Selected"
-                                        />
-                                    );
+                                    if (
+                                        pluralName !== "tag types" &&
+                                        pluralName !== "tags" &&
+                                        pluralName !== "Subscriptions" &&
+                                        pluralName !== "Roles" &&
+                                        pluralName !== "User Roles"
+                                    )
+                                        return (
+                                            <Select
+                                                key={i}
+                                                selectedOption={
+                                                    !selectedValue
+                                                        ? null
+                                                        : {
+                                                              label: selectedValue,
+                                                              value: selectedValue,
+                                                          }
+                                                }
+                                                onChange={({ detail }) => {
+                                                    handleFilterSelected(
+                                                        filterColumn.name,
+                                                        detail?.selectedOption?.value
+                                                    );
+                                                }}
+                                                options={[
+                                                    {
+                                                        label: <em>all</em>,
+                                                        value: null,
+                                                    },
+                                                ].concat(
+                                                    [
+                                                        ...new Set(
+                                                            allItems.map(
+                                                                (row) => row[filterColumn.name]
+                                                            )
+                                                        ),
+                                                    ].map((cellValue) => {
+                                                        return {
+                                                            label: cellValue,
+                                                            value: cellValue,
+                                                        };
+                                                    })
+                                                )}
+                                                placeholder={filterColumn.placeholder}
+                                                selectedAriaLabel="Selected"
+                                            />
+                                        );
                                 })}
                             </Grid>
                         </div>
                     </Grid>
                 }
+            />
+            <DeleteModal
+                selectedItems={collectionProps.selectedItems}
+                onCancel={() => setShowDeleteModal(false)}
+                onOk={() => {
+                    handleDeleteElements(collectionProps.selectedItems);
+                    setShowDeleteModal(false);
+                }}
             />
 
             {UpdateSelectedElement && collectionProps.selectedItems.length === 1 && (
@@ -330,6 +427,7 @@ export default function TableList(props) {
                     setOpen={setEditOpen}
                     setReload={setReload}
                     initState={collectionProps.selectedItems[0]}
+                    reloadChild={onReload}
                 />
             )}
         </>
@@ -345,4 +443,5 @@ TableList.propTypes = {
     editEnabled: PropTypes.bool,
     UpdateSelectedElement: PropTypes.func,
     createNewElement: PropTypes.element,
+    onReload: PropTypes.func,
 };

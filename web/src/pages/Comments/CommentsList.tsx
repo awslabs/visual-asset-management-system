@@ -5,7 +5,7 @@
 
 import LoadingIcons from "react-loading-icons";
 import { useEffect, useState, useRef } from "react";
-import { Box, Tabs, Button, TextContent } from "@cloudscape-design/components";
+import { Box, Tabs, Button, TextContent, Alert } from "@cloudscape-design/components";
 import PopulateComments from "./PopulateComments";
 import { API } from "aws-amplify";
 import { generateUUID } from "../../common/utils/utils";
@@ -24,6 +24,8 @@ export default function CommentsList(props: any) {
     const [allItems, setAllItems] = useState<Array<any>>([]);
     const [userId, setUserId] = useState<string>("");
     const [content, setContent] = useState<string>("");
+    const [showAlert, setShowAlert] = useState(false);
+    const [alertMsg, setAlertMsg] = useState("");
     const editor = useRef(null);
     const listInnerRef = useRef(null);
 
@@ -90,6 +92,23 @@ export default function CommentsList(props: any) {
     const assetId = selectedItem?.assetId;
 
     useEffect(() => {
+        const status = localStorage.getItem("status");
+        if (status === "403post") {
+            setShowAlert(true);
+            setAlertMsg("Unable to edit comment. Error: Request failed with status code 403");
+            setTimeout(() => {
+                setShowAlert(false);
+            }, 10000);
+            localStorage.setItem("status", "");
+        }
+        if (status === "403") {
+            setShowAlert(true);
+            setAlertMsg("Unable to delete comment. Error: Request failed with status code 403");
+            setTimeout(() => {
+                setShowAlert(false);
+            }, 10000);
+            localStorage.setItem("status", "");
+        }
         const getUserId = async () => {
             try {
                 let user = await Auth.currentUserInfo();
@@ -110,12 +129,12 @@ export default function CommentsList(props: any) {
             }
 
             if (items !== false && Array.isArray(items)) {
-                setLoading(false);
-                setShowLoadingIcon(false);
                 setReload(false);
                 setDisplayItemsWhileLoading(false);
                 setAllItems(items.filter((item) => item.assetId.indexOf("#deleted") === -1));
             }
+            setLoading(false);
+            setShowLoadingIcon(false);
         };
         if (reload) {
             getUserId();
@@ -152,9 +171,16 @@ export default function CommentsList(props: any) {
                 }
             );
             console.log(response);
-        } catch (e) {
+        } catch (e: any) {
             console.log("create comment error");
-            console.log(e);
+            if (e.response.status === 403) {
+                setShowLoadingIcon(false);
+                setShowAlert(true);
+                setAlertMsg("Unable to add comment. Error: Request failed with status code 403");
+                setTimeout(() => {
+                    setShowAlert(false);
+                }, 10000);
+            }
         } finally {
             setReload(true);
         }
@@ -212,6 +238,18 @@ export default function CommentsList(props: any) {
                                                         </div>
                                                     </td>
                                                 </tr>
+                                                {showAlert && (
+                                                    <tr>
+                                                        <Alert
+                                                            statusIconAriaLabel="Error"
+                                                            type="error"
+                                                            dismissible={true}
+                                                            onDismiss={() => setShowAlert(false)}
+                                                        >
+                                                            {alertMsg}
+                                                        </Alert>
+                                                    </tr>
+                                                )}
                                                 <tr>
                                                     <td className="commentSectionTableBorder">
                                                         <div>

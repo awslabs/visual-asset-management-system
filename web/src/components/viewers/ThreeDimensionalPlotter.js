@@ -29,7 +29,7 @@ import "babylonjs-loaders";
 import { readRemoteFile } from "react-papaparse";
 import FCS from "fcs";
 import arrayBufferToBuffer from "arraybuffer-to-buffer";
-import { getPresignedKey } from "../../common/auth/s3";
+import { downloadAsset } from "../../services/APIService";
 
 let scatterPlot = {};
 let points = [];
@@ -545,24 +545,31 @@ export default function ThreeDimensionalPlotter(props) {
     }, [reactCanvas]);
 
     useEffect(() => {
-        let config = {
-            download: false,
-            expires: 10,
-        };
         const loadAsset = async () => {
             points = [];
-            await getPresignedKey(assetId, databaseId, assetKey).then((remoteFileUrl) => {
-                if (assetKey.indexOf(".fcs") !== -1) {
-                    try {
-                        readFcsFile(remoteFileUrl, render);
-                    } catch (error) {
-                        console.log(error);
-                    }
-                } else {
-                    try {
-                        readCsvFile(remoteFileUrl, render);
-                    } catch (error) {
-                        console.log(error);
+            await downloadAsset({
+                assetId: assetId,
+                databaseId: databaseId,
+                key: assetKey,
+                version: "",
+            }).then((response) => {
+                if (response !== false && Array.isArray(response)) {
+                    if (response[0] === false) {
+                        // TODO: error handling (response[1] has error message)
+                    } else {
+                        if (assetKey.indexOf(".fcs") !== -1) {
+                            try {
+                                readFcsFile(response[1], render);
+                            } catch (error) {
+                                console.log(error);
+                            }
+                        } else {
+                            try {
+                                readCsvFile(response[1], render);
+                            } catch (error) {
+                                console.log(error);
+                            }
+                        }
                     }
                 }
             });

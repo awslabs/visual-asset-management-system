@@ -25,6 +25,7 @@ export default function ListPageNoDatabase(props: any) {
         onCreateCallback,
         isRelatedTable,
         editEnabled,
+        onReload,
     } = props;
     const [reload, setReload] = useState(true);
     const [loading, setLoading] = useState(true);
@@ -78,6 +79,7 @@ export default function ListPageNoDatabase(props: any) {
                         listDefinition={listDefinition}
                         editEnabled={editEnabled}
                         setReload={setReload}
+                        onReload={onReload}
                         UpdateSelectedElement={CreateNewElement}
                         createNewElement={
                             (CreateNewElement || onCreateCallback) && (
@@ -102,6 +104,7 @@ export default function ListPageNoDatabase(props: any) {
                     open={openNewElement}
                     setOpen={setOpenNewElement}
                     setReload={setReload}
+                    reloadChild={onReload}
                 />
             )}
         </>
@@ -120,4 +123,5 @@ ListPageNoDatabase.propTypes = {
     onCreateCallback: PropTypes.func,
     isRelatedTable: PropTypes.bool,
     editEnabled: PropTypes.bool,
+    onReload: PropTypes.func,
 };

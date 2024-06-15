@@ -1,24 +1,30 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-FROM --platform=linux/amd64 python:3.11-alpine
+FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.11-alpine
 
 #Build PotreeConverter
-WORKDIR /PotreeConverterBuild
+WORKDIR /
 
-# install build deps, download Potree Source, and build for Potree Converter
-# Note. We are cloning to a depth of 5 which must include the git SHA below (see 
-# git reset --hard below). So, if more commits are made to the PoTree repository we
-# will need to increase the clone depth
-RUN apk add --no-cache git cmake make gcc g++ libtbb-dev && \
-    git clone --depth 5 https://github.com/potree/PotreeConverter /PotreeConverter
+# Latest Working Commit
+ARG GITHUB_SHA="c2328c433c7776e231d86712bb4074c82659e366" 
+ARG GITHUB_REPOSITORY="potree/PotreeConverter"
+ARG GITHUB_SERVER_URL="https://github.com"
+
+# install build deps, download Potree Source, and build for Potree Conveter
+RUN apk add --no-cache git cmake make gcc g++ libtbb-dev 
+
+#git clone --depth 1 "https://github.com/potree/PotreeConverter" PotreeConverter
+
+RUN git clone --depth 1 "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" PotreeConverter && \
+    cd PotreeConverter ; \
+    git checkout ${GITHUB_SHA}
 
 # Copy a git patch for the local CMakeLists.txt so we can override compiler settings
 COPY ./PotreeConverter-Fork_af4666fa.patch /PotreeConverter/vams-potree-build.patch
 
 # Potree Converter Commit Hash Reset && Apply the git patch 
 WORKDIR /PotreeConverter
-RUN git reset --hard af4666fa1090983d8ce7c11dcf49ba19eda90995
 RUN git apply --whitespace=fix vams-potree-build.patch
 WORKDIR /PotreeConverterBuild
 

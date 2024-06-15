@@ -111,7 +111,7 @@ const LandingPage = (props) => {
                                 <Box variant="p">
                                     Start uploading and managing your digital assets to get started.
                                 </Box>
-                                <Button href="/upload" variant="primary">
+                                <Button href="#/upload" variant="primary">
                                     Upload {Synonyms.Assets}
                                 </Button>
                             </SpaceBetween>

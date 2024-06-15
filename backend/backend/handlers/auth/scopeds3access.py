@@ -1,14 +1,20 @@
-#  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-
-from backend.handlers.auth import get_database_set, request_to_claims
+from handlers.auth import request_to_claims
 import json
 import boto3
 import os
 from datetime import datetime
+from handlers.authz import CasbinEnforcer
+from common.constants import STANDARD_JSON_RESPONSE
+from common.dynamodb import get_asset_object_from_id
+from common.validators import validate
+from customLogging.logger import safeLogger
 
-from backend.handlers.assets.assetService import get_asset
+claims_and_roles = {}
+logger = safeLogger(service="ScopedS3Access")
+
 
 """
 given a assetId, databaseId determine if a user has access to mutate s3
@@ -21,27 +27,19 @@ POST /auth/scopeds3access
 }
 """
 
+#Set boto environment variable to use regional STS endpoint (https://stackoverflow.com/questions/71255594/request-times-out-when-try-to-assume-a-role-with-aws-sts-from-a-private-subnet-u)
+#AWS_STS_REGIONAL_ENDPOINTS='regional'
+os.environ["AWS_STS_REGIONAL_ENDPOINTS"] = 'regional'
+
 ROLE_ARN = os.environ['ROLE_ARN']
-
-
-def _add_if_not_none(value, ary):
-    if value is not None and "Bucket" in value and "Key" in value:
-        ary.append(f"arn:aws:s3:::{value['Bucket']}/{value['Key']}")
+AWS_PARTITION = os.environ['AWS_PARTITION']
+KMS_KEY_ARN = os.environ['KMS_KEY_ARN']
 
 
 def lambda_handler(event, context):
-    print(event)
-    response = {
-        'statusCode': 200,
-        'body': '',
-        'headers': {
-            'Content-Type': 'application/json',
-                'Access-Control-Allow-Credentials': True,
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type',
-                'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
-        }
-    }
+    global claims_and_roles
+    response = STANDARD_JSON_RESPONSE
+    logger.info(event)
 
     try:
 
@@ -69,110 +67,143 @@ def lambda_handler(event, context):
             })
             response['statusCode'] = 400
             return response
-
-        claims_and_roles = request_to_claims(event)
-        is_super_admin = "super-admin" in claims_and_roles.get("roles", [])
-        tokens = claims_and_roles['tokens']
-
-        databases = get_database_set(tokens)
-        if databaseId not in databases and not is_super_admin:
-            response['body'] = json.dumps({
-                "message": "Not Authorized",
-            })
-            response['statusCode'] = 403
+        
+        logger.info("Validating parameters")
+        (valid, message) = validate({
+            'databaseId': {
+                'value': databaseId,
+                'validator': 'ID'
+            },
+            'assetId': {
+                'value': assetId,
+                'validator': 'ID'
+            },
+        })
+        if not valid:
+            logger.error(message)
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
             return response
 
-        timeout = 900
+        claims_and_roles = request_to_claims(event)
 
-        asset_record = get_asset(databaseId=databaseId, assetId=assetId)
+        asset = get_asset_object_from_id(assetId)
+        if asset:
+            allowed = False
+            # Add Casbin Enforcer to check if the current user has permissions to POST or PUT the asset:
+            # If this is the first time the asset is being accessed, then it would not be present in the database
+            # So, replacing it with the requested content
+            if not asset.get("assetId"):
+                asset = {
+                    "object__type": "asset",
+                    "assetId": assetId,
+                    "databaseId": databaseId
+                }
+            else:
+                asset.update({
+                    "object__type": "asset"
+                })
+            for user_name in claims_and_roles["tokens"]:
+                casbin_enforcer = CasbinEnforcer(user_name)
+                if casbin_enforcer.enforce(f"user::{user_name}", asset, "POST") or casbin_enforcer.enforce(f"user::{user_name}", asset, "PUT"):
+                    allowed = True
+                    break
 
-        keys_for_resources = []
+            if allowed:
+                timeout = 900
 
-        if asset_record:
-            key = None;
-            pl = asset_record.get("previewLocation", None)
-            if pl:
-                key = pl.get("Key", None)
+                # generate a policy scoped to the assetId as the s3 key prefix
+                # to be passed to assume_role
+                policy = {
+                    "Version": "2012-10-17",
+                    "Statement": [{
+                        "Sid": "Stmt1",
+                        "Effect": "Allow",
+                        # set of actions needed to do put object and multipart upload
+                        "Action": [
+                            "s3:PutObject",
+                            "s3:List*",
+                            "s3:CreateMultipartUpload",
+                            "s3:AbortMultipartUpload",
+                            "s3:ListMultipartUploadParts",
+                        ],
+                        "Resource": [
+                            "arn:"+AWS_PARTITION+":s3:::" +
+                            os.environ['S3_BUCKET'] + "/" + assetId + "/*",
+                            "arn:"+AWS_PARTITION+":s3:::" +
+                            os.environ['S3_BUCKET'] + "/previews/" + assetId + "/*"
+                        ]
+                    }, {
+                        "Sid": "Stmt2",
+                        "Effect": "Allow",
+                        # set of actions needed to do get object and multipart upload
+                        "Action": [
+                            "s3:ListBucket",
+                        ],
+                        "Resource": [
+                            "arn:"+AWS_PARTITION+":s3:::" + os.environ['S3_BUCKET']
+                        ]
+                    }]
+                }
 
-            _add_if_not_none(
-                asset_record.get("assetLocation", None),
-                keys_for_resources)
-            _add_if_not_none(
-                key,
-                keys_for_resources)
+                #If we have a KMS ARN, add statement policy to allow KMS actions
+                if KMS_KEY_ARN != "":
+                    policy["Statement"].append({
+                        "Sid": "Stmt3",
+                        "Effect": "Allow",
+                        "Action": [
+                            "kms:Decrypt",
+                            "kms:DescribeKey",
+                            "kms:Encrypt",
+                            "kms:GenerateDataKey*",
+                            "kms:ReEncrypt*",
+                            "kms:ListKeys",
+                            "kms:CreateGrant",
+                            "kms:ListAliases",
+                        ],
+                        "Resource": [KMS_KEY_ARN]
+                    })
 
-        # generate a policy scoped to the assetId as the s3 key prefix
-        # to be passed to assume_role
-        policy = {
-            "Version": "2012-10-17",
-            "Statement": [{
-                "Sid": "Stmt1",
-                "Effect": "Allow",
-                # set of actions needed to do get object and multipart upload
-                "Action": [
-                    "s3:PutObject",
-                    "s3:GetObject*",
-                    "s3:GetBucket*",
-                    "s3:List*",
-                    "s3:CreateMultipartUpload",
-                    "s3:AbortMultipartUpload",
-                    "s3:ListMultipartUploadParts",
-                    "s3:DeleteObject",
-                ],
-                "Resource": [
-                    "arn:aws:s3:::" +
-                    os.environ['S3_BUCKET'] + "/" + assetId + "/*",
-                    "arn:aws:s3:::" +
-                    os.environ['S3_BUCKET'] + "/previews/" + assetId + "/*"
-                ] + keys_for_resources
-            }, {
-                "Sid": "Stmt2",
-                "Effect": "Allow",
-                # set of actions needed to do get object and multipart upload
-                "Action": [
-                    "s3:ListBucket",
-                ],
-                "Resource": [
-                    "arn:aws:s3:::" + os.environ['S3_BUCKET']
-                ]
-            }]
-        }
+                # use sts to create a session for timeout seconds
+                sts_client = boto3.client('sts')
+                assumed_role_object = sts_client.assume_role(
+                    RoleArn=ROLE_ARN,
+                    RoleSessionName="presign",
+                    DurationSeconds=timeout,
+                    Policy=json.dumps(policy),
+                )
 
-        # use sts to create a session for timeout seconds
-        sts_client = boto3.client('sts')
-        assumed_role_object = sts_client.assume_role(
-            RoleArn=ROLE_ARN,
-            RoleSessionName="presign",
-            DurationSeconds=timeout,
-            Policy=json.dumps(policy),
-        )
+                logger.info("assumed role object")
+                logger.info(assumed_role_object)
 
-        print("assumed role object", assumed_role_object)
+                def datetime_serializer(obj):
+                    if isinstance(obj, datetime):
+                        return obj.isoformat()
+                    raise TypeError("Type not serializable")
 
-        def datetime_serializer(obj):
-            if isinstance(obj, datetime):
-                return obj.isoformat()
-            raise TypeError("Type not serializable")
+                assumed_role_object['bucket'] = os.environ['S3_BUCKET']
+                assumed_role_object['region'] = os.environ['AWS_REGION']
 
-        assumed_role_object['bucket'] = os.environ['S3_BUCKET']
-        assumed_role_object['region'] = os.environ['AWS_REGION']
+                # return the credentials
+                response['body'] = json.dumps(assumed_role_object,
+                                              default=datetime_serializer)
 
-        # return the credentials
-        response['body'] = json.dumps(assumed_role_object,
-                                      default=datetime_serializer)
-
-        return response
+                return response
+            else:
+                response['body'] = json.dumps({
+                    "message": "Not Authorized",
+                })
+                response['statusCode'] = 403
+                return response
+        else:
+            response['body'] = json.dumps({
+                "message": "Asset not found",
+            })
+            response['statusCode'] = 404
+            return response
 
     except Exception as e:
         response['statusCode'] = 500
-        print("Error!", e.__class__, "occurred.")
-        try:
-            print(e)
-            response['body'] = json.dumps({"message": str(e)})
-        except Exception:
-            print("Can't Read Error")
-            response['body'] = json.dumps({
-                "message": "An unexpected error occurred "
-                           "while executing the request"
-            })
+        logger.exception(e)
+        response['body'] = json.dumps({"message": "Internal Server Error"})
         return response

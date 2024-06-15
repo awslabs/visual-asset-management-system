@@ -77,10 +77,10 @@ export default function CommentListPage(props: any) {
                 {databaseId && (
                     <BreadcrumbGroup
                         items={[
-                            { text: Synonyms.Databases, href: "/databases/" },
+                            { text: Synonyms.Databases, href: "#/databases/" },
                             {
                                 text: databaseId,
-                                href: `/databases/${databaseId}/${pluralName}/`,
+                                href: `#/databases/${databaseId}/${pluralName}/`,
                             },
                         ]}
                         ariaLabel="Breadcrumbs"

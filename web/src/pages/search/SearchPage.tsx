@@ -1,30 +1,36 @@
 /*
- * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 import React, { Dispatch, ReducerAction, useEffect, useReducer, useState } from "react";
+import { Cache } from "aws-amplify";
+import { useNavigate } from "react-router-dom";
 import SearchPropertyFilter, { changeFilter, search } from "./SearchPropertyFilter";
-import Container from "@cloudscape-design/components/container";
 import {
     Alert,
     BreadcrumbGroup,
     Button,
-    ColumnLayout,
     Flashbar,
     FormField,
     Grid,
-    Header,
     Input,
     Select,
+    Multiselect,
     SpaceBetween,
     TextContent,
 } from "@cloudscape-design/components";
 import Synonyms from "../../synonyms";
+import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import SearchPageSegmentedControl from "./SearchPageSegmentedControl";
 import SearchPageMapView from "./SearchPageMapView";
 import SearchPageListView from "./SearchPageListView";
 import Box from "@cloudscape-design/components/box";
 import { useParams } from "react-router";
+import OptionDefinition from "../../components/createupdate/form-definitions/types/OptionDefinition";
+import { fetchTags } from "../../services/APIService";
+import ListPage from "../ListPage";
+import { fetchAllAssets, fetchDatabaseAssets } from "../../services/APIService";
+import { AssetListDefinition } from "../../components/list/list-definitions/AssetListDefinition";
 
 export interface SearchPageViewProps {
     state: any;
@@ -171,6 +177,7 @@ function searchReducer(state: any, action: any) {
                         "str_description",
                         "str_databaseid",
                         "str_assettype",
+                        "list_tags",
                     ],
                 };
             }
@@ -247,6 +254,20 @@ function searchReducer(state: any, action: any) {
                 notifications: [],
             };
 
+        case "delete-item-failed":
+            return {
+                ...state,
+                loading: false,
+                error: action.error,
+                notifications: [
+                    {
+                        type: "error",
+                        header: "Failed to Delete",
+                        content: action.payload.response,
+                    },
+                ],
+            };
+
         case "clicked-initial-delete":
             return {
                 ...state,
@@ -292,17 +313,37 @@ export const INITIAL_STATE = {
     columnDefinitions: [],
     notifications: [],
 };
-
+var tags: any[] = [];
 function SearchPage(props: SearchPageProps) {
-    const [useMapView] = useState(true);
+    const config = Cache.getItem("config");
+    const navigate = useNavigate();
+    const [useNoOpenSearch] = useState(
+        config.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH)
+    );
+
+    //Mapview should be used when location services are enabled and opensearch is used
+    const [useMapView] = useState(
+        config.featuresEnabled?.includes(featuresEnabled.LOCATIONSERVICES) && !useNoOpenSearch
+    );
+
     const { databaseId } = useParams();
     const [state, dispatch] = useReducer(searchReducer, { ...INITIAL_STATE, databaseId });
 
     useEffect(() => {
-        if (!state.initialResult) {
+        fetchTags().then((res) => {
+            tags = [];
+            if (res && Array.isArray(res)) {
+                Object.values(res).map((x: any) => {
+                    tags.push({ label: `${x.tagName} (${x.tagTypeName})`, value: x.tagName });
+                });
+            }
+            return tags;
+        });
+        if (!state.initialResult && !useNoOpenSearch) {
             search({}, { dispatch, state });
         }
     }, [state]);
+    const [selectedTags, setSelectedTags] = useState<OptionDefinition[]>([]);
 
     return (
         <>
@@ -310,10 +351,10 @@ function SearchPage(props: SearchPageProps) {
                 {databaseId && (
                     <BreadcrumbGroup
                         items={[
-                            { text: Synonyms.Databases, href: "/databases/" },
+                            { text: Synonyms.Databases, href: "#/databases/" },
                             {
                                 text: databaseId,
-                                href: `/databases/${databaseId}/assets/`,
+                                href: `#/databases/${databaseId}/assets/`,
                             },
                             { text: Synonyms.Assets, href: "" },
                         ]}
@@ -342,115 +383,170 @@ function SearchPage(props: SearchPageProps) {
                     )}
                     {state?.notifications.length > 0 && <Flashbar items={state.notifications} />}
 
-                    <Grid
-                        gridDefinition={[{ colspan: { default: 7 } }, { colspan: { default: 5 } }]}
-                    >
-                        <FormField label="Keywords">
-                            <Grid
-                                gridDefinition={[
-                                    { colspan: { default: 12 } },
-                                    { colspan: { default: 12 } },
-                                ]}
-                            >
-                                <Input
-                                    placeholder="Search"
-                                    type="search"
-                                    onChange={(e) => {
-                                        dispatch({
-                                            type: "query-updated",
-                                            query: e.detail.value,
-                                        });
-                                    }}
-                                    onKeyDown={({ detail }) => {
-                                        if (detail.key === "Enter") {
-                                            search({}, { state, dispatch });
-                                        }
-                                    }}
-                                    value={state?.query}
-                                />
-                            </Grid>
-                        </FormField>
-                        <SpaceBetween direction="horizontal" size="xs">
-                            <FormField label="Asset Type">
-                                <Select
-                                    selectedOption={
-                                        state?.filters?._rectype || {
-                                            label: Synonyms.Assets,
-                                            value: "asset",
-                                        }
-                                    }
-                                    onChange={({ detail }) =>
-                                        // changeRectype(e.detail.selectedOption, { state, dispatch })
-                                        changeFilter("_rectype", detail.selectedOption, {
-                                            state,
-                                            dispatch,
-                                        })
-                                    }
-                                    options={[
-                                        { label: Synonyms.Assets, value: "asset" },
-                                        { label: "Files", value: "s3object" },
+                    {!useNoOpenSearch && (
+                        <Grid
+                            gridDefinition={[
+                                { colspan: { default: 6 } },
+                                { colspan: { default: 6 } },
+                            ]}
+                        >
+                            <FormField label="Keywords">
+                                <Grid
+                                    gridDefinition={[
+                                        { colspan: { default: 10 } },
+                                        { colspan: { default: 2 } },
                                     ]}
-                                    placeholder="Asset Type"
-                                />
-                            </FormField>
-                            <FormField label="File Type">
-                                <Select
-                                    selectedOption={state?.filters?.str_assettype}
-                                    placeholder="File Type"
-                                    options={[
-                                        { label: "All", value: "all" },
-                                        ...(state?.result?.aggregations?.str_assettype?.buckets.map(
-                                            (b: any) => {
-                                                return {
-                                                    label: `${b.key} (${b.doc_count})`,
-                                                    value: b.key,
-                                                };
-                                            }
-                                        ) || []),
-                                    ]}
-                                    onChange={({ detail }) =>
-                                        changeFilter("str_assettype", detail.selectedOption, {
-                                            state,
-                                            dispatch,
-                                        })
-                                    }
-                                />
-                            </FormField>
-                            <FormField label="Database">
-                                <Select
-                                    selectedOption={state?.filters?.str_databaseid}
-                                    placeholder="Database"
-                                    options={[
-                                        { label: "All", value: "all" },
-                                        ...(state?.result?.aggregations?.str_databaseid?.buckets.map(
-                                            (b: any) => {
-                                                return {
-                                                    label: `${b.key} (${b.doc_count})`,
-                                                    value: b.key,
-                                                };
-                                            }
-                                        ) || []),
-                                    ]}
-                                    onChange={({ detail }) =>
-                                        changeFilter("str_databaseid", detail.selectedOption, {
-                                            state,
-                                            dispatch,
-                                        })
-                                    }
-                                />
-                            </FormField>
-                            <FormField label="Search">
-                                <Button
-                                    variant="primary"
-                                    onClick={(e) => {
-                                        search({}, { state, dispatch });
-                                    }}
                                 >
-                                    Search
-                                </Button>
+                                    <Input
+                                        placeholder="Search"
+                                        type="search"
+                                        onChange={(e) => {
+                                            dispatch({
+                                                type: "query-updated",
+                                                query: e.detail.value,
+                                            });
+                                        }}
+                                        onKeyDown={({ detail }) => {
+                                            if (detail.key === "Enter") {
+                                                search({}, { state, dispatch });
+                                            }
+                                        }}
+                                        value={state?.query}
+                                    />
+                                </Grid>
                             </FormField>
-                        </SpaceBetween>
-                    </Grid>
+                            <Box>
+                                <Grid
+                                    gridDefinition={[
+                                        { colspan: { default: 9 } },
+                                        { colspan: { default: 3 } },
+                                    ]}
+                                >
+                                    <FormField label="Filter Types">
+                                        <Grid
+                                            gridDefinition={[
+                                                { colspan: { default: 3 } },
+                                                { colspan: { default: 3 } },
+                                                { colspan: { default: 3 } },
+                                                { colspan: { default: 3 } },
+                                            ]}
+                                        >
+                                            <Select
+                                                selectedOption={
+                                                    state?.filters?._rectype || {
+                                                        label: Synonyms.Assets,
+                                                        value: "asset",
+                                                    }
+                                                }
+                                                onChange={({ detail }) =>
+                                                    // changeRectype(e.detail.selectedOption, { state, dispatch })
+                                                    changeFilter(
+                                                        "_rectype",
+                                                        detail.selectedOption,
+                                                        {
+                                                            state,
+                                                            dispatch,
+                                                        }
+                                                    )
+                                                }
+                                                options={[
+                                                    { label: Synonyms.Assets, value: "asset" },
+                                                    { label: "Files", value: "s3object" },
+                                                ]}
+                                                placeholder="Asset Type"
+                                            />
+                                            <Select
+                                                selectedOption={state?.filters?.str_assettype}
+                                                placeholder="File Type"
+                                                options={[
+                                                    { label: "All", value: "all" },
+                                                    ...(state?.result?.aggregations?.str_assettype?.buckets.map(
+                                                        (b: any) => {
+                                                            return {
+                                                                label: `${b.key} (${b.doc_count})`,
+                                                                value: b.key,
+                                                            };
+                                                        }
+                                                    ) || []),
+                                                ]}
+                                                onChange={({ detail }) =>
+                                                    changeFilter(
+                                                        "str_assettype",
+                                                        detail.selectedOption,
+                                                        {
+                                                            state,
+                                                            dispatch,
+                                                        }
+                                                    )
+                                                }
+                                            />
+                                            <Select
+                                                selectedOption={state?.filters?.str_databaseid}
+                                                placeholder="Database"
+                                                options={[
+                                                    { label: "All", value: "all" },
+                                                    ...(state?.result?.aggregations?.str_databaseid?.buckets.map(
+                                                        (b: any) => {
+                                                            return {
+                                                                label: `${b.key} (${b.doc_count})`,
+                                                                value: b.key,
+                                                            };
+                                                        }
+                                                    ) || []),
+                                                ]}
+                                                onChange={({ detail }) =>
+                                                    changeFilter(
+                                                        "str_databaseid",
+                                                        detail.selectedOption,
+                                                        {
+                                                            state,
+                                                            dispatch,
+                                                        }
+                                                    )
+                                                }
+                                            />
+                                            <Select
+                                                selectedOption={state?.filters?.list_tags}
+                                                placeholder="Tags"
+                                                options={[
+                                                    { label: "All", value: "all" },
+                                                    ...(state?.result?.aggregations?.list_tags?.buckets.flatMap(
+                                                        (tag: any) =>
+                                                            tag.key
+                                                                .split(",")
+                                                                .map((value: string) => ({
+                                                                    label: `${value} (${tag.doc_count})`,
+                                                                    value: value,
+                                                                }))
+                                                    ) || []),
+                                                ]}
+                                                onChange={({ detail }) =>
+                                                    changeFilter(
+                                                        "list_tags",
+                                                        detail.selectedOption,
+                                                        {
+                                                            state,
+                                                            dispatch,
+                                                        }
+                                                    )
+                                                }
+                                            />
+                                        </Grid>
+                                    </FormField>
+                                    <FormField label="Search">
+                                        <Button
+                                            variant="primary"
+                                            onClick={(e) => {
+                                                search({}, { state, dispatch });
+                                            }}
+                                        >
+                                            Search
+                                        </Button>
+                                    </FormField>
+                                </Grid>
+                            </Box>
+                        </Grid>
+                    )}
 
                     {useMapView && (
                         <SearchPageSegmentedControl
@@ -462,8 +558,25 @@ function SearchPage(props: SearchPageProps) {
                     )}
                     {state.view === "mapview" ? (
                         <SearchPageMapView state={state} dispatch={dispatch} />
-                    ) : (
+                    ) : !useNoOpenSearch ? (
                         <SearchPageListView state={state} dispatch={dispatch} />
+                    ) : (
+                        <ListPage
+                            singularName={Synonyms.Asset}
+                            singularNameTitleCase={Synonyms.Asset}
+                            pluralName={Synonyms.assets}
+                            pluralNameTitleCase={Synonyms.Assets}
+                            onCreateCallback={() => {
+                                if (databaseId) {
+                                    navigate(`/upload/${databaseId}`);
+                                } else {
+                                    navigate("/upload");
+                                }
+                            }}
+                            listDefinition={AssetListDefinition}
+                            fetchAllElements={fetchAllAssets}
+                            fetchElements={fetchDatabaseAssets}
+                        />
                     )}
                 </SpaceBetween>
             </Box>

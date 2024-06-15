@@ -12,10 +12,9 @@ import {
     FormField,
     Input,
     Textarea,
-    Multiselect,
     MultiselectProps,
 } from "@cloudscape-design/components";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { API } from "aws-amplify";
 
 interface CreateDatabaseProps {
@@ -28,7 +27,6 @@ interface CreateDatabaseProps {
 interface DatabaseFields {
     databaseId: string;
     description: string;
-    acl?: string[];
 }
 
 // when a string is all lower case, return null, otherwise return the string "All lower case letters only"
@@ -84,38 +82,28 @@ export default function CreateDatabase({
     const [groupOptions, setGroupOptions] = useState<MultiselectProps.Option[]>([]);
     const [loadingGroups, setLoadingGroups] = useState(true);
     const [inProgress, setInProgress] = useState(false);
-
-    useEffect(() => {
-        if (!loadingGroups) return;
-        API.get("api", `auth/groups`, {}).then((res) => {
-            console.log("auth groups", res);
-            const opts: MultiselectProps.Option[] = res.claims.map((value: string) => ({
-                value,
-                label: value,
-                description: "Unlabeled group",
-            }));
-            setGroupOptions(opts);
-            setSelectedOptions(
-                opts.filter(
-                    (x) =>
-                        formState.acl &&
-                        x.value !== undefined &&
-                        formState.acl.indexOf(x.value) > -1
-                )
-            );
-            setLoadingGroups(false);
-        });
-    }, [formState.acl, loadingGroups]);
+    const [formError, setFormError] = useState("");
 
     return (
         <Modal
-            onDismiss={() => setOpen(false)}
+            onDismiss={() => {
+                setOpen(false);
+                setFormState({ databaseId: "", description: "" });
+                setFormError("");
+            }}
             visible={open}
             closeAriaLabel="Close modal"
             footer={
                 <Box float="right">
                     <SpaceBetween direction="horizontal" size="xs">
-                        <Button variant="link" onClick={() => setOpen(false)}>
+                        <Button
+                            variant="link"
+                            onClick={() => {
+                                setOpen(false);
+                                setFormState({ databaseId: "", description: "" });
+                                setFormError("");
+                            }}
+                        >
                             Cancel
                         </Button>
                         <Button
@@ -125,7 +113,6 @@ export default function CreateDatabase({
                                 API.put("api", `databases`, {
                                     body: {
                                         ...formState,
-                                        acl: selectedOptions.map((option) => option.value),
                                     },
                                 })
                                     .then((res) => {
@@ -135,6 +122,8 @@ export default function CreateDatabase({
                                     })
                                     .catch((err) => {
                                         console.log("create database error", err);
+                                        let msg = `Unable to ${createOrUpdate} database. Error: Request failed with status code ${err.response.status}`;
+                                        setFormError(msg);
                                     })
                                     .finally(() => {
                                         setInProgress(false);
@@ -158,7 +147,7 @@ export default function CreateDatabase({
             header={`${createOrUpdate} Database`}
         >
             <form onSubmit={(e) => e.preventDefault()}>
-                <Form>
+                <Form errorText={formError}>
                     <SpaceBetween direction="vertical" size="s">
                         <FormField
                             label="Database Name"
@@ -193,27 +182,6 @@ export default function CreateDatabase({
                                 rows={4}
                                 placeholder="Database Description"
                                 data-testid="database-desc"
-                            />
-                        </FormField>
-                        <FormField
-                            label="Group Access Control List"
-                            description="The groups that can access this database"
-                        >
-                            <Multiselect
-                                selectedOptions={selectedOptions}
-                                disabled={inProgress}
-                                onChange={({ detail }) =>
-                                    setSelectedOptions(
-                                        detail.selectedOptions as MultiselectProps.Option[]
-                                    )
-                                }
-                                deselectAriaLabel={(e) => `Remove ${e.label}`}
-                                loadingText={loadingGroups ? "Loading..." : undefined}
-                                options={groupOptions}
-                                filteringType="auto"
-                                placeholder="Choose options"
-                                selectedAriaLabel="Selected"
-                                data-testid="database-acl-multiselect"
                             />
                         </FormField>
                     </SpaceBetween>

@@ -65,9 +65,10 @@ function renderApp(config) {
             ],
         },
     });
-    if (!config.bucket) {
+    if (!config.bucket || !config.featuresEnabled) {
         API.get("api", `secure-config`, {}).then((value) => {
             config.bucket = value.bucket;
+            config.featuresEnabled = value.featuresEnabled;
             Amplify.Storage.bucket = value.bucket;
             Cache.setItem("config", config);
         });

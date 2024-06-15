@@ -113,6 +113,14 @@ export async function deleteSelected({ state, dispatch }: SearchPropertyFilterPr
                     assetId: item.str_assetid,
                 },
             });
+            if (status === false) {
+                dispatch({
+                    type: "delete-item-failed",
+                    payload: {
+                        response: resp,
+                    },
+                });
+            }
         });
         setTimeout(async () => {
             await search({}, { state, dispatch });

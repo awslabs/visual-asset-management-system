@@ -4,7 +4,7 @@
  */
 
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+//import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Upload } from "@aws-sdk/lib-storage";
 import { API } from "aws-amplify";
 
@@ -30,6 +30,7 @@ function createS3Client(
             sessionToken,
         },
         region: region,
+        forcePathStyle: true,
     });
 }
 
@@ -102,18 +103,19 @@ async function getS3ClientForAsset(
     };
 }
 
-async function getPresignedKey(assetId: string, databaseId: string, key: string): Promise<string> {
-    const { s3Client, bucket } = await getS3ClientForAsset(assetId, databaseId);
+//NOTE: Do not use anymore, use download asset from API to get presigned URLs
+// async function getPresignedKey(assetId: string, databaseId: string, key: string): Promise<string> {
+//     const { s3Client, bucket } = await getS3ClientForAsset(assetId, databaseId);
 
-    // presign the key
-    const command = new GetObjectCommand({
-        Bucket: bucket,
-        Key: key,
-    });
+//     // presign the key
+//     const command = new GetObjectCommand({
+//         Bucket: bucket,
+//         Key: key,
+//     });
 
-    const url = await getSignedUrl(s3Client, command, { expiresIn: 900 });
-    return url;
-}
+//     const url = await getSignedUrl(s3Client, command, { expiresIn: 900 });
+//     return url;
+// }
 
 async function getUploadTaskPromise(
     index: number,
@@ -151,4 +153,4 @@ async function getUploadTaskPromise(
     });
 }
 
-export { createS3Client, uploadToS3, getUploadTaskPromise, getPresignedKey };
+export { createS3Client, uploadToS3, getUploadTaskPromise /*, getPresignedKey */ };

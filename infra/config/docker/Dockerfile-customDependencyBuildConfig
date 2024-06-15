@@ -1,0 +1,12 @@
+# VAMS CUSTOM DEPENDENCY BUILDER - DOCKER BUILD FILE
+
+# Modify this file when needing to conduct custom actions as part of building lambda dependency requirement
+
+# The correct AWS SAM build image based on the runtime of the function will be
+
+# passed as build arg. The default allows to do `docker build .` when testing.
+
+ARG IMAGE=public.ecr.aws/sam/build-python3.7
+FROM $IMAGE
+
+# Add Custom Commands like importing specific SSL certificates below

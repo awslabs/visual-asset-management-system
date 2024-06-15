@@ -5,6 +5,7 @@
 
 import { Modal, Select } from "@cloudscape-design/components";
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router";
 import { fetchDatabaseWorkflows, runWorkflow } from "../../services/APIService";
 
 export default function WorkflowSelectorWithModal(props) {
@@ -12,6 +13,7 @@ export default function WorkflowSelectorWithModal(props) {
     const [reload, setReload] = useState(true);
     const [allItems, setAllItems] = useState([]);
     const [workflowId, setWorkflowId] = useState(null);
+    const navigate = useNavigate();
 
     useEffect(() => {
         const getData = async () => {
@@ -38,7 +40,8 @@ export default function WorkflowSelectorWithModal(props) {
             if (result[0] === false) {
                 // TODO: error handling
             } else {
-                window.location = result[1];
+                //navigate (result[1]);
+                window.location.reload(true);
             }
         }
         handleClose();

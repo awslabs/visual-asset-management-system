@@ -38,7 +38,6 @@ function getUploadTaskPromiseLazy(
 }
 
 class BucketKey {
-    Bucket?: string;
     Key?: string;
 }
 
@@ -47,7 +46,6 @@ class AssetPreprocessingBody {
     databaseId?: string;
     original_asset!: BucketKey;
     preview!: BucketKey;
-    gltf!: BucketKey;
     isMultiFile: boolean = false;
 }
 
@@ -144,15 +142,15 @@ export async function executeUploads(uploadPromises: any) {
     return result;
 }
 
-async function uploadAssetToS3(
-    file: File,
-    key: string,
-    metadata: { [k: string]: string },
-    progressCallback: (progress: ProgressCallbackArgs) => void
-) {
-    console.log("upload", key, file);
-    return Storage.put(key, file, { metadata, progressCallback });
-}
+// async function uploadAssetToS3(
+//     file: File,
+//     key: string,
+//     metadata: { [k: string]: string },
+//     progressCallback: (progress: ProgressCallbackArgs) => void
+// ) {
+//     console.log("upload", key, file);
+//     return Storage.put(key, file, { metadata, progressCallback });
+// }
 
 const getAssetType = (assetDetail: AssetDetail) => {
     if (assetDetail.Asset?.length === 1) {
@@ -218,7 +216,8 @@ async function performUploads({
                 fileUploadError(index, event);
             }
         );
-        executeUploads(uploads)
+
+        const up1 = executeUploads(uploads)
             .then(() => {})
             .catch((err) => {
                 return Promise.reject(err);
@@ -260,62 +259,45 @@ async function performUploads({
                     })) ||
             Promise.resolve();
 
-        await Promise.all([up2]).then((uploads) => {
-            const body: UploadAssetWorkflowApi = {
-                assetPreprocessingBody: {
-                    assetId: assetDetail.assetId,
-                    databaseId: assetDetail.databaseId,
-                    gltf: {
-                        Bucket: assetDetail.bucket,
-                        Key: uuid + "/" + prevAssetId + ".gltf",
+        await Promise.all([up2])
+            .then((uploads) => {
+                const body: UploadAssetWorkflowApi = {
+                    executeWorkflowBody: {
+                        workflowIds: [],
                     },
-                    original_asset: {
-                        Bucket: assetDetail.bucket,
-                        Key: assetDetail.key,
+                    updateMetadataBody: {
+                        version: "1",
+                        metadata,
                     },
-                    preview: {
-                        Bucket: assetDetail.bucket,
-                        Key: uuid + "/" + prevAssetId + ".png",
-                    },
-                    isMultiFile: assetDetail.isMultiFile,
-                },
-                executeWorkflowBody: {
-                    workflowIds: [],
-                },
-                updateMetadataBody: {
-                    version: "1",
-                    metadata,
-                },
-                uploadAssetBody: assetDetail,
-            };
+                    uploadAssetBody: assetDetail,
+                };
 
-            if (assetDetail.assetType === ".gltf") {
-                delete body.assetPreprocessingBody;
-            }
-
-            setExecStatus({
-                ...execStatus,
-                "Asset Detail": "in-progress",
-            });
-            return API.post("api", "assets/uploadAssetWorkflow", {
-                "Content-type": "application/json",
-                body,
-            })
-                .then((res) => {
-                    setExecStatus((p) => ({
-                        ...p,
-                        "Asset Detail": "success",
-                    }));
-                })
-                .catch((err) => {
-                    console.log("err asset detail", err);
-                    setExecStatus((p) => ({
-                        ...p,
-                        "Asset Detail": "error",
-                    }));
-                    return Promise.reject(err);
+                setExecStatus({
+                    ...execStatus,
+                    "Asset Detail": "in-progress",
                 });
-        });
+                return API.post("api", "assets/uploadAssetWorkflow", {
+                    "Content-type": "application/json",
+                    body,
+                })
+                    .then((res) => {
+                        setExecStatus((p) => ({
+                            ...p,
+                            "Asset Detail": "success",
+                        }));
+                    })
+                    .catch((err) => {
+                        console.log("err asset detail", err);
+                        setExecStatus((p) => ({
+                            ...p,
+                            "Asset Detail": "error",
+                        }));
+                        return Promise.reject(err);
+                    });
+            })
+            .catch((err) => {
+                return Promise.reject(err);
+            });
         window.onbeforeunload = null;
     }
 }
@@ -328,13 +310,11 @@ function updateAssetDetail(assetDetail: AssetDetail) {
     // TODO duplicate logic with AssetFormDefinition and uploadAssetToS3
     // duplicate except that the uuids are unique to this version
     const config = Cache.getItem("config");
-    assetDetail.bucket = config.bucket;
     assetDetail.assetType = getAssetType(assetDetail);
     assetDetail.key = getKeyPrefix(uuid, assetDetail);
     assetDetail.specifiedPipelines = [];
     if (assetDetail.Preview) {
         assetDetail.previewLocation = {
-            Bucket: config.bucket,
             Key:
                 "previews" +
                 "/" +

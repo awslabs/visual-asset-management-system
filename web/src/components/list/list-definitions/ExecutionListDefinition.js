@@ -20,7 +20,7 @@ export const WorkflowListDefinition = new ListDefinition({
             cellWrapper: (props) => {
                 const { item } = props;
                 return (
-                    <Link href={`/databases/${item.databaseId}/workflows/${item.workflowId}`}>
+                    <Link href={`#/databases/${item.databaseId}/workflows/${item.workflowId}`}>
                         {props.children}
                     </Link>
                 );
@@ -33,7 +33,7 @@ export const WorkflowListDefinition = new ListDefinition({
             cellWrapper: (props) => {
                 const { item } = props;
                 return (
-                    <Link href={`/databases/${item.databaseId}/workflows/`}>{props.children}</Link>
+                    <Link href={`#/databases/${item.databaseId}/workflows/`}>{props.children}</Link>
                 );
             },
             sortingField: "databaseId",

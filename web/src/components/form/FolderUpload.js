@@ -11,6 +11,7 @@
 import { useState } from "react";
 import Button from "@cloudscape-design/components/button";
 import { Grid } from "@cloudscape-design/components";
+import { showOpenFilePicker, showDirectoryPicker } from "file-system-access";
 
 import FormField from "@cloudscape-design/components/form-field";
 
@@ -39,14 +40,14 @@ function FolderUpload(props) {
         return fileHandles;
     };
     const handleDirectorySelection = async () => {
-        const directoryHandle = await window.showDirectoryPicker();
+        const directoryHandle = await showDirectoryPicker();
         const fileHandles = await getFilesFromFileHandle(directoryHandle, directoryHandle.name);
         console.log(fileHandles);
         return { directoryHandle, fileHandles };
     };
 
     const handleFileSelection = async () => {
-        const handles = await window.showOpenFilePicker({ multiple: true });
+        const handles = await showOpenFilePicker({ multiple: true });
         const fileHandles = [];
         for (let i = 0; i < handles.length; i++) {
             fileHandles.push({ path: handles[i].name, handle: handles[i] });

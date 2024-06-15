@@ -4,6 +4,7 @@
  */
 
 import { useContext, useEffect, useState } from "react";
+import { useNavigate } from "react-router";
 import { fetchAllAssets, fetchDatabaseAssets } from "../../services/APIService";
 import { Select } from "@cloudscape-design/components";
 import { WorkflowContext } from "../../context/WorkflowContex";
@@ -12,7 +13,9 @@ import { WorkflowContext } from "../../context/WorkflowContex";
  */
 import {
     columnarFileFormats,
+    onlineViewer3DFileFormats,
     modelFileFormats,
+    imageFileFormats,
     pcFileFormats,
 } from "../../common/constants/fileFormats";
 import Synonyms from "../../synonyms";
@@ -21,6 +24,7 @@ const AssetSelector = (props) => {
     const { database, pathViewType } = props;
     const [reload, setReload] = useState(true);
     const [allItems, setAllItems] = useState([]);
+    const navigate = useNavigate();
     let asset, setAsset, setActiveTab;
     const context = useContext(WorkflowContext);
     if (!pathViewType) {
@@ -47,9 +51,11 @@ const AssetSelector = (props) => {
                         if (pathViewType === "column" || pathViewType === "plot") {
                             return columnarFileFormats.includes(item.assetType);
                         } else if (pathViewType === "3d" || pathViewType === "model") {
-                            return modelFileFormats.includes(item.assetType);
+                            return onlineViewer3DFileFormats.includes(item.assetType);
                         } else if (pathViewType === "pc") {
                             return pcFileFormats.includes(item.assetType);
+                        } else if (pathViewType === "image") {
+                            return imageFileFormats.includes(item.assetType);
                         }
                         return false;
                     });
@@ -67,11 +73,12 @@ const AssetSelector = (props) => {
             selectedOption={asset || null}
             onChange={({ detail }) => {
                 if (pathViewType) {
+                    const assetFileName = detail.selectedOption.label;
                     const assetId = detail.selectedOption.value;
                     const databaseId = allItems.find(
                         (item) => item.assetId === assetId
                     )?.databaseId;
-                    window.location = `/databases/${databaseId}/assets/${assetId}#${pathViewType}`;
+                    navigate(`/databases/${databaseId}/assets/${assetId}/file`);
                 } else {
                     setAsset(detail.selectedOption);
                     setActiveTab("asset");

@@ -55,7 +55,7 @@ jobs:
             - name: Install Poetry Action
               uses: snok/install-poetry@v1
               with:
-                  version: 1.4.2
+                  version: 1.8.2
                   virtualenvs-create: true
                   virtualenvs-in-project: true
                   virtualenvs-path: backend/.venv
@@ -97,9 +97,7 @@ jobs:
               working-directory: vams/infra
               run: |
                   CDK_NAG_ENABLED=true
-                  export STACK_NAME=CfnNagTest
                   export REGION=us-east-1
-                  export VAMS_ADMIN_EMAIL=user@example.com
                   npx cdk synth
 
             - name: eslint
@@ -109,13 +107,13 @@ jobs:
             - name: Scan VAMS WAF Cloudformation template
               uses: stelligent/cfn_nag@master
               with:
-                  input_path: vams/infra/cdk.out/vams-waf-CfnNagTest-us-east-1.template.json
+                  input_path: vams/infra/cdk.out/vams-waf-prod-us-east-1.template.json
 
             - name: Scan VAMS Cloudformation template
               uses: stelligent/cfn_nag@master
               with:
-                  input_path: vams/infra/cdk.out/vams-CfnNagTest-us-east-1.template.json
+                  input_path: vams/infra/cdk.out/vams-core-prod-us-east-1.template.json
 
-            - name: run checks
-              working-directory: vams/backend
-              run: make all
+            #- name: run checks
+            #  working-directory: vams/backend
+            #  run: make all

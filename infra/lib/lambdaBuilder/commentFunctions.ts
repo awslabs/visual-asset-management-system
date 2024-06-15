@@ -3,65 +3,140 @@ import * as path from "path";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
-import { suppressCdkNagErrorsByGrantReadWrite } from "../security";
+import { suppressCdkNagErrorsByGrantReadWrite } from "../helper/security";
+import { LayerVersion } from "aws-cdk-lib/aws-lambda";
+import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
+import * as Config from "../../config/config";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as kms from "aws-cdk-lib/aws-kms";
+import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../helper/security";
 
 export function buildAddCommentLambdaFunction(
     scope: Construct,
-    commentStorageTable: dynamodb.Table
+    lambdaCommonBaseLayer: LayerVersion,
+    commentStorageTable: dynamodb.Table,
+    assetStorageTable: dynamodb.Table,
+    userRolesStorageTable: dynamodb.Table,
+    authEntitiesStorageTable: dynamodb.Table,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "addComment";
-    const addCommentFunction = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: ["backend.handlers.comments.addComment.lambda_handler"],
-        }),
+    const addCommentFunction = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.comments.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
-        memorySize: 3008,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
             COMMENT_STORAGE_TABLE_NAME: commentStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
+            AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
         },
     });
     commentStorageTable.grantReadWriteData(addCommentFunction);
+    assetStorageTable.grantReadWriteData(addCommentFunction);
+    authEntitiesStorageTable.grantReadWriteData(addCommentFunction);
+    userRolesStorageTable.grantReadWriteData(addCommentFunction);
+    kmsKeyLambdaPermissionAddToResourcePolicy(addCommentFunction, kmsKey);
     return addCommentFunction;
 }
 
 export function buildEditCommentLambdaFunction(
     scope: Construct,
-    commentStorageTable: dynamodb.Table
+    lambdaCommonBaseLayer: LayerVersion,
+    commentStorageTable: dynamodb.Table,
+    assetStorageTable: dynamodb.Table,
+    userRolesStorageTable: dynamodb.Table,
+    authEntitiesStorageTable: dynamodb.Table,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "editComment";
-    const editCommentFunction = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: ["backend.handlers.comments.editComment.lambda_handler"],
-        }),
+    const editCommentFunction = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.comments.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
-        memorySize: 3008,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
             COMMENT_STORAGE_TABLE_NAME: commentStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
+            AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
         },
     });
     commentStorageTable.grantReadWriteData(editCommentFunction);
+    assetStorageTable.grantReadWriteData(editCommentFunction);
+    authEntitiesStorageTable.grantReadWriteData(editCommentFunction);
+    userRolesStorageTable.grantReadWriteData(editCommentFunction);
+    kmsKeyLambdaPermissionAddToResourcePolicy(editCommentFunction, kmsKey);
     return editCommentFunction;
 }
 
 export function buildCommentService(
     scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
     commentStorageTable: dynamodb.Table,
-    assetStorageTable: dynamodb.Table
+    assetStorageTable: dynamodb.Table,
+    userRolesStorageTable: dynamodb.Table,
+    authEntitiesStorageTable: dynamodb.Table,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "commentService";
-    const commentService = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, `../../../backend/`), {
-            cmd: [`backend.handlers.comments.${name}.lambda_handler`],
-        }),
+    const commentService = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.comments.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
-        memorySize: 3008,
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
             COMMENT_STORAGE_TABLE_NAME: commentStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
+            AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
         },
     });
     assetStorageTable.grantReadWriteData(commentService);
+    authEntitiesStorageTable.grantReadWriteData(commentService);
+    userRolesStorageTable.grantReadWriteData(commentService);
     commentStorageTable.grantReadWriteData(commentService);
+    kmsKeyLambdaPermissionAddToResourcePolicy(commentService, kmsKey);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
 

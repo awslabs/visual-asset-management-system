@@ -5,14 +5,16 @@
 
 import { Modal } from "@cloudscape-design/components";
 import React, { useState } from "react";
+import { useNavigate } from "react-router";
 import AssetSelector from "./AssetSelector";
 
 export default function AssetSelectorWithModal(props) {
     const { pathViewType } = props;
     const [open, setOpen] = useState(true);
+    const navigate = useNavigate();
     const handleClose = () => {
         setOpen(false);
-        window.location = "/assets";
+        navigate("/assets");
     };
 
     return (

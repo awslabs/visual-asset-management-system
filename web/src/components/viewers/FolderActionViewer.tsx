@@ -4,7 +4,7 @@ import Container from "@cloudscape-design/components/container";
 import { useEffect, useState } from "react";
 import ColumnLayout from "@cloudscape-design/components/column-layout";
 import { useNavigate, useParams } from "react-router";
-import { getPresignedKey } from "../../common/auth/s3";
+import { downloadAsset } from "../../services/APIService";
 export class FolderActionProps {
     databaseId!: string;
     assetId!: string;
@@ -24,8 +24,25 @@ export default function FolderActionViewer({
     const navigate = useNavigate();
     const [downloadLink, setDownloadLink] = useState<string>("");
 
-    function generateDownloadLink(key: string) {
-        getPresignedKey(assetId, databaseId, key).then(setDownloadLink);
+    async function generateDownloadLink(key: string) {
+        try {
+            const response = await downloadAsset({
+                assetId: assetId,
+                databaseId: databaseId,
+                key: key,
+                version: "",
+            });
+
+            if (response !== false && Array.isArray(response)) {
+                if (response[0] === false) {
+                    // TODO: error handling (response[1] has error message)
+                } else {
+                    setDownloadLink(response[1]);
+                }
+            }
+        } catch (error) {
+            console.error(error);
+        }
     }
 
     function navigateToAssetFilePage() {

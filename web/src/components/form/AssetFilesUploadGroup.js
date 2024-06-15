@@ -11,6 +11,7 @@ import {
     previewFileFormats,
     modelFileFormats,
     pcFileFormats,
+    imageFileFormats,
     archiveFileFormats,
 } from "../../common/constants/fileFormats";
 import FileUploadControl from "./FileUploadControl";
@@ -26,9 +27,11 @@ const AssetFilesUploadGroup = (props) => {
                     controlName={"Asset"}
                     fileFormats={modelFileFormats
                         .concat(
-                            columnarFileFormats.concat(
-                                cadFileFormats.concat(archiveFileFormats.concat(pcFileFormats))
-                            )
+                            columnarFileFormats
+                                .concat(
+                                    cadFileFormats.concat(archiveFileFormats.concat(pcFileFormats))
+                                )
+                                .concat(imageFileFormats)
                         )
                         .join(",")}
                 />

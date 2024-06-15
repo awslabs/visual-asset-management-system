@@ -1,51 +1,103 @@
 import { useLocation } from "react-router";
-import { Storage } from "aws-amplify";
+//import { Storage } from "aws-amplify";
+import { downloadAsset } from "../services/APIService";
 import { FileTree } from "../components/filemanager/FileManager";
 import { FileUploadTable, FileUploadTableItem } from "./AssetUpload/FileUploadTable";
 import { useReducer, useState } from "react";
+import { useNavigate, useParams } from "react-router";
+import axios from "axios";
 
-async function downloadAllFilesRecursively(tree: FileTree, directoryHandle: any, dispatch: any) {
+async function downloadAllFilesRecursively(
+    assetId: string,
+    databaseId: string,
+    tree: FileTree,
+    directoryHandle: any,
+    dispatch: any
+) {
     for (let subtree of tree.subTree) {
         if (subtree.subTree.length > 0) {
             const subFolderDirectoryHandle = await directoryHandle.getDirectoryHandle(
                 subtree.name,
                 { create: true }
             );
-            await downloadAllFilesRecursively(subtree, subFolderDirectoryHandle, dispatch);
+            await downloadAllFilesRecursively(
+                assetId,
+                databaseId,
+                subtree,
+                subFolderDirectoryHandle,
+                dispatch
+            );
         } else {
             const fileHandle = await directoryHandle.getFileHandle(subtree.name, { create: true });
             const writable = await fileHandle.createWritable();
-            const data = await Storage.get(subtree.keyPrefix, {
-                download: true,
-                progressCallback: (progress: any) => {
-                    console.log("Progress callback ", progress);
-                    dispatch({
-                        type: "UPDATE_PROGRESS",
-                        payload: {
-                            status: "In Progress",
-                            relativePath: subtree.relativePath,
-                            progress: progress.loaded,
-                            loaded: progress.loaded,
-                            total: progress.total,
-                        },
-                    });
-                },
-            });
-            await writable.write(data.Body);
+            let errorUpload = false;
+
+            try {
+                const response = await downloadAsset({
+                    assetId: assetId,
+                    databaseId: databaseId,
+                    key: subtree.keyPrefix,
+                    version: "",
+                });
+
+                if (response !== false && Array.isArray(response)) {
+                    if (response[0] === false) {
+                        console.error("API Error with downloading file");
+                        dispatch({
+                            type: "UPDATE_STATUS",
+                            payload: { relativePath: subtree.relativePath, status: "Failed" },
+                        });
+                    } else {
+                        //Download file
+                        const responseFile = await axios({
+                            url: response[1],
+                            method: "GET",
+                            responseType: "blob",
+                            onDownloadProgress: (progressEvent) => {
+                                dispatch({
+                                    //console.log("Progress update");
+                                    type: "UPDATE_PROGRESS",
+                                    payload: {
+                                        status: "In Progress",
+                                        relativePath: subtree.relativePath,
+                                        progress: progressEvent.loaded,
+                                        loaded: progressEvent.loaded,
+                                        total: progressEvent.total,
+                                    },
+                                });
+                            },
+                        });
+                        await writable.write(responseFile.data);
+                    }
+                }
+            } catch (error) {
+                console.error(error);
+                dispatch({
+                    type: "UPDATE_STATUS",
+                    payload: { relativePath: subtree.relativePath, status: "Failed" },
+                });
+                errorUpload = true;
+            }
+
             await writable.close();
-            dispatch({
-                type: "UPDATE_STATUS",
-                payload: { relativePath: subtree.relativePath, status: "Completed" },
-            });
+
+            //If we didn't error, we are complete!
+            if (!errorUpload) {
+                dispatch({
+                    type: "UPDATE_STATUS",
+                    payload: { relativePath: subtree.relativePath, status: "Completed" },
+                });
+            }
         }
     }
 }
 
-async function downloadFolder(tree: FileTree, dispatch: any) {
+async function downloadFolder(assetId: string, databaseId: string, tree: FileTree, dispatch: any) {
     //@ts-ignore
     const directoryHandle = await window.showDirectoryPicker();
-    await downloadAllFilesRecursively(tree, directoryHandle, dispatch);
+    await downloadAllFilesRecursively(assetId, databaseId, tree, directoryHandle, dispatch);
 }
+
 const convertFileTreeItemsToFileUploadTableItems = (fileTree: FileTree): FileUploadTableItem[] => {
     const allItems: FileUploadTableItem[] = [];
     for (let subtree of fileTree.subTree) {
@@ -116,6 +168,7 @@ function assetDownloadReducer(
 }
 export default function AssetDownloadsPage() {
     const { state } = useLocation();
+    const { databaseId, assetId } = useParams();
     const fileTree = state["fileTree"] as FileTree;
     const [resume, setResume] = useState(true);
     const fileUploadTableItems = convertFileTreeItemsToFileUploadTableItems(fileTree);
@@ -130,7 +183,7 @@ export default function AssetDownloadsPage() {
                 allItems={fileUploadTableItemsState}
                 resume={resume}
                 onRetry={() => {
-                    downloadFolder(fileTree, dispatch).then(() => {
+                    downloadFolder(assetId!, databaseId!, fileTree, dispatch).then(() => {
                         setResume(false);
                     });
                 }}

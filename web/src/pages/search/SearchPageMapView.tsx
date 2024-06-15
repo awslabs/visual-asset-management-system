@@ -118,7 +118,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                     >
                         <div>
                             <Link
-                                href={`/databases/${state.popupInfo.databaseId}/assets/${state.popupInfo.assetId}`}
+                                href={`#/databases/${state.popupInfo.databaseId}/assets/${state.popupInfo.assetId}`}
                             >
                                 <Button variant="primary">View Asset</Button>
                             </Link>

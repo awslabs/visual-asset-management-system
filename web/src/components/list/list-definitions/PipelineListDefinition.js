@@ -43,7 +43,7 @@ export const PipelineListDefinition = new ListDefinition({
             cellWrapper: (props) => {
                 const { item } = props;
                 return (
-                    <Link href={`/databases/${item.databaseId}/pipelines/`}>{props.children}</Link>
+                    <Link href={`#/databases/${item.databaseId}/pipelines/`}>{props.children}</Link>
                 );
             },
             sortingField: "databaseId",

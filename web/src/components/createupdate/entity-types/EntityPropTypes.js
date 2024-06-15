@@ -49,7 +49,7 @@ export const validateFileType = (value) => {
 };
 
 export const validateContainerUri = (value) => {
-    const regex = /^[0-9]{12}.dkr.ecr.+?amazonaws.com\/.+/g;
+    const regex = /^[0-9]{12}.dkr.(?:ecr|ecr-fips).+?amazonaws.com\/.+/g;
     const result = String(value).match(regex);
     if (result === null) {
         return false;
@@ -243,7 +243,7 @@ export const containerUriPropType = function (props, propName) {
             return null;
         }
         return new Error(
-            `Invalid value for ${propName}. Enter a valid Amazon ECR image Uri ACCOUNT_NUMBER.dkr.ecr.REGION.amazonaws.com/IMAGE_NAME`
+            `Invalid value for ${propName}. Enter a valid Amazon ECR image Uri ACCOUNT_NUMBER.dkr.(ecr|ecr-fips).REGION.amazonaws.com/IMAGE_NAME`
         );
     }
     return null;

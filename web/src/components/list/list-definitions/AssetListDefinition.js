@@ -12,7 +12,7 @@ import Synonyms from "../../../synonyms";
 export const AssetListDefinition = new ListDefinition({
     pluralName: Synonyms.assets,
     pluralNameTitleCase: Synonyms.Assets,
-    visibleColumns: ["assetName", "databaseId", "description", "assetType"],
+    visibleColumns: ["assetName", "databaseId", "description", "assetType", "tags"],
     filterColumns: [
         { name: "databaseId", placeholder: Synonyms.Database },
         { name: "assetType", placeholder: "Type" },
@@ -26,7 +26,7 @@ export const AssetListDefinition = new ListDefinition({
             cellWrapper: (props) => {
                 const { item } = props;
                 return (
-                    <Link href={`/databases/${item.databaseId}/assets/${item.assetId}`}>
+                    <Link href={`#/databases/${item.databaseId}/assets/${item.assetId}`}>
                         {props.children}
                     </Link>
                 );
@@ -38,7 +38,9 @@ export const AssetListDefinition = new ListDefinition({
             header: Synonyms.Database,
             cellWrapper: (props) => {
                 const { item } = props;
-                return <Link href={`/databases/${item.databaseId}/assets/`}>{props.children}</Link>;
+                return (
+                    <Link href={`#/databases/${item.databaseId}/assets/`}>{props.children}</Link>
+                );
             },
             sortingField: "databaseId",
         }),
@@ -53,6 +55,12 @@ export const AssetListDefinition = new ListDefinition({
             header: "Type",
             cellWrapper: (props) => <>{props.children}</>,
             sortingField: "assetType",
+        }),
+        new ColumnDefinition({
+            id: "tags",
+            header: "Tags",
+            cellWrapper: (props) => <>{props.children}</>,
+            sortingField: "tags",
         }),
     ],
 });

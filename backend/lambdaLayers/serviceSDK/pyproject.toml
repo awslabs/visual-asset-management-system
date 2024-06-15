@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "servicesdk"
+version = "0.1.0"
+description = ""
+authors = ["Kurt Scheuringer <scheurik@amazon.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+stepfunctions = "2.3.0"
+casbin = "1.36.0"
+aws-lambda-powertools = "2.36.0"
+locked-dict = "^2023.10.22"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

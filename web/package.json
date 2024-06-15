@@ -21,6 +21,7 @@
         "@turf/turf": "^6.5.0",
         "@types/mapbox__mapbox-gl-draw": "^1.4.0",
         "@types/styled-components": "^5.1.21",
+        "@types/wicg-file-system-access": "2020.9.6",
         "arraybuffer-to-buffer": "^0.0.7",
         "aws-amplify": "^5.3.12",
         "aws-amplify-react": "^5.1.9",
@@ -30,6 +31,7 @@
         "del-cli": "^5.0.0",
         "dompurify": "^2.3.6",
         "fcs": "^0.1.2",
+        "file-system-access": "1.0.4",
         "jodit": "^4.0.0-beta.61",
         "jodit-react": "^1.3.39",
         "loader-utils": "^3.2.0",
@@ -37,7 +39,7 @@
         "maplibre-gl": "^3.0.0",
         "maplibre-gl-js-amplify": "^3.0.5",
         "moment": "^2.29.4",
-        "online-3d-viewer": "^0.8.21",
+        "online-3d-viewer": "^0.12.0",
         "papaparse": "^5.4.1",
         "patch-package": "^6.4.7",
         "postinstall-postinstall": "^2.1.0",
@@ -67,7 +69,8 @@
         "tough-cookie": "^4.1.3",
         "postcss": "^8.4.31",
         "axios": "^1.6.0",
-        "follow-redirects": "^1.15.4"
+        "follow-redirects": "^1.15.4",
+        "@types/react": "^17.0.2"
     },
     "scripts": {
         "start": "react-scripts start",
@@ -107,15 +110,16 @@
         "@types/react-dom": "^17.0.2",
         "@types/sanitize-html": "^2.9.0",
         "assert": "^2.0.0",
-        "fs-extra": "^11.1.1",
         "babel-jest": "^29.5.0",
+        "fs-extra": "^11.1.1",
         "prettier": "^2.4.1",
         "react-error-overlay": "^6.0.9",
         "react-test-renderer": "^17.0.2",
         "sass": "^1.43.4",
         "sass-loader": "^12.3.0",
         "simple-git": "^3.19.0",
-        "ts-node": "^10.9.1"
+        "ts-node": "^10.9.1",
+        "yarn-audit-fix": "^10.0.7"
     },
     "jest": {
         "collectCoverageFrom": [

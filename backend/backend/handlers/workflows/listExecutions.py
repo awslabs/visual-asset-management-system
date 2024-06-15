@@ -3,131 +3,200 @@
 
 import json
 import os
-
 import boto3
+import botocore
 from boto3.dynamodb.conditions import Key
-from backend.common.validators import validate
+from common.constants import STANDARD_JSON_RESPONSE
+from common.dynamodb import get_asset_object_from_id
+from common.validators import validate
+from handlers.auth import request_to_claims
+from handlers.authz import CasbinEnforcer
+from customLogging.logger import safeLogger
+from common.dynamodb import validate_pagination_info
+
+claims_and_roles = {}
+logger = safeLogger(service="ListExecutionsWorkflow")
 
 sfn = boto3.client('stepfunctions')
 dynamodb = boto3.resource('dynamodb')
-response = {
-    'statusCode': 200,
-    'body': '',
-    'headers': {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Credentials': True,
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Content-Type',
-        'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
-    }
-}
+main_rest_response = STANDARD_JSON_RESPONSE
 
 try:
     workflow_execution_database = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_NAME"]
 except:
-    print("Failed Loading Environment Variables")
-    response['body'] = json.dumps({"message": "Failed Loading Environment Variables"})
+    logger.exception("Failed loading environment variables")
+    main_rest_response['body'] = json.dumps({"message": "Failed Loading Environment Variables"})
 
 
-def get_executions(asset_id, workflow_id):
-    print("Listing executions")
-    table = dynamodb.Table(workflow_execution_database)
-    pk = f'{asset_id}-{workflow_id}'
-    response = table.query(
-        KeyConditionExpression=Key('pk').eq(pk),
-        ScanIndexForward=False,
-    )
-    result = []
-    for item in response['Items']:
-        assets=item.get('assets', [])
-        workflow_arn = item['workflow_arn']
-        execution_arn = workflow_arn.replace("stateMachine", "execution")
-        execution_arn = execution_arn + ":" + item['execution_id']
-        print(execution_arn)
-        execution = sfn.describe_execution(
-            executionArn=execution_arn
-        )
-        print(execution)
-        startDate = execution.get('startDate', "")
-        if startDate:
-            startDate = startDate.strftime("%m/%d/%Y, %H:%M:%S")
-        stopDate = execution.get('stopDate', "")
-        if stopDate:
-            stopDate = stopDate.strftime("%m/%d/%Y, %H:%M:%S")
+def get_executions(asset_id, workflow_id, query_params):
+    asset_of_workflow = get_asset_object_from_id(asset_id)
 
-        result.append({
-            'executionId': execution['name'],
-            'executionStatus': execution['status'],
-            'startDate': startDate,
-            'stopDate': stopDate,
-            'Items': assets
-        })
+    # Add Casbin Enforcer to check if the current user has permissions to GET the asset
+    asset_of_workflow.update({
+        "object__type": "asset"
+    })
 
-    return result
+    asset_of_workflow_allowed = False
+
+    for user_name in claims_and_roles["tokens"]:
+        casbin_enforcer = CasbinEnforcer(user_name)
+        if casbin_enforcer.enforce(f"user::{user_name}", asset_of_workflow, "GET"):
+            asset_of_workflow_allowed = True
+            break
+
+    if asset_of_workflow_allowed:
+        logger.info("Listing executions")
+        pk = f'{asset_id}-{workflow_id}'
+
+        paginator = dynamodb.meta.client.get_paginator('query')
+        page_iterator = paginator.paginate(
+            TableName=workflow_execution_database,
+            KeyConditionExpression=Key('pk').eq(pk),
+            ScanIndexForward=False,
+            PaginationConfig={
+                'MaxItems': int(query_params['maxItems']),
+                'PageSize': int(query_params['pageSize']),
+                'StartingToken': query_params['startingToken']
+            }
+        ).build_full_result()
+
+        result = {
+            "Items": []
+        }
+
+        for item in page_iterator['Items']:
+            try:
+                logger.info("workflow execution: ")
+                logger.info(item)
+                # Add Casbin Enforcer to check if the current user has permissions to GET the workflow:
+                item.update({
+                    "object__type": "workflow"
+                })
+                for user_name in claims_and_roles["tokens"]:
+                    casbin_enforcer = CasbinEnforcer(user_name)
+                    if casbin_enforcer.enforce(f"user::{user_name}", item, "GET"):
+                        assets = item.get('assets', [])
+                        workflow_arn = item['workflow_arn']
+                        execution_arn = workflow_arn.replace("stateMachine", "execution")
+                        execution_arn = execution_arn + ":" + item['execution_id']
+                        logger.info(execution_arn)
+                        execution = sfn.describe_execution(
+                            executionArn=execution_arn
+                        )
+                        logger.info(execution)
+                        startDate = execution.get('startDate', "")
+                        if startDate:
+                            startDate = startDate.strftime("%m/%d/%Y, %H:%M:%S")
+                        stopDate = execution.get('stopDate', "")
+                        if stopDate:
+                            stopDate = stopDate.strftime("%m/%d/%Y, %H:%M:%S")
+
+                        result["Items"].append({
+                            'executionId': execution['name'],
+                            'executionStatus': execution['status'],
+                            'startDate': startDate,
+                            'stopDate': stopDate,
+                            'Items': assets
+                        })
+                        break
+            except Exception as e:
+                logger.exception(e)
+                logger.info("Continuing with trying to fetch exceutions...")
+
+        if "NextToken" in page_iterator:
+            result["NextToken"] = page_iterator["NextToken"]
+                
+        return {
+            "statusCode": 200,
+            "message": result
+        }
+    else:
+        return {
+            "statusCode": 403,
+            "message": "Not Authorized"
+        }
 
 
 def lambda_handler(event, context):
-    print(event)
-    response = {
-        'statusCode': 200,
-        'body': '',
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Credentials': True,
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type',
-            'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
-        }
-    }
-    pathParams = event.get('pathParameters', {})
-    if 'assetId' not in pathParams:
-        message = "No assetID in API Call"
-        response['body'] = json.dumps({"message": message})
-        print(response)
-        return response
+    global claims_and_roles
+    response = STANDARD_JSON_RESPONSE
+    logger.info(event)
 
-    if 'workflowId' not in pathParams:
-        message = "No workflow in API Call"
-        response['body'] = json.dumps({"message": message})
-        print(response)
-        return response
+    pathParams = event.get('pathParameters', {})
+    queryParameters = event.get('queryStringParameters', {})
+
+    #Set 50 maxitems/page size to avoid performance issues with state machine API call throttling
+    validate_pagination_info(queryParameters, 50)
 
     try:
 
-        print("Validating Parameters")
+        logger.info("Validating Parameters")
         (valid, message) = validate({
             'workflowId': {
-                'value': pathParams['workflowId'], 
+                'value': pathParams.get('workflowId', ''),
                 'validator': 'ID'
-            }, 
+            },
             'assetId': {
-                'value': pathParams['assetId'], 
+                'value': pathParams.get('assetId', ''),
                 'validator': 'ID'
             },
         })
 
         if not valid:
-            print(message)
-            response['body']=json.dumps({"message": message})
+            logger.error(message)
+            response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
             return response
 
-        print("Listing Workflow Executions")
-        response['body'] = json.dumps({"message": get_executions(pathParams['assetId'], pathParams['workflowId'])})
-        print(response)
-        return response
+        httpMethod = event['requestContext']['http']['method']
+        logger.info(httpMethod)
+        claims_and_roles = request_to_claims(event)
+
+        method_allowed_on_api = False
+        request_object = {
+            "object__type": "api",
+            "route__path": event['requestContext']['http']['path']
+        }
+        for user_name in claims_and_roles["tokens"]:
+            casbin_enforcer = CasbinEnforcer(user_name)
+            if casbin_enforcer.enforce(f"user::{user_name}", request_object, httpMethod):
+                method_allowed_on_api = True
+                break
+
+        if method_allowed_on_api:
+            logger.info("Listing Workflow Executions")
+            result = get_executions(pathParams['assetId'], pathParams['workflowId'], queryParameters)
+            response['body'] = json.dumps({"message": result['message']})
+            response['statusCode'] = result['statusCode']
+            logger.info(response)
+            return response
+        else:
+            response['statusCode'] = 403
+            response['body'] = json.dumps({"message": "Not Authorized"})
+            return response
+    except botocore.exceptions.ClientError as err:
+        if err.response['Error']['Code'] == 'LimitExceededException' or err.response['Error']['Code'] == 'ThrottlingException': 
+            logger.exception("Throttling Error")
+            response['statusCode'] = err.response['ResponseMetadata']['HTTPStatusCode']
+            response['body'] = json.dumps({"message": "ThrottlingException: Too many requests within a given period."})
+            return response
+        elif err.response['Error']['Code'] == 'ExecutionLimitExceeded':
+            logger.exception("ExecutionLimitExceeded")
+            response['statusCode'] = err.response['ResponseMetadata']['HTTPStatusCode']
+            response['body'] = json.dumps({"message": "ExecutionLimitExceeded: Reached the maximum state machine execution limit of 1,000,000"})
+            return response
+        else:
+            logger.exception(err)
+            response['statusCode'] = 500
+            response['body'] = json.dumps({"message": "Internal Server Error"})
+            return response
     except Exception as e:
+        logger.exception(e)
         response['statusCode'] = 500
-        print("Error!", e.__class__, "occurred.")
-        try:
-            print(e)
-            response['body'] = json.dumps({"message": str(e)})
-        except:
-            print("Can't Read Error")
-            response['body'] = json.dumps({"message": "An unexpected error occurred while executing the request"})
+        response['body'] = json.dumps({"message": "Internal Server Error"})
         return response
 
 
 if __name__ == "__main__":
     test_response = lambda_handler(None, None)
-    print(test_response)
+    logger.info(test_response)

@@ -25,7 +25,7 @@ def send_task_success(output: PipelineExecutionParams):
             output=output.to_json(),
         )
     except ClientError as e:
-        logger.error(e)
+        logger.exception(e)
         raise
 
 
@@ -37,5 +37,5 @@ def send_task_failure(output: PipelineExecutionParams):
             output=output.to_json(),
         )
     except ClientError as e:
-        logger.error(e)
+        logger.exception(e)
         raise

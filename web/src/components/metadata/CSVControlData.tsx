@@ -66,9 +66,10 @@ export function createPapaParseConfig(
             setRawControlData(results.data);
         },
         error: (error) => {
-            if (error.message === "Not Found") {
+            if (error.message === "Not Found" || error.message === "Forbidden") {
                 setControlledLists({});
                 setRawControlData([]);
+                console.warn("Could not parse S3 controlled list. Gracefully Continue Without It.");
             } else {
                 console.error(error);
             }

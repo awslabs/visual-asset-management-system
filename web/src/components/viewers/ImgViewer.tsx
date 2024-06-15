@@ -1,6 +1,6 @@
 /* eslint-disable jsx-a11y/alt-text */
 import React, { useEffect, useState } from "react";
-import { getPresignedKey } from "../../common/auth/s3";
+import { downloadAsset } from "../../services/APIService";
 
 class ImgViewerProps {
     assetId!: string;
@@ -19,17 +19,46 @@ export default function ImgViewer({ assetId, databaseId, assetKey, altAssetKey }
             return;
         }
         const fun = async () => {
-            const tmp = await getPresignedKey(assetId, databaseId, assetKey);
-            setUrl(tmp);
+            await downloadAsset({
+                assetId: assetId,
+                databaseId: databaseId,
+                key: assetKey,
+                version: "",
+            }).then((response) => {
+                if (response !== false && Array.isArray(response)) {
+                    if (response[0] === false) {
+                        // TODO: error handling (response[1] has error message)
+                        console.error(response);
+                    } else {
+                        setUrl(response[1]);
+                    }
+                }
+            });
         };
+
         fun();
     }, [assetId, assetKey, databaseId, url]);
 
-    const fallback = (error: any) => {
+    const fallback = async (error: any) => {
         console.log("handling image load err", error);
         if (err === null) {
             setErr(error);
-            getPresignedKey(assetId, databaseId, altAssetKey).then(setUrl);
+
+            await downloadAsset({
+                assetId: assetId,
+                databaseId: databaseId,
+                key: altAssetKey,
+                version: "",
+            }).then((response) => {
+                if (response !== false && Array.isArray(response)) {
+                    if (response[0] === false) {
+                        // TODO: error handling (response[1] has error message)
+                        console.error(response);
+                    } else {
+                        setUrl(response[1]);
+                    }
+                }
+            });
         }
     };
     return (

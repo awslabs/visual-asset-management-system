@@ -3,6 +3,9 @@
 
 import boto3
 from boto3.dynamodb.conditions import Key
+from customLogging.logger import safeLogger
+
+logger = safeLogger(service_name="AssetCount")
 
 dynamodb = boto3.resource('dynamodb')
 dynamodb_client = boto3.client('dynamodb')
@@ -29,7 +32,7 @@ def update_asset_count(db_database, asset_database, queryParams, databaseId):
         PaginationConfig={
             'MaxItems': int(queryParams['maxItems']),
             'PageSize': int(queryParams['pageSize']), 
-            'StartingToken': queryParams['startingToken']
+        #    'StartingToken': queryParams['startingToken']
         }
     ).build_full_result()
 
@@ -50,6 +53,6 @@ def update_asset_count(db_database, asset_database, queryParams, databaseId):
 
     item = resp['Items'][0]
     item['assetCount'] = str(count)
-    print(item)
+    logger.info(item)
     table.put_item(Item=item)
     return

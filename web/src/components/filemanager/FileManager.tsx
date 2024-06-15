@@ -22,10 +22,11 @@ import ColumnLayout from "@cloudscape-design/components/column-layout";
 import Icon from "@cloudscape-design/components/icon";
 import { fetchAssetFiles } from "../../services/APIService";
 import { useNavigate, useParams } from "react-router";
-import { Storage } from "aws-amplify";
+//import { Storage } from "aws-amplify";
 import { AssetDetail } from "../../pages/AssetUpload";
-import localforage from "localforage";
+//import localforage from "localforage";
 import { AssetDetailContext, AssetDetailContextType } from "../../context/AssetDetailContext";
+import { downloadAsset } from "../../services/APIService";
 
 export interface FileTree {
     name: string;
@@ -40,6 +41,9 @@ export interface FileManagerStateValues {
     fileTree: FileTree;
     galleryRoot: string;
     actionsRoot: string;
+    assetId: string;
+    databaseId: string;
+
     download?: {
         shouldNavigate: boolean;
         fileTree: FileTree;
@@ -121,7 +125,7 @@ function addDirectories(root: FileTree, directories: string): FileTree {
 }
 
 function addFiles(fileKeys: FileKey[], root: FileTree) {
-    console.log(fileKeys);
+    //console.log(fileKeys);
     const getParentDirectory = (path: string) => {
         const parentPath = path.split("/").slice(0, -1).join("/");
         return parentPath === "" ? "" : parentPath;
@@ -179,27 +183,49 @@ function toggleExpanded(fileTree: FileTree, relativePath: string): FileTree {
     };
 }
 
-function downloadFile(keyPrefix: string) {
-    //console.log("Downloading file ", keyPrefix)
-    Storage.get(keyPrefix, {
-        download: false,
-    })
-        .then((url) => {
-            //console.log("URL", url)
-            const link = document.createElement("a");
-            link.href = url;
-            link.click();
-        })
-        .catch((error) => {
-            console.log(error);
+async function downloadFile(assetId: string, databaseId: string, keyPrefix: string) {
+    // //console.log("Downloading file ", keyPrefix)
+    // Storage.get(keyPrefix, {
+    //     download: false,
+    // })
+    //     .then((url) => {
+    //         //console.log("URL", url)
+    //         const link = document.createElement("a");
+    //         link.href = url;
+    //         link.click();
+    //     })
+    //     .catch((error) => {
+    //         console.log(error);
+    //     });
+
+    try {
+        const response = await downloadAsset({
+            assetId: assetId,
+            databaseId: databaseId,
+            key: keyPrefix,
+            version: "",
         });
+
+        if (response !== false && Array.isArray(response)) {
+            if (response[0] === false) {
+                // TODO: error handling (response[1] has error message)
+                console.error("API Error with downloading file");
+            } else {
+                const link = document.createElement("a");
+                link.href = response[1];
+                link.click();
+            }
+        }
+    } catch (error) {
+        console.error(error);
+    }
 }
 
-type DownloadFileData = {
-    key: string;
-    name: string;
-    relativePath: string;
-};
+// type DownloadFileData = {
+//     key: string;
+//     name: string;
+//     relativePath: string;
+// };
 
 function fileManagerReducer(state: FileManagerState, action: FileManagerAction): FileManagerState {
     switch (action.type) {
@@ -228,7 +254,10 @@ function fileManagerReducer(state: FileManagerState, action: FileManagerAction):
 
         case "DOWNLOAD_FILE":
             //console.log("DOWNLOAD_FILE", action.payload)
-            downloadFile(action.payload.key);
+            const handleDownloadFile = async () => {
+                await downloadFile(state.assetId, state.databaseId, action.payload.key);
+            };
+            handleDownloadFile();
             return state;
 
         case "DOWNLOAD_FOLDER":
@@ -236,7 +265,7 @@ function fileManagerReducer(state: FileManagerState, action: FileManagerAction):
             if (!state) {
                 return state;
             }
-            //downloadFolder(action.payload.key)
+            //Re-route to the download folder page
             return {
                 ...state,
                 download: {
@@ -249,7 +278,7 @@ function fileManagerReducer(state: FileManagerState, action: FileManagerAction):
             if (!state) {
                 return state;
             }
-            //downloadFolder(action.payload.key)
+            //Re-route to the upload folder page
             return {
                 ...state,
                 upload: {
@@ -298,34 +327,37 @@ function fileManagerReducer(state: FileManagerState, action: FileManagerAction):
                 galleryRoot: "/",
                 actionsRoot: "/",
             };
+        case "FETCH_ERROR":
+            console.log("FETCH_ERROR", action.payload);
+            return state;
         default:
             return state;
     }
 }
 
-function FileManagerControl() {
-    const [filteringText, setFilteringText] = useState("");
-    return (
-        <div>
-            <Grid gridDefinition={[{ colspan: 7 }, { colspan: 5 }]}>
-                <div>
-                    <TextFilter
-                        filteringText={filteringText}
-                        filteringPlaceholder="Search Files"
-                        filteringAriaLabel="Search Files"
-                        onChange={({ detail }) => setFilteringText(detail.filteringText)}
-                    />
-                </div>
-                <div style={{ float: "right" }}>
-                    <SpaceBetween direction="horizontal" size="xs">
-                        <Button>Upload File</Button>
-                        <Button variant={"primary"}>Upload Folder</Button>
-                    </SpaceBetween>
-                </div>
-            </Grid>
-        </div>
-    );
-}
+// function FileManagerControl() {
+//     const [filteringText, setFilteringText] = useState("");
+//     return (
+//         <div>
+//             <Grid gridDefinition={[{ colspan: 7 }, { colspan: 5 }]}>
+//                 <div>
+//                     <TextFilter
+//                         filteringText={filteringText}
+//                         filteringPlaceholder="Search Files"
+//                         filteringAriaLabel="Search Files"
+//                         onChange={({ detail }) => setFilteringText(detail.filteringText)}
+//                     />
+//                 </div>
+//                 <div style={{ float: "right" }}>
+//                     <SpaceBetween direction="horizontal" size="xs">
+//                         <Button>Upload File</Button>
+//                         <Button variant={"primary"}>Upload Folder</Button>
+//                     </SpaceBetween>
+//                 </div>
+//             </Grid>
+//         </div>
+//     );
+// }
 
 function FileTreeBlock(props: {
     level: number;
@@ -405,7 +437,7 @@ function FileTreeView({ root }: { root: FileTree }) {
 }
 
 function FolderActionBar(props: { actionsBarRoot: FileTree }) {
-    const { dispatch } = useContext(AssetFileManagerContext) as AssetFileManagerContextType;
+    const { state, dispatch } = useContext(AssetFileManagerContext) as AssetFileManagerContextType;
     return (
         <div className="action-bar">
             <SpaceBetween size={"l"} direction={"horizontal"}>
@@ -415,7 +447,9 @@ function FolderActionBar(props: { actionsBarRoot: FileTree }) {
                         onClick={() => {
                             dispatch({
                                 type: "DOWNLOAD_FOLDER",
-                                payload: { key: props.actionsBarRoot },
+                                payload: {
+                                    key: props.actionsBarRoot,
+                                },
                             });
                         }}
                     >
@@ -457,7 +491,7 @@ function FolderActionBar(props: { actionsBarRoot: FileTree }) {
 }
 
 function FileActionBar(props: { actionsBarRoot: FileTree }) {
-    const { dispatch } = useContext(AssetFileManagerContext) as AssetFileManagerContextType;
+    const { state, dispatch } = useContext(AssetFileManagerContext) as AssetFileManagerContextType;
 
     return (
         <>
@@ -468,7 +502,9 @@ function FileActionBar(props: { actionsBarRoot: FileTree }) {
                         onClick={() => {
                             dispatch({
                                 type: "DOWNLOAD_FILE",
-                                payload: { key: props.actionsBarRoot.keyPrefix },
+                                payload: {
+                                    key: props.actionsBarRoot.keyPrefix,
+                                },
                             });
                         }}
                     >
@@ -603,6 +639,8 @@ export function FileManager({ assetName }: { assetName: string }) {
         },
         galleryRoot: "/",
         actionsRoot: "/",
+        assetId: assetId!,
+        databaseId: databaseId!,
     };
     const [state, dispatch] = useReducer(fileManagerReducer, initialState);
 
@@ -610,7 +648,7 @@ export function FileManager({ assetName }: { assetName: string }) {
         const fetchData = async () => {
             try {
                 const response = await fetchAssetFiles({ databaseId, assetId });
-                //console.log(response)
+                //console.log("fileManagerResponse", response)
                 const fileTree = addFiles(response, initialState.fileTree);
                 dispatch({ type: "FETCH_SUCCESS", payload: fileTree });
             } catch (error) {
@@ -622,14 +660,17 @@ export function FileManager({ assetName }: { assetName: string }) {
 
     useEffect(() => {
         if (state.download && state.download.shouldNavigate) {
-            navigate("download", { state: { fileTree: state.download.fileTree } });
+            navigate(`/databases/${databaseId}/assets/${assetId}/download`, {
+                state: { fileTree: state.download.fileTree },
+            });
             dispatch({ type: "RESET_DOWNLOAD", payload: null });
         }
         if (state.upload && state.upload.shouldNavigate) {
-            navigate("uploads", {
+            navigate(`/databases/${databaseId}/assets/${assetId}/uploads`, {
                 state: {
                     fileTree: state.upload.fileTree,
                     assetDetailState: assetDetailState,
+                    isNewFiles: true,
                 },
             });
             dispatch({ type: "RESET_UPLOAD", payload: null });

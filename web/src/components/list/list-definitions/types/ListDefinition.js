@@ -15,6 +15,7 @@ export default function ListDefinition(props) {
         filterColumns,
         pluralName,
         pluralNameTitleCase,
+        singularNameTitleCase,
         //@todo find better way to handle delete logic
         elementId,
         deleteRoute,
@@ -24,6 +25,7 @@ export default function ListDefinition(props) {
     this.filterColumns = filterColumns;
     this.pluralName = pluralName;
     this.pluralNameTitleCase = pluralNameTitleCase;
+    this.singularNameTitleCase = singularNameTitleCase;
     this.elementId = elementId;
     this.deleteRoute = deleteRoute;
     if (props.deleteFunction !== null && props.deleteFunction !== undefined) {
@@ -45,6 +47,7 @@ ListDefinition.propTypes = {
     filterColumns: PropTypes.arrayOf(FilterDefinition).isRequired,
     pluralName: PropTypes.string.isRequired,
     pluralNameTitleCase: PropTypes.string.isRequired,
+    singularNameTitleCase: PropTypes.string,
     elementId: PropTypes.string.isRequired,
     deleteRoute: PropTypes.string.isRequired,
     deleteFunction: PropTypes.func,

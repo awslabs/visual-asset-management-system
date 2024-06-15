@@ -10,23 +10,27 @@ from aws_lambda_powertools.utilities.parser.models import (
 
 
 class AssetPreviewLocationModel(BaseModel):
-    Bucket: str
     Key: str
 
+class AssetLinks(BaseModel):
+    parents: list[str]
+    child: list[str]
+    related: list[str]
 
 class UploadAssetModel(BaseModel):
     isMultiFile: bool = False
     databaseId: str
     assetId: str
     assetName: str
-    bucket: str
     key: str
     assetType: str
     description: str
     isDistributable: bool
     Comment: str
     specifiedPipelines: list[str]
+    tags: list[str]
     previewLocation: Optional[AssetPreviewLocationModel]
+    assetLinks: Optional[AssetLinks]
 
 
 class UpdateMetadataModel(BaseModel):
@@ -99,7 +103,7 @@ def GetUploadAssetWorkflowStepFunctionInput(
         uploadAssetWorkflowRequestModel: UploadAssetWorkflowRequestModel
 ) -> UploadAssetWorkflowStepFunctionInput:
     uploadAssetBody = UploadAssetStepFunctionRequest(
-            body=uploadAssetWorkflowRequestModel.uploadAssetBody
+        body=uploadAssetWorkflowRequestModel.uploadAssetBody
     )
 
     copyObjectBody = None
@@ -113,12 +117,12 @@ def GetUploadAssetWorkflowStepFunctionInput(
     updateMetadataBody = None
     if uploadAssetWorkflowRequestModel.updateMetadataBody is not None:
         metadataPathParameters = UpdateAssetMetadataPathParameters(
-                    databaseId=uploadAssetWorkflowRequestModel.uploadAssetBody.databaseId,
-                    assetId=uploadAssetWorkflowRequestModel.uploadAssetBody.assetId,
+            databaseId=uploadAssetWorkflowRequestModel.uploadAssetBody.databaseId,
+            assetId=uploadAssetWorkflowRequestModel.uploadAssetBody.assetId,
         )
         metadataBody = UpdateAssetMetadataBody(
-                    version=uploadAssetWorkflowRequestModel.updateMetadataBody.version,
-                    metadata=uploadAssetWorkflowRequestModel.updateMetadataBody.metadata
+            version=uploadAssetWorkflowRequestModel.updateMetadataBody.version,
+            metadata=uploadAssetWorkflowRequestModel.updateMetadataBody.metadata
         )
         updateMetadataBody = UpdateAssetMetadataStepFunctionRequest(
             pathParameters=metadataPathParameters,
@@ -128,11 +132,11 @@ def GetUploadAssetWorkflowStepFunctionInput(
     executeWorkflowBody = None
     if uploadAssetWorkflowRequestModel.executeWorkflowBody is not None:
         executeWorkflowBody = [ExecuteWorkflowStepFunctionRequest(
-                pathParameters=ExecuteWorkflowPathParameters(
-                    databaseId=uploadAssetWorkflowRequestModel.uploadAssetBody.databaseId,
-                    assetId=uploadAssetWorkflowRequestModel.uploadAssetBody.assetId,
-                    workflowId=x
-                )
+            pathParameters=ExecuteWorkflowPathParameters(
+                databaseId=uploadAssetWorkflowRequestModel.uploadAssetBody.databaseId,
+                assetId=uploadAssetWorkflowRequestModel.uploadAssetBody.assetId,
+                workflowId=x
+            )
         ) for x in uploadAssetWorkflowRequestModel.executeWorkflowBody.workflowIds]
     return UploadAssetWorkflowStepFunctionInput(
         uploadAssetBody=uploadAssetBody,

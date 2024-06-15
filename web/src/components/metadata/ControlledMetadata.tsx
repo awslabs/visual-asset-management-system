@@ -10,6 +10,7 @@ import { EditComp } from "./EditComp";
 import { HandleControlData, handleCSVControlData as originHandler } from "./CSVControlData";
 import MetadataTable, { MetadataApi, put } from "../single/Metadata";
 import { isAxiosError } from "../../common/typeUtils";
+import { fetchDatabaseMetadataSchema } from "../../services/APIService";
 
 export interface Metadata {
     [k: string]: string;
@@ -152,11 +153,14 @@ export default function ControlledMetadata({
                 }
 
                 try {
-                    const data: SchemaContextData = await apiget(
-                        "api",
-                        `metadataschema/${databaseId}`,
-                        {}
-                    );
+                    const dataRaw = await fetchDatabaseMetadataSchema({
+                        databaseId: databaseId,
+                    });
+
+                    const data: SchemaContextData = {
+                        schemas: dataRaw,
+                        databaseId: databaseId,
+                    };
 
                     setSchema(data);
 
@@ -173,11 +177,15 @@ export default function ControlledMetadata({
                     console.error(error);
                 }
             } else {
-                const data: SchemaContextData = await apiget(
-                    "api",
-                    `metadataschema/${databaseId}`,
-                    {}
-                );
+                const dataRaw = await fetchDatabaseMetadataSchema({
+                    databaseId: databaseId,
+                });
+
+                const data: SchemaContextData = {
+                    schemas: dataRaw,
+                    databaseId: databaseId,
+                };
+
                 setSchema(data);
                 if (data.schemas.length > 0) {
                     const start: Metadata = initialState || {};
@@ -198,9 +206,21 @@ export default function ControlledMetadata({
     useEffect(() => {
         if (schema === null || schema.schemas.length === 0) return;
         if (controlledLists !== null) return;
-        storageget(`metadataschema/${databaseId}/controlledlist.csv`).then((url: string) => {
-            handleCSVControlData(url, schema, setControlledLists, setRawControlData);
-        });
+        // try {
+        //     storageget(`metadataschema/${databaseId}/controlledlist.csv`).then((url: string) => {
+        //         console.info("S3 Controlled List Lookup URL: " + url);
+        //         handleCSVControlData(url, schema, setControlledLists, setRawControlData);
+        //     });
+        // } catch (error) {
+        //     setControlledLists({});
+        //     setRawControlData([]);
+        //     console.warn("No S3 database controlled metadata list found. Gracefully Continue Without It.");
+        // }
+
+        //TODO: Alter business logic to use fixed set schema as fixed entries on top and then allow also allow additional meta schema fields beneath
+        setControlledLists({});
+        setRawControlData([]);
+
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [databaseId, schema]);
 

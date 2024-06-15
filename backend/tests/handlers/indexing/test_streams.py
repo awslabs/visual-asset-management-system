@@ -555,7 +555,7 @@ def test_lambda_handler_s3_missing_records():
             get_asset_fields_fn=get_asset_fields_fn,
             sleep_fn=sleep_fn
         )
-    except Exception:
+    except Exception as e:
         pass
 
     s3.head_object.assert_called_with(**{

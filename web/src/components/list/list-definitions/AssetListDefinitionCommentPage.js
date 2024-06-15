@@ -25,7 +25,7 @@ export const AssetListDefinitionCommentPage = new ListDefinition({
             cellWrapper: (props) => {
                 const { item } = props;
                 return (
-                    <Link href={`/databases/${item.databaseId}/assets/${item.assetId}`}>
+                    <Link href={`#/databases/${item.databaseId}/assets/${item.assetId}`}>
                         {props.children}
                     </Link>
                 );
@@ -37,7 +37,9 @@ export const AssetListDefinitionCommentPage = new ListDefinition({
             header: Synonyms.Database,
             cellWrapper: (props) => {
                 const { item } = props;
-                return <Link href={`/databases/${item.databaseId}/assets/`}>{props.children}</Link>;
+                return (
+                    <Link href={`#/databases/${item.databaseId}/assets/`}>{props.children}</Link>
+                );
             },
             sortingField: "databaseId",
         }),

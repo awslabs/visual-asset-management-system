@@ -103,11 +103,15 @@ export default function SingleComment(props: any) {
     const confirmDelete = async () => {
         reloadComments(true);
         setDeleteCommentBool(false);
-        await deleteComment({
-            assetId: comment.assetId,
-            assetVersionIdAndCommentId: comment["assetVersionId:commentId"],
-        });
-        setReload(true);
+        try {
+            let res = await deleteComment({
+                assetId: comment.assetId,
+                assetVersionIdAndCommentId: comment["assetVersionId:commentId"],
+            });
+            if (res === 403) localStorage.setItem("status", res);
+        } finally {
+            setReload(true);
+        }
     };
 
     const cancelDelete = () => {
@@ -134,9 +138,10 @@ export default function SingleComment(props: any) {
                 }
             );
             console.log(response);
-        } catch (e) {
+        } catch (e: any) {
             console.log("edit comment error");
             console.log(e);
+            localStorage.setItem("status", e.response.status + "post");
         } finally {
             setReload(true);
         }

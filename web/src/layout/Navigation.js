@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from "react";
-import { SideNavigation } from "@cloudscape-design/components";
+import React, { useEffect } from "react";
+import { useState } from "react";
+import { SideNavigation, Spinner } from "@cloudscape-design/components";
+import { API } from "aws-amplify";
 import config from "../config";
 import Synonyms from "../synonyms";
 
@@ -16,83 +18,153 @@ if (config.CUSTOMER_LOGO) {
     navHeader.logo = { alt: "logo", src: config.CUSTOMER_LOGO };
 }
 
-let navItems = [
-    {
-        type: "section",
-        role: "assets",
-        text: "Manage",
-        items: [
-            { type: "link", text: Synonyms.Databases, href: "/databases" },
-            { type: "link", text: Synonyms.Assets, href: "/assets" },
-            { type: "link", text: `Upload ${Synonyms.Asset}`, href: "/upload" },
-            { type: "link", text: Synonyms.Comments, href: "/comments" },
-        ],
-    },
-    {
-        type: "section",
-        role: "assets",
-        text: "Visualize",
-        items: [
-            { type: "link", text: "3D Model Viewer", href: "/visualizers/model" },
-            { type: "link", text: "3D Point Cloud Viewer", href: "/visualizers/pc" },
-            { type: "link", text: "3D Plotter", href: "/visualizers/plot" },
-            { type: "link", text: "Columnar Viewer", href: "/visualizers/column" },
-        ],
-    },
-    {
-        type: "section",
-        role: "pipelines",
-        text: "Transform",
-        items: [{ type: "link", text: "Pipelines", href: "/pipelines" }],
-    },
-    {
-        type: "section",
-        role: "workflows",
-        text: "Orchestrate & Automate",
-        items: [{ type: "link", text: "Workflows", href: "/workflows" }],
-    },
-    {
-        type: "divider",
-        role: "super-admin",
-    },
-    {
-        type: "section",
-        role: "super-admin",
-        text: "Admin",
-        items: [
-            { type: "link", text: "Fine Grained Access Controls", href: "/auth/constraints" },
-            {
-                type: "link",
-                text: "Metadata Schema",
-                href: "/metadataschema/create",
-            },
-        ],
-    },
-];
-
 const defaultOnFollowHandler = (ev) => {};
+
+function CenterSpinner() {
+    return (
+        <div
+            aria-live="polite"
+            aria-label="Loading page content."
+            style={{
+                display: "flex",
+                justifyContent: "center",
+                alignItems: "center",
+                height: "100%",
+            }}
+        >
+            <Spinner size="large" />
+        </div>
+    );
+}
 
 export function Navigation({
     activeHref,
     header = navHeader,
-    items = navItems,
     onFollowHandler = defaultOnFollowHandler,
     user,
 }) {
-    let roles = [];
-    try {
-        roles = JSON.parse(user.signInUserSession.idToken.payload["vams:roles"]);
-    } catch (e) {}
-    return (
+    let filteredNavItems = [
+        {
+            type: "section",
+            text: "Manage",
+            items: [
+                { type: "link", text: Synonyms.Databases, href: "#/databases/" },
+                { type: "link", text: Synonyms.Assets, href: "#/assets/" },
+                { type: "link", text: `Upload ${Synonyms.Asset}`, href: "#/upload/" },
+                { type: "link", text: Synonyms.Comments, href: "#/comments/" },
+            ],
+        },
+        // {
+        //     type: "section",
+        //     role: "assets",
+        //     text: "Visualize",
+        //     items: [
+        //         { type: "link", text: "3D Model Viewer", href: "#/visualizers/model" },
+        //         { type: "link", text: "3D Point Cloud Viewer", href: "#/visualizers/pc" },
+        //         { type: "link", text: "3D Plotter", href: "#/visualizers/plot" },
+        //         { type: "link", text: "Columnar Viewer", href: "#/visualizers/column" },
+        //     ],
+        // },
+        {
+            type: "section",
+            text: "Transform",
+            items: [{ type: "link", text: "Pipelines", href: "#/pipelines/" }],
+        },
+        {
+            type: "section",
+            text: "Orchestrate & Automate",
+            items: [{ type: "link", text: "Workflows", href: "#/workflows/" }],
+        },
+        {
+            type: "divider",
+        },
+        {
+            type: "section",
+            text: "Admin",
+            items: [
+                { type: "link", text: "Access Control Contraints", href: "#/auth/constraints/" },
+                {
+                    type: "link",
+                    text: "Roles",
+                    href: "#/auth/roles/",
+                },
+                {
+                    type: "link",
+                    text: "Users in Roles",
+                    href: "#/auth/userroles/",
+                },
+                {
+                    type: "link",
+                    text: "Metadata Schema",
+                    href: "#/metadataschema/create/",
+                },
+                {
+                    type: "link",
+                    text: "Tags Management",
+                    href: "#/auth/tags/",
+                },
+                {
+                    type: "link",
+                    text: "Subscription Management",
+                    href: "#/auth/subscriptions/",
+                },
+                {
+                    type: "link",
+                    text: "Asset Ingestion",
+                    href: "#/assetIngestion",
+                },
+            ],
+        },
+    ];
+    const [navigationItems, setNavigationItems] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        let allowedRoutes = [];
+
+        let allRoutes = [];
+        for (let navigationItem of filteredNavItems) {
+            if (navigationItem.items) {
+                for (let item of navigationItem.items) {
+                    allRoutes.push({
+                        method: "GET",
+                        route__path: item.href.replace("#", ""),
+                    });
+                }
+            }
+        }
+        try {
+            API.post("api", `auth/routes`, {
+                body: {
+                    routes: allRoutes,
+                },
+            }).then((value) => {
+                for (let allowedRoute of value.allowedRoutes) {
+                    allowedRoutes.push("#" + allowedRoute.route__path);
+                }
+
+                for (let navigationItem of filteredNavItems) {
+                    if (navigationItem.items) {
+                        navigationItem.items = navigationItem.items.filter((item) => {
+                            return allowedRoutes.includes(item.href);
+                        });
+                    }
+                }
+                filteredNavItems = filteredNavItems.filter((navigationItem) => {
+                    return navigationItem.items?.length > 0;
+                });
+                setNavigationItems(filteredNavItems);
+                setLoading(false);
+            });
+        } catch (e) {}
+    }, []);
+
+    return loading ? (
+        <CenterSpinner />
+    ) : (
         <SideNavigation
             header={config.CUSTOMER_LOGO ? navHeader : null}
-            items={items.filter((item) => {
-                return (
-                    item.role === undefined ||
-                    roles.includes(item.role) ||
-                    roles.includes("super-admin")
-                );
-            })}
+            items={navigationItems}
             activeHref={activeHref}
             onFollow={onFollowHandler}
         />

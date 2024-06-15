@@ -5,7 +5,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import DOMPurify from "dompurify";
-import { getPresignedKey } from "../../common/auth/s3";
+import { downloadAsset } from "../../services/APIService";
 
 export default function HTMLViewer(props) {
     const shadowElement = useRef(null);
@@ -14,18 +14,29 @@ export default function HTMLViewer(props) {
 
     useEffect(() => {
         const loadAsset = async () => {
-            await getPresignedKey(assetId, databaseId, assetKey).then((remoteFileUrl) => {
-                const request = new XMLHttpRequest();
-                request.onload = function (e) {
-                    const cleanContent = DOMPurify.sanitize(request.response);
-                    const containerElement = document.createElement("div");
-                    containerElement.innerHTML = cleanContent;
-                    const htmlContent = document.importNode(containerElement, true);
-                    const shadowRoot = shadowElement.current.attachShadow({ mode: "open" });
-                    shadowRoot.appendChild(htmlContent);
-                };
-                request.open("get", remoteFileUrl, true);
-                request.send();
+            await downloadAsset({
+                assetId: assetId,
+                databaseId: databaseId,
+                key: assetKey,
+                version: "",
+            }).then((response) => {
+                if (response !== false && Array.isArray(response)) {
+                    if (response[0] === false) {
+                        // TODO: error handling (response[1] has error message)
+                    } else {
+                        const request = new XMLHttpRequest();
+                        request.onload = function (e) {
+                            const cleanContent = DOMPurify.sanitize(request.response);
+                            const containerElement = document.createElement("div");
+                            containerElement.innerHTML = cleanContent;
+                            const htmlContent = document.importNode(containerElement, true);
+                            const shadowRoot = shadowElement.current.attachShadow({ mode: "open" });
+                            shadowRoot.appendChild(htmlContent);
+                        };
+                        request.open("get", response[1], true);
+                        request.send();
+                    }
+                }
             });
         };
         if (!loaded && assetKey !== "") {

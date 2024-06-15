@@ -8,6 +8,635 @@ servers:
           apiGatewayUrl:
               default: ""
 paths:
+    /api/amplify-config:
+        get:
+            summary: "Get secure configuration."
+            responses:
+                "200":
+                    description: OK.
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+    /assets:
+            put:
+                summary: "Create or update an asset."
+                requestBody:
+                    required: true
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/asset'
+                responses:
+                    "200":
+                        description: OK
+                    "400":
+                        description: Invalid parameters.
+                        content:
+                            application/json:
+                                schema:
+                                    $ref: '#/components/schemas/error'
+                    "404":
+                        description: Database not found.
+                        content:
+                            application/json:
+                                schema:
+                                    $ref: '#/components/schemas/error'
+                    "500":
+                        description: Error processing request.
+                        content:
+                            application/json:
+                                schema:
+                                    $ref: '#/components/schemas/error'
+            get:
+                summary: "List all assets."
+                responses:
+                    "200":
+                        description: OK
+                        content:
+                            application/json:
+                                schema:
+                                    type: object
+                                    properties:
+                                        assets:
+                                            type: array
+                                            items:
+                                                $ref: "#/components/schemas/asset"
+                    "500":
+                        description: Error processing request.
+                        content:
+                            application/json:
+                                schema:
+                                    $ref: '#/components/schemas/error'
+    /assets/all:
+            put:
+                summary: "Create or update one or multiple assets."
+                requestBody:
+                    required: true
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                items:
+                                    $ref: "#/components/schemas/asset"
+                responses:
+                    "200":
+                        description: OK
+                    "400":
+                        description: Invalid parameters.
+                        content:
+                            application/json:
+                                schema:
+                                    $ref: '#/components/schemas/error'
+                    "404":
+                        description: Database not found.
+                        content:
+                            application/json:
+                                schema:
+                                    $ref: '#/components/schemas/error'
+                    "500":
+                        description: Error processing request.
+                        content:
+                            application/json:
+                                schema:
+                                    $ref: '#/components/schemas/error'
+    /assets/uploadAssetWorkflow:
+        post:
+            summary: "Upload asset workflow."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/uploadAssetWorkflow'
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+    /asset-links:
+        post:
+            summary: "Create or update asset links."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/asset_links"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not allowed to create/update asset link.
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+    /asset-links/{assetId}:
+        get:
+            summary: "Create or update asset links."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not allowed to create/update asset link.
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /asset-links/{relationId}:
+        delete:
+            summary: "Delete asset link."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not allowed to delete asset link.
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "relationId"
+                in: "path"
+                description: "Unique identifier for asset link."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/uuid_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /auth/constraints:
+        get:
+            summary: "List all constraints."
+            responses:
+                "200":
+                    description: OK
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+                - $ref: '#/components/parameters/maxItemsParam'
+                - $ref: '#/components/parameters/pageSizeParam'
+                - $ref: '#/components/parameters/startingTokenParam'
+            security:
+            - DefaultCognitoAuthorizer: []    
+    /auth/constraints/{constraintId}/:
+        get:
+            summary: "Get constraint."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: '#/components/parameters/maxItemsParam'
+              - $ref: '#/components/parameters/pageSizeParam'
+              - $ref: '#/components/parameters/startingTokenParam'
+              - name: "constraintId"
+                in: "path"
+                description: "Unique identifier for constraint."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/object_name_pattern_regex'
+            security:
+            -   DefaultCognitoAuthorizer: []
+        post:
+            summary: "Update constraint."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/constraint'
+            parameters:
+            - $ref: '#/components/parameters/maxItemsParam'
+            - $ref: '#/components/parameters/pageSizeParam'
+            - $ref: '#/components/parameters/startingTokenParam'            
+            - name: "constraintId"
+              in: "path"
+              description: "Unique identifier for constraint."
+              required: true
+              schema:
+                $ref: '#/components/schemas/object_name_pattern_regex'
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+            -   DefaultCognitoAuthorizer: []
+        put:
+            summary: "Create constraint."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/constraint'
+            parameters:
+            - $ref: '#/components/parameters/maxItemsParam'
+            - $ref: '#/components/parameters/pageSizeParam'
+            - $ref: '#/components/parameters/startingTokenParam'            
+            - name: "constraintId"
+              in: "path"
+              description: "Unique identifier for constraint."
+              required: true
+              schema:
+                $ref: '#/components/schemas/object_name_pattern_regex'
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+            -   DefaultCognitoAuthorizer: []
+        delete: 
+            summary: "Delete constraint."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: '#/components/parameters/maxItemsParam'
+              - $ref: '#/components/parameters/pageSizeParam'
+              - $ref: '#/components/parameters/startingTokenParam'
+              - name: "constraintId"
+                in: "path"
+                description: "Unique identifier for constraint."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/object_name_pattern_regex'
+            security:
+            -   DefaultCognitoAuthorizer: []
+    /auth/routes:
+        post:
+            summary: "Authorize routes."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/auth_request'
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+            -   DefaultCognitoAuthorizer: []
+    /auth/scopeds3access:
+        post:
+            summary: "Get S3 access."
+            description: "Given an assetId and databaseId, determine if a user has access to mutate s3 objects for that asset."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/s3_access"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+    /check-subscription:
+        post:
+            summary: "Verify if subscription exists or not."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/checkSubscription"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+    /comments/assets/{assetId}:
+        get:
+            summary: "List all comments for an asset."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: No asset ID in API call.
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: "showDeleted"
+                in: "query"
+                description: "Show deleted comments flag."
+                schema:
+                    type: boolean
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /comments/assets/{assetId}/assetVersionId/{assetVersionId}/assets:
+        get:
+            summary: "List all comments for the given version of an asset."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: No asset ID in API call.
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "assetId"
+                in: "path"
+                description: "Generated path parameter for assetId."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: "assetVersionId"
+                in: "path"
+                description: "Asset version."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: "showDeleted"
+                in: "query"
+                description: "Show deleted comments flag."
+                schema:
+                    type: boolean
+            security:
+              - DefaultCognitoAuthorizer: []
+    /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}/:
+        get:
+            summary: "Get specified comment."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: No asset ID in API call.
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "assetId"
+                in: "path"
+                description: "Generated path parameter for assetId."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: "assetVersionId:commentId"
+                in: "path"
+                description: "Unique identifier for comment. Validation will be performed on asset version ID and comment ID."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Delete specified comment."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: No asset ID in API call.
+                "403":
+                    description: Action not allowed or not authorized.
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "assetId"
+                in: "path"
+                description: "Generated path parameter for assetId."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: "assetVersionId:commentId" 
+                in: "path"
+                description: "Unique identifier for comment."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
+        post:
+            summary: "Add comment to specified version of asset."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/comment"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: No asset ID in API call.
+                "403":
+                    description: Action not allowed or not authorized.
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "assetId"
+                in: "path"
+                description: "Generated path parameter for assetId."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: "assetVersionId:commentId" 
+                in: "path"
+                description: "Unique identifier for comment."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
+        put:
+            summary: "Edit specified comment."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/comment"
+            responses:
+                "200":
+                    description: Succeeded.
+                "400":
+                    description: No asset ID in API call.
+                "403":
+                    description: Action not allowed or not authorized.
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "assetId"
+                in: "path"
+                description: "Generated path parameter for assetId."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: "assetVersionId:commentId" 
+                in: "path"
+                description: "Unique identifier for comment."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
     /databases:
         put:
             summary: "Create or update a database."
@@ -25,13 +654,15 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not allowed to create/update database.
                 "500":
                     description: Error processing request.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
         get:
             summary: "List all databases."
             responses:
@@ -40,15 +671,24 @@ paths:
                     content:
                         application/json:
                             schema:
-                                type: array
-                                items:
-                                    $ref: "#/components/schemas/database"
+                                type: object
+                                properties:
+                                    databases:
+                                        type: array
+                                        items:
+                                            $ref: "#/components/schemas/database"
                 "500":
                     description: Error processing request.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
     /databases/{databaseId}:
         get:
             summary: "Get a database."
@@ -64,156 +704,76 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
         delete:
             summary: "Delete a database."
             responses:
                 "200":
                     description: Database deleted.
+                "400":
+                    description: Database contains an active workflow, pipeline, or assets. 
+                "403":
+                    description: Action not allowed or not authorized. 
                 "404":
-                    description: Database not found OR Database contains active workflows/pipelines/assets.
+                    description: Database not found.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
+        parameters:
+            - name: "databaseId"
+              in: "path"
+              description: "Unique identifier for database."
+              required: true
+              schema:
+                  $ref: '#/components/schemas/id_regex'
+    /database/{databaseId}/assets:
+        get:
+            summary: "List all assets in a database."
+            responses:
+                "200":
+                    description: OK
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
         parameters:
             - name: "databaseId"
               in: "path"
               description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
               required: true
               schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-    /assets:
-        put:
-            summary: "Create or update an asset."
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            $ref: "#/components/schemas/asset"
-            responses:
-                "200":
-                    description: OK
-                "400":
-                    description: Invalid parameters.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-                "404":
-                    description: Database not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-        get:
-            summary: "List all assets."
-            responses:
-                "200":
-                    description: OK
-                    content:
-                        application/json:
-                            schema:
-                                type: array
-                                items:
-                                    $ref: "#/components/schemas/asset"
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-    /assets/all:
-        put:
-            summary: "Create or update one or multiple assets."
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            type: array
-                            items:
-                                $ref: "#/components/schemas/asset"
-            responses:
-                "200":
-                    description: OK
-                "400":
-                    description: Invalid parameters.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-                "404":
-                    description: Database not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-
-    /assets/uploadAssetWorkflow:
-        post:
-            summary: "Single endpoint to upload asset, add metadata and execute workflows"
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            type: object
-                            properties:
-                                copyFrom:
-                                    type: string
-                                uploadAssetBody:
-                                    $ref: "#/components/schemas/assets"
-                                updateMetadataBody:
-                                    $ref: "#/components/schemas/metadata"
-                                executeWorkflowBody:
-                                    $ref: "#/components/schemas/workflows"
-            responses:
-                "200":
-                    description: OK
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/uploadAssetResponse"
-                "404":
-                    description: Database OR asset not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-
+                  $ref: '#/components/schemas/id_regex'
+            - name: "showDeleted"
+              in: "query"
+              description: "Flag to specify whether to list deleted assets or not."
+              required: false
+              schema:
+                  type: "boolean"
     /database/{databaseId}/assets/{assetId}:
         get:
             summary: "Get an asset."
@@ -229,13 +789,32 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
+            parameters:
+                - name: "databaseId"
+                  in: path
+                  description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+                  required: true
+                  schema:
+                    $ref: "#/components/schemas/id_regex"
+                - name: "assetId"
+                  in: path
+                  description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+                  required: true
+                  schema:
+                    $ref: "#/components/schemas/id_regex"
+                - name: "showDeleted"
+                  in: query
+                  description: "Flag to specify whether to list deleted assets or not."
+                  required: false
+                  schema:
+                    type: "boolean"
         delete:
             summary: "Delete an asset."
             responses:
@@ -246,73 +825,69 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
         parameters:
             - name: "databaseId"
               in: "path"
               description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
               required: true
               schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+                $ref: '#/components/schemas/id_regex'
             - name: "assetId"
               in: "path"
               description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
               required: true
               schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-    /database/{databaseId}/assets/{assetId}/revert:
-        post:
-            summary: "Revert an asset to a previous version."
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            type: object
-                            properties:
-                                version:
-                                    type: integer
+                $ref: '#/components/schemas/id_regex'
+    /database/{databaseId}/assets/{assetId}/columns:
+        get:
+            summary: "For CSV assets, get the names of all column headers."
             responses:
                 "200":
-                    description: Asset reverted.
+                    description: OK
                 "404":
-                    description: Database OR Asset OR Version not found.
+                    description: Database OR Asset not found.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
-        parameters:
-            - name: "databaseId"
-              in: "path"
-              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-              required: true
-              schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-            - name: "assetId"
-              in: "path"
-              description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-              required: true
-              schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: "list"
+                in: "query"
+                required: true
+                schema:
+                    type: "boolean"
     /database/{databaseId}/assets/{assetId}/download:
         post:
-            summary: "Generate a presigned url for downloading the given or the latest version of an asset"
+            summary: "Generate presigned url for downloading the given or latest version of an asset"
+            description: "Generate presigned url for downloading the given or latest version of an asset. Provide an optional key to specify the version of the asset."
             requestBody:
                 required: true
                 content:
@@ -323,12 +898,8 @@ paths:
                                 - databaseId
                                 - assetId
                             properties:
-                                databaseId:
-                                    type: string
-                                assetId:
-                                    type: string
-                                version:
-                                    type: string
+                                key:
+                                    $ref: "#/components/schemas/asset_path_pattern_regex"
             responses:
                 "200":
                     description: Presigned url for asset download is generated.
@@ -345,25 +916,25 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
                 "401":
                     description: Asset not distributable.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
                 "404":
                     description: Database OR Asset OR Version not found.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
         parameters:
             - name: "databaseId"
               in: "path"
@@ -379,130 +950,665 @@ paths:
               schema:
                   type: "string"
                   pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-
-    /database/{databaseId}/assets:
+    /database/{databaseId}/assets/{assetId}/listFiles:
         get:
-            summary: "List all assets in a database."
+            summary: "List files in an asset."
             responses:
                 "200":
                     description: OK
+                "403":
+                    description: Database OR Asset OR Version not found.
                     content:
                         application/json:
                             schema:
-                                type: array
-                                items:
-                                    $ref: "#/components/schemas/asset"
+                                $ref: '#/components/schemas/error'
                 "404":
-                    description: Database not found.
+                    description: Database OR Asset OR Version not found.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
-        parameters:
-            - name: "databaseId"
-              in: "path"
-              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-              required: true
-              schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-    /database/{databaseId}/assets/{assetId}/columns:
-        get:
-            summary: "For CSV assets, get the names of all column headers."
-            responses:
-                "200":
-                    description: OK
-                    content:
-                        application/json:
-                            schema:
-                                type: array
-                                example: [column1, column2, column3]
-                                items:
-                                    type: string
-                "404":
-                    description: Database OR Asset not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-        parameters:
-            - name: "databaseId"
-              in: "path"
-              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-              required: true
-              schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-            - name: "assetId"
-              in: "path"
-              description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-              required: true
-              schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
     /database/{databaseId}/assets/{assetId}/metadata:
         get:
             summary: "For CSV assets, get certain data within the document based on provided variables."
             responses:
                 "200":
-                    description: OK
-                    content:
-                        application/json:
-                            schema:
-                                type: array
-                                items:
-                                    type: array
-                                    items:
-                                        anyOf:
-                                            - type: string
-                                            - type: number
-                                            - type: integer
-                                            - type: boolean
-                "404":
                     description: Database OR Asset not found.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
         parameters:
-            - name: "databaseId"
-              in: "path"
-              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-              required: true
-              schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-            - name: "assetId"
-              in: "path"
-              description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-              required: true
-              schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-            - name: "prefix"
-              in: query
-              required: false
-              description: "prefix of the folder/file inside a multi file asset to store the metadata on."
-              schema:
-                  type: string
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+    /database/{databaseId}/assets/{assetId}/revert:
+        post:
+            summary: "Revert an asset to a previous version."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                version:
+                                    type: integer
+            responses:
+                "200":
+                    description: Asset reverted.
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Database OR Asset OR Version not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+        parameters:
+          - name: "databaseId"
+            in: "path"
+            description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+            required: true
+            schema:
+                $ref: '#/components/schemas/id_regex'
+          - name: "assetId"
+            in: "path"
+            description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
+            required: true
+            schema:
+                $ref: '#/components/schemas/id_regex'
+    /database/{databaseId}/assets/{assetId}/workflows/{workflowId}:
+        post:
+            summary: "Execute a workflow using an asset as the input source."
+            responses:
+                "200":
+                    description: Workflow execution started.
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset does not exist.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: workflowId
+                in: path
+                description: Workflow ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+    /database/{databaseId}/assets/{assetId}/workflows/{workflowId}/executions:
+        get:
+            summary: "List all executions for a workflow."
+            responses:
+                "200":
+                    description: OK.
+                "404":
+                    description: Database OR Asset OR Workflow not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: '#/components/parameters/maxItemsParam'
+              - $ref: '#/components/parameters/pageSizeParam'
+              - $ref: '#/components/parameters/startingTokenParam'
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: workflowId
+                in: path
+                description: Workflow ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+    /database/{databaseId}/pipelines/{pipelineId}:
+        get:
+            summary: "Get a pipeline."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/pipeline'
+                "404":
+                    description: Database OR Pipeline not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: '#/components/parameters/maxItemsParam'
+              - $ref: '#/components/parameters/pageSizeParam'
+              - $ref: '#/components/parameters/startingTokenParam'
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: pipelineId
+                in: path
+                description: Pipeline ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+        delete:
+            summary: "Delete a pipeline."
+            responses:
+                "200":
+                    description: Pipeline deleted.
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Database OR Pipeline not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: '#/components/parameters/maxItemsParam'
+              - $ref: '#/components/parameters/pageSizeParam'
+              - $ref: '#/components/parameters/startingTokenParam'
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: pipelineId
+                in: path
+                description: Pipeline ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: "value"
+                in: "query"
+                description: "Pipeline ID."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+    /database/{databaseId}/workflows:
+        get:
+            summary: "List all workflows for a database."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                  workflows:
+                                    type: array
+                                    items:
+                                        $ref: "#/components/schemas/workflow"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: '#/components/parameters/maxItemsParam'
+              - $ref: '#/components/parameters/pageSizeParam'
+              - $ref: '#/components/parameters/startingTokenParam'
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+    /database/{databaseId}/workflows/{workflowId}:
+        get:
+            summary: "Get a workflow."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/workflow"
+                "404":
+                    description: Database OR Workflow not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: '#/components/parameters/maxItemsParam'
+              - $ref: '#/components/parameters/pageSizeParam'
+              - $ref: '#/components/parameters/startingTokenParam'
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: workflowId
+                in: path
+                description: Workflow ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+        delete:
+            summary: "Delete a workflow."
+            responses:
+                "200":
+                    description: Workflow deleted.
+                "404":
+                    description: Database OR Workflow not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: '#/components/parameters/maxItemsParam'
+              - $ref: '#/components/parameters/pageSizeParam'
+              - $ref: '#/components/parameters/startingTokenParam'
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: workflowId
+                in: path
+                description: Workflow ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+    /ingest-asset:
+        post:
+            summary: "Ingest a new asset into the database."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/ingest_asset"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+    /metadata/{databaseId}/{assetId}/:
+        get:
+            summary: "Get metadata for a given asset."
+            responses:
+                "200":
+                    description: OK
+                "404":
+                    description: Missing asset or database ID path parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Database Id"
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: "assetId"
+                in: "path"
+                description: "Asset Id"
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: "assetPath"
+                in: "query"
+                description: "Asset Path"
+                required: false
+                schema:
+                    $ref: '#/components/schemas/asset_path_pattern_regex'
+              - $ref: '#/components/parameters/maxItemsParam'
+              - $ref: '#/components/parameters/pageSizeParam'
+              - $ref: '#/components/parameters/startingTokenParam'
+        post:
+            summary: "Update metadata for a given asset."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/metadata"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Missing asset or database ID path parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Database Id"
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: "assetId"
+                in: "path"
+                description: "Asset Id"
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+                - DefaultCognitoAuthorizer: []
+        put:
+            summary: "Update metadata for a given asset."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/metadata"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Missing asset or database ID path parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Database Id"
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: "assetId"
+                in: "path"
+                description: "Asset Id"
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+                - DefaultCognitoAuthorizer: []
+    /metadataschema/{databaseId}/:
+        get:
+            summary: "Get metadata schema for a given database."
+            responses:
+                "200":
+                    description: OK
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Missing asset or database ID path parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: '#/components/parameters/maxItemsParam'
+              - $ref: '#/components/parameters/pageSizeParam'
+              - $ref: '#/components/parameters/startingTokenParam'
+              - name: "databaseId"
+                in: "path"
+                description: "Database Id"
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+        post:
+            summary: "Update metadata schema for a given database."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/metadata_schema"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Missing asset or database ID path parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters: 
+              - name: "databaseId"
+                in: "path"
+                description: "Database Id"
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+    /metadataschema/{databaseId}/{field}/:
+        delete:
+            summary: "Delete metadata schema field."
+            responses:
+                "200":
+                    description: OK
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Missing asset or database ID path parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "field"
+                in: "path"
+                description: "Field name"
+                required: true
+                schema:
+                    type: string
+              - name: "databaseId"
+                in: "path"
+                description: "Database Id"
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+                - DefaultCognitoAuthorizer: []
     /pipelines:
         put:
             summary: "Create or update a pipeline."
@@ -520,90 +1626,40 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
                 "404":
                     description: Database not found.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
         get:
             summary: "List all pipelines."
             responses:
                 "200":
                     description: OK
+                "400":
+                    description: Invalid parameters.
                     content:
                         application/json:
                             schema:
-                                type: array
-                                items:
-                                    $ref: "#/components/schemas/pipeline"
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
-    /database/{databaseId}/pipelines/{pipelineId}:
-        get:
-            summary: "Get a pipeline."
-            responses:
-                "200":
-                    description: OK
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/pipeline"
-                "404":
-                    description: Database OR Pipeline not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-        delete:
-            summary: "Delete a pipeline."
-            responses:
-                "200":
-                    description: Pipeline deleted.
-                "404":
-                    description: Database OR Pipeline not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-        parameters:
-            - name: "databaseId"
-              in: "path"
-              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-              required: true
-              schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-            - name: "pipelineId"
-              in: "path"
-              description: "Unique identifier for pipeline, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-              required: true
-              schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
     /database/{databaseId}/pipelines:
         get:
             summary: "List all pipelines in a database."
@@ -613,29 +1669,757 @@ paths:
                     content:
                         application/json:
                             schema:
-                                type: array
-                                items:
-                                    $ref: "#/components/schemas/pipeline"
+                                type: object
+                                properties:
+                                    pipelines:
+                                        type: array
+                                        items:
+                                            $ref: "#/components/schemas/pipeline"
                 "404":
                     description: Database not found.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
-        parameters:
-            - name: "databaseId"
-              in: "path"
-              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-              required: true
-              schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+              - name: databaseId
+                in: path
+                description: Database ID.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+    /roles:
+        get:
+            summary: "List all roles."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: No asset ID in API call.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+        post:
+            summary: "Create roles."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/role"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+        put:
+            summary: "Update role."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/role"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+              - DefaultCognitoAuthorizer: []
+    /subscriptions: 
+        get:
+            summary: "List all tags."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Delete specified subscription."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
+        post:
+            summary: "Create subscriptions."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/subscription"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+              - DefaultCognitoAuthorizer: []
+        put: 
+            summary: "Update subscriptions."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/subscription"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+              - DefaultCognitoAuthorizer: []
+    /tags:
+        get:
+            summary: "List all tags."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
+        post:
+            summary: "Create new tags."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                tags:
+                                    type: array
+                                    items:
+                                        $ref: "#/components/schemas/tag"
+            responses:
+                "200":
+                    description: Succeeded
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+              - DefaultCognitoAuthorizer: []
+        put:
+            summary: "Update tags."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                tags:
+                                    type: array
+                                    items:
+                                        $ref: "#/components/schemas/tag"
+            responses:
+                "200":
+                    description: Succeeded.
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+              - DefaultCognitoAuthorizer: []
+    /tags/{tagId}:
+        delete:
+            summary: "Delete tags."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Database not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+              - name: tagId
+                in: path
+                description: One or more tag ids to delete.
+                required: true
+                schema:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/object_name_pattern_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /tag-types:
+        get:
+            summary: "List all tag types."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
+        post:
+            summary: "Create new tag types."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                              tagTypes:
+                                type: array
+                                items:
+                                    $ref: "#/components/schemas/tagType"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []            
+        put:
+            summary: "Update tag types."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                              tagTypes:
+                                type: array
+                                items:
+                                    $ref: "#/components/schemas/tagType"
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+              - DefaultCognitoAuthorizer: []
+    /tag-types/{tagTypeId}:
+        delete:
+            summary: "Delete a tag type."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+              - name: tagTypeId
+                in: path
+                description: Tag type.
+                required: true
+                schema:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /unsubscribe:
+        delete:
+            summary: "Unsubscribe."
+            description: "eventName (object regex), entityName (object regex), entityId (ID regex), and the list of subscribers (email array regex) are required fields"
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+              - DefaultCognitoAuthorizer: []
+    /user-roles:
+        get:
+            summary: "List all user roles."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters: 
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+              - name: roleName
+                in: query
+                description: One or more role names to add.
+                required: true
+                schema:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/object_name_pattern_regex"
+              - name: userId
+                in: query
+                description: User e-mails.
+                required: true
+                schema:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/email_pattern_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+        post: 
+            summary: "Create new user roles."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: array
+                            items:
+                                $ref: "#/components/schemas/userRole"
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+              - name: roleName
+                in: query
+                description: One or more role names to add.
+                required: true
+                schema:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/object_name_pattern_regex"
+              - name: userId
+                in: query
+                description: User e-mails.
+                required: true
+                schema:
+                    type: array
+                    items:
+                     $ref: "#/components/schemas/email_pattern_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+        put:
+            summary: "Update user roles."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: array
+                            items:
+                                $ref: "#/components/schemas/userRole"
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
+        delete: 
+            summary: "Delete user roles."
+            description: "userId (email regex) is a required field."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /visualizerAssets/{proxy+}/:
+        get:
+            summary: "Get a visualizer asset."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: proxy+
+                in: path
+                description: Visualizer asset path.
+                required: true
+                schema:
+                    $ref: '#/components/schemas/asset_path_pattern_regex'
     /workflows:
         put:
             summary: "Create or update a workflow."
@@ -653,19 +2437,13 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
-                "404":
-                    description: Database not found.
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to read pipeline.
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: '#/components/schemas/error'
         get:
             summary: "List all workflows."
             responses:
@@ -682,250 +2460,325 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
-    /database/{databaseId}/workflows:
-        get:
-            summary: "List all workflows for a database."
-            responses:
-                "200":
-                    description: OK
-                    content:
-                        application/json:
-                            schema:
-                                type: array
-                                items:
-                                    $ref: "#/components/schemas/workflow"
-                "404":
-                    description: Database not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-        parameters:
-            - name: "databaseId"
-              in: "path"
-              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-              required: true
-              schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-    /database/{databaseId}/workflows/{workflowId}:
-        get:
-            summary: "Get a workflow."
-            responses:
-                "200":
-                    description: OK
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/workflow"
-                "404":
-                    description: Database OR Workflow not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-        delete:
-            summary: "Delete a workflow."
-            responses:
-                "200":
-                    description: Workflow deleted.
-                "404":
-                    description: Database OR Workflow not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-        parameters:
-            - name: "databaseId"
-              in: "path"
-              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-              required: true
-              schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-            - name: "workflowId"
-              in: "path"
-              description: "Unique identifier for workflow, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-              required: true
-              schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-    /database/{databaseId}/assets/{assetId}/workflows/{workflowId}:
-        post:
-            summary: "Execute a workflow using an asset as the input source."
-            responses:
-                "200":
-                    description: Workflow execution started.
-                "404":
-                    description: Database OR Workflow OR Asset not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-        parameters:
-            - name: "databaseId"
-              in: "path"
-              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-              required: true
-              schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-            - name: "assetId"
-              in: "path"
-              description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-              required: true
-              schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-            - name: "workflowId"
-              in: "path"
-              description: "Unique identifier for workflow, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-              required: true
-              schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-    /database/{databaseId}/assets/{assetId}/workflows/{workflowId}/executions:
-        get:
-            summary: "List all executions for a workflow."
-            responses:
-                "200":
-                    description: OK
-                    content:
-                        application/json:
-                            schema:
-                                type: array
-                                items:
-                                    $ref: "#/components/schemas/workflowExecution"
-                "404":
-                    description: Database OR Asset OR Workflow not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-        parameters:
-            - name: "databaseId"
-              in: "path"
-              description: "Unique identifier for database, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-              required: true
-              schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-            - name: "assetId"
-              in: "path"
-              description: "Unique identifier for asset, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-              required: true
-              schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-            - name: "workflowId"
-              in: "path"
-              description: "Unique identifier for workflow, must be all lower case, no special chars or spaces except - and _ only letters for first character min 3 and max 100."
-              required: true
-              schema:
-                  type: "string"
-                  pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: '#/components/parameters/maxItemsParam'
+              - $ref: '#/components/parameters/pageSizeParam'
+              - $ref: '#/components/parameters/startingTokenParam'
 components:
     schemas:
-        database:
-            type: object
-            properties:
-                databaseId:
-                    type: string
-                    example: vr-models-training
-                    pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-                description:
-                    type: string
-                    example: 3d models used in training programs.
-            required:
-                - databaseId
-                - description
         asset:
             type: object
             properties:
                 assetId:
-                    type: string
-                    example: blade-12345
-                    pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+                    $ref: '#/components/schemas/id_regex'
+                    #example: blade-12345
                 databaseId:
-                    type: string
-                    example: vr-models-training
-                    pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+                    $ref: '#/components/schemas/id_regex'
+                    #example: vr-models-training
                 description:
-                    type: string
-                    example: 3d models used in training programs.
-                assetType:
-                    type: string
-                    example: .stl
-                    pattern: ^[\\.]([a-z]){1,7}
-                isDistributable:
-                    type: boolean
-                    example: true
-                assetLocation:
-                    $ref: "#/components/schemas/location"
+                    #example: "Description of uploaded asset."
+                    $ref: "#/components/schemas/string256Param"
+                assetName:
+                    # example: 
+                    $ref: '#/components/schemas/object_name_pattern_regex'
+                assetPathKey:
+                    # example
+                    $ref: '#/components/schemas/asset_path_pattern_regex'
                 previewLocation:
-                    $ref: "#/components/schemas/location"
-                specifiedPipelines:
-                    type: array
-                    items:
-                        type: string
-                    example: ["convert-to-gltf", "reduce-polygons"]
-                currentVersion:
-                    $ref: "#/components/schemas/version"
-                versions:
-                    type: array
-                    items:
-                        $ref: "#/components/schemas/version"
+                    # example
+                    $ref: '#/components/schemas/asset_path_pattern_regex'
             required:
                 - assetId
                 - databaseId
                 - description
-                - assetType
-                - isDistributable
-                - assetLocation
-                - previewLocation
+                - assetName
+                - assetPathKey
+        asset_links:
+            type: object
+            properties:
+                assetIdFrom:
+                    $ref: '#/components/schemas/id_regex'
+                assetIdTo:
+                    $ref: '#/components/schemas/id_regex'
+                relationshipType:
+                    $ref: "#/components/schemas/string256Param"
+            required:
+                - assetIdFrom
+                - assetIdTo
+                - relationshipType
+        asset_path_pattern_regex:
+            type: string
+            pattern: ^[a-z]([-_a-z0-9]){3,63}(\/[a-zA-Z0-9_\-.]+){1,63}$
+        auth_request:
+            type: object
+            required:
+                - routes
+            properties:
+              routes:
+                type: array
+                items:
+                    $ref: "#/components/schemas/route"
+        auth_routes:
+            type: object
+            properties:
+              routes:
+                type: array
+                items:
+                    $ref: "#/components/schemas/route"
+        checkSubscription:
+            type: object
+            properties:
+                userId:
+                    $ref: "#/components/schemas/email_pattern_regex"
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+            required:
+                - userId
+                - assetId
+        comment:
+            type: object
+            properties:
+                commentBody:
+                    type: string
+            required:
+                - assetId
+                - commentId
+                - commentBody
+        constraint:
+            type: object
+            properties:
+                criteriaAnd:
+                    type: string
+                    pattern: ^[a-zA-Z0-9\.\-_]+$
+                criteriaOrValue:
+                    type: string
+                    pattern: ^[a-zA-Z0-9\.\-_]+$
+                groupPermissions:
+                    $ref: '#/components/schemas/object_name_pattern_regex'
+                userPermissions:
+                    $ref: "#/components/schemas/email_pattern_regex"
+            required:
+                - criteriaAnd
+                - criteriaOrValue
+                - groupPermissions
+                - userPermissions
+        database:
+            type: object
+            properties:
+                databaseId:
+                    #example: vr-models-training
+                    $ref: '#/components/schemas/id_regex'
+                description:
+                    #example: 3d models used in training programs.
+                    $ref: "#/components/schemas/string256Param"
+            required:
+                - databaseId
+                - description
+        email_pattern_regex: 
+            type: string
+            pattern: ^[\w\-\.\+]+@([\w-]+\.)+[\w-]{2,4}$
+        entityId:
+            $ref: '#/components/schemas/id_regex'
+        entityName:
+            $ref: "#/components/schemas/object_name_pattern_regex"
+        error:
+            type: object
+            properties:
+                message:
+                    type: string
+            required:
+                - message
+        eventName:
+            $ref: "#/components/schemas/object_name_pattern_regex"
+        filename_pattern:
+            type: string
+            pattern: ^[a-zA-Z0-9_\-.]+
+        file_type_regex: 
+                type: string
+                pattern: ^[\\.]([a-z0-9]){1,7}
+        id_regex:
+            type: string
+            pattern: ^[a-z]([-_a-z0-9]){3,63}$
+        ingest_asset: 
+            type: object
+            properties:
+                assetName:
+                    $ref: '#/components/schemas/object_name_pattern_regex'
+                key:
+                    type: string
+            required:
+                - assetName
         location:
             type: object
             properties:
                 Key:
                     type: string
-                    example: blade-12345.stl
+                    #example: blade-12345.stl
                 Bucket:
                     type: string
-                    example: training-models-vams-assets
+                    #example: training-models-vams-assets
             required:
                 - Key
                 - Bucket
+        metadata:
+            type: object
+            properties:
+                assetPath:
+                    $ref: '#/components/schemas/asset_path_pattern_regex'
+        metadata_schema:
+            type: object
+            properties:
+                field:
+                    type: string
+            required:
+                - field
+        object_name_pattern_regex:
+            type: string
+            pattern: ^[a-zA-Z0-9\-._ ]{1,256}$
+        pipeline:
+            type: object
+            properties:
+                databaseId:
+                    #example: vr-models-training
+                    $ref: "#/components/schemas/id_regex"
+                pipelineId:
+                    #example: convert-to-gltf
+                    $ref: "#/components/schemas/id_regex"
+                description:
+                    type: string
+                    #example: Converts models to GLTF.
+                assetType:
+                    #example: model
+                    $ref: "#/components/schemas/file_type_regex"
+                outputType:
+                    #example: gltf
+                    $ref: "#/components/schemas/file_type_regex"
+            required:
+                - pipelineId
+                - databaseId
+                - description
+                - assetType
+                - outputType
+        role:
+            type: object
+            properties:
+                roleName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                description:
+                    $ref: "#/components/schemas/string256Param"                    
+            required:
+                - roleName
+                - description
+        route:
+            type: object
+            properties:
+                routeId:
+                    $ref: '#/components/schemas/id_regex'
+                description:
+                    $ref: "#/components/schemas/string256Param"
+            required:
+                - routeId
+                - description
+        s3_access:
+            type: object
+            properties:
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+        sagemaker_notebook_name_regex:
+            type: string
+            pattern: ^[a-zA-Z0-9](-*[a-zA-Z0-9])*
+        string256Param:
+            type: string
+            maxLength: 256
+        subscribers:
+            type: array
+            items:
+                $ref: "#/components/schemas/email_pattern_regex"
+        subscription:
+            type: object
+            properties:
+                entityId: 
+                    $ref: "#/components/schemas/entityId"
+                entityName:
+                    $ref: "#/components/schemas/entityName"
+                eventName:
+                    $ref: "#/components/schemas/eventName"
+                subscribers:
+                    $ref: "#/components/schemas/subscribers"
+            required:
+                - entityId
+                - entityName
+                - eventName
+                - subscribers
+        tag:
+            type: object
+            properties: 
+                tagName:
+                    #example:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                tagTypeName:
+                    #example:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+            required:
+                - tagName
+                - description
+                - tagTypeName
+        tagType:
+            type: object
+            properties: 
+                tagTypeName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                description:
+                    $ref: "#/components/schemas/string256Param"
+            required: 
+                - tagTypeName
+                - description
+        uploadAssetWorkflow:
+            type: object
+            properties:
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                assetName:
+                    $ref: '#/components/schemas/object_name_pattern_regex'
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                assetPathKey:
+                    $ref: '#/components/schemas/asset_path_pattern_regex'
+            required:
+                - databaseId
+                - assetId
+                - assetName
+                - description
+                - assetPathKey
+        userRole:
+            type: object
+            properties: 
+                roleName:
+                    $ref: "#/components/schemas/object_name_pattern_regex"
+                description:
+                    $ref: "#/components/schemas/string256Param"
+            required:
+                - roleName
+                - description
+        uuid_regex:
+            type: string
+            pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+        validatePagInfoParams:
+            type: object
+            properties:
+              maxItemsParam:
+                $ref: "#/components/parameters/maxItemsParam"
+              pageSizeParam:
+                $ref: "#/components/parameters/pageSizeParam"
+              startingTokenParam:
+                $ref: "#/components/parameters/startingTokenParam"
         version:
             type: object
             properties:
@@ -943,66 +2796,50 @@ components:
                     type: array
                     items:
                         type: string
-        pipeline:
-            type: object
-            properties:
-                pipelineId:
-                    type: string
-                    example: convert-to-gltf
-                    pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-                databaseId:
-                    type: string
-                    example: vr-models-training
-                    pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
-                description:
-                    type: string
-                    example: Converts models to GLTF.
-            required:
-                - pipelineId
-                - databaseId
-                - description
         workflow:
             type: object
             properties:
-                workflowId:
-                    type: string
-                    example: to-gltf-and-reduce
-                    pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
                 databaseId:
-                    type: string
-                    example: vr-models-training
-                    pattern: ^[a-zA-Z]([-_a-zA-Z0-9]){3,100}
+                    #example: vr-models-training
+                    $ref: '#/components/schemas/id_regex'
+                pipelineId:
+                    #example: ["convert-to-gltf", "reduce-polygons"]
+                    type: array
+                    items: 
+                        $ref: '#/components/schemas/id_regex'
+                workflowId:
+                    #example: to-gltf-and-reduce
+                    $ref: '#/components/schemas/id_regex'
                 description:
-                    type: string
-                    example: Converts models to GLTF format then reduces polygons.
-                pipelines:
-                    type: array
-                    items:
-                        type: string
-                    example: ["convert-to-gltf", "reduce-polygons"]
+                    #example: Converts models to GLTF format then reduces polygons.
+                    $ref: '#/components/schemas/string256Param'
             required:
-                - workflowId
                 - databaseId
+                - pipelineId
+                - workflowId
                 - description
-                - pipelines
-        workflowExecution:
-            type: object
-            properties:
-                executionId:
-                    type: string
-                executionStatus:
-                    type: string
-                    enum: [pending, running, failed, succeeded]
-                startDate:
-                    type: string
-                stopDate:
-                    type: string
-                Items:
-                    type: array
-                    items:
-                        $ref: "#/components/schemas/asset"
-        error:
-            type: object
-            properties:
-                message:
-                    type: string
+    parameters:
+      maxItemsParam:
+        name: maxItems
+        in: query
+        description: "Max number of items that can be returned. Default is 1000"
+        schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 1000
+      pageSizeParam:
+        name: pageSize
+        in: query
+        description: "Number of items to be returned per page. Default is 100"
+        schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+      startingTokenParam:
+        name: startingToken
+        in: query
+        description: "Number of items to be returned per page. Default is 100"
+        schema:
+            type: string
+        allowEmptyValue: true

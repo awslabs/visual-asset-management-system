@@ -7,16 +7,12 @@ Lambda Function to Call from within VAMS Pipeline and Workflows for Manual Execu
 import os
 import boto3
 import json
-import datetime
-import logging
-from pathlib import Path
-from urllib.parse import urlparse
+from customLogging.logger import safeLogger
 
 DEST_BUCKET_NAME = os.environ["DEST_BUCKET_NAME"]
 SNS_VISUALIZER_PIPELINE_PC_TOPICARN = os.environ["SNS_VISUALIZER_PIPELINE_PC_TOPICARN"]
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+logger = safeLogger(service="ExecuteVisualizerPCPipeline")
 s3_client = boto3.client('s3')
 s3 = boto3.resource('s3')
 sns_client = boto3.client('sns')
@@ -44,22 +40,30 @@ def execute_visualizer_pipeline(input_path, external_task_token):
 
 
 def lambda_handler(event, context):
-    print(event)
-    if isinstance(event['body'], str):
-        data = json.loads(event['body'])
-    else:
-        data = event['body']
+    logger.info(event)
 
-    # Get external task token if passed
-    if 'TaskToken' in data:
-        external_task_token = data['TaskToken']
-    else:
-        external_task_token = ''
+    try:
+        if isinstance(event['body'], str):
+            data = json.loads(event['body'])
+        else:
+            data = event['body']
 
-    # Starts excution of visualizer pipeline by writing to SNS topic with the input files
-    execute_visualizer_pipeline(data['inputPath'], external_task_token)
+        # Get external task token if passed
+        if 'TaskToken' in data:
+            external_task_token = data['TaskToken']
+        else:
+            external_task_token = ''
 
-    return {
-        'statusCode': 200,
-        'body': 'Success'
-    }
+        # Starts excution of visualizer pipeline by writing to SNS topic with the input files
+        execute_visualizer_pipeline(data['inputPath'], external_task_token)
+
+        return {
+            'statusCode': 200,
+            'body': 'Success'
+        }
+    except Exception as e:
+        logger.exception(e)
+        return {
+            'statusCode': 500,
+            'body': json.dumps({"message": "Internal Server Error"})
+        }

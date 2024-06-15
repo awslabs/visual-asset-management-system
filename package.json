@@ -11,7 +11,8 @@
         "release": "standard-version",
         "prettier-check": "prettier -c --config .prettierrc -u --ignore-path .prettierignore .",
         "prettier-fix": "prettier -w --config .prettierrc -u --ignore-path .prettierignore .",
-        "lint": "eslint web/src infra/lib infra/bin infra/test"
+        "lint": "eslint web/src infra/lib infra/bin infra/test",
+        "lint-fix": "eslint --fix web/src infra/lib infra/bin infra/test"
     },
     "devDependencies": {
         "@typescript-eslint/eslint-plugin": "^5.57.0",

@@ -5,27 +5,22 @@ import os
 import boto3
 import json
 import datetime
-import logging
-from backend.common.validators import validate
+from common.validators import validate
+from handlers.auth import request_to_claims
+from handlers.authz import CasbinEnforcer
+from common.dynamodb import get_asset_object_from_id
+from common.constants import STANDARD_JSON_RESPONSE
+from customLogging.logger import safeLogger
+
+claims_and_roles = {}
 
 # Create a logger object to log the events
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+logger = safeLogger(service="AddComment")
 
 dynamodb = boto3.resource("dynamodb")
 s3c = boto3.client("s3")
 
-response = {
-    "statusCode": 200,
-    "body": "",
-    "headers": {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Credentials": True,
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Allow-Methods": "OPTIONS,POST,GET",
-    },
-}
+main_rest_response = STANDARD_JSON_RESPONSE
 
 comment_database = None
 
@@ -33,8 +28,8 @@ try:
     comment_database = os.environ["COMMENT_STORAGE_TABLE_NAME"]
 except:
     logger.info("Failed Loading Environment Variables")
-    response["statusCode"] = 500
-    response["body"] = json.dumps({"message": "Failed Loading Environment Variables"})
+    main_rest_response["statusCode"] = 500
+    main_rest_response["body"] = json.dumps({"message": "Failed Loading Environment Variables"})
 
 
 def add_comment(assetId: str, assetVersionIdAndCommentId: str, event: dict) -> dict:
@@ -63,9 +58,9 @@ def add_comment(assetId: str, assetVersionIdAndCommentId: str, event: dict) -> d
     try:
         table.put_item(Item=item)
     except Exception as e:
-        logger.error(e)
-        response["statusCode"] = 400
-        response["message"] = e
+        logger.exception(e)
+        response["statusCode"] = 500
+        response["message"] = "Internal Server Error"
         return response
 
     logger.info(item)
@@ -80,25 +75,15 @@ def lambda_handler(event: dict, context: dict) -> dict:
     :param context: Lambda context disctionary
     :returns: Http response object (statusCode, headers, body)
     """
+    response = STANDARD_JSON_RESPONSE
     logger.info(event)
-    response = {
-        "statusCode": 200,
-        "body": "",
-        "headers": {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Credentials": True,
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Content-Type",
-            "Access-Control-Allow-Methods": "OPTIONS,POST,GET",
-        },
-    }
 
     try:
         if isinstance(event["body"], str):
             event["body"] = json.loads(event["body"])
     except Exception as e:
-        response["statusCode"] = 400
-        response["body"] = {"message": e}
+        response["statusCode"] = 500
+        response["body"] = {"message": "Internal Server Error"}
         return response
 
     pathParameters = event.get("pathParameters", {})
@@ -121,34 +106,88 @@ def lambda_handler(event: dict, context: dict) -> dict:
             }
         )
 
-        if not valid:
-            logger.warning(message)
-            response["body"] = json.dumps({"message": message})
-            response["statusCode"] = 400
-            return response
+        global claims_and_roles
+        claims_and_roles = request_to_claims(event)
 
-        logger.info("Trying to add comment")
-        # call the add_comment function if everything is valid
-        returned = add_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], event)
-        response["statusCode"] = returned["statusCode"]
-        response["body"] = json.dumps({"message": returned["message"]})
-        logger.info(response)
-        return response
+        httpMethod = event['requestContext']['http']['method']
+        method_allowed_on_api = False
+
+        asset_object = get_asset_object_from_id(pathParameters["assetId"])
+        asset_object.update({"object__type": "asset"})
+
+        request_object = {
+            "object__type": "api",
+            "route__path": event['requestContext']['http']['path']
+        }
+        # Add Casbin Enforcer to check if the current user has permissions to POST the Comment
+        for user_name in claims_and_roles["tokens"]:
+            casbin_enforcer = CasbinEnforcer(user_name)
+            if casbin_enforcer.enforce(f"user::{user_name}", asset_object, httpMethod) and casbin_enforcer.enforce(
+                    f"user::{user_name}", request_object, httpMethod):
+                method_allowed_on_api = True
+                break
+
+        if method_allowed_on_api:
+            logger.info("Trying to add comment")
+            # Check for missing fields - TODO:  keep these synchronized
+            #
+            required_field_names = ['assetId', 'assetVersionId:commentId']
+            missing_field_names = list(set(required_field_names).difference(pathParameters))
+            if missing_field_names:
+                message = 'Missing path parameter(s) (%s) in API call' % (', '.join(missing_field_names))
+                response['body'] = json.dumps({"message": message})
+                response['statusCode'] = 400
+                logger.error(response)
+                return response
+
+            if not valid:
+                logger.warning(message)
+                response["body"] = json.dumps({"message": message})
+                response["statusCode"] = 400
+                return response
+
+            # Check for missing fields - TODO: need to keep these synchronized
+            #
+            required_field_names = ['commentBody']
+            missing_field_names = list(set(required_field_names).difference(event['body']))
+            if missing_field_names:
+                message = 'Missing body parameter(s) (%s) in API call' % (', '.join(missing_field_names))
+                response['body'] = json.dumps({"message": message})
+                response['statusCode'] = 400
+                logger.error(response)
+                return response
+
+            logger.info("Validating body")
+            (valid, message) = validate(
+                {
+                    "commentBody": {"value": event["body"]["commentBody"], "validator": "STRING"},
+                }
+            )
+            if not valid:
+                logger.error(message)
+                response['body'] = json.dumps({"message": message})
+                response['statusCode'] = 400
+                return response
+
+            # call the add_comment function if everything is valid
+            returned = add_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], event)
+            response["statusCode"] = returned["statusCode"]
+            response["body"] = json.dumps({"message": returned["message"]})
+            logger.info(response)
+            return response
+        else:
+            response["statusCode"] = 403
+            response["body"] = json.dumps({"message": "Action not allowed"})
+            return response
     except Exception as e:
-        logger.error(f"caught exception: {e}")
+        logger.exception(f"caught exception")
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
-            response["statusCode"] = 500
+            response["statusCode"] = 400
             response["body"] = json.dumps(
                 {"message": "comment " + str(event["body"]["assetVersionId:commentId"] + " already exists.")}
             )
-            return response
         else:
             response["statusCode"] = 500
-            logger.error("Error!", e.__class__, "occurred.")
-            try:
-                logger.info(e)
-                response["body"] = json.dumps({"message": str(e)})
-            except:
-                logger.info("Can't Read Error")
-                response["body"] = json.dumps({"message": "An unexpected error occurred while executing the request"})
-            return response
+            response["body"] = json.dumps({"message": "Internal Server Error"})
+            logger.exception(e)
+        return response

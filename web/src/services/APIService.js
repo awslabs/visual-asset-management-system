@@ -9,12 +9,20 @@ import { API } from "aws-amplify";
  * Returns array of boolean and response/error message for the element that the current user is downloading, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */
-export const downloadAsset = async ({ databaseId, assetId, config }, api = API) => {
+export const downloadAsset = async ({ databaseId, assetId, key, version }, api = API) => {
     try {
+        //Version and key are optional fields
+        const body = {
+            version: version,
+            key: key,
+        };
+
         const response = await api.post(
             "api",
             `/database/${databaseId}/assets/${assetId}/download`,
-            config || config.body
+            {
+                body: body,
+            }
         );
         if (response.message) {
             if (
@@ -50,13 +58,13 @@ export const deleteElement = async ({ deleteRoute, elementId, item }, api = API)
         );
         if (response.message) {
             console.log(response.message);
-            return [true, response.message];
+            return [true, response.message, ""];
         } else {
             return false;
         }
     } catch (error) {
         console.log(error);
-        return [false, error?.message];
+        return [false, error?.message, error?.response.data.message];
     }
 };
 
@@ -143,24 +151,6 @@ export const createUpdateElements = async ({ pluralName, config }, api = API) =>
 };
 
 /**
- * Returns array of all constraints from the auth/constraints api
- * @returns {Promise<boolean|{constraints}|any>}
- */
-export const fetchConstraints = async (api = API) => {
-    try {
-        const response = await api.get("api", "auth/constraints", {});
-        if (response.constraints) {
-            return response.constraints;
-        } else {
-            return false;
-        }
-    } catch (error) {
-        console.log(error);
-        return error?.message;
-    }
-};
-
-/**
  * Returns array of all databases the current user can access, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */
@@ -208,17 +198,277 @@ export const fetchAsset = async ({ databaseId, assetId }, api = API) => {
         return error?.message;
     }
 };
+/**
+ * Returns the asset that the current user can access for the given databaseId & assetId, or false if error.
+ * @returns {Promise<boolean|{message}|any>}
+ */
+export const fetchDatabase = async ({ databaseId }, api = API) => {
+    try {
+        let response;
+        if (databaseId) {
+            response = await api.get("api", `databases/${databaseId}`, {});
+            if (response.message) return response.message;
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return error?.message;
+    }
+};
+/**
+ * Returns array of all constraints from the auth/constraints api
+ * @returns {Promise<boolean|{tags}|any>}
+ */
+export const fetchTags = async (api = API) => {
+    try {
+        let response = await api.get("api", "tags", {});
+        let items = [];
+        const init = { queryStringParameters: { startingToken: null } };
+        if (response.message) {
+            if (response.message.Items) {
+                items = items.concat(response.message.Items);
+                while (response.message.NextToken) {
+                    init["queryStringParameters"]["startingToken"] = response.message.NextToken;
+                    response = await api.get("api", "tags", init);
+                    items = items.concat(response.message.Items);
+                }
+                return items;
+            } else {
+                return response.message;
+            }
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return error?.message;
+    }
+};
+/**
+ * Returns array of all constraints from the auth/constraints api
+ * @returns {Promise<boolean|{tagtypes}|any>}
+ */
+export const fetchtagTypes = async (api = API) => {
+    try {
+        let response = await api.get("api", "tag-types", {});
+        let items = [];
+        const init = { queryStringParameters: { startingToken: null } };
+        if (response.message) {
+            if (response.message.Items) {
+                items = items.concat(response.message.Items);
+                while (response.message.NextToken) {
+                    init["queryStringParameters"]["startingToken"] = response.message.NextToken;
+                    response = await api.get("api", "tag-types", init);
+                    items = items.concat(response.message.Items);
+                }
+                return items;
+            } else {
+                return response.message;
+            }
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return error?.message;
+    }
+};
+
+export const fetchAssetLinks = async ({ assetId }, api = API) => {
+    try {
+        let response;
+        if (assetId) {
+            response = await api.get("api", `asset-links/${assetId}`, {});
+            if (response.message) return response.message;
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return error?.message;
+    }
+};
+export const deleteAssetLink = async ({ relationId }, api = API) => {
+    try {
+        let response;
+        if (relationId) {
+            response = await api.del("api", `asset-links/${relationId}`, {});
+            if (response.message) return response.message;
+        } else {
+            return response.message.status;
+        }
+    } catch (error) {
+        console.log(error);
+        return error;
+    }
+};
+
+/**
+ * Returns array of all subscription constraints from the auth/constraints api
+ * @returns {Promise<boolean|{rules}|any>}
+ */
+export const fetchSubscriptionRules = async (api = API) => {
+    try {
+        let response = await api.get("api", "subscriptions", {});
+        let items = [];
+        const init = { queryStringParameters: { startingToken: null } };
+        if (response.message) {
+            if (response.message.Items) {
+                items = items.concat(response.message.Items);
+                while (response.message.NextToken) {
+                    init["queryStringParameters"]["startingToken"] = response.message.NextToken;
+                    response = await api.get("api", "subscriptions", init);
+                    items = items.concat(response.message.Items);
+                }
+                return items;
+            } else {
+                return response.message;
+            }
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return error?.message;
+    }
+};
+
+/**
+ * Returns array of all roles
+ * @returns {Promise<boolean|{roles}|any>}
+ */
+export const fetchRoles = async (api = API) => {
+    try {
+        let response = await api.get("api", "roles", {});
+        let items = [];
+        const init = { queryStringParameters: { startingToken: null } };
+        if (response.message) {
+            if (response.message.Items) {
+                items = items.concat(response.message.Items);
+                while (response.message.NextToken) {
+                    init["queryStringParameters"]["startingToken"] = response.message.NextToken;
+                    response = await api.get("api", "roles", init);
+                    items = items.concat(response.message.Items);
+                }
+                return items;
+            } else {
+                return response.message;
+            }
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return error?.message;
+    }
+};
+
+/**
+ * Returns array of all users assigned to roles
+ * @returns {Promise<boolean|{userroles}|any>}
+ */
+export const fetchUserRoles = async (api = API) => {
+    try {
+        let response = await api.get("api", "user-roles", {});
+        let items = [];
+        const init = { queryStringParameters: { startingToken: null } };
+        if (response.message) {
+            if (response.message.Items) {
+                items = items.concat(response.message.Items);
+                while (response.message.NextToken) {
+                    init["queryStringParameters"]["startingToken"] = response.message.NextToken;
+                    response = await api.get("api", "user-roles", init);
+                    items = items.concat(response.message.Items);
+                }
+                return items;
+            } else {
+                return response.message;
+            }
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return error?.message;
+    }
+};
+
+/**
+ * Returns array of all constraints from the auth/constraints api
+ * @returns {Promise<boolean|{constraints}|any>}
+ */
+export const fetchConstraints = async (api = API) => {
+    try {
+        let response = await api.get("api", "auth/constraints", {});
+        let items = [];
+        const init = { queryStringParameters: { startingToken: null } };
+        if (response.message) {
+            if (response.message.Items) {
+                items = items.concat(response.message.Items);
+                while (response.message.NextToken) {
+                    init["queryStringParameters"]["startingToken"] = response.message.NextToken;
+                    response = await api.get("api", "auth/constraints", init);
+                    items = items.concat(response.message.Items);
+                }
+                return items;
+            } else {
+                return response.message;
+            }
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return error?.message;
+    }
+};
+
+// /**
+//  * Returns array of all constraints from the auth/constraints api
+//  * @returns {Promise<boolean|{rules}|any>}
+//  */
+// export const fetchRulesMetadata = async (api = API) => {
+//     try {
+//         const response = await api.get("api", "notification-config/metadata", {});
+//         if (response.message) {
+//             return response.message;
+//         } else {
+//             return false;
+//         }
+//     } catch (error) {
+//         console.log(error);
+//         return error?.message;
+//     }
+// };
 
 export const fetchAssetFiles = async ({ databaseId, assetId }, api = API) => {
     try {
         let response;
+
         if (databaseId && assetId) {
             response = await api.get(
                 "api",
                 `database/${databaseId}/assets/${assetId}/listFiles`,
                 {}
             );
-            if (response) return response;
+            //console.log("fetchAssetFiles response", response)
+            let items = [];
+            const init = { queryStringParameters: { startingToken: null } };
+            if (response.message) {
+                items = items.concat(response.message.Items);
+                while (response.message.NextToken) {
+                    init["queryStringParameters"]["startingToken"] = response.message.NextToken;
+                    response = await api.get(
+                        "api",
+                        `database/${databaseId}/assets/${assetId}/listFiles`,
+                        init
+                    );
+                    items = items.concat(response.message.Items);
+                }
+
+                return items;
+            } else return false;
         } else {
             return false;
         }
@@ -277,7 +527,7 @@ export const deleteComment = async ({ assetId, assetVersionIdAndCommentId }, api
             return false;
         }
     } catch (error) {
-        console.log(error);
+        if (error.response.status === 403) return error.response.status;
         return [false, error?.message];
     }
 };
@@ -485,9 +735,84 @@ export const fetchWorkflowExecutions = async ({ databaseId, assetId, workflowId 
                 `database/${databaseId}/assets/${assetId}/workflows/${workflowId}/executions`,
                 {}
             );
+            let items = [];
+            const init = { queryStringParameters: { startingToken: null } };
             if (response.message) {
                 if (response.message.Items) {
-                    return response.message.Items;
+                    items = items.concat(response.message.Items);
+                    while (response.message.NextToken) {
+                        init["queryStringParameters"]["startingToken"] = response.message.NextToken;
+                        response = await api.get(
+                            "api",
+                            `database/${databaseId}/assets/${assetId}/workflows/${workflowId}/executions`,
+                            init
+                        );
+                        items = items.concat(response.message.Items);
+                    }
+                    return items;
+                } else {
+                    return response.message;
+                }
+            }
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return error?.message;
+    }
+};
+
+/**
+ * Returns array of all metadata fields from the backend
+ * @returns {Promise<boolean|{roles}|any>}
+ */
+export const fetchAllMetadataSchema = async (api = API) => {
+    try {
+        let response = await api.get("api", "metadataschema/", {});
+        let items = [];
+        const init = { queryStringParameters: { startingToken: null } };
+        if (response.message) {
+            if (response.message.Items) {
+                items = items.concat(response.message.Items);
+                while (response.message.NextToken) {
+                    init["queryStringParameters"]["startingToken"] = response.message.NextToken;
+                    response = await api.get("api", "metadataschema/", init);
+                    items = items.concat(response.message.Items);
+                }
+                return items;
+            } else {
+                return response.message;
+            }
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return error?.message;
+    }
+};
+
+/**
+ * Returns array of  metadata fields from the backend for a particular databaseId
+ * @returns {Promise<boolean|{roles}|any>}
+ */
+export const fetchDatabaseMetadataSchema = async ({ databaseId }, api = API) => {
+    try {
+        let response;
+        if (databaseId) {
+            response = await api.get("api", `metadataschema/${databaseId}`, {});
+            let items = [];
+            const init = { queryStringParameters: { startingToken: null } };
+            if (response.message) {
+                if (response.message.Items) {
+                    items = items.concat(response.message.Items);
+                    while (response.message.NextToken) {
+                        init["queryStringParameters"]["startingToken"] = response.message.NextToken;
+                        response = await api.get("api", `metadataschema/${databaseId}`, init);
+                        items = items.concat(response.message.Items);
+                    }
+                    return items;
                 } else {
                     return response.message;
                 }

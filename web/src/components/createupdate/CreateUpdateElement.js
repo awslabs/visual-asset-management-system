@@ -49,7 +49,6 @@ async function fillFormWithAssetMetadata(asset) {
     values.Preview = previewTransfer.files[0]; //File
     values.assetName = asset.assetName;
     values.assetType = "." + asset.assetLocation.Key.split(".").pop();
-    values.bucket = asset.assetLocation?.Bucket;
     values.databaseId = { label: asset.databaseId, value: asset.databaseId };
     values.description = asset.description;
     values.isDistributable = asset.isDistributable;
