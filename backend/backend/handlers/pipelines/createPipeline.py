@@ -249,7 +249,7 @@ def lambda_handler(event, context, create_pipeline_fn=CreatePipeline.from_env):
                 'optional': True
             },
             'inputParameters': {
-                'value':  event['body']['inputParameters'],
+                'value':  event['body'].get('inputParameters', ''),
                 'validator': 'STRING_JSON',
                 'optional': True
             }

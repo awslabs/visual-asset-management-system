@@ -55,6 +55,7 @@ export function getConfig(app: cdk.App): Config {
             process.env.STACK_NAME) +
         "-" +
         config.env.region;
+        
     config.app.bucketMigrationStaging.assetBucketName = <string>(app.node.tryGetContext(
         "staging-bucket"
     ) || //here to keep backwards compatability
@@ -62,6 +63,7 @@ export function getConfig(app: cdk.App): Config {
         config.app.bucketMigrationStaging.assetBucketName ||
         process.env.STAGING_BUCKET || //here to keep backwards compatability
         process.env.ASSET_STAGING_BUCKET);
+
     config.app.adminEmailAddress = <string>(
         (app.node.tryGetContext("adminEmailAddress") ||
             config.app.adminEmailAddress ||
@@ -101,6 +103,10 @@ export function getConfig(app: cdk.App): Config {
 
     if (config.app.pipelines.usePreviewPcPotreeViewer.enabled == undefined) {
         config.app.pipelines.usePreviewPcPotreeViewer.enabled = false;
+    }
+
+    if (config.app.pipelines.useGenAiMetadata3dExtraction.enabled == undefined) {
+        config.app.pipelines.useGenAiMetadata3dExtraction.enabled = false;
     }
 
     if (config.app.authProvider.useCognito.useUserPasswordAuthFlow == undefined) {
