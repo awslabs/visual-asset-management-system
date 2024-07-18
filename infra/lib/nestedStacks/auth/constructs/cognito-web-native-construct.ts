@@ -160,6 +160,7 @@ export class CognitoWebNativeConstructStack extends Construct {
             },
         });
 
+        // Classic flow is enabled because using assume_role_with_web_identity to extend auth token timeout
         const identityPool = new cognito.CfnIdentityPool(this, "IdentityPool", {
             allowUnauthenticatedIdentities: false,
             cognitoIdentityProviders: [
@@ -198,6 +199,8 @@ export class CognitoWebNativeConstructStack extends Construct {
             "IdentityPoolRoleAttachment",
             {
                 identityPoolId: identityPool.ref,
+                // Disabled due to using Classic Auth Flow which doesn't support roleMappings
+                // Instead this should be handled in in s3scopedaccess
                 /*
                 roleMappings: {
                     default: {

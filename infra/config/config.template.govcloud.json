@@ -11,6 +11,7 @@
             "assetBucketName": null
         },
         "adminEmailAddress": "adminEmail@example.com",
+        "credTokenTimeoutSeconds": 14400,
         "useFips": true,
         "useWaf": true,
         "useKmsCmkEncryption": {

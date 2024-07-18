@@ -167,49 +167,35 @@ def lambda_handler(event, context):
                         "Resource": [KMS_KEY_ARN]
                     })
 
-                # use sts to create a session for timeout seconds
+                # Use Cognito client to create a session to extend the timeout seconds
                 sts_client = boto3.client('sts')
-                client = boto3.client('cognito-identity')
+                cognito_client = boto3.client('cognito-identity')
 
                 cognito_token=event["headers"]["authorization"].split(" ")[1]
-                print("cognito_token", cognito_token, "cognito_auth", cognito_auth, "identity_pool_id", identity_pool_id)
+
                 login={cognito_auth:cognito_token}
-                print("login", login)
                 
                 account_id = sts_client.get_caller_identity()['Account']
-                print("account_id", account_id)
 
-                cognitoId = client.get_id(
+                cognito_id = cognito_client.get_id(
                     AccountId=account_id,
                     IdentityPoolId=identity_pool_id,
                     Logins=login,
                 )
-                print("cognitoId", cognitoId["IdentityId"])
 
-                cognito_open_id = client.get_open_id_token(
-                    IdentityId=cognitoId["IdentityId"],
+                cognito_open_id = cognito_client.get_open_id_token(
+                    IdentityId=cognito_id["IdentityId"],
                     Logins=login
                 )
 
-                print("cognito_open_id", cognito_open_id)
-                print(f"Role: {ROLE_ARN}")
                 assumed_role_object = sts_client.assume_role_with_web_identity(
                     RoleArn=ROLE_ARN,
                     RoleSessionName="presign",
                     WebIdentityToken=cognito_open_id["Token"],
                     DurationSeconds=timeout,
                     Policy=json.dumps(policy),
-
                 )
 
-                """
-                assumed_role_object = sts_client.assume_role(
-                    RoleArn=ROLE_ARN,
-                    RoleSessionName="presign",
-                    DurationSeconds=timeout,
-                    Policy=json.dumps(policy),
-                )
-                """
                 logger.info("assumed role object")
                 logger.info(assumed_role_object)
 

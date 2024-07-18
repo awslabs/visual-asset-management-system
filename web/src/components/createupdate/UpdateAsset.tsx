@@ -59,7 +59,6 @@ const update = async (
         };
         await Storage.put(newKey, files[0], {
             resumable: true,
-            useAccelerateEndpoint: true,
             customPrefix: {
                 public: "",
             },

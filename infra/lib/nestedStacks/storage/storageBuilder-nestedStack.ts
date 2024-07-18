@@ -210,7 +210,6 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
 
     const assetBucket = new s3.Bucket(scope, "AssetBucket", {
         ...s3DefaultProps,
-        transferAcceleration: true,
         cors: [
             {
                 allowedOrigins: ["*"],
