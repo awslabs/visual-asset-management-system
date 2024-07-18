@@ -35,6 +35,9 @@ ROLE_ARN = os.environ['ROLE_ARN']
 AWS_PARTITION = os.environ['AWS_PARTITION']
 KMS_KEY_ARN = os.environ['KMS_KEY_ARN']
 
+cognito_auth = os.environ["COGNITO_AUTH"]
+identity_pool_id = os.environ["IDENTITY_POOL_ID"]
+cred_timeout = int(os.environ['CRED_TOKEN_TIMEOUT_SECONDS'])
 
 def lambda_handler(event, context):
     global claims_and_roles
@@ -110,7 +113,7 @@ def lambda_handler(event, context):
                     break
 
             if allowed:
-                timeout = 900
+                timeout = cred_timeout
 
                 # generate a policy scoped to the assetId as the s3 key prefix
                 # to be passed to assume_role
@@ -166,13 +169,47 @@ def lambda_handler(event, context):
 
                 # use sts to create a session for timeout seconds
                 sts_client = boto3.client('sts')
+                client = boto3.client('cognito-identity')
+
+                cognito_token=event["headers"]["authorization"].split(" ")[1]
+                print("cognito_token", cognito_token, "cognito_auth", cognito_auth, "identity_pool_id", identity_pool_id)
+                login={cognito_auth:cognito_token}
+                print("login", login)
+                
+                account_id = sts_client.get_caller_identity()['Account']
+                print("account_id", account_id)
+
+                cognitoId = client.get_id(
+                    AccountId=account_id,
+                    IdentityPoolId=identity_pool_id,
+                    Logins=login,
+                )
+                print("cognitoId", cognitoId["IdentityId"])
+
+                cognito_open_id = client.get_open_id_token(
+                    IdentityId=cognitoId["IdentityId"],
+                    Logins=login
+                )
+
+                print("cognito_open_id", cognito_open_id)
+                print(f"Role: {ROLE_ARN}")
+                assumed_role_object = sts_client.assume_role_with_web_identity(
+                    RoleArn=ROLE_ARN,
+                    RoleSessionName="presign",
+                    WebIdentityToken=cognito_open_id["Token"],
+                    DurationSeconds=timeout,
+                    Policy=json.dumps(policy),
+
+                )
+
+                """
                 assumed_role_object = sts_client.assume_role(
                     RoleArn=ROLE_ARN,
                     RoleSessionName="presign",
                     DurationSeconds=timeout,
                     Policy=json.dumps(policy),
                 )
-
+                """
                 logger.info("assumed role object")
                 logger.info(assumed_role_object)
 

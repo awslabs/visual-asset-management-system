@@ -166,6 +166,7 @@ export class CognitoWebNativeConstructStack extends Construct {
                     providerName: userPool.userPoolProviderName,
                 },
             ],
+            allowClassicFlow: true
         });
 
         const cognitoIdentityPrincipal: string = Service("COGNITO_IDENTITY").PrincipalString;
@@ -195,6 +196,7 @@ export class CognitoWebNativeConstructStack extends Construct {
             "IdentityPoolRoleAttachment",
             {
                 identityPoolId: identityPool.ref,
+                /*
                 roleMappings: {
                     default: {
                         type: "Token",
@@ -205,6 +207,7 @@ export class CognitoWebNativeConstructStack extends Construct {
                         }:${userPoolWebClient.userPoolClientId}`,
                     },
                 },
+                */
                 roles: {
                     unauthenticated: unauthenticatedRole.roleArn,
                     authenticated: authenticatedRole.roleArn,
@@ -293,6 +296,7 @@ export class CognitoWebNativeConstructStack extends Construct {
                 },
                 "sts:AssumeRoleWithWebIdentity"
             ),
+            maxSessionDuration: cdk.Duration.seconds(props.config.app.credTokenTimeoutSeconds)
         });
 
         return authenticatedRole;

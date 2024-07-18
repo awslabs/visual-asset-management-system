@@ -11,6 +11,7 @@
             "assetBucketName": null
         },
         "adminEmailAddress": "adminEmail@example.com",
+        "credTokenTimeoutSeconds": 43200,
         "useFips": false,
         "useWaf": true,
         "useKmsCmkEncryption": {
@@ -21,7 +22,7 @@
             "enabled": false
         },
         "useGlobalVpc": {
-            "enabled": false,
+            "enabled": true,
             "useForAllLambdas": false,
             "addVpcEndpoints": true,
             "optionalExternalVpcId": null,

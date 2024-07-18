@@ -78,6 +78,7 @@ import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../config/config";
 import { generateUniqueNameHash } from "../../helper/security";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import { authResources } from "../auth/authBuilder-nestedStack";
 
 interface apiGatewayLambdaConfiguration {
     routePath: string;
@@ -92,6 +93,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         config: Config.Config,
         api: apigwv2.HttpApi,
         storageResources: storageResources,
+        authResources: authResources,
         lambdaCommonBaseLayer: LayerVersion,
         lambdaCommonServiceSDKLayer: LayerVersion,
         vpc: ec2.IVpc,
@@ -104,6 +106,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             config,
             api,
             storageResources,
+            authResources,
             lambdaCommonBaseLayer,
             lambdaCommonServiceSDKLayer,
             vpc,
@@ -135,6 +138,7 @@ export function apiBuilder(
     config: Config.Config,
     api: apigwv2.HttpApi,
     storageResources: storageResources,
+    authResources: authResources,
     lambdaCommonBaseLayer: LayerVersion,
     lambdaCommonServiceSDKLayer: LayerVersion,
     vpc: ec2.IVpc,
@@ -875,6 +879,7 @@ export function apiBuilder(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
+        authResources,
         config,
         vpc,
         subnets
