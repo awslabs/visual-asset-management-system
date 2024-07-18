@@ -149,7 +149,9 @@ export class CognitoWebNativeConstructStack extends Construct {
             generateSecret: false,
             userPool: userPool,
             userPoolClientName: "WebClient",
-            refreshTokenValidity: Duration.hours(24), //AppSec Guidelines Reccomendation
+            refreshTokenValidity: Duration.hours(24), //AppSec Guidelines Recommendation
+            accessTokenValidity: cdk.Duration.seconds(props.config.app.credTokenTimeoutSeconds),
+            idTokenValidity: cdk.Duration.seconds(props.config.app.credTokenTimeoutSeconds),
             supportedIdentityProviders,
             authFlows: {
                 userSrp: true,
