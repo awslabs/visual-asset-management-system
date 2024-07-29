@@ -69,6 +69,12 @@ export function getConfig(app: cdk.App): Config {
             config.app.adminEmailAddress ||
             process.env.ADMIN_EMAIL_ADDRESS)
     );
+    config.app.credTokenTimeoutSeconds = <number>(
+        (app.node.tryGetContext("credTokenTimeoutSeconds") ||
+            config.app.credTokenTimeoutSeconds ||
+            process.env.CRED_TOKEN_TIMEOUT_SECONDS ||
+            3600)
+    );
     config.app.useFips = <boolean>(
         (app.node.tryGetContext("useFips") ||
             config.app.useFips ||
@@ -326,6 +332,7 @@ export interface ConfigPublic {
             assetBucketName: string;
         };
         adminEmailAddress: string;
+        credTokenTimeoutSeconds: number;
         useFips: boolean;
         useWaf: boolean;
         useKmsCmkEncryption: {

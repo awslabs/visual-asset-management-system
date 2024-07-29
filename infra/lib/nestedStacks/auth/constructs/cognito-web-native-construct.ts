@@ -149,7 +149,9 @@ export class CognitoWebNativeConstructStack extends Construct {
             generateSecret: false,
             userPool: userPool,
             userPoolClientName: "WebClient",
-            refreshTokenValidity: Duration.hours(24), //AppSec Guidelines Reccomendation
+            refreshTokenValidity: Duration.hours(24), //AppSec Guidelines Recommendation
+            accessTokenValidity: cdk.Duration.seconds(props.config.app.credTokenTimeoutSeconds),
+            idTokenValidity: cdk.Duration.seconds(props.config.app.credTokenTimeoutSeconds),
             supportedIdentityProviders,
             authFlows: {
                 userSrp: true,
@@ -158,6 +160,7 @@ export class CognitoWebNativeConstructStack extends Construct {
             },
         });
 
+        // Classic flow is enabled because using assume_role_with_web_identity to extend auth token timeout
         const identityPool = new cognito.CfnIdentityPool(this, "IdentityPool", {
             allowUnauthenticatedIdentities: false,
             cognitoIdentityProviders: [
@@ -166,6 +169,7 @@ export class CognitoWebNativeConstructStack extends Construct {
                     providerName: userPool.userPoolProviderName,
                 },
             ],
+            allowClassicFlow: true
         });
 
         const cognitoIdentityPrincipal: string = Service("COGNITO_IDENTITY").PrincipalString;
@@ -195,6 +199,9 @@ export class CognitoWebNativeConstructStack extends Construct {
             "IdentityPoolRoleAttachment",
             {
                 identityPoolId: identityPool.ref,
+                // Disabled due to using Classic Auth Flow which doesn't support roleMappings
+                // Instead this should be handled in in s3scopedaccess
+                /*
                 roleMappings: {
                     default: {
                         type: "Token",
@@ -205,6 +212,7 @@ export class CognitoWebNativeConstructStack extends Construct {
                         }:${userPoolWebClient.userPoolClientId}`,
                     },
                 },
+                */
                 roles: {
                     unauthenticated: unauthenticatedRole.roleArn,
                     authenticated: authenticatedRole.roleArn,
@@ -293,6 +301,7 @@ export class CognitoWebNativeConstructStack extends Construct {
                 },
                 "sts:AssumeRoleWithWebIdentity"
             ),
+            maxSessionDuration: cdk.Duration.seconds(props.config.app.credTokenTimeoutSeconds)
         });
 
         return authenticatedRole;

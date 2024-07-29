@@ -33,6 +33,7 @@ try:
     asset_Database = os.environ["ASSET_STORAGE_TABLE_NAME"]
     bucket_name = os.environ["S3_ASSET_STORAGE_BUCKET"]
     region = os.environ['AWS_REGION']
+    timeout = int(os.environ['CRED_TOKEN_TIMEOUT_SECONDS'])
     #s3Endpoint = os.environ['S3_ENDPOINT']
 except:
     logger.exception("Failed Loading Environment Variables")
@@ -108,7 +109,7 @@ def get_Asset(databaseId, assetId, key, version):
         return s3_client.generate_presigned_url('get_object', Params={
             'Bucket': bucket_name,
             'Key': key
-        }, ExpiresIn=3600)
+        }, ExpiresIn=timeout)
     else:
         versions = item['versions']
         for i in versions:
@@ -117,7 +118,7 @@ def get_Asset(databaseId, assetId, key, version):
                     'Bucket': bucket_name,
                     'Key': key,
                     'VersionId': i['S3Version']
-                }, ExpiresIn=3600)
+                }, ExpiresIn=timeout)
         return "Error: Asset not found or not authorized to view the assets"
 
 

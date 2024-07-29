@@ -12,6 +12,7 @@ from customLogging.logger import safeLogger
 from common.s3 import validateS3AssetExtensionsAndContentType
 
 region = os.environ['AWS_REGION']
+timeout = int(os.environ['CRED_TOKEN_TIMEOUT_SECONDS'])
 s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'})
 s3 = boto3.client('s3', region_name=region, config=s3_config)
 
@@ -35,7 +36,7 @@ def calculate_num_parts(file_size, max_part_size=12 * 1024 * 1024):
     return -(-file_size // max_part_size)
 
 
-def generate_presigned_url(key, upload_id, part_number, expiration=3600):
+def generate_presigned_url(key, upload_id, part_number, expiration=timeout):
     url = s3.generate_presigned_url(
         ClientMethod='upload_part',
         Params={

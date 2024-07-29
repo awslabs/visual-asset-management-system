@@ -19,6 +19,7 @@ import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     kmsKeyPolicyStatementGenerator,
 } from "../helper/security";
+import { authResources } from "../nestedStacks/auth/authBuilder-nestedStack";
 
 interface AuthFunctions {
     constraints: lambda.Function;
@@ -30,13 +31,35 @@ export function buildAuthFunctions(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
+    authResources: authResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): AuthFunctions {
+    const cognitoIdentityPrincipal: string = Service("COGNITO_IDENTITY").PrincipalString;
+    const lambdaIdentityPrincipal: string = Service("LAMBDA").PrincipalString;
     const storageBucketScopedS3AccessRole = new iam.Role(scope, "storageBucketScopedS3AccessRole", {
-        assumedBy: Service("LAMBDA").Principal,
+        assumedBy: new iam.CompositePrincipal(
+            new iam.FederatedPrincipal(
+                cognitoIdentityPrincipal,
+                {
+                    StringEquals: {
+                        "cognito-identity.amazonaws.com:aud": authResources.cognito.identityPoolId
+                    },
+                    "ForAnyValue:StringLike": {
+                        "cognito-identity.amazonaws.com:amr": "authenticated",
+                    },
+                },
+                "sts:AssumeRoleWithWebIdentity"
+            ),
+            new iam.FederatedPrincipal(lambdaIdentityPrincipal)
+            ),
+        maxSessionDuration: Duration.seconds(config.app.credTokenTimeoutSeconds),
     });
+
+    //const storageBucketScopedS3AccessRole = new iam.Role(scope, "storageBucketScopedS3AccessRole", {
+    //    assumedBy: [Service("LAMBDA").Principal, Service("COGNITO_IDENTITY").Principal]
+    //});
 
     //Note KMS key needs to be added inside Lambda function as it overwritees policy when assumed from "storageBucketScopedS3AccessRole"
     storageResources.s3.assetBucket.grantReadWrite(storageBucketScopedS3AccessRole);
@@ -45,6 +68,7 @@ export function buildAuthFunctions(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
+        authResources,
         config,
         vpc,
         subnets,
@@ -56,6 +80,9 @@ export function buildAuthFunctions(
             KMS_KEY_ARN: storageResources.encryption.kmsKey
                 ? storageResources.encryption.kmsKey.keyArn
                 : "",
+            COGNITO_AUTH: "cognito-idp." + config.env.region + ".amazonaws.com/" + authResources.cognito.userPoolId,
+            IDENTITY_POOL_ID: authResources.cognito.identityPoolId,
+            CRED_TOKEN_TIMEOUT_SECONDS: config.app.credTokenTimeoutSeconds.toString()
         }
     );
 
@@ -72,6 +99,7 @@ export function buildAuthFunctions(
             scope,
             lambdaCommonBaseLayer,
             storageResources,
+            authResources,
             config,
             vpc,
             subnets,
@@ -93,6 +121,7 @@ export function buildAuthFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
+    authResources: authResources,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
