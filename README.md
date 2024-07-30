@@ -254,6 +254,7 @@ VAMS is provided under a shared responsibility model. Any customization for cust
 2. Currently VAMS UI web pages do not support HTTPOnly or Secure cookies for storing user authentication data.
 3. Content Security Policies (CSPs) are currently being applied, however when deploying from the Application Load Balancer (ALB) configuration option, the CSPs are sent via HTML body instead of through headers due to current AWS ALB header re-write limitations.
 4. Using the Cloudfront configuration option installs a AWS-managed TLS certrificate and generates a unique cloudfront domain URL. Consider modifying the cloudfront distrubution for your own TLS certificate and domain.
+5. Authentication Access, ID, and file presigned URL token timeouts are set to 1 hour by default per best pracitce security guidelines. Consult with your organizations' security team and adjust as nessesary to account for fixing any application timeout issues.
 
 Please review all considerations with your organizations' security teams to determine if mitigations are required.
 

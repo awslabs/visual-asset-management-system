@@ -1,7 +1,7 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-FROM condaforge/mambaforge:latest as build
+FROM --platform=linux/amd64 condaforge/mambaforge:latest as build
 
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 

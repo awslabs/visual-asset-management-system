@@ -109,6 +109,8 @@ If you are needing to add custom settings to your local docker builds, such as a
 1. `/infra/config/dockerDockerfile-customDependencyBuildConfig` - Docker file for all local packaging environments such as Lambda Layers and/or Custom Resources. Add extra lines to end of file.
 2. `/backendPipelines/...` - Docker files for use-case pipeline containers. Add extra lines above any package install or downloads.
 
+When specifying docker image pulls, all docker files should be defined/fixed to the `linux/amd64` platform. This alleievates issues with deploying across Windows, Max, and Linux host OS platforms.
+
 ### CDK Deploy with Custom SSL Cert Proxy
 
 If you need to deploy VAMS CDK using custom SSL certificates due to internal organization HTTPS proxy requirements, follow the below instructions.

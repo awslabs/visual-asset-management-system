@@ -196,10 +196,18 @@ def iter_Asset(body, item=None):
         version = int(asset['currentVersion']['Version']) + 1
         asset['versions'] = prevVersions
 
+        if 'description' not in body:
+            body['description'] = asset['description']
+
+        if 'assetName' not in body:
+            body['assetName'] = asset['assetName']
+
     if 'previewLocation' in body and body['previewLocation'] is not None:
         asset['previewLocation'] = {
             "Key": body['previewLocation']['Key']
         }
+
+
 
     asset['assetLocation'] = {
         "Key": body['key']
@@ -374,12 +382,14 @@ def lambda_handler(event, context):
                 'validator': 'ID'
             },
             'description': {
-                'value': event['body']['description'],
-                'validator': 'STRING_256'
+                'value': event['body'].get('description', ""),
+                'validator': 'STRING_256',
+                'optional': True
             },
             'assetName': {
-                'value': event['body']['assetName'],
-                'validator': 'OBJECT_NAME'
+                'value': event['body'].get('assetName', ""),
+                'validator': 'OBJECT_NAME',
+                'optional': True
             },
             'assetPathKey': {
                 'value': event['body']['key'],

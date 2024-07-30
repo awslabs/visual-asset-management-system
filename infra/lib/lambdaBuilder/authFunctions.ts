@@ -44,7 +44,7 @@ export function buildAuthFunctions(
                 cognitoIdentityPrincipal,
                 {
                     StringEquals: {
-                        "cognito-identity.amazonaws.com:aud": authResources.cognito.identityPoolId
+                        "cognito-identity.amazonaws.com:aud": authResources.cognito.identityPoolId,
                     },
                     "ForAnyValue:StringLike": {
                         "cognito-identity.amazonaws.com:amr": "authenticated",
@@ -53,8 +53,8 @@ export function buildAuthFunctions(
                 "sts:AssumeRoleWithWebIdentity"
             ),
             new iam.FederatedPrincipal(lambdaIdentityPrincipal)
-            ),
-        maxSessionDuration: Duration.seconds(config.app.credTokenTimeoutSeconds),
+        ),
+        maxSessionDuration: Duration.seconds(config.app.authProvider.credTokenTimeoutSeconds),
     });
 
     //const storageBucketScopedS3AccessRole = new iam.Role(scope, "storageBucketScopedS3AccessRole", {
@@ -80,9 +80,13 @@ export function buildAuthFunctions(
             KMS_KEY_ARN: storageResources.encryption.kmsKey
                 ? storageResources.encryption.kmsKey.keyArn
                 : "",
-            COGNITO_AUTH: "cognito-idp." + config.env.region + ".amazonaws.com/" + authResources.cognito.userPoolId,
+            COGNITO_AUTH:
+                "cognito-idp." +
+                config.env.region +
+                ".amazonaws.com/" +
+                authResources.cognito.userPoolId,
             IDENTITY_POOL_ID: authResources.cognito.identityPoolId,
-            CRED_TOKEN_TIMEOUT_SECONDS: config.app.credTokenTimeoutSeconds.toString()
+            CRED_TOKEN_TIMEOUT_SECONDS: config.app.authProvider.credTokenTimeoutSeconds.toString(),
         }
     );
 

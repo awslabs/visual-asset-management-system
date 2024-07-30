@@ -36,45 +36,51 @@ export class PipelineBuilderNestedStack extends NestedStack {
 
         props = { ...defaultProps, ...props };
 
-        const pipelineNetwork = new SecurityGroupGatewayPipelineConstruct(this, "PipelineNetwork", {
-            ...props,
-            config: props.config,
-            vpc: props.vpc,
-            vpceSecurityGroup: props.vpceSecurityGroup,
-            subnets: props.subnets,
-        });
-
-        //Create nested stack for each turned on pipeline
-        if (props.config.app.pipelines.usePreviewPcPotreeViewer.enabled) {
-            const previewPcPotreeViewerPipelineNestedStack = new PcPotreeViewerBuilderNestedStack(
+        if (
+            props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
+            props.config.app.pipelines.useGenAiMetadata3dExtraction.enabled
+        ) {
+            const pipelineNetwork = new SecurityGroupGatewayPipelineConstruct(
                 this,
-                "PcPotreeViewerBuilderNestedStack",
+                "PipelineNetwork",
                 {
                     ...props,
                     config: props.config,
-                    storageResources: props.storageResources,
-                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
                     vpc: props.vpc,
-                    pipelineSubnets: pipelineNetwork.subnets.pipeline,
-                    pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                    vpceSecurityGroup: props.vpceSecurityGroup,
+                    subnets: props.subnets,
                 }
             );
-        }
 
-        if (props.config.app.pipelines.useGenAiMetadata3dExtraction.enabled) {
-            const genAiMetadata3dExtractionNestedStack = new Metadata3dExtractionNestedStack(
-                this,
-                "GenAiMetadata3dExtractionNestedStack",
-                {
-                    ...props,
-                    config: props.config,
-                    storageResources: props.storageResources,
-                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                    vpc: props.vpc,
-                    pipelineSubnets: pipelineNetwork.subnets.pipeline,
-                    pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
-                }
-            );
+            //Create nested stack for each turned on pipeline
+            if (props.config.app.pipelines.usePreviewPcPotreeViewer.enabled) {
+                const previewPcPotreeViewerPipelineNestedStack =
+                    new PcPotreeViewerBuilderNestedStack(this, "PcPotreeViewerBuilderNestedStack", {
+                        ...props,
+                        config: props.config,
+                        storageResources: props.storageResources,
+                        lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                        vpc: props.vpc,
+                        pipelineSubnets: pipelineNetwork.subnets.pipeline,
+                        pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                    });
+            }
+
+            if (props.config.app.pipelines.useGenAiMetadata3dExtraction.enabled) {
+                const genAiMetadata3dExtractionNestedStack = new Metadata3dExtractionNestedStack(
+                    this,
+                    "GenAiMetadata3dExtractionNestedStack",
+                    {
+                        ...props,
+                        config: props.config,
+                        storageResources: props.storageResources,
+                        lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                        vpc: props.vpc,
+                        pipelineSubnets: pipelineNetwork.subnets.pipeline,
+                        pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                    }
+                );
+            }
         }
     }
 }

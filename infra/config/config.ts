@@ -55,7 +55,7 @@ export function getConfig(app: cdk.App): Config {
             process.env.STACK_NAME) +
         "-" +
         config.env.region;
-        
+
     config.app.bucketMigrationStaging.assetBucketName = <string>(app.node.tryGetContext(
         "staging-bucket"
     ) || //here to keep backwards compatability
@@ -69,9 +69,9 @@ export function getConfig(app: cdk.App): Config {
             config.app.adminEmailAddress ||
             process.env.ADMIN_EMAIL_ADDRESS)
     );
-    config.app.credTokenTimeoutSeconds = <number>(
+    config.app.authProvider.credTokenTimeoutSeconds = <number>(
         (app.node.tryGetContext("credTokenTimeoutSeconds") ||
-            config.app.credTokenTimeoutSeconds ||
+            config.app.authProvider.credTokenTimeoutSeconds ||
             process.env.CRED_TOKEN_TIMEOUT_SECONDS ||
             3600)
     );
@@ -332,7 +332,6 @@ export interface ConfigPublic {
             assetBucketName: string;
         };
         adminEmailAddress: string;
-        credTokenTimeoutSeconds: number;
         useFips: boolean;
         useWaf: boolean;
         useKmsCmkEncryption: {
@@ -381,6 +380,7 @@ export interface ConfigPublic {
             };
         };
         authProvider: {
+            credTokenTimeoutSeconds: number;
             useCognito: {
                 enabled: boolean;
                 useSaml: boolean;

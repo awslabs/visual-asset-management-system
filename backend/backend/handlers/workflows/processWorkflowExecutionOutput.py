@@ -361,13 +361,13 @@ def lambda_handler(event, context):
                             "body": {
                                 "databaseId": event['databaseId'],
                                 "assetId": event['assetId'],
-                                "assetName": event['assetName'],
+                                #"assetName": event['assetName'], #We don't have asset ID and is not required for updating an existing asset by uploadAsset
                                 "pipelineId": pipelineName,
                                 "executionId": event['executionId'],
                                 "tags": event.get("tags", []),
                                 "key": file,
                                 "assetType": outputType,
-                                "description": event['description'],
+                                #"description": event['description'],#We don't have asset description and is not required for updating an existing asset by uploadAsset
                                 "specifiedPipelines": [],
                                 "isDistributable": True,
                                 "Comment": "",
