@@ -2,54 +2,55 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
-## [2.1.0](TBD) (TBD)
+## [2.1.0] (2024-08-30)
 
-This minor version includes changes to VAMS pipelines and use-case pipeline implementations.
+This minor version includes changes to VAMS pipelines, use-case pipeline implementations, and v2.0 bug fixes.
 
 Recommended Upgrade Path: A/B Stack Deployment with data migration using staging bucket configuration and upgrade migration scripts for DynamoDB tables in `./infra/upgradeMigrationScripts`
 
 ### ⚠ BREAKING CHANGES
 
--   Pipelines are now changed to support a new pipelineType meaning and the old pipelineType was renamed to pipelineExecutionType.
--   Execution workflow input parameter names to pipelines have also changed which can break existing workflows/pipelines.
+-   Pipelines are now changed to support a new pipelineType meaning, and the old pipelineType was renamed to pipelineExecutionType.
+-   Execution workflow input parameter names to pipelines have also changed, which can break existing workflows/pipelines.
 
-Due to dynamoDB table structure changes, a A/B Stack deployment with migration script is reccommended if there are existing pipelines that need to be automatically brought over.
+Due to DynamoDB table structure changes, a A/B Stack deployment with migration script is recommended if there are existing pipelines that need to be automatically brought over.
 
 ### Features
 
--   Re-worked infrastructure CDK components and project directory structure to split out use-case pipelines (i.e. PotreeViewer/Visualizer Pipelines) from the rest of the lambda backend and stack infrastructures. This will allow for future upgrades that will split these components completely out into their own open source project.
--   PotreeViewerPipeline (previously VisualizerPipeline) is now baselined to the new standard use-case pipeline pattern to support external state machine callbacks (i.e. from VAMS pipeline workflows)
+-   Re-worked infrastructure CDK components and project directory structure to split out use-case pipelines (i.e., PotreeViewer/Visualizer Pipelines) from the rest of the lambda backend and stack infrastructures. This will allow for future upgrades that will split these components completely out into their own open-source project.
+-   PotreeViewerPipeline (previously VisualizerPipeline) is now baselined to the new standard use-case pipeline pattern to support external state machine callbacks (i.e., from VAMS pipeline workflows)
 -   -   PreviewPotreeViewerPipeline (previously VisualizerPipeline) can now be registered and called from VAMS pipeline workflows (suggested to be called from a preview type pipeline) via the 'vamsExecutePreviewPcPotreeViewerPipeline' lambda function.
--   Added new standard pipeline and configuration option for GenAiMetadata3dExtractionPipeline use-case pipeline that can take in OBJ, FBX, GLB, USD, STL, PLY, DAE, and ABC files from an asset and use generative AI to analyze the file through 2D renders what keywords, tags, or other metadata the file should be associated with. Pipeline can be called by registering 'vamsExecuteGenAiMetadata3dExtractionPipeline' lambda function with VAMS pipelines / workflows.
+-   Added a new standard pipeline and configuration option for GenAiMetadata3dExtractionPipeline use-case pipeline that can take in OBJ, FBX, GLB, USD, STL, PLY, DAE, and ABC files from an asset and use generative AI to analyze the file through 2D renders what keywords, tags, or other metadata the file should be associated with. Pipeline can be called by registering 'vamsExecuteGenAiMetadata3dExtractionPipeline' lambda function with VAMS pipelines / workflows.
 -   **Web** Added `pipelineExecutionType` to VAMS pipelines (previously `pipelineType`) and added a new context to `pipelineType`. Current pipeline types are `StandardFile` and `PreviewFile`. These are implemented to support future roadmap implementations of different pipeline types and auto-executions options on asset file uploads.
--   **Web** Added `inputParameters` to piplines to allow the optional specification of a JSON object which can be used within a pipeline execution to set pipeline configuration options. This is set at the time of creating a VAMS pipeline.
--   Added `inputMetadata` to pipeline inputs which automatically pulls in asset name, description, tags, and all metdata fields of the asset to a pipeline execution. This can also be used in the future to pull through user defined inputMetadata at the time of an execution with additional UI/UX.
+-   **Web** Added `inputParameters` to pipelines to allow the optional specification of a JSON object which can be used within a pipeline execution to set pipeline configuration options. This is set at the time of creating a VAMS pipeline.
+-   Added `inputMetadata` to pipeline inputs which automatically pulls in asset name, description, tags, and all metadata fields of the asset to a pipeline execution. This can also be used in the future to pull through user-defined inputMetadata at the time of an execution with additional UI/UX.
 -   Changed `inputPath` and `outputPath` of pipeline function execution inputs to `inputS3AssetFilePath` and `outputS3AssetFilesPath`
 -   Added `outputS3AssetPreviewPath`, `outputS3AssetMetadataPath`, and `inputOutputS3AssetAuxiliaryFilesPath` pipeline execution parameter inputs to support different location paths for asset data outputs and writing to asset auxiliary temporary path locations
--   Updated `processWorkflowExecutionOutput` lambda function (previously `uploadAllAssets`) to also account for metadata data object outputs of pipelines to update against assets. Preview image output logic is stubbed out but will not be fully implemented until the new upload / storage process overhaul is completed in a future verison.
+-   Updated `processWorkflowExecutionOutput` lambda function (previously `uploadAllAssets`) to also account for metadata data object outputs of pipelines to update against assets. Preview image output logic is stubbed out but will not be fully implemented until the new upload / storage process overhaul is completed in a future version.
 -   Added `credTokenTimeoutSeconds` authProvider config on the infrastructure side to allow manual specification of access, ID, and pre-signed URL tokenExpiration. Extending this can fix upload timeouts for larger files or slower connections. Auth refresh tokens timeouts are fixed to 24 hours currently.
 -   -   Implements a new approach for s3ScopedAccess for upload that allows tokens up to 12 hours using AssumeRoleWithWebIdentity.
 
 ### Bug Fixes
 
--   Fixed CreateWorkflow error seen in v2.0 with updated library dependencies
+-   Fixed CreateWorkflow error seen in v2.0 (Mac/Linux builds) with updated library dependencies and setting a standardized docker platforms across the board to `linux/amd64`
 -   Re-worked PreviewPotreeViewerPipeline (previously VisualizerPipeline) state machine and associated functions to properly handle errors
 -   Fixed benign logger errors in OpenSearch indexing lambda function (streams)
 -   Fixed existing functionality with `processWorkflowExecutionOutput` (previously `uploadAllAssets`) not working
--   Fixed pipeline execution to properly account for asset file primary key names that contain spaces. Previously could cause pipelines to error on execution.
+-   Fixed pipeline execution to properly account for asset file primary key names that contain spaces. Previously, could cause pipelines to error on execution.
 
 ### Chores
 
 -   VisualizerPipeline now re-named to PreviewPotreeViewerPipeline as the previous name was too generic and other "visualizer" or viewer pipelines may exist later
 -   'visualizerAssets' S3 bucket renamed to 'assetAuxiliary'. This bucket will now be used for all pipeline or otherwise auto-generated files (previews/thumbnails) associated with assets that should not be versioned
 -   'visualizerAssets/{proxy+}' API route and related function re-named to 'auxililaryPreviewAssets/stream/{proxy+}'. This function is used for retrieving auto-generated preview files that should be rapidly streamed such as the PreviewPotreeViewerPipeline files.
--   Renamed and moved `uploadAllAssets` lambda function handler. It is now `processWorkflowExecutionOutput` and moved to the to the `workflows` backend folder
--   Updated Workflow ListExecutions to write stopDate, startDate, and executionStatus back to dynamoDB table after a SFN fetch where the execution has stopped. This is done for performance / caching reasons.
+-   Renamed and moved `uploadAllAssets` lambda function handler. It is now `processWorkflowExecutionOutput` and moved to the `workflows` backend folder
+-   Updated Workflow ListExecutions to write stopDate, startDate, and executionStatus back to DynamoDB table after an SFN fetch where the execution has stopped. This is done for performance / caching reasons.
 -   Workflow executions are now limited to only 1 active running execution per workflow per asset. This helps prevent workflows from globbering each other and preventing other errors and race conditions
--   Updated a pipeline's default taskTimeout to 24 hours and taskHeartBeat to 1 hour unless otherwise specified. Previously it defauled to the service default which was up to a year. This helps prevent runaway asynchronous processes that never properly return and closeout workflow executions.
--   Added some external sfn token heartbeats into the new and existing use-case pipeline implementations at nthe end of a container run. These heart beat locations can still be improved but expected that these pipelines take longer to run.
--   Workflow executions now pass the originiating execution callers username and request context which can be used for lambda cross-call logic
--   Created additional Casbin API check abstraction function which can be used to consolidate API permission check logic and simplify lambda handlers. Applied aot all existing API-gateway accessible lambda handlers
+-   Updated a pipeline's default taskTimeout to 24 hours and taskHeartBeat to 1 hour unless otherwise specified. Previously, it defaulted to the service default which was up to a year. This helps prevent runaway asynchronous processes that never properly return and closeout workflow executions.
+-   Added some external sfn token heartbeats into the new and existing use-case pipeline implementations at the end of a container run. These heartbeat locations can still be improved, but it is expected that these pipelines take longer to run.
+-   Workflow executions now pass the originating execution caller's username and request context, which can be used for lambda cross-call logic
+-   Created an additional Casbin API check abstraction function which can be used to consolidate API permission check logic and simplify lambda handlers. Applied to all existing API-gateway accessible lambda handlers
+-   Added draft lambda functions for the uploadV2 feature expected. Draft function not yet ingested into CDK for deployment.
 
 ### Deprecation / Feature Removal
 
