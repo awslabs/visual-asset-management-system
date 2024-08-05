@@ -249,7 +249,7 @@ def iter_Asset(body, item=None):
     return asset
 
 
-def upload_Asset(event, body, queryParameters, returnAsset=False):
+def upload_Asset(event, body, queryParameters, returnAsset=False, uploadTempLocation=False):
     table = dynamodb.Table(asset_database)
     try:
         db_response = table.query(
@@ -279,6 +279,26 @@ def upload_Asset(event, body, queryParameters, returnAsset=False):
                     break
 
             if operation_allowed_on_asset:
+
+                #If true, asset was uploaded to a temporary location within the S3 bucket and we need to move it now to the correct asset location
+                if uploadTempLocation:
+                    tempLocationKeyPrefix = os.path.dirname(body['key'])
+                    fileNameKey = body['key'].split("/")[-1]
+                    finalKeyLocation = body['assetId'] + "/" + fileNameKey
+
+                    #Do MIME check on whatever is uploaded to S3 at this point for this temporary location (ahead of a copy)
+                    if(not validateS3AssetExtensionsAndContentType(bucket_name, tempLocationKeyPrefix)):
+                        raise ValueError('An uploaded asset at the provided temporary location contains a potentially malicious executable type object. Unable to process asset upload.')
+
+                    copy_source = {
+                        'Bucket': bucket_name,
+                        'Key': body['key']
+                    }
+                    s3c.copy_object(CopySource=copy_source, Bucket=bucket_name, Key=finalKeyLocation)
+
+                    #Update the final key location
+                    body['key'] = finalKeyLocation
+
                 up = iter_Asset(body)
                 table.put_item(Item=up)
                 logger.info(up)
@@ -315,6 +335,26 @@ def upload_Asset(event, body, queryParameters, returnAsset=False):
                         break
 
                 if operation_allowed_on_asset:
+
+                    #If true, asset was uploaded to a temporary location within the S3 bucket and we need to move it now to the correct asset location
+                    if uploadTempLocation:
+                        tempLocationKeyPrefix = os.path.dirname(body['key'])
+                        fileNameKey = body['key'].split("/")[-1]
+                        finalKeyLocation = body['assetId'] + "/" + fileNameKey
+
+                        #Do MIME check on whatever is uploaded to S3 at this point for this temporary location (ahead of a copy)
+                        if(not validateS3AssetExtensionsAndContentType(bucket_name, tempLocationKeyPrefix)):
+                            raise ValueError('An uploaded asset at the provided temporary location contains a potentially malicious executable type object. Unable to process asset upload.')
+
+                        copy_source = {
+                            'Bucket': bucket_name,
+                            'Key': body['key']
+                        }
+                        s3c.copy_object(CopySource=copy_source, Bucket=bucket_name, Key=finalKeyLocation)
+
+                        #Update the final key location
+                        body['key'] = finalKeyLocation
+
                     up = iter_Asset(body, asset)
                     table.put_item(Item=up)
                     # Send notification on asset version change to subscribers
@@ -421,6 +461,8 @@ def lambda_handler(event, context):
         if 'returnAsset' in event:
             returnAsset = True
 
+        uploadTempLocation = event['body'].get('uploadTempLocation', False)
+
         logger.info("Trying to get Data")
 
         # prepare pagination query parameters for update asset count
@@ -433,7 +475,7 @@ def lambda_handler(event, context):
         if 'startingToken' not in queryParameters:
             queryParameters['startingToken'] = None
 
-        response.update(upload_Asset(event, event['body'], queryParameters, returnAsset))
+        response.update(upload_Asset(event, event['body'], queryParameters, returnAsset, uploadTempLocation))
         logger.info(response)
         return response
     except Exception as e:

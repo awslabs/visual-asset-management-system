@@ -370,6 +370,7 @@ def lambda_handler(event, context):
                                 #"description": event['description'],#We don't have asset description and is not required for updating an existing asset by uploadAsset
                                 "specifiedPipelines": [],
                                 "isDistributable": True,
+                                "uploadTempLocation": True,
                                 "Comment": "",
                                 "assetLocation": {
                                     "Key": file

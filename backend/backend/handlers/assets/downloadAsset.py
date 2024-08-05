@@ -22,6 +22,7 @@ dynamodb = boto3.resource('dynamodb')
 main_rest_response = STANDARD_JSON_RESPONSE
 asset_Database = None
 bucket_name = None
+timeout = 1800
 unitTest = {
     "body": {
         "databaseId": "Unit_Test"
