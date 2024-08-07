@@ -2,15 +2,15 @@
     "name": "vams",
     "env": {
         "account": null,
-        "region": null,
+        "region": "us-east-1",
         "loadContextIgnoreVPCStacks": false
     },
     "app": {
-        "baseStackName": "prod",
+        "baseStackName": "prod1",
         "bucketMigrationStaging": {
             "assetBucketName": null
         },
-        "adminEmailAddress": "adminEmail@example.com",
+        "adminEmailAddress": "scheurik@amazon.com",
         "useFips": false,
         "useWaf": true,
         "useKmsCmkEncryption": {
@@ -21,7 +21,7 @@
             "enabled": false
         },
         "useGlobalVpc": {
-            "enabled": false,
+            "enabled": true,
             "useForAllLambdas": false,
             "addVpcEndpoints": true,
             "optionalExternalVpcId": null,
@@ -52,7 +52,7 @@
         },
         "pipelines": {
             "usePreviewPcPotreeViewer": {
-                "enabled": false
+                "enabled": true
             },
             "useGenAiMetadata3dExtraction": {
                 "enabled": false

@@ -71,14 +71,14 @@ def run(stage: PipelineStage, inputMetadata: str = '', inputParameters: str = ''
         )
 
     # check file extension to determine if we can continue processing
-    # currently only supports E57, LAZ, and LAS
-    if not local_filepath.endswith(ext.Extensions.E57) and not local_filepath.endswith(ext.Extensions.LAZ) and not local_filepath.endswith(ext.Extensions.LAS):
+    # currently only supports E57, PLY, LAZ, and LAS
+    if not local_filepath.endswith(ext.Extensions.E57) and not local_filepath.endswith(ext.Extensions.PLY) and not local_filepath.endswith(ext.Extensions.LAZ) and not local_filepath.endswith(ext.Extensions.LAS):
         return ext.error_response(stage, 
-            "Unsupported file type for point cloud visualization pipeline conversion. Currently only supports E57, LAZ, and LAS."
+            "Unsupported file type for point cloud visualization pipeline conversion. Currently only supports E57, PLY, LAZ, and LAS."
         )
 
-    # If input file is E57, convert to LAZ
-    if local_filepath.endswith(ext.Extensions.E57):
+    # If input file is E57 or PLY, convert to LAZ
+    if local_filepath.endswith(ext.Extensions.E57) or local_filepath.endswith(ext.Extensions.PLY):
         pipeline_response = allconvert_pdalconversion_pipeline(
             local_filepath, local_output_dir)
         logger.info(f"Pipeline Response: {pipeline_response}")
@@ -122,7 +122,7 @@ def run(stage: PipelineStage, inputMetadata: str = '', inputParameters: str = ''
 def allconvert_pdalconversion_pipeline(input_file_path: str, output_dir: str) -> dict:
     """
     Conversion Pipeline
-    Converts Point Cloud Format (E57 and others) to LAZ
+    Converts Point Cloud Format (E57, PLY and others) to LAZ
     """
     logger.info("Constructing PDAL Conversion Pipeline...")
     filename, extension = os.path.splitext(os.path.basename(input_file_path))

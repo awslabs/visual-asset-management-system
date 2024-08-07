@@ -372,7 +372,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
          */
 
         //Build Lambda Web Visualizer Pipeline Resources to Open the Pipeline through a SNS Topic Subscription
-        const allowedInputFileExtensions = ".laz,.las,.e57";
+        const allowedInputFileExtensions = ".laz,.las,.e57,.ply";
         const openPipelineFunction = buildOpenPipelineFunction(
             this,
             props.lambdaCommonBaseLayer,
@@ -418,7 +418,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
         props.storageResources.sns.assetBucketObjectCreatedTopic.addSubscription(
             new LambdaSubscription(PcPotreeViewerPipelineSnsExecuteFunction, {
                 filterPolicy: {
-                    //Future TODO: If SNS Subscription String Filtering ever supports suffix matching, add a filter here for LAS/LAZ/E57 files to reduce calls to Lambda
+                    //Future TODO: If SNS Subscription String Filtering ever supports suffix matching, add a filter here for LAS/LAZ/PLY files to reduce calls to Lambda
                 },
             })
         );

@@ -384,9 +384,9 @@ There are no defined input parameter configurations for this pipeline. This pipe
 
 ![Preview PotreeViewer Pipeline Architecture](/diagrams/pipeline_usecase_previewPotreeViewer.png)
 
-| Input File Types Supported   | Base Lambda Function Name - VAMS trigger | Base Lambda Function Name - SNS trigger |
-| :--------------------------- | :--------------------------------------- | --------------------------------------- |
-| LAS, LAZ, E57 (Point Clouds) | vamsExecutePreviewPcPotreeViewerPipeline | snsExecutePrviewPcPotreeViewerPipeline  |
+| Input File Types Supported        | Base Lambda Function Name - VAMS trigger | Base Lambda Function Name - SNS trigger |
+| :-------------------------------- | :--------------------------------------- | --------------------------------------- |
+| LAS, LAZ, E57, PLY (Point Clouds) | vamsExecutePreviewPcPotreeViewerPipeline | snsExecutePrviewPcPotreeViewerPipeline  |
 
 ### Standard Type - GenerativeAI 3D Metadata Extraction Pipeline
 

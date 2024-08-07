@@ -76,7 +76,7 @@ def run(stage: PipelineStage, inputMetadata: str = '', inputParameters: str = ''
         )
 
     # check file extension to determine if we can continue processing
-    # currently only supports E57, LAZ, and LAS
+    # currently only supports LAZ and LAS
     if not local_filepath.endswith(ext.Extensions.LAZ) and not local_filepath.endswith(ext.Extensions.LAS):
         return ext.error_response(stage, 
             "Unsupported file type for point cloud visualization pipeline conversion. Currently only supports LAZ and LAS."

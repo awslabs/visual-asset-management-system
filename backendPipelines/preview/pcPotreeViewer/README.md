@@ -20,10 +20,10 @@ The Point Cloud Pipeline (PCP) provides functionality for converting a input pip
 ### Overview
 
 0. Open Pipeline Lambda function is called from a SNS event on adding an object to the VAMS Assets S3 bucket. Open Pipeline starts the Pipeline State Machine and passes through S3 bucket and object information.
-1. Construct Pipeline Lambda function constructs the multi-stage JSON input definitions for the jobs based on the filetypes uploaded to the S3 bucket (e57 = PDAL + PotreeConveter, laz/laz = PotreeConverter)
+1. Construct Pipeline Lambda function constructs the multi-stage JSON input definitions for the jobs based on the filetypes uploaded to the S3 bucket (e57/ply = PDAL + PotreeConveter, laz/laz = PotreeConverter)
 2. AWS Batch Job executes for batch processing point cloud data
 3. AWS Fargate Task provisions Docker container compute resources and runs the specific PCP app container
-4. If the first stage/type is PDAL, the PDAL PCP container runs to translate the file to a LAZ format. The e57 file is retrieved form origniating S3 bucket. Outputs are to the VAMS AssetsAuxiliary S3 bucket as a temporary pipeline file.
+4. If the first stage/type is PDAL, the PDAL PCP container runs to translate the file to a LAZ format. The e57/ply file is retrieved form origniating S3 bucket. Outputs are to the VAMS AssetsAuxiliary S3 bucket as a temporary pipeline file.
 5. If the first or last stage/type is POTREE, the POTREE PCP container runs to translate the original LAS/LAZ or previous stage LAZ file to a octree Potree 2.0 format. The LAS/LAZ inputs file are retrieved form origniating S3 bucket (Assets or AssetsAuxiliary (temp)). The octree format outputs are written to the VAMS AssetsAuxiliary S3 bucket. Note: Temporary files from PDAL are not deleted at this time.
 6. After the PDAL or PDAL + POTREE stages are done, the StateMachine ends in a success or fail state depending on errors. Errors in the container are written to Cloudwatch logs.
 
@@ -108,7 +108,7 @@ The PDAL library is used in this application to streamline transforming the poin
 
 ### Base Pipeline
 
-Ingests and unzips the non-LAZ/LAS files (i.e. E57) and outputs a LAZ file.
+Ingests and unzips the non-LAZ/LAS files (i.e. E57, PLY) and outputs a LAZ file.
 
 ## Potree Converter Pipeline
 

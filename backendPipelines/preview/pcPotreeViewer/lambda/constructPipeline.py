@@ -19,13 +19,13 @@ def lambda_handler(event, context):
     input_s3_asset_file_root, input_s3_asset_extension = os.path.splitext(event['inputS3AssetFilePath'])
 
     # construct different pipeline definitions based on file type
-    if input_s3_asset_extension == ".e57":
+    if input_s3_asset_extension == ".e57" or input_s3_asset_extension == ".ply":
         definition = construct_pdal_definition(event)
     elif input_s3_asset_extension == ".las" or input_s3_asset_extension == ".laz":
         definition = construct_potree_definition(event)
     else:
         return {
-            "error": "Unsupported file type for point cloud potree viewer pipeline conversion. Currently only supports E57, LAZ, and LAS."
+            "error": "Unsupported file type for point cloud potree viewer pipeline conversion. Currently only supports E57, PLY, LAZ, and LAS."
         }
 
     logger.info(f"Definition: {definition}")

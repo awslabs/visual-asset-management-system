@@ -19,6 +19,7 @@ class Extensions(EnumMeta):
     LAS = ".las"
     LAZ = ".laz"
     E57 = ".e57"
+    PLY = ".ply"
 
 
 def success_response(stage: PipelineStage, message=None) -> PipelineStage:

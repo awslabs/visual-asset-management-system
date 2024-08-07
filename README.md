@@ -44,34 +44,34 @@ Sample use cases that have leveraged early iterations of VAMS include:
 
 VAMS currently integrates with several different asset viewers and supports the following formats for viewing 3D assets interactively.
 
-| Name                              | Extension | Type   | Viewer             | Excluded Library |
-| :-------------------------------- | :-------- | :----- | :----------------- | :--------------- |
-| Wavefront                         | obj       | text   | Online 3D Viewer   |                  |
-| 3D Studio                         | 3ds       | binary | Online 3D Viewer   |                  |
-| Stereolithography                 | stl       | text   | Online 3D Viewer   |                  |
-| Stereolithography                 | stl       | binary | Online 3D Viewer   |                  |
-| Polygon File Format               | ply       | text   | Online 3D Viewer   |                  |
-| Polygon File Format               | ply       | binary | Online 3D Viewer   |                  |
-| glTF                              | gltf      | text   | Online 3D Viewer   |                  |
-| glTF                              | glb       | binary | Online 3D Viewer   |                  |
-| Object File Format                | off       | text   | Online 3D Viewer   |                  |
-| Object File Format                | off       | binary | Online 3D Viewer   |                  |
-| Dotbim                            | bim       | text   | Online 3D Viewer   |                  |
-| Rhinoceros 3D                     | 3dm       | binary | Online 3D Viewer   |                  |
-| Filmbox                           | fbx       | text   | Online 3D Viewer   |                  |
-| Filmbox                           | fbx       | binary | Online 3D Viewer   |                  |
-| Collada                           | dae       | text   | Online 3D Viewer   |                  |
-| Virtual Reality Modeling Language | wrl       | text   | Online 3D Viewer   |                  |
-| 3D Manufacturing Format           | 3mf       | text   | Online 3D Viewer   |                  |
-| Additive Manufacturing            | amf       | text   | Online 3D Viewer   |                  |
-| (Excluded\*) Dotbim               | ifc       | text   | Online 3D Viewer\* | web-ifc          |
-| (Excluded\*) FreeCad              | fcstd     | text   | Online 3D Viewer\* | occt-import-js   |
-| (Excluded\*) Boundary Rep         | brep      | text   | Online 3D Viewer\* | occt-import-js   |
-| (Excluded\*) ISO 10303 CAD        | step      | text   | Online 3D Viewer\* | occt-import-js   |
-| (Excluded\*) Graphics Exchange    | iges      | text   | Online 3D Viewer\* | occt-import-js   |
-| Point Cloud - LiDAR Data Exchange | laz       | binary | Potree Viewer      |                  |
-| Point Cloud - LiDAR Data Exchange | las       | binary | Potree Viewer      |                  |
-| Point Cloud - LiDAR Data Exchange | e57       | binary | Potree Viewer      |                  |
+| Name                              | Extension | Type   | Viewer             | Excluded Library | Notes                                                                                        |
+| :-------------------------------- | :-------- | :----- | :----------------- | :--------------- | -------------------------------------------------------------------------------------------- |
+| Wavefront                         | obj       | text   | Online 3D Viewer   |                  |                                                                                              |
+| 3D Studio                         | 3ds       | binary | Online 3D Viewer   |                  |                                                                                              |
+| Stereolithography                 | stl       | text   | Online 3D Viewer   |                  |                                                                                              |
+| Stereolithography                 | stl       | binary | Online 3D Viewer   |                  |                                                                                              |
+| glTF                              | gltf      | text   | Online 3D Viewer   |                  |                                                                                              |
+| glTF                              | glb       | binary | Online 3D Viewer   |                  |                                                                                              |
+| Object File Format                | off       | text   | Online 3D Viewer   |                  |                                                                                              |
+| Object File Format                | off       | binary | Online 3D Viewer   |                  |                                                                                              |
+| Dotbim                            | bim       | text   | Online 3D Viewer   |                  |                                                                                              |
+| Rhinoceros 3D                     | 3dm       | binary | Online 3D Viewer   |                  |                                                                                              |
+| Filmbox                           | fbx       | text   | Online 3D Viewer   |                  |                                                                                              |
+| Filmbox                           | fbx       | binary | Online 3D Viewer   |                  |                                                                                              |
+| Collada                           | dae       | text   | Online 3D Viewer   |                  |                                                                                              |
+| Virtual Reality Modeling Language | wrl       | text   | Online 3D Viewer   |                  |                                                                                              |
+| 3D Manufacturing Format           | 3mf       | text   | Online 3D Viewer   |                  |                                                                                              |
+| Additive Manufacturing            | amf       | text   | Online 3D Viewer   |                  |                                                                                              |
+| (Excluded\*) Dotbim               | ifc       | text   | Online 3D Viewer\* | web-ifc          |                                                                                              |
+| (Excluded\*) FreeCad              | fcstd     | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
+| (Excluded\*) Boundary Rep         | brep      | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
+| (Excluded\*) ISO 10303 CAD        | step      | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
+| (Excluded\*) Graphics Exchange    | iges      | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
+| Point Cloud - LiDAR Data Exchange | laz       | binary | Potree Viewer      |                  |                                                                                              |
+| Point Cloud - LiDAR Data Exchange | las       | binary | Potree Viewer      |                  |                                                                                              |
+| Point Cloud - LiDAR Data Exchange | e57       | binary | Potree Viewer      |                  |                                                                                              |
+| Polygon File Format               | ply       | binary | Potree Viewer      |                  | Type stores meshes and point clouds - VAMS currently showing only point cloud viewer for PLY |
+| Polygon File Format               | ply       | text   | Potree Viewer      |                  |                                                                                              |
 
 Viewers available include:
 
