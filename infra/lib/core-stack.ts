@@ -259,6 +259,19 @@ export class CoreVAMSStack extends cdk.Stack {
                 description: "API Gateway endpoint",
             });
 
+            let useCasefunctionNumber = 1
+            for (const pipelineVamsExecuteLambdaFunction of pipelineBuilderNestedStack.pipelineVamsLambdaFunctionNames) {
+                const pipelineVamsExecuteLambdaFunctionOutput = new cdk.CfnOutput(
+                    this,
+                    `VamsPipelineExecuteLambdaFunctionOutput_${useCasefunctionNumber}`,
+                    {
+                        value: pipelineVamsExecuteLambdaFunction,
+                        description: "Use-case Pipeline - VAMS Execute Lambda Function to Register",
+                    }
+                );
+                useCasefunctionNumber = useCasefunctionNumber + 1
+            }
+
             //Nag supressions
             const refactorPaths = [
                 `/${props.stackName}/ApiBuilder/VAMSWorkflowIAMRole/Resource`,
@@ -412,38 +425,6 @@ export class CoreVAMSStack extends cdk.Stack {
                     appliesTo: [
                         {
                             regex: "/^Action::kms:(.*)\\*$/g",
-                        },
-                    ],
-                },
-            ],
-            true
-        );
-
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: "Allow permissions for KMS unencryption/re-encryption for keys generated within VAMS. Policy statements additions on imported keys are No-Op statements and must be set externally to the deployment.",
-                    appliesTo: [
-                        {
-                            regex: "/^Action::kms:(.*)\\*$/g",
-                        },
-                    ],
-                },
-            ],
-            true
-        );
-
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM4",
-                    reason: "Intend to use AWSLambdaBasicExecutionRole as is at this stage of this project.",
-                    appliesTo: [
-                        {
-                            regex: "/.*AWSLambdaBasicExecutionRole$/g",
                         },
                     ],
                 },

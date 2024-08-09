@@ -370,9 +370,27 @@ def lambda_handler(event, context):
 
 This section describes use-case specific pipelines that can be activated in the infrastructure deployment configuration file `/infra/config/config.json`. These pipelines can be setup through VAMS pipelines and workflows and/or some may be called directly through other triggering mechanisms. See the [Configuration Guide](./ConfigurationGuide.md) for the use-case pipeline configuration options.
 
+Pipeline architectures can either be synchronous or asynchonous. If asynchronous, the option of "Wait for Callback with the Task Token" must be used when adding the pipeline to VAMS.
+
 See the [NOTICE file](./NOTICE.md) for specific third-party license information regarding each of these pipelines.
 
-### Preview Type - PotreeViewer Point Cloud Visualizer Pipeline
+### Standard Type - Trimesh Mesh Converter Pipeline (Synchronous)
+
+The Trimesh Mesh Converter Pipeline is used to convert between various 3D mesh file types.
+
+If you wish to trigger this pipelines additionally/manually through VAMS pipeline, you can setup a new VAMS pipeline using the table below. You will need to lookup the lambda function name in the AWS console based on the base deployment name listed.
+
+The pipeline uses the third-party open-source Trimesh library to conduct the conversion.
+
+The pipeline uses the selected file type on the asset as the input type and the registered pipeline `outputType` as the final conversion type. For now a separate pipeline registration is required for each from-to file type conversion that a organization would like to support.
+
+NOTE: Pipeline must be registered in VAMS WITHOUT the option of "Wait for Callback with the Task Token"
+
+| Input File Types Supported                                       | Base Lambda Function Name    |
+| :--------------------------------------------------------------- | :--------------------------- |
+| STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ (3D Meshes) | vamsExecuteTrimeshConversion |
+
+### Preview Type - PotreeViewer Point Cloud Visualizer Pipeline (Asynchronous)
 
 The PotreeViewer Point Cloud Visualizer Pipeline is used to generate preview files for certain types of points clouds asset files. Currently preview pipelines like these are aprimarily implemented outside of VAMS pipelines/workflows but also have the ability to be called through traditional pipelines. Until preview type pipelines are fully integrated as part of the regular VAMS pipeline design and execution, this pipeline is triggered primarily through a S3 Event Notification on uploading new asset files to VAMS.
 
@@ -382,19 +400,23 @@ The PotreeViewer pipeline outputs it's files (Potree OCTREE Formated Files) to t
 
 There are no defined input parameter configurations for this pipeline. This pipeline ignores inputMetadata as it's not needed for the operation of this pipeline.
 
+NOTE: If pipeline registered separately in VAMS Pipelines, it must be registered in VAMS with the option of "Wait for Callback with the Task Token"
+
 ![Preview PotreeViewer Pipeline Architecture](/diagrams/pipeline_usecase_previewPotreeViewer.png)
 
 | Input File Types Supported        | Base Lambda Function Name - VAMS trigger | Base Lambda Function Name - SNS trigger |
 | :-------------------------------- | :--------------------------------------- | --------------------------------------- |
 | LAS, LAZ, E57, PLY (Point Clouds) | vamsExecutePreviewPcPotreeViewerPipeline | snsExecutePrviewPcPotreeViewerPipeline  |
 
-### Standard Type - GenerativeAI 3D Metadata Extraction Pipeline
+### Standard Type - GenerativeAI 3D Metadata Extraction Pipeline (Asynchronous)
+
+> Notice: This use-case pipeline uses a open-source library that is GPL licensed. Please refer to the ![NOTICE File](/NOTICE.md) and review with your organizations legal team before enabling use.
 
 The GenerativeAI 3D Metadata Extraction Pipeline is used to generate 2D renders and metadata JSON labeling information for 3D mesh asset files. This is useful to auto-label asset data as it is ingested.
 
 If you wish to trigger this pipelines additionally/manually through VAMS pipeline, you can setup a new VAMS pipeline using the table below. You will need to lookup the lambda function name in the AWS console based on the base deployment name listed.
 
-The pipeline uses the third-party ope-source Blender library to generate 2D renders of the 3D object. This is then ingested into both Amazon Rekognition and Amazon Bedrock to generate and summarize labels on these 2D images. The output is a JSON metadata keywords file in the asset S3 bucket. Input types are currently restricted by the input model formats that Blender can accept.
+The pipeline uses the third-party open-source Blender library to generate 2D renders of the 3D object. This is then ingested into both Amazon Rekognition and Amazon Bedrock to generate and summarize labels on these 2D images. The output is a JSON metadata keywords file in the asset S3 bucket. Input types are currently restricted by the input model formats that Blender can accept.
 
 This pipeline can use the inputMetadata passed into the pipeline as additional seed data for more accurately labeling the 2D image objects. This can be toggled on or off with an inputParameter.
 
@@ -407,7 +429,9 @@ The following inputParameters are supported:
 }
 ```
 
-![GenAI etadata 3D Extraction Pipeline Architecture](/diagrams/pipeline_usecase_genAiMetadata3dExtraction.png)
+NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback with the Task Token"
+
+![GenAI Metadata 3D Extraction Pipeline Architecture](/diagrams/pipeline_usecase_genAiMetadata3dExtraction.png)
 
 | Input File Types Supported                              | Base Lambda Function Name                    |
 | :------------------------------------------------------ | :------------------------------------------- |

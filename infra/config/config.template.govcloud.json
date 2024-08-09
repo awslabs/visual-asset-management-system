@@ -51,6 +51,9 @@
             "optionalHostedZoneId": null
         },
         "pipelines": {
+            "useConversionMeshTrimesh": {
+                "enabled": false
+            },
             "usePreviewPcPotreeViewer": {
                 "enabled": false
             },

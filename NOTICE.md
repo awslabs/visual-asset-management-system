@@ -1,6 +1,6 @@
 Amazon VAMS
 
-Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
 ---
 
@@ -104,12 +104,13 @@ This software includes third party software subject to the following copyrights:
 
 Python Libraries
 
-| Name   | Version | Related Pipeline             | License                |
-| ------ | ------- | ---------------------------- | ---------------------- |
-| pillow | 10.3.0  | GENAI 3D METADATA GENERATION | HPND--MIT/3-Clause-BSD |
-| NumPy  | latest  | GENAI 3D METADATA GENERATION | BSD-3-Clause           |
+| Name    | Version | Related Pipeline             | License                |
+| ------- | ------- | ---------------------------- | ---------------------- |
+| pillow  | 10.3.0  | GENAI 3D METADATA GENERATION | HPND--MIT/3-Clause-BSD |
+| NumPy   | latest  | MULTIPLE                     | BSD-3-Clause           |
+| TriMesh | latest  | CONVERSION MESH TRIMESH      | MIT License            |
 
-Other Libraries
+Other Libraries (Use-case Pipelines)
 
 | Name            | Version                                                                      | Related Pipeline             | Licenses     |
 | :-------------- | :--------------------------------------------------------------------------- | :--------------------------- | :----------- |

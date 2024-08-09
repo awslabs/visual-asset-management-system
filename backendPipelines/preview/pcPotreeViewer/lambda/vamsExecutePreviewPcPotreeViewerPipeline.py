@@ -61,7 +61,7 @@ def lambda_handler(event, context):
         if 'TaskToken' in data:
             external_task_token = data['TaskToken']
         else:
-            external_task_token = ''
+            raise Exception("VAMS Workflow TaskToken not found in pipeline input. Make sure to register this pipeline in VAMS as needing a task token callback.")
 
         #Get input parameters if defined
         if 'inputParameters' in data:
@@ -74,6 +74,12 @@ def lambda_handler(event, context):
             input_metadata = data['inputMetadata']
         else:
             input_metadata = ''
+
+        #Get outputType if defined
+        if 'outputType' in data:
+            output_filetype = data['outputType']
+        else:
+            output_filetype = ''
 
         #Get Executing username 
         if 'executingUserName' in data:

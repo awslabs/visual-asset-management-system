@@ -274,6 +274,7 @@ def create_lambda_step(pipeline, input_s3_asset_file_uri, output_s3_asset_files_
             "outputS3AssetFilesPath.$": output_s3_asset_files_uri,
             "outputS3AssetPreviewPath.$": output_s3_asset_preview_uri,
             "outputS3AssetMetadataPath.$": output_s3_asset_metadata_uri,
+            "outputType": pipeline["outputType"],
             "inputOutputS3AssetAuxiliaryFilesPath.$": inputOutput_s3_assetAuxiliary_files_uri,
             "inputMetadata.$": "$.inputMetadata",
             "inputParameters": inputParameters,

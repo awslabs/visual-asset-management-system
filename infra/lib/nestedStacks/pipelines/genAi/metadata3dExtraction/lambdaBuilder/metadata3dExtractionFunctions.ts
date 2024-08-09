@@ -17,6 +17,7 @@ import * as Config from "../../../../../../config/config";
 import * as kms from "aws-cdk-lib/aws-kms";
 import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
+import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
 
 export function buildVamsExecuteMetadata3dExtractionPipelineFunction(
     scope: Construct,
@@ -59,6 +60,7 @@ export function buildVamsExecuteMetadata3dExtractionPipelineFunction(
     assetAuxiliaryBucket.grantRead(fun);
     openPipelineLambdaFunction.grantInvoke(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
 }
@@ -110,6 +112,7 @@ export function buildOpenPipelineFunction(
     assetAuxiliaryBucket.grantRead(fun);
     pipelineStateMachine.grantStartExecution(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
 }
@@ -204,6 +207,7 @@ export function buildMetadataGenerationPipelineFunction(
     assetBucket.grantReadWrite(fun);
     assetAuxiliaryBucket.grantReadWrite(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     // Add permissions to Lambda function to access Bedrock
     const bedrockPolicy = new iam.PolicyStatement({
@@ -291,6 +295,7 @@ export function buildPipelineEndFunction(
     assetBucket.grantRead(fun);
     assetAuxiliaryBucket.grantRead(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     const stateTaskPolicy = new iam.PolicyStatement({
         actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],

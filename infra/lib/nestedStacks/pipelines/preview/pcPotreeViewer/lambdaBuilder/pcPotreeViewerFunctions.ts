@@ -18,6 +18,7 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../../../../../helper/security";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ServiceHelper from "../../../../../helper/service-helper";
+import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
 
 export function buildSnsExecutePcPotreeViewerPipelineFunction(
     scope: Construct,
@@ -61,6 +62,7 @@ export function buildSnsExecutePcPotreeViewerPipelineFunction(
     assetAuxiliaryBucket.grantRead(fun);
     openPipelineLambdaFunction.grantInvoke(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
 }
@@ -106,6 +108,7 @@ export function buildVamsExecutePcPotreeViewerPipelineFunction(
     assetAuxiliaryBucket.grantRead(fun);
     openPipelineLambdaFunction.grantInvoke(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
 }
@@ -157,6 +160,7 @@ export function buildOpenPipelineFunction(
     assetAuxiliaryBucket.grantRead(fun);
     pipelineStateMachine.grantStartExecution(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
 }
@@ -252,6 +256,7 @@ export function buildPipelineEndFunction(
     assetBucket.grantRead(fun);
     assetAuxiliaryBucket.grantRead(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     const stateTaskPolicy = new iam.PolicyStatement({
         actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],

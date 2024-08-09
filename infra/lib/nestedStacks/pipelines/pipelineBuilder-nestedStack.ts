@@ -8,13 +8,15 @@ import { Construct } from "constructs";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as cdk from "aws-cdk-lib";
-import { NestedStack } from "aws-cdk-lib";
+import { Stack, NestedStack } from "aws-cdk-lib";
 import { SecurityGroupGatewayPipelineConstruct } from "./constructs/securitygroup-gateway-pipeline-construct";
 import { PcPotreeViewerBuilderNestedStack } from "./preview/pcPotreeViewer/pcPotreeViewerBuilder-nestedStack";
 import { Metadata3dExtractionNestedStack } from "./genAi/metadata3dExtraction/metadata3dExtractionBuilder-nestedStack";
+import { ConversionMeshTrimeshNestedStack } from "./conversion/trimesh/conversionMeshTrimeshBuilder-nestedStack";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as Config from "../../../config/config";
 import * as kms from "aws-cdk-lib/aws-kms";
+import { NagSuppressions } from "cdk-nag";
 
 export interface PipelineBuilderNestedStackProps extends cdk.StackProps {
     config: Config.Config;
@@ -31,26 +33,51 @@ export interface PipelineBuilderNestedStackProps extends cdk.StackProps {
 const defaultProps: Partial<PipelineBuilderNestedStackProps> = {};
 
 export class PipelineBuilderNestedStack extends NestedStack {
+
+    public pipelineVamsLambdaFunctionNames: string[] = [];
+
     constructor(parent: Construct, name: string, props: PipelineBuilderNestedStackProps) {
         super(parent, name);
 
         props = { ...defaultProps, ...props };
 
+        const pipelineNetwork = new SecurityGroupGatewayPipelineConstruct(
+            this,
+            "PipelineNetwork",
+            {
+                ...props,
+                config: props.config,
+                vpc: props.vpc,
+                vpceSecurityGroup: props.vpceSecurityGroup,
+                subnets: props.subnets,
+            }
+        );
+
+        ////Non-VPC Required Pipelines
+        //Note: May still use VPC if config set to put lambdas into VPC
+        if(props.config.app.pipelines.useConversionMeshTrimesh.enabled) {
+
+            const conversionMeshTrimeshPipelineNestedStack =
+            new ConversionMeshTrimeshNestedStack(this, "ConversionMeshTrimeshNestedStack", {
+                ...props,
+                config: props.config,
+                storageResources: props.storageResources,
+                vpc: props.vpc,
+                pipelineSubnets: pipelineNetwork.subnets.pipeline,
+                pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+            });
+
+            //Add function name to array for stack output
+            this.pipelineVamsLambdaFunctionNames.push(conversionMeshTrimeshPipelineNestedStack.pipelineVamsLambdaFunctionName)
+        }
+
+
+        ////VPC-Required Pipelines
         if (
             props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
             props.config.app.pipelines.useGenAiMetadata3dExtraction.enabled
         ) {
-            const pipelineNetwork = new SecurityGroupGatewayPipelineConstruct(
-                this,
-                "PipelineNetwork",
-                {
-                    ...props,
-                    config: props.config,
-                    vpc: props.vpc,
-                    vpceSecurityGroup: props.vpceSecurityGroup,
-                    subnets: props.subnets,
-                }
-            );
 
             //Create nested stack for each turned on pipeline
             if (props.config.app.pipelines.usePreviewPcPotreeViewer.enabled) {
@@ -64,6 +91,9 @@ export class PipelineBuilderNestedStack extends NestedStack {
                         pipelineSubnets: pipelineNetwork.subnets.pipeline,
                         pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
                     });
+
+                    //Add function name to array for stack output
+                    this.pipelineVamsLambdaFunctionNames.push(previewPcPotreeViewerPipelineNestedStack.pipelineVamsLambdaFunctionName)
             }
 
             if (props.config.app.pipelines.useGenAiMetadata3dExtraction.enabled) {
@@ -80,6 +110,9 @@ export class PipelineBuilderNestedStack extends NestedStack {
                         pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
                     }
                 );
+
+                //Add function name to array for stack output
+                this.pipelineVamsLambdaFunctionNames.push(genAiMetadata3dExtractionNestedStack.pipelineVamsLambdaFunctionName)
             }
         }
     }

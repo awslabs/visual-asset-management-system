@@ -353,6 +353,8 @@ def lambda_handler(event, context):
                 assets = []
                 if 'Contents' in objectsFound:
                     files = [x['Key'] for x in objectsFound['Contents'] if '/' != x['Key'][-1]]
+                    logger.info("Files present in pipeline output asset folder:")
+                    logger.info(files)
                     for file in files:
                         outputType = event['outputType']
                         pipelineName = event['pipeline']

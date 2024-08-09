@@ -9,12 +9,12 @@ import { storageResources } from "../../../storage/storageBuilder-nestedStack";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as cdk from "aws-cdk-lib";
 import { NestedStack } from "aws-cdk-lib";
-import { Metadata3dExtractionConstruct } from "./constructs/metadata3dExtraction-construct";
+import { ConversionMeshTrimeshConstruct } from "./constructs/conversionMeshTrimesh-construct";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as Config from "../../../../../config/config";
 import * as kms from "aws-cdk-lib/aws-kms";
 
-export interface Metadata3dExtractionNestedStackProps extends cdk.StackProps {
+export interface ConversionMeshTrimeshNestedStackProps extends cdk.StackProps {
     config: Config.Config;
     vpc: ec2.IVpc;
     pipelineSubnets: ec2.ISubnet[];
@@ -26,18 +26,18 @@ export interface Metadata3dExtractionNestedStackProps extends cdk.StackProps {
 /**
  * Default input properties
  */
-const defaultProps: Partial<Metadata3dExtractionNestedStackProps> = {};
+const defaultProps: Partial<ConversionMeshTrimeshNestedStackProps> = {};
 
-export class Metadata3dExtractionNestedStack extends NestedStack {
-    public pipelineVamsLambdaFunctionName: string 
-    constructor(parent: Construct, name: string, props: Metadata3dExtractionNestedStackProps) {
+export class ConversionMeshTrimeshNestedStack extends NestedStack {
+    public pipelineVamsLambdaFunctionName: string = ""
+    constructor(parent: Construct, name: string, props: ConversionMeshTrimeshNestedStackProps) {
         super(parent, name);
 
         props = { ...defaultProps, ...props };
 
-        const metadata3dExtractionConstructPipeline = new Metadata3dExtractionConstruct(
+        const conversionMeshTrimeshConstructPipeline = new ConversionMeshTrimeshConstruct(
             this,
-            "Metadata3dExtractionPipeline",
+            "ConversionMeshTrimeshPipeline",
             {
                 ...props,
                 config: props.config,
@@ -45,10 +45,10 @@ export class Metadata3dExtractionNestedStack extends NestedStack {
                 vpc: props.vpc,
                 pipelineSubnets: props.pipelineSubnets,
                 pipelineSecurityGroups: props.pipelineSecurityGroups,
-                lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                lambdaCommonBaseLayer: props.lambdaCommonBaseLayer
             }
         );
 
-        this.pipelineVamsLambdaFunctionName = metadata3dExtractionConstructPipeline.pipelineVamsLambdaFunctionName
+        this.pipelineVamsLambdaFunctionName = conversionMeshTrimeshConstructPipeline.pipelineVamsLambdaFunctionName
     }
 }

@@ -91,6 +91,13 @@ Exclusion\* notes:
 
 ## Install
 
+> **Warning**
+> This solution allows you to interact with third-party software libraries and generative AI (GAI) models from third party providers. Your use of the software libraries and third-party GAI models is governed by the terms provided to you by the third-party software library and GAI model providers when you acquired your license to use them (for example, their terms of service, license agreement, acceptable use policy, and privacy policy).
+
+> You are responsible for ensuring that your use of the third-party software libraries and GAI models comply with the terms governing them, and any laws, rules, regulations, policies, or standards that apply to you.
+
+> You are also responsible for making your own independent assessment of the third-party software libraries and GAI models that you use, including their outputs and how third-party software libraries GAI model providers use any data that might be transmitted to them based on your deployment configuration. AWS does not make any representations, warranties, or guarantees regarding the third-party software libraries and GAI models, which are “Third-Party Content” under your agreement with AWS. This solution is offered to you as “AWS Content” under your agreement with AWS.
+
 ### Requirements
 
 -   Python 3.10
@@ -241,31 +248,10 @@ To know more about how VAMS works and for instructions on configuring pipeline &
 
 Refer to the ![Writing your own pipelines section in the Developer Guide](./DeveloperGuide.md/#adding-your-own-pipelines).
 
-## Security
-
-VAMS is provided under a shared responsibility model. Any customization for customer use must go through an AppSec review to confirm the modifications don't introduce new vulnerabilities. Any team implementing takes on the responsibility of ensuring their implementation has gone through a proper security review.
-
-1. Run `yarn audit` in the `web` directory prior to deploying front-end to ensure all packages are up-to-date. Run `yarn audit fix` to mitigate critical security vulnerabilities.
-2. When deploying to a customer account, create an IAM Role for deployment that limits access to the least privilege necessary based on the customers internal security policies.
-
-### Security Considerations
-
-1. Run CDK bootstrap with the least-privileged AWS IAM role needed to deploy CDK and VAMS environment components.
-2. Currently VAMS UI web pages do not support HTTPOnly or Secure cookies for storing user authentication data.
-3. Content Security Policies (CSPs) are currently being applied, however when deploying from the Application Load Balancer (ALB) configuration option, the CSPs are sent via HTML body instead of through headers due to current AWS ALB header re-write limitations.
-4. Using the Cloudfront configuration option installs a AWS-managed TLS certrificate and generates a unique cloudfront domain URL. Consider modifying the cloudfront distrubution for your own TLS certificate and domain.
-5. Authentication Access, ID, and file presigned URL token timeouts are set to 1 hour by default per best pracitce security guidelines. Consult with your organizations' security team and adjust as nessesary to account for fixing any application timeout issues.
-
-Please review all considerations with your organizations' security teams to determine if mitigations are required.
-
 ## Uninstalling
 
 1. Run `cdk destroy --all` from infra folder.
 2. Some resources may not be deleted by CDK (e.g S3 buckets and DynamoDB tables, pipeline stacks). You may delete them using the AWS CLI or the AWS Console.
-
-## Contributing
-
-See the [CONTRIBUTING](./CONTRIBUTING.md) file for how to contribute.
 
 ## Costs
 
@@ -309,6 +295,33 @@ Below are the additional costs for including use-case specific pipeline features
 | Amazon Cloudwatch  | 1GB logs - VPC Flowlogs/API Gateway/Pipeline | $3.28             | $4.12           |
 | Amazon Bedrock     | 1M Tokens - Claude Sonnet                    | $18               | $NA             |
 | Amazon Rekognition | 10k Image Processing                         | $7.50             | $9              |
+
+## Security
+
+When you build systems on AWS infrastructure, security responsibilities are shared between you and AWS. This [shared responsibility](http://aws.amazon.com/compliance/shared-responsibility-model/) model reduces your operational burden because AWS operates, manages, and controls the components including the host operating system, virtualization layer, and physical security of the facilities in which the services operate. For more information about AWS security, visit [AWS Cloud Security](http://aws.amazon.com/security/).
+
+VAMS is provided under this shared responsibility model. Any customization for customer use must go through an AppSec review to confirm the modifications don't introduce new vulnerabilities. Any team implementing takes on the responsibility of ensuring their implementation has gone through a proper security review.
+
+1. Run `yarn audit` in the `web` directory prior to deploying front-end to ensure all packages are up-to-date. Run `yarn audit fix` to mitigate critical security vulnerabilities.
+2. When deploying to a customer account, create an IAM Role for deployment that limits access to the least privilege necessary based on the customers internal security policies.
+
+### Security Considerations
+
+1. Run CDK bootstrap with the least-privileged AWS IAM role needed to deploy CDK and VAMS environment components.
+2. Currently VAMS UI web pages do not support HTTPOnly or Secure cookies for storing user authentication data.
+3. Content Security Policies (CSPs) are currently being applied, however when deploying from the Application Load Balancer (ALB) configuration option, the CSPs are sent via HTML body instead of through headers due to current AWS ALB header re-write limitations.
+4. Using the Cloudfront configuration option installs a AWS-managed TLS certrificate and generates a unique cloudfront domain URL. Consider modifying the cloudfront distrubution for your own TLS certificate and domain.
+5. Authentication Access, ID, and file presigned URL token timeouts are set to 1 hour by default per best pracitce security guidelines. Consult with your organizations' security team and adjust as nessesary to account for fixing any application timeout issues.
+
+Please review all considerations with your organizations' security teams to determine if mitigations are required.
+
+## Content Security Legal Disclaimer
+
+The sample code; software libraries; command line tools; proofs of concept; templates; or other related technology (including any of the foregoing that are provided by our personnel) is provided to you as AWS Content under the AWS Customer Agreement, or the relevant written agreement between you and AWS (whichever applies). You should not use this AWS Content in your production accounts, or on production or other critical data. You are responsible for testing, securing, and optimizing the AWS Content, such as sample code, as appropriate for production grade use based on your specific quality control practices and standards. Deploying AWS Content may incur AWS charges for creating or using AWS chargeable resources, such as running Amazon EC2 instances or using Amazon S3 storage.
+
+## Contributing
+
+See the [CONTRIBUTING](./CONTRIBUTING.md) file for how to contribute.
 
 ## License
 

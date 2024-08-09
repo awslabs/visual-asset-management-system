@@ -60,6 +60,8 @@ const defaultProps: Partial<Metadata3dExtractionConstructProps> = {
  * On redeployment, will automatically invalidate the CloudFront distribution cache
  */
 export class Metadata3dExtractionConstruct extends NestedStack {
+    public pipelineVamsLambdaFunctionName: string 
+
     constructor(parent: Construct, name: string, props: Metadata3dExtractionConstructProps) {
         super(parent, name);
 
@@ -68,9 +70,6 @@ export class Metadata3dExtractionConstruct extends NestedStack {
         const region = Stack.of(this).region;
         const account = Stack.of(this).account;
 
-        const vpcSubnets = props.vpc.selectSubnets({
-            subnets: props.pipelineSubnets,
-        });
 
         //Lambda layer resource
         //Deploy Metadata Generation Lambda Layer
@@ -416,35 +415,11 @@ export class Metadata3dExtractionConstruct extends NestedStack {
                 "The Metadata 3D Extraction Lambda Function Name to use in a VAMS Pipeline",
             exportName: "Metadata3dExtractionLambdaExecutionFunctionName",
         });
+        this.pipelineVamsLambdaFunctionName = metadata3dExtractionPipelineExecuteFunction.functionName
 
         //Nag Supressions
         const reason =
             "Intended Solution. The pipeline lambda functions need appropriate access to S3.";
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: reason,
-                    appliesTo: [
-                        {
-                            regex: "/Action::s3:.*/g",
-                        },
-                    ],
-                },
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: reason,
-                    appliesTo: [
-                        {
-                            // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "/^Resource::.*/g",
-                        },
-                    ],
-                },
-            ],
-            true
-        );
 
         NagSuppressions.addResourceSuppressions(
             this,

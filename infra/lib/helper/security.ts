@@ -14,33 +14,6 @@ import { Service } from "../helper/service-helper";
 import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 
-/*
-
-    from https://aws.amazon.com/premiumsupport/knowledge-center/s3-bucket-policy-for-config-rule/
-
-    {
-      "Id": "ExamplePolicy",
-      "Version": "2012-10-17",
-      "Statement": [
-        {
-          "Sid": "AllowSSLRequestsOnly",
-          "Action": "s3:*",
-          "Effect": "Deny",
-          "Resource": [
-            `arn:${Service.Partition()}:s3:::DOC-EXAMPLE-BUCKET`,
-            `arn:${Service.Partition()}:s3:::DOC-EXAMPLE-BUCKET/*`
-          ],
-          "Condition": {
-            "Bool": {
-              "aws:SecureTransport": "false"
-            }
-          },
-          "Principal": "*"
-        }
-      ]
-    }
-
-    */
 export function requireTLSAndAdditionalPolicyAddToResourcePolicy(
     bucket: s3.Bucket,
     config: Config.Config

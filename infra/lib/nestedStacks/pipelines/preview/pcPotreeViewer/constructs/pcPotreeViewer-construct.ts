@@ -59,6 +59,9 @@ const defaultProps: Partial<PcPotreeViewerConstructProps> = {
  * On redeployment, will automatically invalidate the CloudFront distribution cache
  */
 export class PcPotreeViewerConstruct extends NestedStack {
+
+    public pipelineVamsLambdaFunctionName: string 
+
     constructor(parent: Construct, name: string, props: PcPotreeViewerConstructProps) {
         super(parent, name);
 
@@ -67,9 +70,6 @@ export class PcPotreeViewerConstruct extends NestedStack {
         const region = Stack.of(this).region;
         const account = Stack.of(this).account;
 
-        const vpcSubnets = props.vpc.selectSubnets({
-            subnets: props.pipelineSubnets,
-        });
 
         /**
          * Batch Resources
@@ -430,35 +430,11 @@ export class PcPotreeViewerConstruct extends NestedStack {
                 "The Point Cloud Potree Viewer Pipeline Lambda Function Name to use in a VAMS Pipeline",
             exportName: "PcPotreeViewerLambdaExecutionFunctionName",
         });
+        this.pipelineVamsLambdaFunctionName = PcPotreeViewerPipelineVamsExecuteFunction.functionName
 
         //Nag Supressions
         const reason =
             "Intended Solution. The pipeline lambda functions need appropriate access to S3.";
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: reason,
-                    appliesTo: [
-                        {
-                            regex: "/Action::s3:.*/g",
-                        },
-                    ],
-                },
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: reason,
-                    appliesTo: [
-                        {
-                            // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "/^Resource::.*/g",
-                        },
-                    ],
-                },
-            ],
-            true
-        );
 
         NagSuppressions.addResourceSuppressions(
             this,

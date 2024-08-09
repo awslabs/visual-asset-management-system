@@ -119,6 +119,10 @@ export function getConfig(app: cdk.App): Config {
         config.app.authProvider.useCognito.useUserPasswordAuthFlow = false;
     }
 
+    if(config.app.pipelines.useConversionMeshTrimesh.enabled == undefined) {
+        config.app.pipelines.useConversionMeshTrimesh.enabled = true;
+    }
+
     //Load S3 Policy statements JSON
     const s3AdditionalBucketPolicyFile: string = readFileSync(
         join(__dirname, "policy", "s3AdditionalBucketPolicyConfig.json"),
@@ -372,6 +376,9 @@ export interface ConfigPublic {
             optionalHostedZoneId: string;
         };
         pipelines: {
+            useConversionMeshTrimesh: {
+                enabled: boolean;
+            };
             usePreviewPcPotreeViewer: {
                 enabled: boolean;
             };

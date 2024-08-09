@@ -83,7 +83,7 @@ def get_Assets(databaseId, assetId):
     return items
 
 
-def get_Asset(databaseId, assetId, key, version):
+def get_File(databaseId, assetId, key, version):
     items = get_Assets(databaseId, assetId)
     if not items and len(items) == 0:
         return "Error: Asset not found or not authorized to view the assets"
@@ -206,7 +206,7 @@ def lambda_handler(event, context):
                 version = event['body']['version']
                 logger.info("Version Provided: " + version)
 
-            url = get_Asset(pathParameters['databaseId'], pathParameters['assetId'], key, version)
+            url = get_File(pathParameters['databaseId'], pathParameters['assetId'], key, version)
             response['statusCode'] = 200
 
             if url == "Error: Asset not found or not authorized to view the assets":

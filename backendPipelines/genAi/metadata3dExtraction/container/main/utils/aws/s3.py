@@ -191,7 +191,7 @@ def delete_all_path_contents(bucket_name: str, pathKey: str):
         if 'Contents' in response:
             # map object ket from object list for multi object delete request
             object_keys = map_object_keys(response["Contents"])
-            print(f"Deleting {len(object_keys)} Other Objects")
+            logger.info(f"Deleting {len(object_keys)} Other Objects")
 
             # delete objects from bucket path
             client.delete_objects(

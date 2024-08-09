@@ -29,6 +29,7 @@ export interface PcPotreeViewerBuilderNestedStackProps extends cdk.StackProps {
 const defaultProps: Partial<PcPotreeViewerBuilderNestedStackProps> = {};
 
 export class PcPotreeViewerBuilderNestedStack extends NestedStack {
+    public pipelineVamsLambdaFunctionName: string 
     constructor(parent: Construct, name: string, props: PcPotreeViewerBuilderNestedStackProps) {
         super(parent, name);
 
@@ -43,5 +44,7 @@ export class PcPotreeViewerBuilderNestedStack extends NestedStack {
             pipelineSecurityGroups: props.pipelineSecurityGroups,
             lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
         });
+
+        this.pipelineVamsLambdaFunctionName = pcPotreeViewerPipeline.pipelineVamsLambdaFunctionName
     }
 }
