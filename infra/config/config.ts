@@ -111,16 +111,16 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.usePreviewPcPotreeViewer.enabled = false;
     }
 
-    if (config.app.pipelines.useGenAiMetadata3dExtraction.enabled == undefined) {
-        config.app.pipelines.useGenAiMetadata3dExtraction.enabled = false;
+    if (config.app.pipelines.useGenAiMetadata3dLabeling.enabled == undefined) {
+        config.app.pipelines.useGenAiMetadata3dLabeling.enabled = false;
     }
 
     if (config.app.authProvider.useCognito.useUserPasswordAuthFlow == undefined) {
         config.app.authProvider.useCognito.useUserPasswordAuthFlow = false;
     }
 
-    if(config.app.pipelines.useConversionMeshTrimesh.enabled == undefined) {
-        config.app.pipelines.useConversionMeshTrimesh.enabled = true;
+    if(config.app.pipelines.useConversion3dBasic.enabled == undefined) {
+        config.app.pipelines.useConversion3dBasic.enabled = true;
     }
 
     //Load S3 Policy statements JSON
@@ -162,12 +162,12 @@ export function getConfig(app: cdk.App): Config {
     if (
         config.app.useAlb.enabled ||
         config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
-        config.app.pipelines.useGenAiMetadata3dExtraction.enabled ||
+        config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
         config.app.openSearch.useProvisioned.enabled
     ) {
         if (!config.app.useGlobalVpc.enabled) {
             console.warn(
-                "Configuration Warning: Due to ALB, Data Pipelines, or OpenSearch Provisioned being enabled, auto-enabling Use Global VPC flag"
+                "Configuration Warning: Due to ALB, Use-Case Pipelines, or OpenSearch Provisioned being enabled, auto-enabling Use Global VPC flag"
             );
         }
 
@@ -376,13 +376,13 @@ export interface ConfigPublic {
             optionalHostedZoneId: string;
         };
         pipelines: {
-            useConversionMeshTrimesh: {
+            useConversion3dBasic: {
                 enabled: boolean;
             };
             usePreviewPcPotreeViewer: {
                 enabled: boolean;
             };
-            useGenAiMetadata3dExtraction: {
+            useGenAiMetadata3dLabeling: {
                 enabled: boolean;
             };
         };

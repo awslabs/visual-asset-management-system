@@ -108,7 +108,7 @@ Python Libraries
 | ------- | ------- | ---------------------------- | ---------------------- |
 | pillow  | 10.3.0  | GENAI 3D METADATA GENERATION | HPND--MIT/3-Clause-BSD |
 | NumPy   | latest  | MULTIPLE                     | BSD-3-Clause           |
-| TriMesh | latest  | CONVERSION MESH TRIMESH      | MIT License            |
+| TriMesh | latest  | CONVERSION 3D BASIC          | MIT License            |
 
 Other Libraries (Use-case Pipelines)
 

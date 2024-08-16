@@ -49,8 +49,8 @@ Some configuration options can be overriden at time of deployment with either en
 -   `app.useAlb.optionalHostedZoneID` | default: NULL | #Optional route53 zone host ID to automatically create an alias for the `domainHost` specified to the created ALB.
 
 -   `app.pipelines.usePreviewPcPotreeViewer.enabled` | default: false | #Feature to create a point cloud potree viewer processing pipeline to support point cloud file type viewing within the VAMS web UI. This will enable the global VPC option and all pipeline components will be put behind the VPC. NOTICE: This feature uses a third-party open-source library with a GPL license, refer to your legal team before enabling.
--   `app.pipelines.useGenAiMetadata3dExtraction.enabled` | default: false | #Feature to create a generative AI metadata extraction pipeline for glb, fbx, and obj files. This will enable the global VPC option and all pipeline components will be put behind the VPC.
--   `app.pipelines.useConversionMeshTrimesh.enabled` | default: true | #Feature to create a file converter pipeline between STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, and XYZ file format types. This pipeline does not need a VPC to operate.
+-   `app.pipelines.useGenAiMetadata3dLabeling.enabled` | default: false | #Feature to create a generative AI metadata labeling pipeline for glb, fbx, and obj files. This will enable the global VPC option and all pipeline components will be put behind the VPC.
+-   `app.pipelines.useConversion3dBasic.enabled` | default: true | #Feature to create a file converter pipeline between STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, and XYZ file format types. This pipeline does not need a VPC to operate.
 
 -   `app.authProvider.credTokenTimeoutSeconds` | default: 3600 | #Used to specify authentication token timeouts for access, ID, and presigned upload/download URLs. Adjust this if you have issues with upload/download timeouts.
 -   `app.authProvider.useCognito.enabled` | default: true | #Feature to use Cognito Use Pools should be used for VAMS user management and authentication. At least 1 authProvider must be enabled in the configuration.

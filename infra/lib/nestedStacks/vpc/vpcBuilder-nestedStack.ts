@@ -371,7 +371,7 @@ export class VPCBuilderNestedStack extends NestedStack {
             //Pipeline-Only Required Endpoints
             if (
                 props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
-                props.config.app.pipelines.useGenAiMetadata3dExtraction.enabled
+                props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled
             ) {
                 // Create VPC endpoint for Batch
                 new ec2.InterfaceVpcEndpoint(this, "BatchEndpoint", {
@@ -437,7 +437,7 @@ export class VPCBuilderNestedStack extends NestedStack {
             //All Lambda and Metadata Generation Pipeline Required Endpoints
             if (
                 props.config.app.useGlobalVpc.useForAllLambdas &&
-                props.config.app.pipelines.useGenAiMetadata3dExtraction.enabled
+                props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled
             ) {
                 // Create VPC endpoint for Bedrock Runtime
                 new ec2.InterfaceVpcEndpoint(this, "BedrockEndpoint", {

@@ -11,8 +11,8 @@ import * as cdk from "aws-cdk-lib";
 import { Stack, NestedStack } from "aws-cdk-lib";
 import { SecurityGroupGatewayPipelineConstruct } from "./constructs/securitygroup-gateway-pipeline-construct";
 import { PcPotreeViewerBuilderNestedStack } from "./preview/pcPotreeViewer/pcPotreeViewerBuilder-nestedStack";
-import { Metadata3dExtractionNestedStack } from "./genAi/metadata3dExtraction/metadata3dExtractionBuilder-nestedStack";
-import { ConversionMeshTrimeshNestedStack } from "./conversion/trimesh/conversionMeshTrimeshBuilder-nestedStack";
+import { Metadata3dLabelingNestedStack } from "./genAi/metadata3dLabeling/metadata3dLabelingBuilder-nestedStack";
+import { Conversion3dBasicNestedStack } from "./conversion/3dBasic/conversion3dBasicBuilder-nestedStack";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as Config from "../../../config/config";
 import * as kms from "aws-cdk-lib/aws-kms";
@@ -55,10 +55,10 @@ export class PipelineBuilderNestedStack extends NestedStack {
 
         ////Non-VPC Required Pipelines
         //Note: May still use VPC if config set to put lambdas into VPC
-        if(props.config.app.pipelines.useConversionMeshTrimesh.enabled) {
+        if(props.config.app.pipelines.useConversion3dBasic.enabled) {
 
-            const conversionMeshTrimeshPipelineNestedStack =
-            new ConversionMeshTrimeshNestedStack(this, "ConversionMeshTrimeshNestedStack", {
+            const conversion3dBasicPipelineNestedStack =
+            new Conversion3dBasicNestedStack(this, "Conversion3dBasicNestedStack", {
                 ...props,
                 config: props.config,
                 storageResources: props.storageResources,
@@ -69,14 +69,14 @@ export class PipelineBuilderNestedStack extends NestedStack {
             });
 
             //Add function name to array for stack output
-            this.pipelineVamsLambdaFunctionNames.push(conversionMeshTrimeshPipelineNestedStack.pipelineVamsLambdaFunctionName)
+            this.pipelineVamsLambdaFunctionNames.push(conversion3dBasicPipelineNestedStack.pipelineVamsLambdaFunctionName)
         }
 
 
         ////VPC-Required Pipelines
         if (
             props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
-            props.config.app.pipelines.useGenAiMetadata3dExtraction.enabled
+            props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled
         ) {
 
             //Create nested stack for each turned on pipeline
@@ -96,10 +96,10 @@ export class PipelineBuilderNestedStack extends NestedStack {
                     this.pipelineVamsLambdaFunctionNames.push(previewPcPotreeViewerPipelineNestedStack.pipelineVamsLambdaFunctionName)
             }
 
-            if (props.config.app.pipelines.useGenAiMetadata3dExtraction.enabled) {
-                const genAiMetadata3dExtractionNestedStack = new Metadata3dExtractionNestedStack(
+            if (props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled) {
+                const genAiMetadata3dLabelingNestedStack = new Metadata3dLabelingNestedStack(
                     this,
-                    "GenAiMetadata3dExtractionNestedStack",
+                    "GenAiMetadata3dLabelingNestedStack",
                     {
                         ...props,
                         config: props.config,
@@ -112,7 +112,7 @@ export class PipelineBuilderNestedStack extends NestedStack {
                 );
 
                 //Add function name to array for stack output
-                this.pipelineVamsLambdaFunctionNames.push(genAiMetadata3dExtractionNestedStack.pipelineVamsLambdaFunctionName)
+                this.pipelineVamsLambdaFunctionNames.push(genAiMetadata3dLabelingNestedStack.pipelineVamsLambdaFunctionName)
             }
         }
     }

@@ -51,13 +51,13 @@
             "optionalHostedZoneId": null
         },
         "pipelines": {
-            "useConversionMeshTrimesh": {
+            "useConversion3dBasic": {
                 "enabled": false
             },
             "usePreviewPcPotreeViewer": {
                 "enabled": false
             },
-            "useGenAiMetadata3dExtraction": {
+            "useGenAiMetadata3dLabeling": {
                 "enabled": false
             }
         },

@@ -374,9 +374,9 @@ Pipeline architectures can either be synchronous or asynchonous. If asynchronous
 
 See the [NOTICE file](./NOTICE.md) for specific third-party license information regarding each of these pipelines.
 
-### Standard Type - Trimesh Mesh Converter Pipeline (Synchronous)
+### Standard Type - 3D Basic Converter Pipeline (Synchronous)
 
-The Trimesh Mesh Converter Pipeline is used to convert between various 3D mesh file types.
+The 3dBasic Converter Pipeline is used to convert between various 3D mesh file types.
 
 If you wish to trigger this pipelines additionally/manually through VAMS pipeline, you can setup a new VAMS pipeline using the table below. You will need to lookup the lambda function name in the AWS console based on the base deployment name listed.
 
@@ -388,7 +388,7 @@ NOTE: Pipeline must be registered in VAMS WITHOUT the option of "Wait for Callba
 
 | Input File Types Supported                                       | Base Lambda Function Name    |
 | :--------------------------------------------------------------- | :--------------------------- |
-| STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ (3D Meshes) | vamsExecuteTrimeshConversion |
+| STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ (3D Meshes) | vamsExecute3dBasicConversion |
 
 ### Preview Type - PotreeViewer Point Cloud Visualizer Pipeline (Asynchronous)
 
@@ -408,11 +408,11 @@ NOTE: If pipeline registered separately in VAMS Pipelines, it must be registered
 | :-------------------------------- | :--------------------------------------- | --------------------------------------- |
 | LAS, LAZ, E57, PLY (Point Clouds) | vamsExecutePreviewPcPotreeViewerPipeline | snsExecutePrviewPcPotreeViewerPipeline  |
 
-### Standard Type - GenerativeAI 3D Metadata Extraction Pipeline (Asynchronous)
+### Standard Type - GenerativeAI 3D Metadata Labeling Pipeline (Asynchronous)
 
 > Notice: This use-case pipeline uses a open-source library that is GPL licensed. Please refer to the ![NOTICE File](/NOTICE.md) and review with your organizations legal team before enabling use.
 
-The GenerativeAI 3D Metadata Extraction Pipeline is used to generate 2D renders and metadata JSON labeling information for 3D mesh asset files. This is useful to auto-label asset data as it is ingested.
+The GenerativeAI 3D Metadata labeling Pipeline is used to generate 2D renders and metadata JSON labeling information for 3D mesh asset files. This is useful to auto-label asset data as it is ingested.
 
 If you wish to trigger this pipelines additionally/manually through VAMS pipeline, you can setup a new VAMS pipeline using the table below. You will need to lookup the lambda function name in the AWS console based on the base deployment name listed.
 
@@ -431,11 +431,11 @@ The following inputParameters are supported:
 
 NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback with the Task Token"
 
-![GenAI Metadata 3D Extraction Pipeline Architecture](/diagrams/pipeline_usecase_genAiMetadata3dExtraction.png)
+![GenAI Metadata 3D Labeling Pipeline Architecture](/diagrams/pipeline_usecase_genAiMetadata3dLabeling.png)
 
-| Input File Types Supported                              | Base Lambda Function Name                    |
-| :------------------------------------------------------ | :------------------------------------------- |
-| OBJ, GLB/GLTF, FBX, ABC, DAE, PLY, STL, USD (3D Meshes) | vamsExecuteGenAiMetadata3dExtractionPipeline |
+| Input File Types Supported                              | Base Lambda Function Name                  |
+| :------------------------------------------------------ | :----------------------------------------- |
+| OBJ, GLB/GLTF, FBX, ABC, DAE, PLY, STL, USD (3D Meshes) | vamsExecuteGenAiMetadata3dLabelingPipeline |
 
 # Testing API
 
