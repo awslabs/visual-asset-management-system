@@ -533,6 +533,12 @@ def handle_s3_event_record(record,
                            get_asset_fields_fn=get_asset_fields,
                            s3index_fn=AOSIndexS3Objects.from_env,
                            sleep_fn=time.sleep):
+    
+    #Ignore pipeline and preview files from assets
+    if record.get("s3", {}).get("object", {}).get("key", "").startswith("pipeline") or \
+            record.get("s3", {}).get("object", {}).get("key", "").startswith("preview"):
+        logger.info("Ignoring pipeline and preview files from assets from indexing")
+        return
 
     handle_s3_event_record_removed(record, s3, s3index_fn)
 

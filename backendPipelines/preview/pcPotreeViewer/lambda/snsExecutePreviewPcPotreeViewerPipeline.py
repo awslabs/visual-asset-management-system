@@ -113,6 +113,11 @@ def lambda_handler(event, context):
                 logger.info(inputS3AssetFilePath)
                 logger.info(inputOutputS3AssetAuxiliaryFilesPath)
 
+                #Ignore pipeline and preview files from assets
+                if s3_source_key.startswith("pipeline") or s3_source_key.startswith("preview"):
+                    logger.info("Ignoring pipeline and preview files from assets for this use-case pipeline run")
+                    continue
+
                 # Starts excution of pipeline 
                 execute_pipeline(inputS3AssetFilePath, '', ''
                                                     , '', inputOutputS3AssetAuxiliaryFilesPath
