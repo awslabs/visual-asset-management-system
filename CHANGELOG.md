@@ -45,6 +45,9 @@ Due to DynamoDB table structure changes, a A/B Stack deployment with migration s
 -   Fixed pipeline execution to properly account for asset file primary key names that contain spaces. Previously, could cause pipelines to error on execution.
 -   **Web** The asset file viewer now appropriately shows multiple files that are uploaded to the asset
 -   **Web** Hid the `View %AssetName% Metadata` button for top-level root folder on asset details page file manager that led to a blank page. The metadata for this is already on the asset details page.
+-   Fixed GovCloud deployments where v2 Lambda PreTokenGen for Cognito are not supported, reverted to v1 lambdas that only support Access Tokens (instead of both ID and Access token use for VAMS authorizers)
+-   Fixed GovCloud deployments for erronouesly including a GeoServices reference that is not supported in GovCloud partition
+-   Fixed KMS key IAM policy principals (for non-externally imported key setting) to include OpenSearch when using OpenSearch deployment configurations
 
 ### Chores
 

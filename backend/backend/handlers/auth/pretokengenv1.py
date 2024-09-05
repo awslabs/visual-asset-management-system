@@ -1,4 +1,4 @@
-#  Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#  Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -88,24 +88,13 @@ def lambda_handler(event, context):
     result.update(event)
     result.update({
         "response": {
-            "claimsAndScopeOverrideDetails": {
-                "idTokenGeneration": {
-                    "claimsToAddOrOverride": {
-                        "vams:externalAttributes": json.dumps([]), #TODO: Future use to add external system user attributes to claims that can be incorporated into ABAC system constraints
-                        "vams:roles": json.dumps(roles),
-                        "vams:tokens": (
-                            json.dumps([event['userName']])
-                        )
-                    }
-                },
-                "accessTokenGeneration": {
-                    "claimsToAddOrOverride": {
-                        "vams:externalAttributes": json.dumps([]), #TODO: Future use to add external system user attributes to claims that can be incorporated into ABAC system constraints
-                        "vams:roles": json.dumps(roles),
-                        "vams:tokens": (
-                            json.dumps([event['userName']])
-                        )
-                    }
+            "claimsOverrideDetails": {
+                "claimsToAddOrOverride": {
+                    "vams:externalAttributes": json.dumps([]), #TODO: Future use to add external system user attributes to claims that can be incorporated into ABAC system constraints
+                    "vams:roles": json.dumps(roles),
+                    "vams:tokens": (
+                        json.dumps([event['userName']])
+                    )
                 }
             },
         }

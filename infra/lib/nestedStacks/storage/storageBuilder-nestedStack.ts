@@ -153,7 +153,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
 
             //Add policy
             kmsEncryptionKey.addToResourcePolicy(
-                kmsKeyPolicyStatementPrincipalGenerator(kmsEncryptionKey)
+                kmsKeyPolicyStatementPrincipalGenerator(config, kmsEncryptionKey)
             );
         }
     }

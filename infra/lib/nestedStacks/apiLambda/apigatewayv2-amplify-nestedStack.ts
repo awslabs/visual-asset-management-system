@@ -110,7 +110,8 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
         const cspPolicy = generateContentSecurityPolicy(
             props.storageResources,
             cognitoDomain,
-            apiEndpoint
+            apiEndpoint,
+            props.config
         );
         this.csp = cspPolicy;
 
