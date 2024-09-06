@@ -48,6 +48,7 @@ Due to DynamoDB table structure changes, a A/B Stack deployment with migration s
 -   Fixed GovCloud deployments where v2 Lambda PreTokenGen for Cognito are not supported, reverted to v1 lambdas that only support Access Tokens (instead of both ID and Access token use for VAMS authorizers)
 -   Fixed GovCloud deployments for erronouesly including a GeoServices reference that is not supported in GovCloud partition
 -   Fixed KMS key IAM policy principals (for non-externally imported key setting) to include OpenSearch when using OpenSearch deployment configurations
+-   Added logic to look at other claims data if "vams:\*" claims are not in the original JWT token. This is in prepartion for external IDP support and some edge case setups customers have.
 
 ### Chores
 
