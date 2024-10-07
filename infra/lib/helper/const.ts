@@ -1725,7 +1725,7 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
         },
         "aws-us-gov": {
             arn: "arn:aws-us-gov:cognito-identity:{region}:{account-id}:{resource-id}",
-            principal: "cognito-identity.amazonaws.com",
+            principal: "cognito-identity-us-gov.amazonaws.com",
             hostname: "cognito-identity.{region}.amazonaws.com",
             fipsHostname: "cognito-identity-fips.{region}.amazonaws.com",
         },

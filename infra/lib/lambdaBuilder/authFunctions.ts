@@ -44,10 +44,10 @@ export function buildAuthFunctions(
                 cognitoIdentityPrincipal,
                 {
                     StringEquals: {
-                        "cognito-identity.amazonaws.com:aud": authResources.cognito.identityPoolId,
+                        [`${cognitoIdentityPrincipal}:aud`]: authResources.cognito.identityPoolId,
                     },
                     "ForAnyValue:StringLike": {
-                        "cognito-identity.amazonaws.com:amr": "authenticated",
+                        [`${cognitoIdentityPrincipal}:amr`]: "authenticated",
                     },
                 },
                 "sts:AssumeRoleWithWebIdentity"

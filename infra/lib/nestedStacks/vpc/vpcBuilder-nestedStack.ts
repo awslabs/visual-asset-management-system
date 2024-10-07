@@ -460,7 +460,7 @@ export class VPCBuilderNestedStack extends NestedStack {
 
             //All Lambda and OpenSearch Provisioned Required Endpoints
             if (
-                props.config.app.useGlobalVpc.useForAllLambdas &&
+                props.config.app.useGlobalVpc.useForAllLambdas ||
                 props.config.app.openSearch.useProvisioned.enabled
             ) {
                 // Create VPC endpoint for SSM

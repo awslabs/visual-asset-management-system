@@ -117,18 +117,18 @@ def lambda_handler(event, context):
 
                 # generate a policy scoped to the assetId as the s3 key prefix
                 # to be passed to assume_role
+                #Note: Shortened actions due to bumping up against PackedPolicySize limit when enabling KMS
                 policy = {
                     "Version": "2012-10-17",
                     "Statement": [{
-                        "Sid": "Stmt1",
                         "Effect": "Allow",
                         # set of actions needed to do put object and multipart upload
                         "Action": [
-                            "s3:PutObject",
+                            "s3:PutO*",
                             "s3:List*",
-                            "s3:CreateMultipartUpload",
-                            "s3:AbortMultipartUpload",
-                            "s3:ListMultipartUploadParts",
+                            "s3:CreateM*",
+                            "s3:AbortM*",
+                            "s3:ListM*",
                         ],
                         "Resource": [
                             "arn:"+AWS_PARTITION+":s3:::" +
@@ -137,11 +137,10 @@ def lambda_handler(event, context):
                             os.environ['S3_BUCKET'] + "/previews/" + assetId + "/*"
                         ]
                     }, {
-                        "Sid": "Stmt2",
                         "Effect": "Allow",
                         # set of actions needed to do get object and multipart upload
                         "Action": [
-                            "s3:ListBucket",
+                            "s3:ListB*",
                         ],
                         "Resource": [
                             "arn:"+AWS_PARTITION+":s3:::" + os.environ['S3_BUCKET']
@@ -152,17 +151,10 @@ def lambda_handler(event, context):
                 #If we have a KMS ARN, add statement policy to allow KMS actions
                 if KMS_KEY_ARN != "":
                     policy["Statement"].append({
-                        "Sid": "Stmt3",
                         "Effect": "Allow",
                         "Action": [
-                            "kms:Decrypt",
-                            "kms:DescribeKey",
-                            "kms:Encrypt",
-                            "kms:GenerateDataKey*",
-                            "kms:ReEncrypt*",
-                            "kms:ListKeys",
-                            "kms:CreateGrant",
-                            "kms:ListAliases",
+                            "kms:GenerateD*",
+                            "kms:D*"
                         ],
                         "Resource": [KMS_KEY_ARN]
                     })
