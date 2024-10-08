@@ -13,6 +13,7 @@ import { Construct } from "constructs";
 import { IHttpRouteAuthorizer } from "@aws-cdk/aws-apigatewayv2-alpha";
 import { Service } from "../../../helper/service-helper";
 import { authResources } from "../../auth/authBuilder-nestedStack";
+import * as Config from "../../../../config/config";
 
 /**
  * Additional configuration needed to use federated identities
@@ -61,10 +62,21 @@ interface InlineLambdaProps {
      * Additional configuration needed for federated auth
      */
     federatedConfig?: AmplifyConfigFederatedIdentityProps;
+
     /**
-     * External OATH IDP URL Configuration
+     * External OAUTH IDP URL Configuration
      */
-    externalOathIdpURL?: string;
+    externalOAuthIdpURL?: string;
+
+    /**
+     * External OAUTH IDP ClientID Configuration
+     */
+    externalOAuthIdpClientId?: string;
+
+    // /**
+    //  * External OAUTH IDP ClientSecret Configuration
+    //  */
+    // externalOAuthIdpClientSecret?: string;
 
     /**
      * Name of deployed stack
@@ -78,6 +90,12 @@ interface InlineLambdaProps {
 }
 
 export interface AmplifyConfigLambdaConstructProps extends cdk.StackProps {
+    
+     /**
+     * Main Configuration Provider
+     */
+    config: Config.Config,
+    
     /**
      * The AuthResources Provider
      */
@@ -98,10 +116,6 @@ export interface AmplifyConfigLambdaConstructProps extends cdk.StackProps {
      * Additional configuration needed for federated auth
      */
     federatedConfig?: AmplifyConfigFederatedIdentityProps;
-    /**
-     * External OATH IDP URL Configuration
-     */
-    externalOathIdpURL?: string;
 
     /**
      * Content Security Policy to apply (generally for ALB deployment where CSP is not injected)
@@ -126,12 +140,14 @@ export class AmplifyConfigLambdaConstruct extends Construct {
             code: lambda.Code.fromInline(
                 this.getJavascriptInlineFunction({
                     region: props.region,
-                    userPoolId: props.authResources.cognito.userPoolId,
-                    appClientId: props.authResources.cognito.webClientId,
-                    identityPoolId: props.authResources.cognito.identityPoolId,
+                    userPoolId: props.config.app.authProvider.useCognito.enabled? props.authResources.cognito.userPoolId : "undefined",
+                    appClientId: props.config.app.authProvider.useCognito.enabled? props.authResources.cognito.webClientId : "undefined",
+                    identityPoolId: props.config.app.authProvider.useCognito.enabled? props.authResources.cognito.identityPoolId : "undefined",
                     api: props.apiUrl || "us-east-1",
                     federatedConfig: props.federatedConfig,
-                    externalOathIdpURL: props.externalOathIdpURL || "undefined",
+                    externalOAuthIdpURL: props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl || "undefined",
+                    externalOAuthIdpClientId: props.config.app.authProvider.useExternalOAuthIdp.idpAuthClientId || "undefined",
+                    //externalOAuthIdpClientSecret: props.config.app.authProvider.useExternalOAuthIdp.idpAuthClientSecret || "undefined",
                     stackName: props.stackName!,
                     contentSecurityPolicy: props.contentSecurityPolicy || "",
                 })

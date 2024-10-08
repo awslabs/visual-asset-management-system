@@ -92,9 +92,7 @@ export class AuthBuilderNestedStack extends NestedStack {
             };
         } else {
             //TODO - Other Authentications Setup
-            throw new Error(
-                "Unsupported Configuration: An currently unsupported authentication method chosen"
-            );
+
         }
 
         //Setup Custom Resource Role Policy

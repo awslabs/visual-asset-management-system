@@ -123,6 +123,10 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useConversion3dBasic.enabled = true;
     }
 
+    if(config.app.authProvider.useExternalOAuthIdp.enabled == undefined) {
+        config.app.authProvider.useExternalOAuthIdp.enabled = false;
+    }
+
     //Load S3 Policy statements JSON
     const s3AdditionalBucketPolicyFile: string = readFileSync(
         join(__dirname, "policy", "s3AdditionalBucketPolicyConfig.json"),
@@ -173,6 +177,7 @@ export function getConfig(app: cdk.App): Config {
 
         config.app.useGlobalVpc.enabled = true;
     }
+
 
     //Any configuration warnings/errors checks
     if (
@@ -290,7 +295,7 @@ export function getConfig(app: cdk.App): Config {
     //Check when implementing auth providers
     if (
         config.app.authProvider.useCognito.enabled &&
-        config.app.authProvider.useExternalOathIdp.enabled
+        config.app.authProvider.useExternalOAuthIdp.enabled
     ) {
         throw new Error("Configuration Error: Must specify only one authentication method!");
     }
@@ -306,12 +311,31 @@ export function getConfig(app: cdk.App): Config {
     config.app.authProvider.useCognito.useUserPasswordAuthFlow;
 
     if (
-        config.app.authProvider.useExternalOathIdp.enabled &&
-        (config.app.authProvider.useExternalOathIdp.idpAuthProviderUrl == "UNDEFINED" ||
-            config.app.authProvider.useExternalOathIdp.idpAuthProviderUrl == "")
+        config.app.authProvider.useExternalOAuthIdp.enabled &&
+        (!config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl == "" ||
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl == "" ||
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthClientSecret == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthClientSecret == "UNDEFINED"
+            )
     ) {
         throw new Error(
-            "Configuration Error: Must specify a external IDP auth URL when using an external OATH provider!"
+            "Configuration Error: Must specify a external IDP auth URL, external IDP principal domain, external IDP client ID, external IDP client secret, Lambda Authorizer JWT Issuer URL, Lambda Authorizer JWT Identity Source, and Lambda Authorizer JWT Audience when using an external OAUTH provider!"
+        );
+    }
+
+    //If using Location services, for now must use cognito due to IDP authenticated role need
+    if(config.app.useLocationService.enabled && config.app.authProvider.useCognito.enabled) {
+        throw new Error(
+            "Configuration Error: Cannot use location services without using the Cognito authentication method."
         );
     }
 
@@ -393,9 +417,15 @@ export interface ConfigPublic {
                 useSaml: boolean;
                 useUserPasswordAuthFlow: boolean;
             };
-            useExternalOathIdp: {
+            useExternalOAuthIdp: {
                 enabled: boolean;
                 idpAuthProviderUrl: string;
+                idpAuthClientId: string;
+                idpAuthClientSecret: string;
+                idpAuthPrincipalDomain: string;
+                lambdaAuthorizorJWTIssuerUrl: string;
+                lambdaAuthorizorJWTAudience: string;
+                
             };
         };
     };

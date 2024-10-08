@@ -68,9 +68,14 @@
                 "useSaml": false,
                 "useUserPasswordAuthFlow": false
             },
-            "useExternalOathIdp": {
+            "useExternalOAuthIdp": {
                 "enabled": false,
-                "idpAuthProviderUrl": null
+                "idpAuthProviderUrl": null,
+                "idpAuthClientId": null,
+                "idpAuthClientSecret": null,
+                "idpAuthPrincipalDomain": null,
+                "lambdaAuthorizorJWTIssuerUrl": null,
+                "lambdaAuthorizorJWTAudience": null
             }
         }
     }

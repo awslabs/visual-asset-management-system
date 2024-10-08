@@ -143,8 +143,6 @@ export function generateContentSecurityPolicy(
         "'self'",
         "blob:",
         authenticationDomain,
-        `https://${Service("COGNITO_IDP").Endpoint}/`,
-        `https://${Service("COGNITO_IDENTITY").Endpoint}/`,
         `https://${apiUrl}`,
         //`https://${props.storageResources.s3.assetBucket.bucketRegionalDomainName}/`, //Virtual Host Format Connection
         //`https://${props.storageResources.s3.assetBucket.bucketDomainName}/`, //Virtual Host Format Connection
@@ -152,18 +150,11 @@ export function generateContentSecurityPolicy(
         `https://${Service("S3").Endpoint}/${storageResources.s3.assetBucket.bucketName}/`, //Path Addressable Format Connection
     ];
 
-    //Add GeoLocation service URL if feature turned on
-    if (config.app.useLocationService.enabled) {
-        connectSrc.push(`https://maps.${Service("GEO").Endpoint}/`);
-    }
-
     const scriptSrc = [
         "'self'",
         "blob:",
         "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
         authenticationDomain,
-        `https://${Service("COGNITO_IDP").Endpoint}/`,
-        `https://${Service("COGNITO_IDENTITY").Endpoint}/`,
         `https://${apiUrl}`,
         //`https://${props.storageResources.s3.assetBucket.bucketRegionalDomainName}/`, //Virtual Host Format Connection
         `https://${Service("S3").PrincipalString}/${storageResources.s3.assetBucket.bucketName}/`, //Path Addressable Format Connection
@@ -178,6 +169,18 @@ export function generateContentSecurityPolicy(
         `https://${Service("S3").PrincipalString}/${storageResources.s3.assetBucket.bucketName}/`, //Path Addressable Format Connection
         `https://${Service("S3").Endpoint}/${storageResources.s3.assetBucket.bucketName}/`, //Path Addressable Format Connection
     ];
+
+    if(config.app.authProvider.useCognito.enabled) {
+        connectSrc.push(`https://${Service("COGNITO_IDP").Endpoint}/`);
+        connectSrc.push(`https://${Service("COGNITO_IDENTITY").Endpoint}/`);
+        scriptSrc.push(`https://${Service("COGNITO_IDP").Endpoint}/`);
+        scriptSrc.push(`https://${Service("COGNITO_IDENTITY").Endpoint}/`);
+    }
+
+    //Add GeoLocation service URL if feature turned on
+    if (config.app.useLocationService.enabled) {
+        connectSrc.push(`https://maps.${Service("GEO").Endpoint}/`);
+    }
 
     const csp =
         `default-src 'none'; style-src 'self' 'unsafe-inline'; ` +

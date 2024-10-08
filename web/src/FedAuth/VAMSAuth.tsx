@@ -57,10 +57,28 @@ interface Config {
      * Additional configuration needed for federated auth
      */
     federatedConfig?: AmplifyConfigFederatedIdentityProps;
+
+    /**
+     * External OAUTH IDP URL Configuration
+     */
+    externalOAuthIdpURL?: string;
+
+    /**
+     * External OAUTH IDP ClientID Configuration
+     */
+    externalOAuthIdpClientId?: string;
+    
+    // /**
+    //  * External OAUTH IDP ClientSecret Configuration
+    //  */
+    // externalOAuthIdpClientSecret?: string;
+
     /**
      * S3 Asset bucket
      */
     bucket?: string;
+
+
 
     /**
      * VAMS Features that are enabled

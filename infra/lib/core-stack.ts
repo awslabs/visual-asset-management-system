@@ -88,8 +88,8 @@ export class CoreVAMSStack extends cdk.Stack {
         //Select auth provider
         if (props.config.app.authProvider.useCognito.enabled) {
             this.enabledFeatures.push(VAMS_APP_FEATURES.AUTHPROVIDER_COGNITO);
-        } else if (props.config.app.authProvider.useExternalOathIdp.enabled) {
-            this.enabledFeatures.push(VAMS_APP_FEATURES.AUTHPROVIDER_EXTERNALOATHIDP);
+        } else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
+            this.enabledFeatures.push(VAMS_APP_FEATURES.AUTHPROVIDER_EXTERNALOAUTHIDP);
         }
 
         //Deploy VPC (nested stack)
@@ -302,7 +302,7 @@ export class CoreVAMSStack extends cdk.Stack {
         }
 
         //Deploy Location Services (Nested Stack) and setup feature enabled
-        if (props.config.app.useLocationService.enabled) {
+        if (props.config.app.useLocationService.enabled && props.config.app.authProvider.useCognito.enabled) {
             const locationServiceNestedStack = new LocationServiceNestedStack(
                 this,
                 "LocationService",
