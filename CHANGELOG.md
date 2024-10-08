@@ -49,6 +49,10 @@ Due to DynamoDB table structure changes, a A/B Stack deployment with migration s
 -   Fixed GovCloud deployments for erronouesly including a GeoServices reference that is not supported in GovCloud partition
 -   Fixed KMS key IAM policy principals (for non-externally imported key setting) to include OpenSearch when using OpenSearch deployment configurations
 -   Added logic to look at other claims data if "vams:\*" claims are not in the original JWT token. This is in prepartion for external IDP support and some edge case setups customers have.
+-   Fixed CDK deployment bug not deploying the required VPC endpoints during particular configurations of OpenSearch Provisioned, Not using all Lambda's behind VPCs, and using the option to use VPC endpoints
+-   **Web** Fixed bug where adding asset links had swapped the child/parent asset (WebUI only bug, API direct calls were not affected)
+-   Fixed CDK deployment bug of encrypting the WebAppLogsBucket when deploying with ALB and KMS encryption. The WebAppLogsBucket cannot be KMS encrypted when used for ALB logging output.
+-   Fixed bug for exceeding PolicyLimitSize of STS temporary role calls in S3ScopedAccess used during asset upload from the Web UI when KMS encryption is enabled.
 
 ### Chores
 
