@@ -237,7 +237,6 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 apiUrl: props.apiUrl,
                 vpc: webAppDistroNetwork.vpc,
                 albSubnets: webAppDistroNetwork.subnets.webApp,
-                s3VPCEndpoint: webAppDistroNetwork.s3VpcEndpoint,
                 albSecurityGroup: webAppDistroNetwork.securityGroups.webAppALB,
                 vpceSecurityGroup: webAppDistroNetwork.securityGroups.webAppVPCE,
             });
@@ -249,9 +248,12 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 resources: [webAppBucket.arnForObjects("*"), webAppBucket.bucketArn],
             });
 
-            webAppBucketPolicy.addCondition("StringEquals", {
-                "aws:SourceVpce": webAppDistroNetwork.s3VpcEndpoint.vpcEndpointId,
-            });
+            //Restrict to just the VPCe (if enabled)
+            if(props.config.app.useAlb.addAlbS3SpecialVpcEndpoint) {
+                webAppBucketPolicy.addCondition("StringEquals", {
+                    "aws:SourceVpce": website.s3VpcEndpoint.vpcEndpointId,
+                });
+            }
 
             webAppBucket.addToResourcePolicy(webAppBucketPolicy);
 

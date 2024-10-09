@@ -13,6 +13,7 @@
         "adminEmailAddress": "adminEmail@example.com",
         "useFips": false,
         "useWaf": true,
+        "addStackCloudTrailLogs": true,
         "useKmsCmkEncryption": {
             "enabled": false,
             "optionalExternalCmkArn": null
@@ -46,6 +47,7 @@
         "useAlb": {
             "enabled": false,
             "usePublicSubnet": false,
+            "addAlbS3SpecialVpcEndpoint": true,
             "domainHost": "vams1.example.com",
             "certificateArn": "arn:aws-us-gov:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>",
             "optionalHostedZoneId": null

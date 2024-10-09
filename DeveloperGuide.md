@@ -128,7 +128,7 @@ RUN pip config set global.cert /var/task/Combined.crt
 
 4. You may need to add additional environment variables to allow using the ceritificate to be used for for `apk install` or `apt-get` system actions.
 
-#### Web Development
+### Web Development
 
 The web front-end runs on NodeJS React with a supporting library of amplify-js SDK. The React web page is setup as a single page app using React routes with a hash (#) router.
 
@@ -138,7 +138,7 @@ Infrastructure Note (Hash Router): The hash router was chosen in order so suppor
 
 The front end when loading the page receives a configuration from the AWS backend to include amplify storage bucket, API Gateway/Cloudfront endpoints, authentication endpoints, and features enabled. Some of these are retrieved on load pre-authentication while others are received post-authentication. Features enabled is a comma-deliminated list of infrastructure features that were enabled/disabled on CDK deployment through the `config.json` file and toggle different front-end features to view.
 
-#### Implementing pipelines outside of Lambda
+### Implementing pipelines outside of Lambda
 
 To process an asset through VAMS using an external system or when a job can take longer than the Lambda timeout of 15 minutes, it is recommended that you use the _Wait for a Callback with the Task Token_ feature so that the Pipeline Lambda can initiate your job and then exit instead of waiting for the work to complete before it also finishes. This reduces your Lambda costs and helps you avoid failed jobs that fail simply because they take longer than the timeout to complete.
 
@@ -167,7 +167,22 @@ Two additional settings enable your job to end with a timeout error by defining 
 
 If you would like your job check in to show that it is still running and fail the step if it does not check in within some amount of time less than the task timeout, define the Task Heartbeat Timeout on the create pipeline screen also. If more time than the specified seconds elapses between heartbeats from the task, this state fails with a States.Timeout error name.
 
-#### Uninstalling
+### Special Configurations
+
+### Static WebApp - ALB w/ Manual VPC Interface Endpoint Creation
+
+During deployment of the ALB configuration for the static web contents, some organizations require that all VPC endpoints be created outside of a CDK stack.
+
+Turn the `app.useAlb.addAlbS3SpecialVpcEndpoint` infrastructure configuration to `false` in this scenario. The following VPC Interface Endpoint will need to be created as well as the other required steps to link it to the ALB target groups and S3 (after the stack has been deployed):
+
+1. Deploy the stack first with the configuration setting to `false`
+2. Create a VPC Interface Endpoint on the VPC on the same subnets used on the ALB deployment and using/linked to the newly created VPCe security group already setup as part of the stack for the VPC endpoint.
+3. Add a new IAM resource policy on the VPC endpoint to allow all `["s3:Get*", "s3:List*"]` actions for the S3 webAppBucket (bucket name will be the domain name used for the ALB) and its objects
+4. Update the IAM resource policy on the webAppBucket S3 bucket (bucket name will be the domain name used for the ALB) to add a condition to only allow connections from the created VPC Interface Endpoint
+5. Lookup all the Private IP Addresses for each ALB subnet that are assigned to the VPC Interface endpoint
+6. Add to the stack-created ALB target group all the VPCe IP addresses looked up in the previous step.
+
+### Uninstalling
 
 1. Run `cdk destroy` from infra folder
 2. Some resources may not be deleted by CDK (e.g S3 buckets and DynamoDB table) and you will have to delete them via aws cli or using aws console
@@ -176,7 +191,7 @@ Note:
 
 After running CDK destroy there might still some resources be running in AWS that will have to be cleaned up manually as CDK does not delete some resources.
 
-#### Deployment Overview
+### Deployment Overview
 
 The CDK deployment deploys the VAMS stack into your account. The components that are created by this app are:
 

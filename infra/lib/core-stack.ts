@@ -116,29 +116,31 @@ export class CoreVAMSStack extends cdk.Stack {
             props.config
         );
 
-        //Setup cloud trail and log groups
-        const trailLogGroup = new logs.LogGroup(this, "CloudTrailLogGroup", {
-            logGroupName:
-                "/aws/vendedlogs/VAMSCloudTrailLogs" +
-                generateUniqueNameHash(
-                    props.config.env.coreStackName,
-                    props.config.env.account,
-                    "VAMSCloudTrailLogs",
-                    10
-                ),
-            retention: logs.RetentionDays.TEN_YEARS,
-            removalPolicy: cdk.RemovalPolicy.DESTROY,
-        });
+        //Setup cloud trail and log groups (if enabled)
+        if(props.config.app.addStackCloudTrailLogs) {
+            const trailLogGroup = new logs.LogGroup(this, "CloudTrailLogGroup", {
+                logGroupName:
+                    "/aws/vendedlogs/VAMSCloudTrailLogs" +
+                    generateUniqueNameHash(
+                        props.config.env.coreStackName,
+                        props.config.env.account,
+                        "VAMSCloudTrailLogs",
+                        10
+                    ),
+                retention: logs.RetentionDays.TEN_YEARS,
+                removalPolicy: cdk.RemovalPolicy.DESTROY,
+            });
 
-        const trail = new cloudTrail.Trail(this, "CloudTrail-VAMS", {
-            isMultiRegionTrail: false,
-            bucket: storageResourcesNestedStack.storageResources.s3.accessLogsBucket,
-            s3KeyPrefix: "cloudtrail-logs",
-            sendToCloudWatchLogs: true, //AppSec requirements
-            cloudWatchLogGroup: trailLogGroup, //AppSec requirements
-        });
-        trail.logAllLambdaDataEvents();
-        trail.logAllS3DataEvents();
+            const trail = new cloudTrail.Trail(this, "CloudTrail-VAMS", {
+                isMultiRegionTrail: false,
+                bucket: storageResourcesNestedStack.storageResources.s3.accessLogsBucket,
+                s3KeyPrefix: "cloudtrail-logs",
+                sendToCloudWatchLogs: true, //AppSec requirements
+                cloudWatchLogGroup: trailLogGroup, //AppSec requirements
+            });
+            trail.logAllLambdaDataEvents();
+            trail.logAllS3DataEvents();
+        }
 
         //Deploy Lambda Layers (nested stack)
         const lambdaLayers = new LambdaLayersBuilderNestedStack(this, "LambdaLayers", {});

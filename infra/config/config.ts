@@ -127,6 +127,14 @@ export function getConfig(app: cdk.App): Config {
         config.app.authProvider.useExternalOAuthIdp.enabled = false;
     }
 
+    if(config.app.addStackCloudTrailLogs == undefined) {
+        config.app.addStackCloudTrailLogs = true;
+    }
+
+    if(config.app.useAlb.addAlbS3SpecialVpcEndpoint == undefined) {
+        config.app.useAlb.addAlbS3SpecialVpcEndpoint = true;
+    }
+
     //Load S3 Policy statements JSON
     const s3AdditionalBucketPolicyFile: string = readFileSync(
         join(__dirname, "policy", "s3AdditionalBucketPolicyConfig.json"),
@@ -362,6 +370,7 @@ export interface ConfigPublic {
         adminEmailAddress: string;
         useFips: boolean;
         useWaf: boolean;
+        addStackCloudTrailLogs: boolean;
         useKmsCmkEncryption: {
             enabled: boolean;
             optionalExternalCmkArn: string;
@@ -395,6 +404,7 @@ export interface ConfigPublic {
         useAlb: {
             enabled: boolean;
             usePublicSubnet: boolean;
+            addAlbS3SpecialVpcEndpoint: boolean;
             domainHost: string;
             certificateArn: string;
             optionalHostedZoneId: string;
