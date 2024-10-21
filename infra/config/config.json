@@ -80,6 +80,9 @@
                 "lambdaAuthorizorJWTAudience": null
                 
             }
+        },
+        "webUi": {
+            "optionalBannerHtmlMessage": ""
         }
     }
 }

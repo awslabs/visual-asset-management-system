@@ -87,6 +87,11 @@ interface InlineLambdaProps {
      * Content Security Policy to apply (generally for ALB deployment where CSP is not injected)
      */
     contentSecurityPolicy?: string;
+
+    /**
+     * HTML banner message to be displayed at the top of all web UI pages
+     */
+    bannerHtmlMessage?: string
 }
 
 export interface AmplifyConfigLambdaConstructProps extends cdk.StackProps {
@@ -150,6 +155,7 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                     //externalOAuthIdpClientSecret: props.config.app.authProvider.useExternalOAuthIdp.idpAuthClientSecret || "undefined",
                     stackName: props.stackName!,
                     contentSecurityPolicy: props.contentSecurityPolicy || "",
+                    bannerHtmlMessage: props.config.app.webUi.optionalBannerHtmlMessage || ""
                 })
             ),
             timeout: cdk.Duration.seconds(15),

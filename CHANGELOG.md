@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.2.0] (2024-12-31)
+
+### ⚠ BREAKING CHANGES
+
+### Features
+
+-   Added configuration option `addStackCloudTrailLogs` for creating AWS CloudTrail log groups and trails for the stack. This is defaulted to `true`.
+-   Added configuration option `useAlb.addAlbS3SpecialVpcEndpoint` for creating the special S3 VPC Interface Endpoint for ALB deployment configurations. This is defaulted to `true`. See documentation for this setting if turned false.
+-   Added configuration option `webUi.optionalBannerHtmlMessage` for adding a persistent banner (HTML) message at the top of the WebUI
+
+### Bug Fixes
+
+### Chores
+
 ## [2.1.0] (2024-08-30)
 
 This minor version includes changes to VAMS pipelines, use-case pipeline implementations, and v2.0 bug fixes.
@@ -35,8 +49,6 @@ Due to DynamoDB table structure changes, a A/B Stack deployment with migration s
 -   -   Implements a new approach for s3ScopedAccess for upload that allows tokens up to 12 hours using AssumeRoleWithWebIdentity.
 -   **Web** Added PointCloud viewer and pipeline support for `.ply` file formats, moved from the 3D Mesh 3D Online Viewer
 -   **Web** The asset file viewer now says `(primary)` next to the assets main/primary associated file. The primary file is what get's used right now for pipeline ingestion when launching a workflow.
--   Added configuration option `addStackCloudTrailLogs` for creating AWS CloudTrail log groups and trails for the stack. This is defaulted to `true`.
--   Added configuration option `addAlbS3SpecialVpcEndpoint` for creating the special S3 VPC Interface Endpoint for ALB deployment configurations. This is defaulted to `true`. See documentation for this setting if turned false.
 
 ### Bug Fixes
 
