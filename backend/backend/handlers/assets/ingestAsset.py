@@ -287,7 +287,7 @@ def lambda_handler(event, context):
                     upload_id = resp['UploadId']
 
                     # Generate pre-signed URLs for part uploads
-                    part_urls = [generate_presigned_url(bucket_name, key, upload_id, part_number) for part_number in range(1, num_parts + 1)]
+                    part_urls = [generate_presigned_url(key, upload_id, part_number) for part_number in range(1, num_parts + 1)]
 
                     response['body'] = json.dumps({"message": {
                         'uploadId': upload_id,
