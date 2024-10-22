@@ -64,8 +64,8 @@ function App() {
                 localStorage.setItem("email", menuText);
                 return (
                     <>
+                        <GlobalHeader />
                         <HeaderPortal>
-                            <GlobalHeader />
                             <TopNavigation
                                 identity={{
                                     href: "/",

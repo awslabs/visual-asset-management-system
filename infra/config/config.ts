@@ -438,6 +438,9 @@ export interface ConfigPublic {
                 
             };
         };
+        webUi: {
+            optionalBannerHtmlMessage: string;
+        }
     };
 }
 

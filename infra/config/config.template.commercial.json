@@ -79,6 +79,9 @@
                 "lambdaAuthorizorJWTIssuerUrl": null,
                 "lambdaAuthorizorJWTAudience": null
             }
+        },
+        "webUi": {
+            "optionalBannerHtmlMessage": ""
         }
     }
 }

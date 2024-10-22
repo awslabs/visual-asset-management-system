@@ -10,10 +10,34 @@ import React, { useState } from "react";
 export function GlobalHeader() {
     const config = Cache.getItem("config");
     const contentSecurityPolicy = config.contentSecurityPolicy;
+    const bannerMessageHtml = config.bannerHtmlMessage;
 
     const [useContentSecurityPolicy] = useState(
         contentSecurityPolicy !== undefined && contentSecurityPolicy !== ""
     );
+
+    const [useBannerMessageHtml] = useState(
+        bannerMessageHtml !== undefined && bannerMessageHtml !== ""
+    );
+
+    function sanitizeHtml(html) {
+        // Escape HTML to prevent XSS
+        const escapedHtml = html.replace(/&/g, '&amp;')
+                                .replace(/</g, '&lt;')
+                                .replace(/>/g, '&gt;')
+                                .replace(/"/g, '&quot;')
+                                .replace(/'/g, '&#039;');
+
+        // Use a regular expression to only allow <strong>, <u>, and <em> tags
+        const sanitizedHtml = escapedHtml.replace(
+            /(<\/?(?!strong|u|em)\b[^>]*>)/gi, 
+            ''
+        );
+
+        return sanitizedHtml;
+    }
+
+    const sanitizedBannerMessage = sanitizeHtml(bannerMessageHtml);
 
     return (
         <>
@@ -22,6 +46,19 @@ export function GlobalHeader() {
                 <head>
                     <meta httpEquiv="Content-Security-Policy" content={contentSecurityPolicy} />
                 </head>
+            )}
+
+            {useBannerMessageHtml && (
+                <div style={{
+                    backgroundColor: "rgba(231, 94, 64, 1)", 
+                    width: "100vw",
+                    color: "white",
+                    wordWrap: "break-word", // Allow long words to break
+                    overflowWrap: "break-word", // For compatibility with older browsers
+                    textAlign: "center"
+                }}>
+                    <div dangerouslySetInnerHTML={{ __html: sanitizedBannerMessage }} />
+                </div>
             )}
         </>
     );
