@@ -468,6 +468,7 @@ def get_asset_fields(keys):
 
     attempts = 0
     result = {}
+    #logger.info(keys)
     while result.get("Item") is None and attempts < 60:
         attempts += 1
         result = client.get_item(
@@ -479,7 +480,7 @@ def get_asset_fields(keys):
         )
 
         if result.get("Item") is None:
-            logger.info("asset record is empty on attempt" + attempts+" for keys "+keys)
+            logger.info("asset record is empty on attempt"+ str(attempts))
             time.sleep(1)
 
     return result.get('Item')

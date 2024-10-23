@@ -763,6 +763,12 @@ export default function ViewAsset() {
                                                       ).find((type: any) =>
                                                           type.tags.includes(tag)
                                                       );
+
+                                                      //If tagType has required field add [R] to tag type name
+                                                      if (tagType && tagType.required) {
+                                                          tagType.tagTypeName += " [R]";
+                                                      }
+
                                                       return tagType
                                                           ? `${tag} (${tagType.tagTypeName})`
                                                           : tag;

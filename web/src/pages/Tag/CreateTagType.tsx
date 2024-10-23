@@ -15,6 +15,7 @@ import OptionDefinition from "../../components/createupdate/form-definitions/typ
 interface TagTypeFields {
     tagTypeName: string;
     description: string;
+    required: string;
     selectedOptions: OptionDefinition[] | null;
 }
 
@@ -32,6 +33,14 @@ function validateNameLowercase(name: string) {
     return name.match(/^[a-z0-9_-]+$/) !== null
         ? null
         : "All lower case letters only. No special characters except '-' and '_'";
+}
+
+// when a required string is either "True" or "False", otherwise return the string "'True' or 'False' only"
+function validateRequiredText(required: string) {
+    if (required === undefined) return undefined;
+    return required == "True" || required == "False"
+        ? null
+        : "'True' or 'False' only";
 }
 
 // when a string is between 4 and 64 characters, return null, otherwise return the string "Between 4 and 64 characters"
@@ -74,6 +83,7 @@ export default function CreateTagType({
     const tagtypeBody = {
         tagTypeName: formState.tagTypeName,
         description: formState.description,
+        required: formState.required
     };
     const handleModalClose = () => {
         setShowModal(false);
@@ -82,12 +92,14 @@ export default function CreateTagType({
 
     const handleApiError = (err: any) => {
         if (err.response && err.response.status === 500) {
-            const errorMessage = err.response.data.message || "Duplicate Tag";
+            const errorMessage = err.response.data.message || "Duplicate Tag Type";
             setErrorMessage(errorMessage);
             setShowModal(true);
         }
     };
     const [nameError, setNameError] = useState<string | null>(null);
+
+    const [requiredError, setRequiredError] = useState<string | null>(null);
 
     return (
         <Modal
@@ -138,7 +150,7 @@ export default function CreateTagType({
                                             console.log("create tag-type ", err);
                                             if (err.response && err.response.status === 500) {
                                                 const errorMessage =
-                                                    "Tag name " +
+                                                    "Tag type name " +
                                                     tagtypeBody.tagTypeName +
                                                     " already exists or is not valid";
                                                 setNameError(errorMessage);
@@ -246,6 +258,23 @@ export default function CreateTagType({
                             }
                             placeholder="Tag Type Description"
                             data-testid="tag-type-description"
+                        />
+                    </FormField>
+
+                    <FormField
+                        label="Required on Asset"
+                        constraintText="Required. Only 'True' or 'False' values allowed"
+                        errorText={requiredError || validateRequiredText(formState.required)}
+                    >
+                        <Input
+                            value={formState.required}
+                            disabled={false}
+                            onChange={({ detail }) => {
+                                setFormState({ ...formState, required: detail.value });
+                                setRequiredError("");
+                            }}
+                            placeholder="Required on Asset"
+                            data-testid="required"
                         />
                     </FormField>
                 </SpaceBetween>

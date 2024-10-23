@@ -11,6 +11,10 @@ All notable changes to this project will be documented in this file. See [standa
 -   Added configuration option `addStackCloudTrailLogs` for creating AWS CloudTrail log groups and trails for the stack. This is defaulted to `true`.
 -   Added configuration option `useAlb.addAlbS3SpecialVpcEndpoint` for creating the special S3 VPC Interface Endpoint for ALB deployment configurations. This is defaulted to `true`. See documentation for this setting if turned false.
 -   Added configuration option `webUi.optionalBannerHtmlMessage` for adding a persistent banner (HTML) message at the top of the WebUI
+-   **Web** Added capability to define which tag types are required to be added to an asset. If tag types are required, at least one of the defined tags on the tag type must always be included on the asset.
+-   The ingestAsset API now supports passing in tags (to support required tag types)
+-   Changed access logs S3 bucket lifecycle policy to only remove logs after 90 days
+-   Added lifecycle polcies on asset and asset auxiliary bucket to remove incomplete upload parts after 14 days
 
 ### Bug Fixes
 

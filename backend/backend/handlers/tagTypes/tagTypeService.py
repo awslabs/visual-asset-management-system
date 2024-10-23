@@ -43,7 +43,6 @@ def get_tag_types(response, query_params):
         }
     ).build_full_result()
 
-
     #Loop to get all tag results for tag type
     rawTagItems = []
     page_iteratorTags = paginator.paginate(
@@ -104,6 +103,7 @@ def get_tag_types(response, query_params):
         tagType = {
             "tagTypeName": deserialized_document["tagTypeName"],
             "description": deserialized_document["description"],
+            "required": deserialized_document.get("required", "False"),
             "tags": [] if deserialized_document["tagTypeName"] not in formatted_tag_results else formatted_tag_results[
                 deserialized_document["tagTypeName"]]
         }

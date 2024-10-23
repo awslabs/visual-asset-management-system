@@ -155,6 +155,8 @@ export function buildUploadAssetFunction(
             SEND_EMAIL_FUNCTION_NAME: sendEmailFunction.functionName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName,
+            TAG_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName,
             S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
         },
     });
@@ -172,6 +174,8 @@ export function buildUploadAssetFunction(
     storageResources.dynamo.assetLinksStorageTable.grantReadWriteData(uploadAssetFunction);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(uploadAssetFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(uploadAssetFunction);
+    storageResources.dynamo.tagTypeStorageTable.grantReadData(uploadAssetFunction);
+    storageResources.dynamo.tagStorageTable.grantReadData(uploadAssetFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(
         uploadAssetFunction,
         storageResources.encryption.kmsKey
@@ -438,12 +442,16 @@ export function buildUploadAssetWorkflowFunction(
             UPLOAD_WORKFLOW_ARN: uploadAssetWorkflowStateMachine.stateMachineArn,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName,
+            TAG_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName
         },
     });
 
     uploadAssetWorkflowStateMachine.grantStartExecution(uploadAssetWorkflowFunction);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(uploadAssetWorkflowFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(uploadAssetWorkflowFunction);
+    storageResources.dynamo.tagTypeStorageTable.grantReadData(uploadAssetWorkflowFunction);
+    storageResources.dynamo.tagStorageTable.grantReadData(uploadAssetWorkflowFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(uploadAssetWorkflowFunction, kmsKey);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);

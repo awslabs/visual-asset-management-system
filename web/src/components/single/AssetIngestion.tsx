@@ -186,7 +186,8 @@ export default function AssetIngestion() {
     let defaultPlaceholder = `{
     "databaseId": "<database-name>",
     "assetName": "<name of asset>",
-    "description": "<Enter Asset description here>"
+    "description": "<Enter Asset description here>",
+    "tags": ["optional", "tags", "to", "add"]
 }`;
 
     return (

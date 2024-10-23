@@ -194,8 +194,8 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         lifecycleRules: [
             {
                 enabled: true,
-                expiration: Duration.days(30),
-                noncurrentVersionExpiration: Duration.days(30),
+                expiration: Duration.days(90),
+                noncurrentVersionExpiration: Duration.days(90),
             },
         ],
     });
@@ -221,6 +221,12 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
                     s3.HttpMethods.HEAD,
                 ],
                 exposedHeaders: ["ETag"],
+            },
+        ],
+        lifecycleRules: [
+            {
+                enabled: true,
+                abortIncompleteMultipartUploadAfter: Duration.days(14)
             },
         ],
         serverAccessLogsBucket: accessLogsBucket,
@@ -315,6 +321,12 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
                     s3.HttpMethods.HEAD,
                 ],
                 exposedHeaders: ["ETag"],
+            },
+        ],
+        lifecycleRules: [
+            {
+                enabled: true,
+                abortIncompleteMultipartUploadAfter: Duration.days(14)
             },
         ],
         serverAccessLogsBucket: accessLogsBucket,

@@ -153,6 +153,13 @@ def validate_number(name, value):
         return (True, '')
     except ValueError:
         return (False, name + " is invalid. Must be a number.")
+    
+def validate_bool(name, value):
+    try:
+        bool(value)
+        return (True, '')
+    except ValueError:
+        return (False, name + " is invalid. Must be a boolean string of 'true'/'false'.")
 
 
 def validate(values):
@@ -261,6 +268,10 @@ def validate(values):
                 return (valid, message)
         if v['validator'] == 'NUMBER':
             (valid, message) = validate_number(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'BOOL':
+            (valid, message) = validate_bool(k, v['value'])
             if not valid:
                 return (valid, message)
 
