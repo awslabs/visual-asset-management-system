@@ -48,6 +48,9 @@ casbin_user_enforcer_map = {} if CASBIN_NO_DICTIONARY_LOCKING else locked_dict.L
 
 logger = safeLogger(service="AuthzInit")
 
+deserializer = TypeDeserializer()
+_dynamodb_client = boto3.client("dynamodb")
+paginator = _dynamodb_client.get_paginator("scan")
 
 # Wrap CasbinEnforcerService objects, caching them to corresponding users to improve performance
 # Policy updates within CasbinEnforcerProxy objects will occur separately.
@@ -114,7 +117,6 @@ class CasbinEnforcerService:
         global casbin_user_policy_map
 
         self._auth_table_name = ""
-        self._dynamodb_client = boto3.client("dynamodb")
         self._user_roles_table_name = ""
         self._user_id = user_id
         self._dateTime_Cached = datetime.now()
@@ -140,8 +142,6 @@ class CasbinEnforcerService:
         self._create_casbin_enforcer(policy_text)
 
     def _read_policies_from_table(self, role_name):
-        deserializer = TypeDeserializer()
-        paginator = self._dynamodb_client.get_paginator("scan")
 
         # See: UserRolesStorageTable in: infra/lib/nestedStacks/auth/constructs/*.ts (for groupPermissions)
         # The ABAC system will eventually have three methods to tie a user to a constraint.
@@ -212,8 +212,6 @@ class CasbinEnforcerService:
         return items
 
     def _read_current_user_roles_from_table(self):
-        deserializer = TypeDeserializer()
-        paginator = self._dynamodb_client.get_paginator("scan")
 
         # See: UserRolesStorageTable in: infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts
         #

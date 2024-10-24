@@ -161,7 +161,7 @@ def lambda_handler(event, context):
             },
             'executingUserName': {
                 'value': event['executingUserName'],
-                'validator': 'EMAIL'
+                'validator': 'USERID'
             },
             'assetFilesPathPipelineKey': {
                 'value': event.get("filesPathKey", ""),

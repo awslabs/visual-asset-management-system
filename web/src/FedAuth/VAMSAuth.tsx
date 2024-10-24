@@ -270,6 +270,7 @@ const VAMSAuth: React.FC<AuthProps> = (props) => {
 
     console.log("useLocal", useLocal);
     console.log("basePath", basePath);
+
     useEffect(() => {
         if (config && (!config.bucket || !config.featuresEnable) && user) {
             API.get("api", `secure-config`, {}).then((value) => {
@@ -321,7 +322,8 @@ const VAMSAuth: React.FC<AuthProps> = (props) => {
         Auth.currentSession()
             .then((user) => {
                 setState({
-                    email: user.getIdToken().decodePayload().email,
+                    email: user.getIdToken().decodePayload().sub,
+                    username: user.getIdToken().decodePayload().sub,
                     authenticated: true,
                 });
             })

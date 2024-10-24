@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from "react";
 import ReactDOM from "react-dom";
-import { Cache } from "aws-amplify";
+import { API, Cache } from "aws-amplify";
 import { Authenticator } from "@aws-amplify/ui-react";
 import { BrowserRouter, HashRouter } from "react-router-dom";
 import { TopNavigation } from "@cloudscape-design/components";
@@ -36,6 +36,7 @@ const HeaderPortal = ({ children }) => {
 
 function App() {
     const [navigationOpen, setNavigationOpen] = useState(true);
+    const [loginProfile, setLoginProfile] = useState(Cache.getItem("loginProfile"));
 
     useEffect(() => {
         const cachedNavigationOpen = Cache.getItem("navigationOpen");
@@ -57,11 +58,21 @@ function App() {
     }, [navigationOpen]);
 
     return (
-        <Authenticator components={components} loginMechanisms={["email"]} hideSignUp={true}>
+        <Authenticator components={components} loginMechanisms={["username"]} hideSignUp={true}>
             {({ signOut, user }) => {
                 const menuText =
                     user.signInUserSession?.idToken?.payload?.name || user.username || user.email;
-                localStorage.setItem("email", menuText);
+                localStorage.setItem("userName", menuText);
+
+                if (!loginProfile) {
+                    API.post("api", `auth/loginProfile/${menuText}`, {}).then((value) => {
+                        loginProfile.userId = value.message.Items[0].userId;
+                        loginProfile.email = value.message.Items[0].email;
+                        Cache.setItem("loginProfile", loginProfile);
+                        setLoginProfile(loginProfile);
+                    });
+                }
+
                 return (
                     <>
                         <GlobalHeader />

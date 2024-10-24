@@ -57,7 +57,7 @@ import CustomTable from "../table/CustomTable";
 import { API } from "aws-amplify";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
 
-var email = "";
+var userName = "";
 
 fetchtagTypes().then((res) => {
     const tagTypesString = JSON.stringify(res);
@@ -70,11 +70,11 @@ export default function ViewAsset() {
     const subscriptionBody = {
         eventName: "Asset Version Change",
         entityName: "Asset",
-        subscribers: [email],
+        subscribers: [userName],
         entityId: assetId,
     };
     const checkBody = {
-        userId: email,
+        userId: userName,
         assetId: assetId,
     };
 
@@ -124,7 +124,7 @@ export default function ViewAsset() {
     };
 
     useEffect(() => {
-        email = localStorage.getItem("email")!;
+        userName = localStorage.getItem("userName")!;
         const getData = async () => {
             setLoading(true);
             const items = await fetchDatabaseWorkflows({ databaseId: databaseId });
@@ -223,7 +223,7 @@ export default function ViewAsset() {
         checkSubscriptionStatus();
     }, []);
     const checkSubscriptionStatus = async () => {
-        checkBody.userId = email;
+        checkBody.userId = userName;
         try {
             const response = await API.post("api", "check-subscription", {
                 body: checkBody,
@@ -251,8 +251,8 @@ export default function ViewAsset() {
     const handleSubscribe = async () => {
         setDisable(true);
         try {
-            if (!email) {
-                alert("Email not available", "error");
+            if (!userName) {
+                alert("Username not available", "error");
                 setDisable(false);
                 setShowModal(false);
 

@@ -229,7 +229,7 @@ export class CognitoWebNativeConstructStack extends Construct {
         );
 
         const cognitoUser = new cognito.CfnUserPoolUser(this, "AdminUser", {
-            username: props.config.app.adminEmailAddress,
+            username: props.config.app.adminUserId,
             userPoolId: userPool.userPoolId,
             desiredDeliveryMediums: ["EMAIL"],
             userAttributes: [

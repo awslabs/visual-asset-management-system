@@ -28,12 +28,14 @@ def request_to_claims(request):
         tokens = json.loads(claims['vams:tokens'])
     elif 'cognito:username' in claims:
         tokens = [claims['cognito:username']]
-    elif 'email' in claims:
-        tokens = [claims['email']]
     elif 'username' in claims:
         tokens = [claims['username']]
     elif 'sub' in claims:
         tokens = [claims['sub']]
+    elif 'upn' in claims:
+        tokens = [claims['upn']]
+    elif 'email' in claims:
+        tokens = [claims['email']]
 
     if 'vams:roles' in claims:
         roles = json.loads(claims['vams:roles'])

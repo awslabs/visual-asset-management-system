@@ -2,7 +2,7 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 import json
-from handlers.authn import request_to_claims
+from handlers.auth import request_to_claims
 import boto3
 import os
 from customLogging.logger import safeLogger
@@ -15,7 +15,7 @@ from common.dynamodb import validate_pagination_info
 
 claims_and_roles = {}
 
-logger = safeLogger(service="constraints")
+logger = safeLogger(service="AuthConstraintsService")
 
 region = os.environ['AWS_REGION']
 dynamodb = boto3.resource('dynamodb', region_name=region)
@@ -175,7 +175,7 @@ def update_constraint(event, response):
             (valid, message) = validate({
                 'userId': {
                     'value': userPermission['userId'],
-                    'validator': 'EMAIL'
+                    'validator': 'USERID'
                 }
             })
 
@@ -191,7 +191,8 @@ def update_constraint(event, response):
         ReturnValues="UPDATED_NEW"
     )
 
-    response['body']['constraint'] = constraint
+    response['body'] = {"message": "Constraint created/updated."}
+    response['body']['constraint'] = json.dumps(constraint)
 
 
 def delete_constraint(event, response):
@@ -277,6 +278,7 @@ def lambda_handler(event, context):
         return response
 
     except ValidationError as ex:
+        logger.error(ex)
         response['statusCode'] = ex.code
         response['body']['error'] = ex.resp
         response['body'] = json.dumps(response['body'])
@@ -284,6 +286,7 @@ def lambda_handler(event, context):
 
     except Exception as e:
         logger.error(event)
+        logger.error(e)
         response['statusCode'] = 500
         response['body']['error'] = "Internal Server Error"
         response['body'] = json.dumps(response['body'])

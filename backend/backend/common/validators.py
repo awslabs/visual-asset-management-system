@@ -16,6 +16,7 @@ asset_path_pattern = r'^[a-z]([-_a-z0-9]){3,63}(\/[a-zA-Z0-9_\-.\s]+){1,63}$'
 asset_auxiliarypreview_path_pattern = r'^[a-z]([-_a-z0-9]){3,63}(\/[a-zA-Z0-9_\-.\s]+){1,63}\/preview(\/[a-zA-Z0-9_\-.\s]+){1,63}(\/?)$'
 asset_path_pipeline_pattern = r'^pipelines\/([a-zA-Z0-9_\-.\s]){1,63}\/([a-zA-Z0-9_\-.\s]){1,63}\/output(\/[a-zA-Z0-9_\-.\s]+){1,63}(\/)$'
 object_name_pattern = r'^[a-zA-Z0-9\-._\s]{1,256}$'
+userid_pattern = r'^[\w\-\.\+\@]{3,256}$'
 
 #Define local regexes that use the patterns
 id_regex = re.compile(id_pattern)
@@ -29,6 +30,7 @@ asset_path_regex = re.compile(asset_path_pattern)
 asset_auxiliarypreview_path_regex = re.compile(asset_auxiliarypreview_path_pattern)
 asset_path_pipeline_regex = re.compile(asset_path_pipeline_pattern)
 object_name_regex = re.compile(object_name_pattern)
+userid_regex = re.compile(userid_pattern)
 
 def validate_id(name, value):
     if not id_regex.fullmatch(value):
@@ -111,6 +113,13 @@ def validate_email_array(name, values):
             return (valid, message)
     return (True, '')
 
+def validate_userid_array(name, values):
+    for val in values:
+        (valid, message) = validate_userid(name, val)
+        if not valid:
+            return (valid, message)
+    return (True, '')
+
 def validate_string_max_length(name, value, max_length):
     if len(value) > max_length:
         return (False, name + " must be lower than " + str(max_length) + " characters")
@@ -138,6 +147,11 @@ def validate_string_fileType(name, value):
 def validate_email(name, value):
     if not bool(re.match(email_regex, value)):
         return (False, name + " is invalid. Must follow the regexp "+email_pattern)
+    return (True, '')
+
+def validate_userid(name, value):
+    if not bool(re.match(userid_regex, value)):
+        return (False, name + " is invalid. Must follow the regexp "+userid_pattern)
     return (True, '')
 
 def validate_regex(name, value):
@@ -214,6 +228,10 @@ def validate(values):
             (valid, message) = validate_email_array(k, v['value'])
             if not valid:
                 return (valid, message)
+        if v['validator'] == 'USERID_ARRAY':
+            (valid, message) = validate_userid_array(k, v['value'])
+            if not valid:
+                return (valid, message)
         if v['validator'] == 'STRING_256':
             (valid, message) = validate_string_max_length(k, v['value'], 256)
             if not valid:
@@ -260,6 +278,10 @@ def validate(values):
                 return (valid, message)
         if v['validator'] == 'EMAIL':
             (valid, message) = validate_email(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'USERID':
+            (valid, message) = validate_userid(k, v['value'])
             if not valid:
                 return (valid, message)
         if v['validator'] == 'REGEX':

@@ -62,7 +62,7 @@ Please note, depending on what changes are in flight, VAMS may not be available 
 
 Deployment data migration documentation and scripts between major VAMS version deployments are located in `/infra/deploymentDataMigration`
 
-### SAML Authentication
+### SAML Authentication - Cognito
 
 SAML authentication enables you to provision access to your VAMS instance using your organization's federated identity provider such as Auth0, Active Directory, or Google Workspace.
 
@@ -84,7 +84,7 @@ The following stack outputs are required by your identity provider to establish 
 -   SP urn / Audience URI / SP entity ID
 -   CloudFrontDistributionUrl for the list of callback urls. Include this url with and without a single trailing slack (e.g., <https://example.com> and <https://example.com/>)
 
-### JWT Token Authentication
+### JWT Token Authentication - Cognito
 
 VAMS API requires a valid authorization token that will be validated on each call against the configured authentication system (eg. Cognito).
 
@@ -103,6 +103,18 @@ The critical component right now is that the authenticated VAMS username be incl
 ```
 
 NOTE: GovCloud deployments when the GovCloud configuration setting is true only support v1 of the Cognito lambdas. This means that ONLY Access tokens produced by Cognito can be used with VAMS API Calls for authentication/authorization. Otherwise both ID and Access tokens can be used for Non-govcloud deployments.
+
+### LoginProfile Custom Organizational Updates
+
+VAMS supports adding custom logic to how VAMS user profile information is updated and with what information.
+
+This logic should be overriden by each oranization as needed within `/backend/backend/customConfigCommon/customAuthLoginProfile.py`
+
+The default logic is to fill in and override login profile information like email from the JWT token returned by the IDP.
+
+LoginProfile is updated via a authenticated API call by the user from the webUI (on login) via a POST call to `/api/auth/loginProfile/{userId}`.
+
+Email field of the loginProfile is used by systems that need to send emails to the user. It will revert to the userId of email is blank or not in an email format as a backup.
 
 ### Local Docker Builds - Custom Build Settings
 
@@ -284,6 +296,13 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 | ----------- | --------- | -------------------------------------------- |
 | asset_id    | String    | Asset identifier for this workflow execution |
 | database_id | String    | Database to which the asset belongs          |
+
+## UserStorageTable
+
+| Field  | Data Type | Description                               |
+| ------ | --------- | ----------------------------------------- |
+| userId | String    | (PK) Main user ID associated with profile |
+| email  | String    | Email belonging to the user               |
 
 Attributes are driven by user input. No predetermined fields aside from the partition and sort key.
 From rel 1.4 onwards, when you add metadata on a file / folder, the s3 key prefix of the file/folder is used as the asset key in the metadata table

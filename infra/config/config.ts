@@ -69,6 +69,13 @@ export function getConfig(app: cdk.App): Config {
             config.app.adminEmailAddress ||
             process.env.ADMIN_EMAIL_ADDRESS)
     );
+    config.app.adminUserId = <string>(
+        (app.node.tryGetContext("adminUserId") ||
+            app.node.tryGetContext("adminEmailAddress") || //user email in this case for ENV backwards compatibility
+            config.app.adminUserId ||
+            process.env.ADMIN_EMAIL_ADDRESS || //user email in this case for ENV backwards compatibility
+            process.env.ADMIN_USER_ID)
+    );
     config.app.authProvider.credTokenTimeoutSeconds = <number>(
         (app.node.tryGetContext("credTokenTimeoutSeconds") ||
             config.app.authProvider.credTokenTimeoutSeconds ||
@@ -292,6 +299,16 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
+    if (
+        !config.app.adminUserId ||
+        config.app.adminUserId == "" ||
+        config.app.adminUserId == "UNDEFINED"
+    ) {
+        throw new Error(
+            "Configuration Error: Must specify an initial admin user ID as part of this deployment configuration!"
+        );
+    }
+
     //Error check when implementing openSearch
     if (
         config.app.openSearch.useServerless.enabled &&
@@ -330,9 +347,7 @@ export function getConfig(app: cdk.App): Config {
             config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "" ||
             config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "UNDEFINED" ||
             config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthClientSecret == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthClientSecret == "UNDEFINED"
+            config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "UNDEFINED" 
             )
     ) {
         throw new Error(
@@ -367,6 +382,7 @@ export interface ConfigPublic {
         bucketMigrationStaging: {
             assetBucketName: string;
         };
+        adminUserId: string;
         adminEmailAddress: string;
         useFips: boolean;
         useWaf: boolean;
@@ -431,7 +447,6 @@ export interface ConfigPublic {
                 enabled: boolean;
                 idpAuthProviderUrl: string;
                 idpAuthClientId: string;
-                idpAuthClientSecret: string;
                 idpAuthPrincipalDomain: string;
                 lambdaAuthorizorJWTIssuerUrl: string;
                 lambdaAuthorizorJWTAudience: string;

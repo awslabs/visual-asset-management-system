@@ -31,7 +31,7 @@ export function buildSendEmailFunction(
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         environment: {
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName
         },
     });
 
@@ -42,7 +42,7 @@ export function buildSendEmailFunction(
         })
     );
 
-    storageResources.dynamo.assetStorageTable.grantReadWriteData(sendEmailFunction);
+    storageResources.dynamo.assetStorageTable.grantReadData(sendEmailFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(
         sendEmailFunction,
         storageResources.encryption.kmsKey

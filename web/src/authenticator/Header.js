@@ -7,6 +7,7 @@
 import loginBgImageSrc from "../resources/img/login_bg.png";
 import { Cache } from "aws-amplify";
 import React, { useState } from "react";
+import sanitizeHtml from 'sanitize-html';
 
 export function Header() {
     const config = Cache.getItem("config");
@@ -21,24 +22,9 @@ export function Header() {
         bannerMessageHtml !== undefined && bannerMessageHtml !== ""
     );
 
-    function sanitizeHtml(html) {
-        // Escape HTML to prevent XSS
-        const escapedHtml = html.replace(/&/g, '&amp;')
-                                .replace(/</g, '&lt;')
-                                .replace(/>/g, '&gt;')
-                                .replace(/"/g, '&quot;')
-                                .replace(/'/g, '&#039;');
-
-        // Use a regular expression to only allow <strong>, <u>, and <em> tags
-        const sanitizedHtml = escapedHtml.replace(
-            /(<\/?(?!strong|u|em)\b[^>]*>)/gi, 
-            ''
-        );
-
-        return sanitizedHtml;
-    }
-
-    const sanitizedBannerMessage = sanitizeHtml(bannerMessageHtml);
+    const sanitizedBannerMessage = sanitizeHtml(bannerMessageHtml, {
+        allowedTags: ['b', 'em', 'strong', 'u'],
+    });
 
     return (
         <>

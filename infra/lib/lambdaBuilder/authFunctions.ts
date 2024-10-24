@@ -22,9 +22,10 @@ import {
 import { authResources } from "../nestedStacks/auth/authBuilder-nestedStack";
 
 interface AuthFunctions {
-    constraints: lambda.Function;
+    authConstraintsService: lambda.Function;
     scopeds3access: lambda.Function;
-    authService: lambda.Function;
+    authLoginProfile: lambda.Function;
+    routes: lambda.Function;
 }
 
 export function buildAuthFunctions(
@@ -62,6 +63,7 @@ export function buildAuthFunctions(
         });
     }
     else if (config.app.authProvider.useExternalOAuthIdp.enabled) {
+        //experimental however currently scopeds3access still uses AssumeRole with externalOAuthIDP enabled
         let idpPrincipal = config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain;
         storageBucketScopedS3AccessRole = new iam.Role(scope, "storageBucketScopedS3AccessRole", {
             assumedBy: new iam.CompositePrincipal(
@@ -87,7 +89,7 @@ export function buildAuthFunctions(
     //Note KMS key needs to be added inside Lambda function as it overwritees policy when assumed from "storageBucketScopedS3AccessRole"
     storageResources.s3.assetBucket.grantReadWrite(storageBucketScopedS3AccessRole!);
 
-    const scopeds3accessFunction = buildAuthFunction(
+    const scopeds3accessFunction = buildScopedS3Function(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
@@ -95,7 +97,6 @@ export function buildAuthFunctions(
         config,
         vpc,
         subnets,
-        "scopeds3access",
         {
             AWS_PARTITION: ServiceHelper.Partition(),
             ROLE_ARN: storageBucketScopedS3AccessRole!.roleArn,
@@ -123,7 +124,7 @@ export function buildAuthFunctions(
     );
 
     return {
-        constraints: buildAuthFunction(
+        authConstraintsService: buildAuthConstraintsFunction(
             scope,
             lambdaCommonBaseLayer,
             storageResources,
@@ -131,10 +132,17 @@ export function buildAuthFunctions(
             config,
             vpc,
             subnets,
-            "constraints"
         ),
         scopeds3access: scopeds3accessFunction,
-        authService: buildAuthService(
+        authLoginProfile: buildAuthLoginProfile(
+            scope,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        ),
+        routes: buildRoutesService(
             scope,
             lambdaCommonBaseLayer,
             storageResources,
@@ -145,7 +153,7 @@ export function buildAuthFunctions(
     };
 }
 
-export function buildAuthFunction(
+export function buildAuthConstraintsFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
@@ -153,10 +161,10 @@ export function buildAuthFunction(
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
-    name: string,
     environment?: { [key: string]: string }
 ): lambda.Function {
-    const fun = new lambda.Function(scope, name, {
+    const name = "authConstraintsService";
+    const authServiceFun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.auth.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -180,15 +188,58 @@ export function buildAuthFunction(
             ...environment,
         },
     });
-    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
-    return fun;
+    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(authServiceFun);
+    storageResources.dynamo.assetStorageTable.grantReadData(authServiceFun);
+    storageResources.dynamo.databaseStorageTable.grantReadData(authServiceFun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(authServiceFun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(authServiceFun, storageResources.encryption.kmsKey);
+    return authServiceFun;
 }
 
-export function buildAuthService(
+export function buildScopedS3Function(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    authResources: authResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    environment?: { [key: string]: string }
+): lambda.Function {
+    const name = "scopeds3access";
+    const authServiceFun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.auth.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(1),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ...environment,
+        },
+    });
+    storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(authServiceFun);
+    storageResources.dynamo.assetStorageTable.grantReadData(authServiceFun);
+    storageResources.dynamo.databaseStorageTable.grantReadData(authServiceFun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(authServiceFun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(authServiceFun, storageResources.encryption.kmsKey);
+    return authServiceFun;
+}
+
+export function buildAuthLoginProfile(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
@@ -197,8 +248,51 @@ export function buildAuthService(
     subnets: ec2.ISubnet[],
     environment?: { [key: string]: string }
 ): lambda.Function {
-    const name = "authService";
-    const authService = new lambda.Function(scope, name, {
+    const name = "authLoginProfile";
+    const authLoginProfileFunc = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.auth.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            USER_STORAGE_TABLE_NAME: storageResources.dynamo.userStorageTable.tableName,
+            EXTERNAL_OATH_IDP_URL: config.app.authProvider.useExternalOAuthIdp.enabled ?
+                config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl : "", //Optional environment field they may get used for customConfigCommon method
+            ...environment,
+        },
+    });
+
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(authLoginProfileFunc);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(authLoginProfileFunc);
+    storageResources.dynamo.userStorageTable.grantReadWriteData(authLoginProfileFunc);
+    kmsKeyLambdaPermissionAddToResourcePolicy(authLoginProfileFunc, storageResources.encryption.kmsKey);
+
+    return authLoginProfileFunc;
+}
+
+export function buildRoutesService(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    environment?: { [key: string]: string }
+): lambda.Function {
+    const name = "routes";
+    const routesFunc = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.auth.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -220,9 +314,9 @@ export function buildAuthService(
         },
     });
 
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(authService);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(authService);
-    kmsKeyLambdaPermissionAddToResourcePolicy(authService, storageResources.encryption.kmsKey);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(routesFunc);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(routesFunc);
+    kmsKeyLambdaPermissionAddToResourcePolicy(routesFunc, storageResources.encryption.kmsKey);
 
-    return authService;
+    return routesFunc;
 }

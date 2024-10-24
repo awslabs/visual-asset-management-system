@@ -26,6 +26,7 @@ export function buildSubscriptionService(
     assetStorageTable: dynamodb.Table,
     userRolesStorageTable: dynamodb.Table,
     authEntitiesStorageTable: dynamodb.Table,
+    userStorageTable: dynamodb.Table,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "subscriptionService";
@@ -42,6 +43,7 @@ export function buildSubscriptionService(
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
             AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
+            USER_STORAGE_TABLE_NAME: userStorageTable.tableName
         },
     });
 
@@ -64,7 +66,8 @@ export function buildSubscriptionService(
     subscriptionsStorageTable.grantReadWriteData(subscriptionServiceFunction);
     assetStorageTable.grantReadWriteData(subscriptionServiceFunction);
     authEntitiesStorageTable.grantReadWriteData(subscriptionServiceFunction);
-    userRolesStorageTable.grantReadWriteData(subscriptionServiceFunction);
+    userRolesStorageTable.grantReadData(subscriptionServiceFunction);
+    userStorageTable.grantReadWriteData(subscriptionServiceFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(subscriptionServiceFunction, kmsKey);
     return subscriptionServiceFunction;
 }
@@ -96,7 +99,7 @@ export function buildCheckSubscriptionFunction(
     subscriptionsStorageTable.grantReadWriteData(checkSubscriptionService);
     assetStorageTable.grantReadWriteData(checkSubscriptionService);
     authEntitiesStorageTable.grantReadWriteData(checkSubscriptionService);
-    userRolesStorageTable.grantReadWriteData(checkSubscriptionService);
+    userRolesStorageTable.grantReadData(checkSubscriptionService);
     kmsKeyLambdaPermissionAddToResourcePolicy(checkSubscriptionService, kmsKey);
     return checkSubscriptionService;
 }
@@ -145,7 +148,7 @@ export function buildUnSubscribeFunction(
     subscriptionsStorageTable.grantReadWriteData(unsubscribeServiceFunction);
     assetStorageTable.grantReadWriteData(unsubscribeServiceFunction);
     authEntitiesStorageTable.grantReadWriteData(unsubscribeServiceFunction);
-    userRolesStorageTable.grantReadWriteData(unsubscribeServiceFunction);
+    userRolesStorageTable.grantReadData(unsubscribeServiceFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(unsubscribeServiceFunction, kmsKey);
     return unsubscribeServiceFunction;
 }

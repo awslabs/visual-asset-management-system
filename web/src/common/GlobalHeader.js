@@ -6,6 +6,7 @@
 
 import { Cache } from "aws-amplify";
 import React, { useState } from "react";
+import sanitizeHtml from 'sanitize-html';
 
 export function GlobalHeader() {
     const config = Cache.getItem("config");
@@ -20,24 +21,9 @@ export function GlobalHeader() {
         bannerMessageHtml !== undefined && bannerMessageHtml !== ""
     );
 
-    function sanitizeHtml(html) {
-        // Escape HTML to prevent XSS
-        const escapedHtml = html.replace(/&/g, '&amp;')
-                                .replace(/</g, '&lt;')
-                                .replace(/>/g, '&gt;')
-                                .replace(/"/g, '&quot;')
-                                .replace(/'/g, '&#039;');
-
-        // Use a regular expression to only allow <strong>, <u>, and <em> tags
-        const sanitizedHtml = escapedHtml.replace(
-            /(<\/?(?!strong|u|em)\b[^>]*>)/gi, 
-            ''
-        );
-
-        return sanitizedHtml;
-    }
-
-    const sanitizedBannerMessage = sanitizeHtml(bannerMessageHtml);
+    const sanitizedBannerMessage = sanitizeHtml(bannerMessageHtml, {
+        allowedTags: ['b', 'em', 'strong', 'u'],
+    });
 
     return (
         <>
@@ -50,7 +36,7 @@ export function GlobalHeader() {
 
             {useBannerMessageHtml && (
                 <div style={{
-                    backgroundColor: "rgba(231, 94, 64, 1)", 
+                    backgroundColor: "rgba(231, 94, 64, 1)",
                     width: "100vw",
                     color: "white",
                     wordWrap: "break-word", // Allow long words to break

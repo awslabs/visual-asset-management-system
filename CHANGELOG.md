@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Features
 
+-   Updated backend infrastructure configuration options and functionality to fully support External OAuth IDP systems besides AWS cognito
 -   Added configuration option `addStackCloudTrailLogs` for creating AWS CloudTrail log groups and trails for the stack. This is defaulted to `true`.
 -   Added configuration option `useAlb.addAlbS3SpecialVpcEndpoint` for creating the special S3 VPC Interface Endpoint for ALB deployment configurations. This is defaulted to `true`. See documentation for this setting if turned false.
 -   Added configuration option `webUi.optionalBannerHtmlMessage` for adding a persistent banner (HTML) message at the top of the WebUI
@@ -15,10 +16,16 @@ All notable changes to this project will be documented in this file. See [standa
 -   The ingestAsset API now supports passing in tags (to support required tag types)
 -   Changed access logs S3 bucket lifecycle policy to only remove logs after 90 days
 -   Added lifecycle polcies on asset and asset auxiliary bucket to remove incomplete upload parts after 14 days
+-   Changed UserId to no longer needing to be an email, added a new LoginProfile table to track user emails for notification service which gets updated from JWT tokens or organization custom logic for retrieving user emails
 
 ### Bug Fixes
 
+-   Increased CustomResource lambda timeouts for OpenSearch schema deployment that caused issues intermitently during GovCloud deployments
+-   Fixed bug in constraint service API that was saving constraints on POST/PUT properly but was erroring on generating a 200 response resulting in a 500 error
+
 ### Chores
+
+-   Optimized some backend lambda initialization code for cold start performance
 
 ## [2.1.0] (2024-08-30)
 

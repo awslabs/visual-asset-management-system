@@ -16,6 +16,11 @@ from customLogging.logger import safeLogger
 
 logger = safeLogger(service="IndexingStreams")
 
+s3client = boto3.client("s3")
+dynamodbClient = boto3.client("dynamodb")
+dynamodbResource = boto3.resource('dynamodb')
+deserialize = TypeDeserializer().deserialize
+
 #
 # Single doc Example
 #
@@ -61,8 +66,7 @@ class MetadataTable():
     @staticmethod
     def from_env(env=os.environ):
         tableName = env.get("METADATA_STORAGE_TABLE_NAME")
-        dynamodb = boto3.resource('dynamodb')
-        table = dynamodb.Table(tableName)
+        table = dynamodbResource.Table(tableName)
         return MetadataTable(table)
 
     @staticmethod
@@ -142,10 +146,9 @@ class MetadataTable():
         )
 
 class AOSIndexS3Objects():
-    def __init__(self, bucketName, s3client,
+    def __init__(self, bucketName,
                  aosclient, indexName, metadataTable=MetadataTable.from_env):
         self.bucketName = bucketName
-        self.s3client = s3client
         self.aosclient = aosclient
         self.indexName = indexName
         self.metadataTable = metadataTable()
@@ -153,7 +156,6 @@ class AOSIndexS3Objects():
     @staticmethod
     def from_env(env=os.environ):
         bucketName = env.get("ASSET_BUCKET_NAME")
-        s3client = boto3.client('s3')
         region = env.get('AWS_REGION')
         service = env.get('AOS_TYPE')  # aoss (serverless) or es (provisioned)
         credentials = boto3.Session().get_credentials()
@@ -169,10 +171,10 @@ class AOSIndexS3Objects():
             connection_class=RequestsHttpConnection,
             pool_maxsize=20,
         )
-        return AOSIndexS3Objects(bucketName, s3client, aosclient, indexName)
+        return AOSIndexS3Objects(bucketName, aosclient, indexName)
 
     def _get_s3_object_keys_generator(self, prefix):
-        paginator = self.s3client.get_paginator('list_objects')
+        paginator = s3client.get_paginator('list_objects')
         page_iterator = paginator.paginate(Bucket=self.bucketName,
                                            Prefix=prefix)
         for page in page_iterator:
@@ -202,8 +204,7 @@ class AOSIndexS3Objects():
         return result
 
     def get_asset_fields(self, databaseId, assetId):
-        ddb = boto3.resource("dynamodb")
-        table = ddb.Table(os.environ.get("ASSET_STORAGE_TABLE_NAME"))
+        table = dynamodbResource.Table(os.environ.get("ASSET_STORAGE_TABLE_NAME"))
 
         result = table.get_item(
             Key={
@@ -394,7 +395,6 @@ class AOSIndexAssetMetadata():
 
     @staticmethod
     def _process_item(item):
-        deserialize = TypeDeserializer().deserialize
         result = {
             x: y
             for k, v in item["dynamodb"]["NewImage"].items()
@@ -451,8 +451,7 @@ class AOSIndexAssetMetadata():
 
 
 def get_asset_fields(keys):
-    # 'Keys': {'assetId': {'S': '...'}, 'databaseId': {'S': '...'}},
-    client = boto3.client("dynamodb")
+    # 'Keys': {'assetId': {'S': '...'}, 'databaseId': {'S': '...'}}
 
     # this allows us to get the asset fields when the provided key
     # is for a metadata prefix rather than just an assetId
@@ -471,7 +470,7 @@ def get_asset_fields(keys):
     #logger.info(keys)
     while result.get("Item") is None and attempts < 60:
         attempts += 1
-        result = client.get_item(
+        result = dynamodbClient.get_item(
             TableName=os.environ.get("ASSET_STORAGE_TABLE_NAME"),
             Key=keys,
             AttributesToGet=[
@@ -518,7 +517,7 @@ def lambda_handler_a(event, context,
             metadataTable.write_asset_table_updated_event(
                 databaseId, assetId)
 
-def handle_s3_event_record_removed(record, s3, s3index_fn):
+def handle_s3_event_record_removed(record, s3index_fn):
     if not record.get("eventName", "").startswith("ObjectRemoved:"):
         logger.info("not an object removed event")
         logger.info(record)
@@ -529,7 +528,6 @@ def handle_s3_event_record_removed(record, s3, s3index_fn):
 
 
 def handle_s3_event_record(record,
-                           s3=boto3.client("s3"),
                            metadata_fn=MetadataTable.from_env,
                            get_asset_fields_fn=get_asset_fields,
                            s3index_fn=AOSIndexS3Objects.from_env,
@@ -541,7 +539,7 @@ def handle_s3_event_record(record,
         logger.info("Ignoring pipeline and preview files from assets from indexing")
         return
 
-    handle_s3_event_record_removed(record, s3, s3index_fn)
+    handle_s3_event_record_removed(record, s3index_fn)
 
     if not record.get("eventName", "").startswith("ObjectCreated:"):
         logger.info("not an object created event")
@@ -550,7 +548,7 @@ def handle_s3_event_record(record,
 
     metadata = metadata_fn()
 
-    head_result = s3.head_object(
+    head_result = s3client.head_object(
         Bucket=record['s3']['bucket']['name'],
         Key=record['s3']['object']['key'],
     )

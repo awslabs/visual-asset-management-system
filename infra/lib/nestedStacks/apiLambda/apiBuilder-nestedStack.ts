@@ -405,6 +405,7 @@ export function apiBuilder(
         storageResources.dynamo.assetStorageTable,
         storageResources.dynamo.userRolesStorageTable,
         storageResources.dynamo.authEntitiesStorageTable,
+        storageResources.dynamo.userStorageTable,
         storageResources.encryption.kmsKey
     );
     attachFunctionToApi(scope, subscriptionService, {
@@ -891,24 +892,39 @@ export function apiBuilder(
         api: api,
     });
 
-    attachFunctionToApi(scope, authFunctions.constraints, {
+    attachFunctionToApi(scope, authFunctions.authConstraintsService, {
         routePath: "/auth/constraints",
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
     for (let i = 0; i < methods.length; i++) {
-        attachFunctionToApi(scope, authFunctions.constraints, {
+        attachFunctionToApi(scope, authFunctions.authConstraintsService, {
             routePath: "/auth/constraints/{constraintId}",
             method: methods[i],
             api: api,
         });
     }
 
-    attachFunctionToApi(scope, authFunctions.authService, {
+    attachFunctionToApi(scope, authFunctions.routes, {
         routePath: "/auth/routes",
         method: apigwv2.HttpMethod.POST,
         api: api,
     });
+
+    attachFunctionToApi(scope, authFunctions.authLoginProfile, {
+        routePath: "/auth/loginProfile/{userId}",
+        method: apigwv2.HttpMethod.GET,
+        api: api,
+    });
+
+    attachFunctionToApi(scope, authFunctions.authLoginProfile, {
+        routePath: "/auth/loginProfile/{userId}",
+        method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+
+
+
 
     //Enabling API Gateway Access Logging: Currently the only way to do this is via V1 constructs
     //https://github.com/aws/aws-cdk/issues/11100#issuecomment-904627081

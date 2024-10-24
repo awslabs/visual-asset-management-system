@@ -8,7 +8,7 @@ from handlers.authz import CasbinEnforcer
 from common.constants import STANDARD_JSON_RESPONSE
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="AuthService")
+logger = safeLogger(service_name="Routes")
 
 def lambda_handler(event, _):
 

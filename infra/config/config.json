@@ -10,6 +10,7 @@
         "bucketMigrationStaging": {
             "assetBucketName": null
         },
+        "adminUserId": "administrator",
         "adminEmailAddress": "adminEmail@example.com",
         "useFips": false,
         "useWaf": true,
@@ -74,7 +75,6 @@
                 "enabled": false,
                 "idpAuthProviderUrl": null,
                 "idpAuthClientId": null,
-                "idpAuthClientSecret": null,
                 "idpAuthPrincipalDomain": null,
                 "lambdaAuthorizorJWTIssuerUrl": null,
                 "lambdaAuthorizorJWTAudience": null

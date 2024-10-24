@@ -166,13 +166,20 @@ def lambda_handler(event, context):
                         "Resource": [KMS_KEY_ARN]
                     })
 
-                # Use Cognito client to create a session to extend the timeout seconds
-                account_id = sts_client.get_caller_identity()['Account']
-                authorizer_jwt_token=event["headers"]["authorization"].split(" ")[1]
-
                 if use_external_oauth == "true":
-                    open_id_token = {"Token":authorizer_jwt_token}
+                    #If using a non-cognito IDP, switch back to old assume role method (has tighter restrictions on session timeouts)
+                    assumed_role_object = sts_client.assume_role(
+                        RoleArn=ROLE_ARN,
+                        RoleSessionName="presign",
+                        DurationSeconds=timeout,
+                        Policy=json.dumps(policy),
+                    )
+
                 else:
+                    # Use Cognito client to create a session to extend the timeout seconds
+                    account_id = sts_client.get_caller_identity()['Account']
+                    authorizer_jwt_token=event["headers"]["authorization"].split(" ")[1]
+
                     login={cognito_auth:authorizer_jwt_token}
                     cognito_id = cognito_client.get_id(
                         AccountId=account_id,
@@ -184,13 +191,13 @@ def lambda_handler(event, context):
                         Logins=login
                     )
 
-                assumed_role_object = sts_client.assume_role_with_web_identity(
-                    RoleArn=ROLE_ARN,
-                    RoleSessionName="presign",
-                    WebIdentityToken=open_id_token["Token"],
-                    DurationSeconds=timeout,
-                    Policy=json.dumps(policy),
-                )
+                    assumed_role_object = sts_client.assume_role_with_web_identity(
+                        RoleArn=ROLE_ARN,
+                        RoleSessionName="presign",
+                        WebIdentityToken=open_id_token["Token"],
+                        DurationSeconds=timeout,
+                        Policy=json.dumps(policy),
+                    )
 
                 logger.info("assumed role object")
                 logger.info(assumed_role_object)
