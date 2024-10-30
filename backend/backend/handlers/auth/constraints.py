@@ -191,7 +191,8 @@ def update_constraint(event, response):
         ReturnValues="UPDATED_NEW"
     )
 
-    response['body']['constraint'] = constraint
+    response['body'] = {"message": "Constraint created/updated."}
+    response['body']['constraint'] = json.dumps(constraint)
 
 
 def delete_constraint(event, response):

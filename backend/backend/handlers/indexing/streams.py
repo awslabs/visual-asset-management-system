@@ -479,7 +479,7 @@ def get_asset_fields(keys):
         )
 
         if result.get("Item") is None:
-            logger.info("asset record is empty on attempt" + attempts+" for keys "+keys)
+            logger.info("asset record is empty on attempt"+ str(attempts))
             time.sleep(1)
 
     return result.get('Item')
