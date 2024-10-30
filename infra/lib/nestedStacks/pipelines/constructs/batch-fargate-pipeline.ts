@@ -60,7 +60,7 @@ export class BatchFargatePipelineConstruct extends Construct {
             path.join(__dirname, props.imageAssetPath),
             {
                 file: props.dockerfileName,
-                platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64 //Fix to the LINUX_AMD64 platform to standardize instruction set across all loads
+                platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64, //Fix to the LINUX_AMD64 platform to standardize instruction set across all loads
             }
         );
 

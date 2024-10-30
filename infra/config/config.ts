@@ -119,7 +119,7 @@ export function getConfig(app: cdk.App): Config {
         config.app.authProvider.useCognito.useUserPasswordAuthFlow = false;
     }
 
-    if(config.app.pipelines.useConversion3dBasic.enabled == undefined) {
+    if (config.app.pipelines.useConversion3dBasic.enabled == undefined) {
         config.app.pipelines.useConversion3dBasic.enabled = true;
     }
 

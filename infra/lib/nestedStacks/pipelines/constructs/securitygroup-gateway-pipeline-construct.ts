@@ -51,7 +51,7 @@ export class SecurityGroupGatewayPipelineConstruct extends Construct {
         //For pipelines we are only deploying in 1 subnet/AZ, so just grab the top one from the isolated/private subnet list
         //At this point we already know there is at least 1  subnet with other checks previously done
         this.subnets = {
-            pipeline: props.subnets != undefined? [props.subnets[0]] : [],
+            pipeline: props.subnets != undefined ? [props.subnets[0]] : [],
         };
 
         this.securityGroups = {

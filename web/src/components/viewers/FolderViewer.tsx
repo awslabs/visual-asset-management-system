@@ -71,7 +71,12 @@ export default function FolderViewer({
                     }
                     currentChildren = foundChild.children!;
                 }
-                currentChildren.push({ name: fileName, displayName: fileName, isOpen: true, key: filePath.key }); // Add the file name as a child node with the key
+                currentChildren.push({
+                    name: fileName,
+                    displayName: fileName,
+                    isOpen: true,
+                    key: filePath.key,
+                }); // Add the file name as a child node with the key
             }
         }
         root.children = rootChildren;

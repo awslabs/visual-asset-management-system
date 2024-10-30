@@ -115,7 +115,7 @@ function addDirectories(root: FileTree, directories: string): FileTree {
         if (subTree == null) {
             subTree = {
                 name: part,
-                displayName:part,
+                displayName: part,
                 relativePath: parts.slice(0, i + 1).join("/") + "/",
                 keyPrefix: part,
                 primary: false,
@@ -137,7 +137,6 @@ function addFiles(fileKeys: FileKey[], root: FileTree) {
         return parentPath === "" ? "" : parentPath;
     };
     if (fileKeys.length === 1) {
-
         let displayName = fileKeys[0].fileName;
         //Set "(Primary)" on display name if true
         if (fileKeys[0].primary) {
@@ -146,7 +145,7 @@ function addFiles(fileKeys: FileKey[], root: FileTree) {
 
         root.subTree.push({
             name: fileKeys[0].fileName,
-            displayName:displayName,
+            displayName: displayName,
             relativePath: fileKeys[0].relativePath,
             keyPrefix: fileKeys[0].key,
             primary: fileKeys[0].primary,
@@ -175,7 +174,7 @@ function addFiles(fileKeys: FileKey[], root: FileTree) {
 
         parentRoot!.subTree.push({
             name: fileKey.fileName,
-            displayName:displayName,
+            displayName: displayName,
             relativePath: fileKey.relativePath,
             keyPrefix: fileKey.key,
             primary: fileKey.primary,
@@ -499,21 +498,25 @@ function FolderActionBar(props: { actionsBarRoot: FileTree }) {
                         Upload Files in {props.actionsBarRoot.name}{" "}
                     </span>
                 </div>
-                { //Only show this if the keyPrefix is not "/"
-                    props.actionsBarRoot.keyPrefix != "/" && (<div className="action-bar-item">
-                    <Icon name={"external"} />
-                    <span
-                        onClick={() => {
-                            dispatch({
-                                type: "VIEW_FILE_FOLDER",
-                                payload: { key: props.actionsBarRoot },
-                            });
-                        }}
-                    >
-                        {" "}
-                        View {props.actionsBarRoot.name} Metadata{" "}
-                    </span>
-                </div>)}
+                {
+                    //Only show this if the keyPrefix is not "/"
+                    props.actionsBarRoot.keyPrefix != "/" && (
+                        <div className="action-bar-item">
+                            <Icon name={"external"} />
+                            <span
+                                onClick={() => {
+                                    dispatch({
+                                        type: "VIEW_FILE_FOLDER",
+                                        payload: { key: props.actionsBarRoot },
+                                    });
+                                }}
+                            >
+                                {" "}
+                                View {props.actionsBarRoot.name} Metadata{" "}
+                            </span>
+                        </div>
+                    )
+                }
             </SpaceBetween>
         </div>
     );

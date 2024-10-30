@@ -29,7 +29,7 @@ export interface Metadata3dLabelingNestedStackProps extends cdk.StackProps {
 const defaultProps: Partial<Metadata3dLabelingNestedStackProps> = {};
 
 export class Metadata3dLabelingNestedStack extends NestedStack {
-    public pipelineVamsLambdaFunctionName: string 
+    public pipelineVamsLambdaFunctionName: string;
     constructor(parent: Construct, name: string, props: Metadata3dLabelingNestedStackProps) {
         super(parent, name);
 
@@ -49,6 +49,7 @@ export class Metadata3dLabelingNestedStack extends NestedStack {
             }
         );
 
-        this.pipelineVamsLambdaFunctionName = Metadata3dLabelingConstructPipeline.pipelineVamsLambdaFunctionName
+        this.pipelineVamsLambdaFunctionName =
+            Metadata3dLabelingConstructPipeline.pipelineVamsLambdaFunctionName;
     }
 }

@@ -12,9 +12,7 @@ import * as path from "path";
 import * as cdk from "aws-cdk-lib";
 import { Duration, Stack, Names, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
-import {
-    buildVamsExecute3dBasicConversionPipelineFunction
-} from "../lambdaBuilder/conversion3dBasicFunctions";
+import { buildVamsExecute3dBasicConversionPipelineFunction } from "../lambdaBuilder/conversion3dBasicFunctions";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
 import { NagSuppressions } from "cdk-nag";
 import { CfnOutput } from "aws-cdk-lib";
@@ -45,7 +43,7 @@ const defaultProps: Partial<Conversion3dBasicConstructProps> = {
 };
 
 export class Conversion3dBasicConstruct extends NestedStack {
-    public pipelineVamsLambdaFunctionName: string = "" 
+    public pipelineVamsLambdaFunctionName = "";
 
     constructor(parent: Construct, name: string, props: Conversion3dBasicConstructProps) {
         super(parent, name);
@@ -55,27 +53,25 @@ export class Conversion3dBasicConstruct extends NestedStack {
         const region = Stack.of(this).region;
         const account = Stack.of(this).account;
 
-
         //Build Lambda VAMS Execution Function
-        const pipelineConversion3dBasicLambdaFunction = buildVamsExecute3dBasicConversionPipelineFunction(
-            this,
-            props.storageResources.s3.assetBucket,
-            props.storageResources.s3.assetAuxiliaryBucket,
-            props.config,
-            props.vpc,
-            props.pipelineSubnets,
-            props.storageResources.encryption.kmsKey
-        );
+        const pipelineConversion3dBasicLambdaFunction =
+            buildVamsExecute3dBasicConversionPipelineFunction(
+                this,
+                props.storageResources.s3.assetBucket,
+                props.storageResources.s3.assetAuxiliaryBucket,
+                props.config,
+                props.vpc,
+                props.pipelineSubnets,
+                props.storageResources.encryption.kmsKey
+            );
 
         //Output VAMS Pipeline Execution Function name
         new CfnOutput(this, "Conversion3dBasicLambdaExecutionFunctionName", {
-            value: pipelineConversion3dBasicLambdaFunction.functionName, 
-            description:
-                "The 3dBasic Conversion Lambda Function Name to use in a VAMS Pipeline",
+            value: pipelineConversion3dBasicLambdaFunction.functionName,
+            description: "The 3dBasic Conversion Lambda Function Name to use in a VAMS Pipeline",
             exportName: "Conversion3dBasicLambdaExecutionFunctionName",
         });
-        
-        this.pipelineVamsLambdaFunctionName = pipelineConversion3dBasicLambdaFunction.functionName 
 
+        this.pipelineVamsLambdaFunctionName = pipelineConversion3dBasicLambdaFunction.functionName;
     }
 }

@@ -259,7 +259,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 description: "API Gateway endpoint",
             });
 
-            let useCasefunctionNumber = 1
+            let useCasefunctionNumber = 1;
             for (const pipelineVamsExecuteLambdaFunction of pipelineBuilderNestedStack.pipelineVamsLambdaFunctionNames) {
                 const pipelineVamsExecuteLambdaFunctionOutput = new cdk.CfnOutput(
                     this,
@@ -269,7 +269,7 @@ export class CoreVAMSStack extends cdk.Stack {
                         description: "Use-case Pipeline - VAMS Execute Lambda Function to Register",
                     }
                 );
-                useCasefunctionNumber = useCasefunctionNumber + 1
+                useCasefunctionNumber = useCasefunctionNumber + 1;
             }
 
             //Nag supressions

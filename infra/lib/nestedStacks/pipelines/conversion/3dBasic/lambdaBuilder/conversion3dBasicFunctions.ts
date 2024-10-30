@@ -26,11 +26,15 @@ export function buildVamsExecute3dBasicConversionPipelineFunction(
     subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
 ): lambda.Function {
-    const name = "vamsExecute3dBasicConversion" 
-
+    const name = "vamsExecute3dBasicConversion";
 
     const fun = new lambda.DockerImageFunction(scope, name, {
-        code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, '../../../../../../../backendPipelines/conversion/3dBasic/lambdaContainer')),
+        code: lambda.DockerImageCode.fromImageAsset(
+            path.join(
+                __dirname,
+                "../../../../../../../backendPipelines/conversion/3dBasic/lambdaContainer"
+            )
+        ),
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
@@ -44,10 +48,10 @@ export function buildVamsExecute3dBasicConversionPipelineFunction(
         environment: {},
     });
 
-     assetBucket.grantReadWrite(fun);
-     assetAuxiliaryBucket.grantReadWrite(fun);
-     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
-     suppressCdkNagErrorsByGrantReadWrite(scope);
+    assetBucket.grantReadWrite(fun);
+    assetAuxiliaryBucket.grantReadWrite(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
 }

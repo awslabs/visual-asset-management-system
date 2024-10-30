@@ -73,7 +73,6 @@ interface Config {
      * Content Security Policy to apply (generally for ALB deployment where CSP is not injected)
      */
     contentSecurityPolicy?: string;
-
 }
 
 function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
