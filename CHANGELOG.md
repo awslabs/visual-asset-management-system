@@ -14,20 +14,15 @@ All notable changes to this project will be documented in this file. See [standa
 -   Added configuration option `webUi.optionalBannerHtmlMessage` for adding a persistent banner (HTML) message at the top of the WebUI
 -   **Web** Added capability to define which tag types are required to be added to an asset. If tag types are required, at least one of the defined tags on the tag type must always be included on the asset.
 -   The ingestAsset API now supports passing in tags (to support required tag types)
--   Changed access logs S3 bucket lifecycle policy to only remove logs after 90 days
--   Added lifecycle polcies on asset and asset auxiliary bucket to remove incomplete upload parts after 14 days
 -   Changed UserId to no longer needing to be an email, added a new LoginProfile table to track user emails for notification service which gets updated from JWT tokens or organization custom logic for retrieving user emails
 
 ### Bug Fixes
-
--   Increased CustomResource lambda timeouts for OpenSearch schema deployment that caused issues intermitently during GovCloud deployments
--   Fixed bug in constraint service API that was saving constraints on POST/PUT properly but was erroring on generating a 200 response resulting in a 500 error
 
 ### Chores
 
 -   Optimized some backend lambda initialization code for cold start performance
 
-## [2.1.0] (2024-08-30)
+## [2.1.0] (2024-10-31)
 
 This minor version includes changes to VAMS pipelines, use-case pipeline implementations, and v2.0 bug fixes.
 
@@ -60,6 +55,8 @@ Due to DynamoDB table structure changes, a A/B Stack deployment with migration s
 -   -   Implements a new approach for s3ScopedAccess for upload that allows tokens up to 12 hours using AssumeRoleWithWebIdentity.
 -   **Web** Added PointCloud viewer and pipeline support for `.ply` file formats, moved from the 3D Mesh 3D Online Viewer
 -   **Web** The asset file viewer now says `(primary)` next to the assets main/primary associated file. The primary file is what get's used right now for pipeline ingestion when launching a workflow.
+-   Changed access logs S3 bucket lifecycle policy to only remove logs after 90 days
+-   Added lifecycle polcies on asset and asset auxiliary bucket to remove incomplete upload parts after 14 days
 
 ### Bug Fixes
 
@@ -78,6 +75,9 @@ Due to DynamoDB table structure changes, a A/B Stack deployment with migration s
 -   **Web** Fixed bug where adding asset links had swapped the child/parent asset (WebUI only bug, API direct calls were not affected)
 -   Fixed CDK deployment bug of encrypting the WebAppLogsBucket when deploying with ALB and KMS encryption. The WebAppLogsBucket cannot be KMS encrypted when used for ALB logging output.
 -   Fixed bug for exceeding PolicyLimitSize of STS temporary role calls in S3ScopedAccess used during asset upload from the Web UI when KMS encryption is enabled.
+-   Increased CustomResource lambda timeouts for OpenSearch schema deployment that caused issues intermitently during GovCloud deployments
+-   Fixed bug in constraint service API that was saving constraints on POST/PUT properly but was erroring on generating a 200 response resulting in a 500 error
+-   Fixed bug in OpenSearch indexing (bad logging method) during certain edge cases that prevented adding new data to the index
 
 ### Chores
 
@@ -94,11 +94,12 @@ Due to DynamoDB table structure changes, a A/B Stack deployment with migration s
 -   Added CDK Stack output to display all VAMS Pipeline Lambda function names for all activated use-case pipelines that can be registered within the VAMS.
 -   Added error for all use-case pipeline lambdas if executed with the wrong task_token / call-back setup (synch vs asynch) in VAMS
 -   Added draft lambda functions for the uploadV2 feature expected. Draft function not yet ingested into CDK for deployment.
--   Updated documentation on security, legal, and use notices
-
-### Deprecation / Feature Removal
+-   Added security.txt file to website for AWS security reporting information.
+-   Updated documentation on security, legal, and use notices.
 
 ### Known Oustanding Issues
+
+-   Using s3ScopedAccess for Upload (currently in use by VAMS WebUI) can also cause synchronization issues due to race conditions between uploading and calling the asset upload APIs. Additionally handling very large file uplaods and downloads (+1TB) can cause issues. Expect a future re-write to use solely pre-signed storage URLs for upload and a 3/4-step guided API call process for this to resolve this issue, similar to `ingestAsset` API used to test the core of this new method.
 
 ## [2.0.0] (2024-6-14)
 
