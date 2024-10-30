@@ -227,7 +227,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         lifecycleRules: [
             {
                 enabled: true,
-                abortIncompleteMultipartUploadAfter: Duration.days(14)
+                abortIncompleteMultipartUploadAfter: Duration.days(14),
             },
         ],
         serverAccessLogsBucket: accessLogsBucket,
@@ -327,7 +327,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         lifecycleRules: [
             {
                 enabled: true,
-                abortIncompleteMultipartUploadAfter: Duration.days(14)
+                abortIncompleteMultipartUploadAfter: Duration.days(14),
             },
         ],
         serverAccessLogsBucket: accessLogsBucket,

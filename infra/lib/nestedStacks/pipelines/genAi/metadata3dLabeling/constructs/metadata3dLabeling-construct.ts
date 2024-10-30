@@ -60,7 +60,7 @@ const defaultProps: Partial<Metadata3dLabelingConstructProps> = {
  * On redeployment, will automatically invalidate the CloudFront distribution cache
  */
 export class Metadata3dLabelingConstruct extends NestedStack {
-    public pipelineVamsLambdaFunctionName: string 
+    public pipelineVamsLambdaFunctionName: string;
 
     constructor(parent: Construct, name: string, props: Metadata3dLabelingConstructProps) {
         super(parent, name);
@@ -69,7 +69,6 @@ export class Metadata3dLabelingConstruct extends NestedStack {
 
         const region = Stack.of(this).region;
         const account = Stack.of(this).account;
-
 
         //Lambda layer resource
         //Deploy Metadata Generation Lambda Layer
@@ -411,11 +410,11 @@ export class Metadata3dLabelingConstruct extends NestedStack {
         //Output VAMS Pipeline Execution Function name
         new CfnOutput(this, "Metadata3dLabelingLambdaExecutionFunctionName", {
             value: Metadata3dLabelingPipelineExecuteFunction.functionName,
-            description:
-                "The Metadata 3D Labeling Lambda Function Name to use in a VAMS Pipeline",
+            description: "The Metadata 3D Labeling Lambda Function Name to use in a VAMS Pipeline",
             exportName: "Metadata3dLabelingLambdaExecutionFunctionName",
         });
-        this.pipelineVamsLambdaFunctionName = Metadata3dLabelingPipelineExecuteFunction.functionName
+        this.pipelineVamsLambdaFunctionName =
+            Metadata3dLabelingPipelineExecuteFunction.functionName;
 
         //Nag Supressions
         const reason =

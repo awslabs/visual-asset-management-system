@@ -29,7 +29,7 @@ export interface Conversion3dBasicNestedStackProps extends cdk.StackProps {
 const defaultProps: Partial<Conversion3dBasicNestedStackProps> = {};
 
 export class Conversion3dBasicNestedStack extends NestedStack {
-    public pipelineVamsLambdaFunctionName: string = ""
+    public pipelineVamsLambdaFunctionName = "";
     constructor(parent: Construct, name: string, props: Conversion3dBasicNestedStackProps) {
         super(parent, name);
 
@@ -45,10 +45,11 @@ export class Conversion3dBasicNestedStack extends NestedStack {
                 vpc: props.vpc,
                 pipelineSubnets: props.pipelineSubnets,
                 pipelineSecurityGroups: props.pipelineSecurityGroups,
-                lambdaCommonBaseLayer: props.lambdaCommonBaseLayer
+                lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
             }
         );
 
-        this.pipelineVamsLambdaFunctionName = conversion3dBasicConstructPipeline.pipelineVamsLambdaFunctionName
+        this.pipelineVamsLambdaFunctionName =
+            conversion3dBasicConstructPipeline.pipelineVamsLambdaFunctionName;
     }
 }

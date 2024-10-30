@@ -87,12 +87,10 @@ interface Config {
      * Content Security Policy to apply (generally for ALB deployment where CSP is not injected)
      */
     contentSecurityPolicy?: string;
-
     /**
      * HTML banner message to be displayed at the top of all web UI pages
      */
     bannerHtmlMessage?: string
-
 }
 
 function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {

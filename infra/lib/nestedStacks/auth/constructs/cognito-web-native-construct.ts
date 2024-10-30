@@ -53,7 +53,7 @@ export class CognitoWebNativeConstructStack extends Construct {
         super(parent, name);
 
         //Check if GovCloud is enabled and set the handler to v1 instead (GovCloud does not support advanced security mode which can use the v2 pretokengen lambdas)
-        const handlerName = props.config.app.govCloud.enabled? "pretokengenv1" : "pretokengenv2";
+        const handlerName = props.config.app.govCloud.enabled ? "pretokengenv1" : "pretokengenv2";
         const preTokenGeneration = new lambda.Function(this, handlerName, {
             code: lambda.Code.fromAsset(path.join(__dirname, `../../../../../backend/backend`)),
             handler: `handlers.auth.${handlerName}.lambda_handler`,
@@ -108,7 +108,7 @@ export class CognitoWebNativeConstructStack extends Construct {
         cfnUserPool.lambdaConfig = {
             preTokenGenerationConfig: {
                 lambdaArn: preTokenGeneration.functionArn,
-                lambdaVersion: props.config.app.govCloud.enabled? "V1_0" : "V2_0",
+                lambdaVersion: props.config.app.govCloud.enabled ? "V1_0" : "V2_0",
             },
         };
 
