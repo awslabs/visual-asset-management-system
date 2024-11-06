@@ -15,7 +15,7 @@ import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 
 export function requireTLSAndAdditionalPolicyAddToResourcePolicy(
-    bucket: s3.Bucket,
+    bucket: s3.IBucket,
     config: Config.Config
 ) {
     bucket.addToResourcePolicy(
@@ -43,7 +43,7 @@ export function requireTLSAndAdditionalPolicyAddToResourcePolicy(
 }
 
 export function kmsKeyLambdaPermissionAddToResourcePolicy(
-    lambdaFunction: lambda.Function,
+    lambdaFunction: lambda.IFunction,
     kmsKey?: kms.IKey
 ) {
     if (kmsKey) {

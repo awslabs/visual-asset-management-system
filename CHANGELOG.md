@@ -78,6 +78,7 @@ Due to DynamoDB table structure changes, a A/B Stack deployment with migration s
 -   Increased CustomResource lambda timeouts for OpenSearch schema deployment that caused issues intermitently during GovCloud deployments
 -   Fixed bug in constraint service API that was saving constraints on POST/PUT properly but was erroring on generating a 200 response resulting in a 500 error
 -   Fixed bug in OpenSearch indexing (bad logging method) during certain edge cases that prevented adding new data to the index
+-   Fixed bug in CDK storageResource helper function where S3 buckets were not getting the proper resource policies applied
 
 ### Chores
 
