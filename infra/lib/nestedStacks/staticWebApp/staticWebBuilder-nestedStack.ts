@@ -73,6 +73,9 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
         const webAppAccessLogsBucket = new s3.Bucket(this, "WebAppAccessLogsBucket", {
             ...s3DefaultProps,
+            bucketName: props.config.app.useAlb.enabled
+            ? props.config.app.useAlb.domainHost + "-webappaccesslogs"
+            : undefined,
             encryption:
                 props.config.app.useKmsCmkEncryption.enabled && !props.config.app.useAlb.enabled //ALB doesn't support encryption logs bucket encrypted with KMS
                     ? s3.BucketEncryption.KMS
@@ -253,11 +256,15 @@ export class StaticWebBuilderNestedStack extends NestedStack {
             });
 
             //Restrict to just the VPCe (if enabled)
+            //Note: If not adding VPCe at deployment, add condition restriction to blank VPCe (that get's filled in afterwards as part of manual steps)
+            let vpcEndpointId:string = "";
             if(props.config.app.useAlb.addAlbS3SpecialVpcEndpoint) {
-                webAppBucketPolicy.addCondition("StringEquals", {
-                    "aws:SourceVpce": website.s3VpcEndpoint.vpcEndpointId,
-                });
+                vpcEndpointId = website.s3VpcEndpoint.vpcEndpointId;
             }
+            webAppBucketPolicy.addCondition("StringEquals", {
+                "aws:SourceVpce": vpcEndpointId,
+            });
+
 
             webAppBucket.addToResourcePolicy(webAppBucketPolicy);
 

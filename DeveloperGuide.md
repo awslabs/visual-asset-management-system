@@ -193,6 +193,7 @@ Turn the `app.useAlb.addAlbS3SpecialVpcEndpoint` infrastructure configuration to
 4. Update the IAM resource policy on the webAppBucket S3 bucket (bucket name will be the domain name used for the ALB) to add a condition to only allow connections from the created VPC Interface Endpoint
 5. Lookup all the Private IP Addresses for each ALB subnet that are assigned to the VPC Interface endpoint
 6. Add to the stack-created ALB target group all the VPCe IP addresses looked up in the previous step.
+7. Update the resource policy of the S3 ALB domainname bucket (which contains the webapp files) to update the condition of `aws:SourceVpce` to point to the new VPCe endpoint ID
 
 ### Uninstalling
 

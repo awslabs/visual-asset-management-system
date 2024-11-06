@@ -21,6 +21,7 @@ All notable changes to this project will be documented in this file. See [standa
 ### Chores
 
 -   Optimized some backend lambda initialization code for cold start performance
+-   Updated S3 bucket name for WebAppAccessLogs for ALB deployment (to be based on the domain name used `<ALBDomainName>-webappaccesslogs`) to help with organization policy exceptions
 
 ## [2.1.0] (2024-10-31)
 
