@@ -8,19 +8,21 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Features
 
--   Updated backend infrastructure configuration options and functionality to fully support External OAuth IDP systems besides AWS cognito
+-   Updated backend infrastructure configuration options and functionality to support External OAuth IDP systems besides AWS cognito (Note: Does not yet include any of the front-end changes for this which is where the authentication mechanism happens)
 -   Added configuration option `addStackCloudTrailLogs` for creating AWS CloudTrail log groups and trails for the stack. This is defaulted to `true`.
 -   Added configuration option `useAlb.addAlbS3SpecialVpcEndpoint` for creating the special S3 VPC Interface Endpoint for ALB deployment configurations. This is defaulted to `true`. See documentation for this setting if turned false.
--   Added configuration option `webUi.optionalBannerHtmlMessage` for adding a persistent banner (HTML) message at the top of the WebUI
+-   **Web** Added infrastructure configuration option `webUi.optionalBannerHtmlMessage` for adding a persistent banner (HTML) message at the top of the WebUI
 -   **Web** Added capability to define which tag types are required to be added to an asset. If tag types are required, at least one of the defined tags on the tag type must always be included on the asset.
 -   The ingestAsset API now supports passing in tags (to support required tag types)
--   Changed UserId to no longer needing to be an email, added a new LoginProfile table to track user emails for notification service which gets updated from JWT tokens or organization custom logic for retrieving user emails
+-   Changed UserId to no longer need to be an email, added a new LoginProfile table to track user emails for notification service which gets updated from JWT tokens or organization custom logic for retrieving user emails. New API for updating LoginProfile added to web login.
 
 ### Bug Fixes
 
 ### Chores
 
--   Optimized some backend lambda initialization code for cold start performance
+-   Upgraded lambda and all associated libraries (including use-case pipelines) to use Python 3.12 runtimes
+-   Upgraded infrastructure NPM package dependencies
+-   Optimized some backend lambda initialization code in various functions and globally in the casbin authorization functions for cold start performance improvement
 -   Updated S3 bucket name for WebAppAccessLogs for ALB deployment (to be based on the domain name used `<ALBDomainName>-webappaccesslogs`) to help with organization policy exceptions
 
 ## [2.1.0] (2024-10-31)

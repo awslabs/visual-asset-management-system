@@ -41,7 +41,7 @@ VAMS Upgrade Templates are described below. Copy the template to a new configura
 -   Script to run locally to migrate data from one VAMS deployment stack to another.
 -   Intended to be run as part of an A/B deployment, before the new stack version is fully switched over to and before the old stack is tore down.
 
-1. Install python 3.10 and boto3 (pip install boto3)
+1. Install python 3.12 and boto3 (pip install boto3)
 
 2. Copy the appropriate migration script in [Migration Script Template Outline](./README.md#migration-script-template-outline) to a new JSON schema file in `./infra/deploymentDataMigration/config`.
 3. Update the regionFrom [Stack A] and regionTo [Stack B] fields in your `./infra/deploymentDataMigration/config/` JSON MigrationSchema file to reflect the region where the old and new VAMS stacks are deployed.

@@ -4,7 +4,7 @@
 
 ### Requirements
 
--   Python 3.10
+-   Python 3.12
 -   Poetry (for managing python dependencies in the VAMS backend)
 -   Docker
 -   Node >=18.7

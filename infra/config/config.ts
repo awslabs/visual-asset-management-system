@@ -15,7 +15,7 @@ import { region_info } from "aws-cdk-lib";
 dotenv.config();
 
 //Top level configurations
-export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_10;
+export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
 export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_18_X;
 export const LAMBDA_MEMORY_SIZE = 3003;
 export const OPENSEARCH_VERSION = cdk.aws_opensearchservice.EngineVersion.OPENSEARCH_2_7;

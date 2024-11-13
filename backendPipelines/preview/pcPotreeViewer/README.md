@@ -35,7 +35,7 @@ Note: All container logic and AWS SDK use is controlled with Python scripts that
 
 Before getting started with the container, verify the following are installed.
 
--   Python >3.10: <https://www.python.org/downloads/>
+-   Python >3.12: <https://www.python.org/downloads/>
 -   Docker (CLI and/or Desktop): <https://www.docker.com/>
 
 ### Building the Container Image
