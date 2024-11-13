@@ -99,6 +99,15 @@ def verify_get_path_objects(bucketName: str, pathPrefix: str):
 
     return all_outputs
 
+def lookup_existing_asset(database_id, asset_id):
+    asset_table = dynamodb.Table(asset_Database)
+    asset = asset_table.get_item(
+        Key={'databaseId': database_id, 'assetId': asset_id})
+    if 'Item' in asset:
+        return asset['Item']
+    else:
+        return None
+
 
 def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
@@ -350,8 +359,14 @@ def lambda_handler(event, context):
                 except Exception as e:
                     logger.error(e)
 
+                existingAsset = None
+                try:
+                    existingAsset = lookup_existing_asset(event['databaseId'], event['assetId'])
+                except Exception as e:
+                    logger.error(e)
+
                 assets = []
-                if 'Contents' in objectsFound:
+                if 'Contents' in objectsFound and existingAsset:
                     files = [x['Key'] for x in objectsFound['Contents'] if '/' != x['Key'][-1]]
                     logger.info("Files present in pipeline output asset folder:")
                     logger.info(files)
@@ -363,23 +378,22 @@ def lambda_handler(event, context):
                             "body": {
                                 "databaseId": event['databaseId'],
                                 "assetId": event['assetId'],
-                                #"assetName": event['assetName'], #We don't have asset ID and is not required for updating an existing asset by uploadAsset
+                                #"assetName": existingAsset['assetName'], #not needed for asset update
                                 "pipelineId": pipelineName,
                                 "executionId": event['executionId'],
-                                "tags": event.get("tags", []),
+                                "tags": existingAsset.get('tags', []),
                                 "key": file,
                                 "assetType": outputType,
-                                #"description": event['description'],#We don't have asset description and is not required for updating an existing asset by uploadAsset
+                                #"description": existingAsset.get('description', ""), #not needed for asset update
                                 "specifiedPipelines": [],
-                                "isDistributable": True,
+                                "isDistributable": existingAsset.get('isDistributable', False),
+                                "isMultiFile": existingAsset.get('isMultiFile', False),
                                 "uploadTempLocation": True,
-                                "Comment": "",
+                                "Comment": "Pipeline Upload",
                                 "assetLocation": {
                                     "Key": file
                                 },
-                                "previewLocation": {
-                                    "Key": ""
-                                }
+                                "previewLocation": existingAsset.get('previewLocation', {"Key": ""}),
                             },
                             "returnAsset": True
                         }
