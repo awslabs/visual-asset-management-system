@@ -35,6 +35,9 @@ ROLE_ARN = os.environ['ROLE_ARN']
 AWS_PARTITION = os.environ['AWS_PARTITION']
 KMS_KEY_ARN = os.environ['KMS_KEY_ARN']
 
+cognito_auth = os.environ["COGNITO_AUTH"]
+identity_pool_id = os.environ["IDENTITY_POOL_ID"]
+cred_timeout = int(os.environ['CRED_TOKEN_TIMEOUT_SECONDS'])
 
 def lambda_handler(event, context):
     global claims_and_roles
@@ -110,22 +113,22 @@ def lambda_handler(event, context):
                     break
 
             if allowed:
-                timeout = 900
+                timeout = cred_timeout
 
                 # generate a policy scoped to the assetId as the s3 key prefix
                 # to be passed to assume_role
+                #Note: Shortened actions due to bumping up against PackedPolicySize limit when enabling KMS
                 policy = {
                     "Version": "2012-10-17",
                     "Statement": [{
-                        "Sid": "Stmt1",
                         "Effect": "Allow",
                         # set of actions needed to do put object and multipart upload
                         "Action": [
-                            "s3:PutObject",
+                            "s3:PutO*",
                             "s3:List*",
-                            "s3:CreateMultipartUpload",
-                            "s3:AbortMultipartUpload",
-                            "s3:ListMultipartUploadParts",
+                            "s3:CreateM*",
+                            "s3:AbortM*",
+                            "s3:ListM*",
                         ],
                         "Resource": [
                             "arn:"+AWS_PARTITION+":s3:::" +
@@ -134,11 +137,10 @@ def lambda_handler(event, context):
                             os.environ['S3_BUCKET'] + "/previews/" + assetId + "/*"
                         ]
                     }, {
-                        "Sid": "Stmt2",
                         "Effect": "Allow",
                         # set of actions needed to do get object and multipart upload
                         "Action": [
-                            "s3:ListBucket",
+                            "s3:ListB*",
                         ],
                         "Resource": [
                             "arn:"+AWS_PARTITION+":s3:::" + os.environ['S3_BUCKET']
@@ -149,26 +151,39 @@ def lambda_handler(event, context):
                 #If we have a KMS ARN, add statement policy to allow KMS actions
                 if KMS_KEY_ARN != "":
                     policy["Statement"].append({
-                        "Sid": "Stmt3",
                         "Effect": "Allow",
                         "Action": [
-                            "kms:Decrypt",
-                            "kms:DescribeKey",
-                            "kms:Encrypt",
-                            "kms:GenerateDataKey*",
-                            "kms:ReEncrypt*",
-                            "kms:ListKeys",
-                            "kms:CreateGrant",
-                            "kms:ListAliases",
+                            "kms:GenerateD*",
+                            "kms:D*"
                         ],
                         "Resource": [KMS_KEY_ARN]
                     })
 
-                # use sts to create a session for timeout seconds
+                # Use Cognito client to create a session to extend the timeout seconds
                 sts_client = boto3.client('sts')
-                assumed_role_object = sts_client.assume_role(
+                cognito_client = boto3.client('cognito-identity')
+
+                cognito_token=event["headers"]["authorization"].split(" ")[1]
+
+                login={cognito_auth:cognito_token}
+                
+                account_id = sts_client.get_caller_identity()['Account']
+
+                cognito_id = cognito_client.get_id(
+                    AccountId=account_id,
+                    IdentityPoolId=identity_pool_id,
+                    Logins=login,
+                )
+
+                cognito_open_id = cognito_client.get_open_id_token(
+                    IdentityId=cognito_id["IdentityId"],
+                    Logins=login
+                )
+
+                assumed_role_object = sts_client.assume_role_with_web_identity(
                     RoleArn=ROLE_ARN,
                     RoleSessionName="presign",
+                    WebIdentityToken=cognito_open_id["Token"],
                     DurationSeconds=timeout,
                     Policy=json.dumps(policy),
                 )

@@ -1,13 +1,11 @@
 {
     "name": "project-root",
-    "version": "1.4.0",
+    "version": "2.1.0",
     "license": "Apache-2.0",
     "scripts": {
         "buildanddeploy.dev": "npm run build && npm run deploy.dev",
         "build": "cd web && yarn install && npm run build",
         "deploy.dev": "cd infra && npm install && npm run deploy.dev",
-        "deploy.alpha": "cd infra && npm install && npm run deploy.alpha",
-        "deploy.bms": "cd infra && npm install && npm run deploy.bms",
         "release": "standard-version",
         "prettier-check": "prettier -c --config .prettierrc -u --ignore-path .prettierignore .",
         "prettier-fix": "prettier -w --config .prettierrc -u --ignore-path .prettierignore .",

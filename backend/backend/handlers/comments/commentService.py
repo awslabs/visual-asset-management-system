@@ -392,12 +392,11 @@ def lambda_handler(event: dict, context: dict) -> dict:
         claims_and_roles = request_to_claims(event)
 
         method_allowed_on_api = False
-        request_object = {"object__type": "api"}
 
         # Add Casbin Enforcer to check if the current user has permissions to GET the Comment
         for user_name in claims_and_roles["tokens"]:
             casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", request_object, httpMethod):
+            if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
                 break
 

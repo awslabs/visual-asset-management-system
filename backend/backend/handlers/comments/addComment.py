@@ -115,15 +115,10 @@ def lambda_handler(event: dict, context: dict) -> dict:
         asset_object = get_asset_object_from_id(pathParameters["assetId"])
         asset_object.update({"object__type": "asset"})
 
-        request_object = {
-            "object__type": "api",
-            "route__path": event['requestContext']['http']['path']
-        }
         # Add Casbin Enforcer to check if the current user has permissions to POST the Comment
         for user_name in claims_and_roles["tokens"]:
             casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", asset_object, httpMethod) and casbin_enforcer.enforce(
-                    f"user::{user_name}", request_object, httpMethod):
+            if casbin_enforcer.enforce(f"user::{user_name}", asset_object, httpMethod) and casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
                 break
 

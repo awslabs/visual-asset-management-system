@@ -37,7 +37,7 @@ asset_table = dynamodb.Table(asset_database)
 # A method that takes in s3 path and returns all the files in that path using paginator and s3_client
 
 
-def get_all_files_in_path(path, query_params):
+def get_all_files_in_path(path, primaryKeyPath, query_params):
     result = {
         "Items": []
     }
@@ -52,9 +52,18 @@ def get_all_files_in_path(path, query_params):
         }
     ):
         for obj in page_iterator.get('Contents', []):
+            fileName = os.path.basename(obj['Key'])
+            primaryFile = False
+
+            #This is the primary asset file, so label it
+            if primaryKeyPath == obj['Key']:
+                primaryFile = True
+
             result["Items"].append({
+                'fileName': fileName,
                 'key': obj['Key'],
-                'relativePath': obj['Key'].removeprefix(path)
+                'relativePath': obj['Key'].removeprefix(path),
+                "primary": primaryFile
             })
 
         if 'NextToken' in page_iterator:
@@ -102,15 +111,11 @@ def lambda_handler(event, context):
 
     try:
 
-        http_method = event['requestContext']['http']['method']
+
         method_allowed_on_api = False
-        request_object = {
-            "object__type": "api",
-            "route__path": event['requestContext']['http']['path']
-        }
         for user_name in claims_and_roles["tokens"]:
             casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", request_object, http_method):
+            if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
                 break
 
@@ -165,12 +170,16 @@ def lambda_handler(event, context):
 
             # if assetId exists in database
             if asset_location:
-                # Get Key from assetLocation dictionary
-                key = asset_location['Key']
+                # Get Key from assetLocation dictionary (primary asset file)
+                primaryFileKey = asset_location['Key']
+
+                #For now grab all files from the top level asset location
+                key = asset_id + "/"
 
                 # get all files in assetLocation
-                result = get_all_files_in_path(key, queryParameters)
+                result = get_all_files_in_path(key, primaryFileKey, queryParameters)
                 response['body'] = json.dumps({"message": result})
+                logger.info(response)
                 return response
             else:
                 # log the assetId and databaseId on a single line and include they don't exist

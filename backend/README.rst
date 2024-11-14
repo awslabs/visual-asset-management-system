@@ -25,7 +25,7 @@ https://github.com/aws/aws-cdk/issues/14201
 `poetry export -o requirements.txt --without-hashes`
 
 ### Move requirements.txt to ./lambdaLayers/<LAYERNAME>
-`cp -rf ./requirements.txt ./lambdaLayers/<LAYERNAME>/requirements.txt``
+`cp -rf ./requirements.txt ./lambdaLayers/<LAYERNAME>/requirements.txt`
 
 
 ### Running Tests - top level backend

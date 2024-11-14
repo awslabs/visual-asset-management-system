@@ -196,10 +196,18 @@ def iter_Asset(body, item=None):
         version = int(asset['currentVersion']['Version']) + 1
         asset['versions'] = prevVersions
 
+        if 'description' not in body:
+            body['description'] = asset['description']
+
+        if 'assetName' not in body:
+            body['assetName'] = asset['assetName']
+
     if 'previewLocation' in body and body['previewLocation'] is not None:
         asset['previewLocation'] = {
             "Key": body['previewLocation']['Key']
         }
+
+
 
     asset['assetLocation'] = {
         "Key": body['key']
@@ -241,7 +249,7 @@ def iter_Asset(body, item=None):
     return asset
 
 
-def upload_Asset(body, queryParameters, http_path, returnAsset=False):
+def upload_Asset(event, body, queryParameters, returnAsset=False, uploadTempLocation=False):
     table = dynamodb.Table(asset_database)
     try:
         db_response = table.query(
@@ -262,18 +270,35 @@ def upload_Asset(body, queryParameters, http_path, returnAsset=False):
                 "assetName": body.get('assetName', body['assetId']),
                 "tags": body.get('tags', [])
             }
-            request_object = {
-                "object__type": "api",
-                "route__path": http_path
-            }
+
             for user_name in claims_and_roles["tokens"]:
                 casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", asset, http_method) and casbin_enforcer.enforce(
-                        f"user::{user_name}", request_object, http_method):
+                if casbin_enforcer.enforce(f"user::{user_name}", asset, http_method) and casbin_enforcer.enforceAPI(
+                            event):
                     operation_allowed_on_asset = True
                     break
 
             if operation_allowed_on_asset:
+
+                #If true, asset was uploaded to a temporary location within the S3 bucket and we need to move it now to the correct asset location
+                if uploadTempLocation:
+                    tempLocationKeyPrefix = os.path.dirname(body['key'])
+                    fileNameKey = body['key'].split("/")[-1]
+                    finalKeyLocation = body['assetId'] + "/" + fileNameKey
+
+                    #Do MIME check on whatever is uploaded to S3 at this point for this temporary location (ahead of a copy)
+                    if(not validateS3AssetExtensionsAndContentType(bucket_name, tempLocationKeyPrefix)):
+                        raise ValueError('An uploaded asset at the provided temporary location contains a potentially malicious executable type object. Unable to process asset upload.')
+
+                    copy_source = {
+                        'Bucket': bucket_name,
+                        'Key': body['key']
+                    }
+                    s3c.copy_object(CopySource=copy_source, Bucket=bucket_name, Key=finalKeyLocation)
+
+                    #Update the final key location
+                    body['key'] = finalKeyLocation
+
                 up = iter_Asset(body)
                 table.put_item(Item=up)
                 logger.info(up)
@@ -302,18 +327,34 @@ def upload_Asset(body, queryParameters, http_path, returnAsset=False):
                 asset.update({
                     "object__type": "asset"
                 })
-                request_object = {
-                    "object__type": "api",
-                    "route__path": http_path
-                }
                 for user_name in claims_and_roles["tokens"]:
                     casbin_enforcer = CasbinEnforcer(user_name)
-                    if casbin_enforcer.enforce(f"user::{user_name}", asset, http_method) and casbin_enforcer.enforce(
-                            f"user::{user_name}", request_object, http_method):
+                    if casbin_enforcer.enforce(f"user::{user_name}", asset, http_method) and casbin_enforcer.enforceAPI(
+                            event):
                         operation_allowed_on_asset = True
                         break
 
                 if operation_allowed_on_asset:
+
+                    #If true, asset was uploaded to a temporary location within the S3 bucket and we need to move it now to the correct asset location
+                    if uploadTempLocation:
+                        tempLocationKeyPrefix = os.path.dirname(body['key'])
+                        fileNameKey = body['key'].split("/")[-1]
+                        finalKeyLocation = body['assetId'] + "/" + fileNameKey
+
+                        #Do MIME check on whatever is uploaded to S3 at this point for this temporary location (ahead of a copy)
+                        if(not validateS3AssetExtensionsAndContentType(bucket_name, tempLocationKeyPrefix)):
+                            raise ValueError('An uploaded asset at the provided temporary location contains a potentially malicious executable type object. Unable to process asset upload.')
+
+                        copy_source = {
+                            'Bucket': bucket_name,
+                            'Key': body['key']
+                        }
+                        s3c.copy_object(CopySource=copy_source, Bucket=bucket_name, Key=finalKeyLocation)
+
+                        #Update the final key location
+                        body['key'] = finalKeyLocation
+
                     up = iter_Asset(body, asset)
                     table.put_item(Item=up)
                     # Send notification on asset version change to subscribers
@@ -350,7 +391,6 @@ def lambda_handler(event, context):
     global claims_and_roles
     claims_and_roles = request_to_claims(event)
     logger.info("claims and roles", claims_and_roles)
-    http_path = event['requestContext']['http']['path']
 
     if isinstance(event['body'], str):
         event['body'] = json.loads(event['body'])
@@ -382,12 +422,14 @@ def lambda_handler(event, context):
                 'validator': 'ID'
             },
             'description': {
-                'value': event['body']['description'],
-                'validator': 'STRING_256'
+                'value': event['body'].get('description', ""),
+                'validator': 'STRING_256',
+                'optional': True
             },
             'assetName': {
-                'value': event['body']['assetName'],
-                'validator': 'OBJECT_NAME'
+                'value': event['body'].get('assetName', ""),
+                'validator': 'OBJECT_NAME',
+                'optional': True
             },
             'assetPathKey': {
                 'value': event['body']['key'],
@@ -404,8 +446,9 @@ def lambda_handler(event, context):
         if 'previewLocation' in event['body'] and event['body']['previewLocation'] is not None:
             (valid, message) = validate({
                 'assetPathKey': {
-                    'value': event['body']['previewLocation']['Key'],
-                    'validator': 'ASSET_PATH'
+                    'value': event['body'].get("previewLocation", {}).get('Key', ""),
+                    'validator': 'ASSET_PATH',
+                    'optional': True
                 }
             })
             if not valid:
@@ -417,6 +460,8 @@ def lambda_handler(event, context):
         returnAsset = False
         if 'returnAsset' in event:
             returnAsset = True
+
+        uploadTempLocation = event['body'].get('uploadTempLocation', False)
 
         logger.info("Trying to get Data")
 
@@ -430,7 +475,7 @@ def lambda_handler(event, context):
         if 'startingToken' not in queryParameters:
             queryParameters['startingToken'] = None
 
-        response.update(upload_Asset(event['body'], queryParameters, http_path, returnAsset))
+        response.update(upload_Asset(event, event['body'], queryParameters, returnAsset, uploadTempLocation))
         logger.info(response)
         return response
     except Exception as e:

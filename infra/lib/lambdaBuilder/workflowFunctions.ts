@@ -77,7 +77,7 @@ export function buildWorkflowService(
     return workflowService;
 }
 
-export function buildListlWorkflowExecutionsFunction(
+export function buildListWorkflowExecutionsFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
@@ -109,7 +109,9 @@ export function buildListlWorkflowExecutionsFunction(
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
         },
     });
-    storageResources.dynamo.workflowExecutionStorageTable.grantReadData(listAllWorkflowsFunction);
+    storageResources.dynamo.workflowExecutionStorageTable.grantReadWriteData(
+        listAllWorkflowsFunction
+    ); //Needs write permission to update execution status after a SFN fetch
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(listAllWorkflowsFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(listAllWorkflowsFunction);
     storageResources.dynamo.assetStorageTable.grantReadData(listAllWorkflowsFunction);
@@ -132,7 +134,7 @@ export function buildCreateWorkflowFunction(
     scope: Construct,
     lambdaCommonServiceSDKLayer: LayerVersion,
     storageResources: storageResources,
-    uploadAllAssetFunction: lambda.Function,
+    processWorkflowExecutionOutputFunction: lambda.Function,
     stackName: string,
     config: Config.Config,
     vpc: ec2.IVpc,
@@ -154,7 +156,7 @@ export function buildCreateWorkflowFunction(
     const role = buildWorkflowRole(
         scope,
         storageResources.s3.assetBucket,
-        uploadAllAssetFunction,
+        processWorkflowExecutionOutputFunction,
         storageResources.encryption.kmsKey
     );
     const name = "createWorkflow";
@@ -175,7 +177,8 @@ export function buildCreateWorkflowFunction(
                 : undefined,
         environment: {
             WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
-            UPLOAD_ALL_LAMBDA_FUNCTION_NAME: uploadAllAssetFunction.functionName,
+            PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME:
+                processWorkflowExecutionOutputFunction.functionName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             VAMS_STACK_NAME: stackName,
@@ -223,6 +226,7 @@ export function buildRunWorkflowFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
+    metadataReadFunction: lambda.IFunction,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -252,6 +256,8 @@ export function buildRunWorkflowFunction(
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
+            S3_ASSETAUXILIARY_STORAGE_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
+            METADATA_READ_LAMBDA_FUNCTION_NAME: metadataReadFunction.functionName,
         },
     });
     storageResources.dynamo.workflowStorageTable.grantReadData(runWorkflowFunction);
@@ -261,6 +267,8 @@ export function buildRunWorkflowFunction(
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(runWorkflowFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(runWorkflowFunction);
     storageResources.s3.assetBucket.grantReadWrite(runWorkflowFunction);
+    storageResources.s3.assetAuxiliaryBucket.grantReadWrite(runWorkflowFunction);
+    metadataReadFunction.grantInvoke(runWorkflowFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(
         runWorkflowFunction,
         storageResources.encryption.kmsKey
@@ -270,17 +278,86 @@ export function buildRunWorkflowFunction(
     runWorkflowFunction.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
-            actions: ["states:StartExecution", "states:DescribeStateMachine"],
+            actions: [
+                "states:StartExecution",
+                "states:DescribeStateMachine",
+                "states:DescribeExecution",
+            ],
             resources: [IAMArn("*vams*").statemachine, IAMArn("*vams*").statemachineExecution],
         })
     );
     return runWorkflowFunction;
 }
 
+export function buildProcessWorkflowExecutionOutputFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    uploadAssetLambdaFunction: lambda.Function,
+    readMetadataLambdaFunction: lambda.Function,
+    createMetadataLambdaFunction: lambda.Function,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "processWorkflowExecutionOutput";
+    const processWorkflowExecutionOutputFunction = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.workflows.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
+                storageResources.dynamo.workflowExecutionStorageTable.tableName,
+            UPLOAD_LAMBDA_FUNCTION_NAME: uploadAssetLambdaFunction.functionName,
+            READ_METADATA_LAMBDA_FUNCTION_NAME: readMetadataLambdaFunction.functionName,
+            CREATE_METADATA_LAMBDA_FUNCTION_NAME: createMetadataLambdaFunction.functionName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
+        },
+    });
+    uploadAssetLambdaFunction.grantInvoke(processWorkflowExecutionOutputFunction);
+    readMetadataLambdaFunction.grantInvoke(processWorkflowExecutionOutputFunction);
+    createMetadataLambdaFunction.grantInvoke(processWorkflowExecutionOutputFunction);
+    storageResources.s3.assetBucket.grantReadWrite(processWorkflowExecutionOutputFunction);
+    storageResources.dynamo.databaseStorageTable.grantReadWriteData(
+        processWorkflowExecutionOutputFunction
+    );
+    storageResources.dynamo.assetStorageTable.grantReadData(processWorkflowExecutionOutputFunction);
+    storageResources.dynamo.workflowExecutionStorageTable.grantReadWriteData(
+        processWorkflowExecutionOutputFunction
+    );
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(
+        processWorkflowExecutionOutputFunction
+    );
+    storageResources.dynamo.userRolesStorageTable.grantReadData(
+        processWorkflowExecutionOutputFunction
+    );
+    kmsKeyLambdaPermissionAddToResourcePolicy(
+        processWorkflowExecutionOutputFunction,
+        storageResources.encryption.kmsKey
+    );
+    suppressCdkNagErrorsByGrantReadWrite(scope);
+    return processWorkflowExecutionOutputFunction;
+}
+
 export function buildWorkflowRole(
     scope: Construct,
     assetStorageBucket: s3.Bucket,
-    uploadAllAssetFunction: lambda.Function,
+    processWorkflowExecutionOutputFunction: lambda.Function,
     kmsKey?: kms.IKey
 ): iam.Role {
     const createWorkflowPolicy = new iam.PolicyDocument({
@@ -329,6 +406,7 @@ export function buildWorkflowRole(
                     "logs:PutLogEvents",
                     "logs:CreateLogGroup",
                     "logs:DescribeLogStreams",
+                    "logs:DescribeLogGroups",
                 ],
                 //"*"" Resource policy required as per AWS documentation as CloudWatch API doesn't support resource types
                 //https://docs.aws.amazon.com/step-functions/latest/dg/cw-logs.html
@@ -342,7 +420,7 @@ export function buildWorkflowRole(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["lambda:InvokeFunction"],
-                resources: [uploadAllAssetFunction.functionArn],
+                resources: [processWorkflowExecutionOutputFunction.functionArn],
             }),
             // For lambda pipelines created through lambda functions
             new iam.PolicyStatement({

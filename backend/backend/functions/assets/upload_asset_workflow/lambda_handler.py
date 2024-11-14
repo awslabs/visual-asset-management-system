@@ -99,7 +99,6 @@ def lambda_handler(event: Dict[Any, Any], context: LambdaContext) -> APIGatewayP
         # Add Casbin Enforcer to check if the current user has permissions to PUT the Asset
         operation_allowed_on_asset = False
         http_method = event['requestContext']['http']['method']
-        http_path = event['requestContext']['http']['path']
         asset = {
             "object__type": "asset",
             "databaseId": event['body']['uploadAssetBody']['databaseId'],
@@ -107,14 +106,9 @@ def lambda_handler(event: Dict[Any, Any], context: LambdaContext) -> APIGatewayP
             "assetName": event['body']['uploadAssetBody'].get('assetName', event['body']['uploadAssetBody']['assetId']),
             "tags": event['body']['uploadAssetBody'].get('tags', [])
         }
-        request_object = {
-            "object__type": "api",
-            "route__path": http_path
-        }
         for user_name in claims_and_roles["tokens"]:
             casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", asset, http_method) and casbin_enforcer.enforce(
-                    f"user::{user_name}", request_object, http_method):
+            if casbin_enforcer.enforce(f"user::{user_name}", asset, http_method) and casbin_enforcer.enforceAPI(event):
                 operation_allowed_on_asset = True
                 break
 

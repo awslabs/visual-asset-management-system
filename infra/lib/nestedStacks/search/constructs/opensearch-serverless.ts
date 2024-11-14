@@ -110,6 +110,7 @@ export class OpensearchServerlessConstruct extends Construct {
                     externalModules: ["aws-sdk"],
                 },
                 runtime: LAMBDA_NODE_RUNTIME,
+                timeout: cdk.Duration.seconds(30),
                 vpc: this.useVPCEndpoint ? props.vpc : undefined,
                 vpcSubnets: this.useVPCEndpoint ? { subnets: props.subnets } : undefined,
                 //Note: This schema deploy resource must run in the VPC in order to communicate with the AOSS and associated VPC Endpoint.

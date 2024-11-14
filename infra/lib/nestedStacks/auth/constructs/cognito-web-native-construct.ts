@@ -18,6 +18,7 @@ import { LAMBDA_PYTHON_RUNTIME } from "../../../../config/config";
 import { NagSuppressions } from "cdk-nag";
 import { Service } from "../../../helper/service-helper";
 import * as Config from "../../../../config/config";
+import { handler } from "../../search/constructs/schemaDeploy/provisioned/deployschemaprovisioned";
 
 export interface SamlSettings {
     metadata: cognito.UserPoolIdentityProviderSamlMetadata;
@@ -51,7 +52,8 @@ export class CognitoWebNativeConstructStack extends Construct {
     constructor(parent: Construct, name: string, props: CognitoWebNativeConstructStackProps) {
         super(parent, name);
 
-        const handlerName = "pretokengen";
+        //Check if GovCloud is enabled and set the handler to v1 instead (GovCloud does not support advanced security mode which can use the v2 pretokengen lambdas)
+        const handlerName = props.config.app.govCloud.enabled ? "pretokengenv1" : "pretokengenv2";
         const preTokenGeneration = new lambda.Function(this, handlerName, {
             code: lambda.Code.fromAsset(path.join(__dirname, `../../../../../backend/backend`)),
             handler: `handlers.auth.${handlerName}.lambda_handler`,
@@ -101,18 +103,20 @@ export class CognitoWebNativeConstructStack extends Construct {
 
         const cfnUserPool = userPool.node.defaultChild as cognito.CfnUserPool;
 
-        //Add pretokengen lambda trigger (V2) - this will generate claims for both ID and Access token claims
+        //(Non-GovCloud) Add pretokengen lambda trigger (V2) - this will generate claims for both Access and ID token claims
+        //(GovCloud) Add pretokengen lambda trigger (V1) - this will generate claims for only Access token claims (ID token will not have claims and can't be used)
         cfnUserPool.lambdaConfig = {
             preTokenGenerationConfig: {
                 lambdaArn: preTokenGeneration.functionArn,
-                lambdaVersion: "V2_0",
+                lambdaVersion: props.config.app.govCloud.enabled ? "V1_0" : "V2_0",
             },
         };
+
         userPool.node.addDependency(preTokenGeneration);
         preTokenGeneration.grantInvoke(Service("COGNITO_IDP").Principal);
 
+        //Only enable advanced security for non-govcloud environments (currently no supported by cognito)
         if (!props.config.app.govCloud.enabled) {
-            //Only enable advanced security where it's available
             const userPoolAddOnsProperty: cognito.CfnUserPool.UserPoolAddOnsProperty = {
                 advancedSecurityMode: "ENFORCED",
             };
@@ -149,7 +153,13 @@ export class CognitoWebNativeConstructStack extends Construct {
             generateSecret: false,
             userPool: userPool,
             userPoolClientName: "WebClient",
-            refreshTokenValidity: Duration.hours(24), //AppSec Guidelines Reccomendation
+            refreshTokenValidity: Duration.hours(24), //AppSec Guidelines Recommendation
+            accessTokenValidity: cdk.Duration.seconds(
+                props.config.app.authProvider.credTokenTimeoutSeconds
+            ),
+            idTokenValidity: cdk.Duration.seconds(
+                props.config.app.authProvider.credTokenTimeoutSeconds
+            ),
             supportedIdentityProviders,
             authFlows: {
                 userSrp: true,
@@ -158,6 +168,7 @@ export class CognitoWebNativeConstructStack extends Construct {
             },
         });
 
+        // Classic flow is enabled because using assume_role_with_web_identity to extend auth token timeout
         const identityPool = new cognito.CfnIdentityPool(this, "IdentityPool", {
             allowUnauthenticatedIdentities: false,
             cognitoIdentityProviders: [
@@ -166,6 +177,7 @@ export class CognitoWebNativeConstructStack extends Construct {
                     providerName: userPool.userPoolProviderName,
                 },
             ],
+            allowClassicFlow: true,
         });
 
         const cognitoIdentityPrincipal: string = Service("COGNITO_IDENTITY").PrincipalString;
@@ -195,6 +207,9 @@ export class CognitoWebNativeConstructStack extends Construct {
             "IdentityPoolRoleAttachment",
             {
                 identityPoolId: identityPool.ref,
+                // Disabled due to using Classic Auth Flow which doesn't support roleMappings
+                // Instead this should be handled in in s3scopedaccess
+                /*
                 roleMappings: {
                     default: {
                         type: "Token",
@@ -205,6 +220,7 @@ export class CognitoWebNativeConstructStack extends Construct {
                         }:${userPoolWebClient.userPoolClientId}`,
                     },
                 },
+                */
                 roles: {
                     unauthenticated: unauthenticatedRole.roleArn,
                     authenticated: authenticatedRole.roleArn,
@@ -292,6 +308,9 @@ export class CognitoWebNativeConstructStack extends Construct {
                     },
                 },
                 "sts:AssumeRoleWithWebIdentity"
+            ),
+            maxSessionDuration: cdk.Duration.seconds(
+                props.config.app.authProvider.credTokenTimeoutSeconds
             ),
         });
 

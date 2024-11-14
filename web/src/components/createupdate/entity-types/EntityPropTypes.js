@@ -36,6 +36,17 @@ export const verifyStringMaxLength = (value, maxLength) => {
     else return false;
 };
 
+export const verifyJsonParsable = (value) => {
+    //If JSON.parse does not throw error, return true.
+    //Otherwise return false
+    try {
+        JSON.parse(value);
+        return true;
+    } catch (e) {
+        return false;
+    }
+};
+
 /*
 Starts with . followed by 1 to 7 lowercase letters
  */
@@ -188,6 +199,22 @@ export const stringMaxLength = (maxLength, props, propName) => {
     return null;
 };
 
+export const jsonString = (props, propName) => {
+    //check if prop is supplied by option element
+    let testValue = props[propName];
+    if (testValue && testValue.hasOwnProperty("value")) testValue = testValue.value;
+
+    if (!verifyIsString(testValue)) {
+        return new Error(`Invalid prop ${propName}. Expected a string.`);
+    }
+
+    if (!verifyJsonParsable(testValue)) {
+        return new Error(`Invalid prop ${propName}. Value must be JSON parsable.`);
+    }
+
+    return null;
+};
+
 export const entityPropType = function (props, propName) {
     if (!props[propName].propTypes) {
         return new Error(`Invalid prop ${propName}. Not valid entity, no PropTypes.`);
@@ -270,6 +297,7 @@ export const EntityPropTypes = {
     STRING_64: stringMaxLength.bind(null, 64),
     STRING_128: stringMaxLength.bind(null, 128),
     STRING_256: stringMaxLength.bind(null, 256),
+    JSON_STRING: jsonString,
     CONTAINER_URI: containerUriPropType,
     LAMBDA_NAME: validateLambdaName,
     BOOL: boolPropType,
