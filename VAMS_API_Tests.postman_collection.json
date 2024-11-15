@@ -249,7 +249,7 @@
                         "header": [],
                         "body": {
                             "mode": "raw",
-                            "raw": "{\"databaseId\":\"2\", \"pipelineId\":\"pipe-4\", \"assetType\":\".csv\", \"outputType\":\".csv\", \"pipelineType\":\"Lambda\", \"description\":\"Test Pipeline 4\"}"
+                            "raw": "{\"databaseId\":\"2\", \"pipelineId\":\"pipe-4\", \"assetType\":\".csv\", \"outputType\":\".csv\", \"pipelineType\":\"standardFile\", \"pipelineExecutionType\":\"Lambda\", \"description\":\"Test Pipeline 4\"}"
                         },
                         "url": {
                             "raw": "{{apiUrl}}/pipelines",

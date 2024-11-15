@@ -6,6 +6,7 @@ from typing import Tuple
 from typing import Any
 from typing import Dict
 from customLogging.logger import safeLogger
+from models.common import VAMSGeneralErrorResponse
 
 logger = safeLogger(service_name="DynamoDBCommon")
 dynamodb_client = boto3.client('dynamodb')
@@ -37,7 +38,7 @@ def to_update_expr(record, op="SET") -> Tuple[Dict[str, str], Dict[str, Any], st
 
 def get_asset_object_from_id(asset_id):
     if not asset_id:
-        raise Exception("Empty asset ID received")
+        raise VAMSGeneralErrorResponse("Empty assetId received")
 
     try:
         asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
@@ -56,7 +57,9 @@ def get_asset_object_from_id(asset_id):
     logger.info("Scanned Asset Item:")
     logger.info(items)
     item = items.get("Items", [])[0] if items.get("Items", []) else None
+
     asset_object = {
+        "object__type": "asset",
         "assetId": item['assetId']['S'] if item else None,
         "assetName": item['assetName']['S'] if item else None,
         "databaseId": item['databaseId']['S'] if item else None,

@@ -368,8 +368,11 @@ export class VPCBuilderNestedStack extends NestedStack {
                 }
             }
 
-            //Visualizer Pipeline-Only Required Endpoints
-            if (props.config.app.pipelines.usePointCloudVisualization.enabled) {
+            //Pipeline-Only Required Endpoints
+            if (
+                props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
+                props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled
+            ) {
                 // Create VPC endpoint for Batch
                 new ec2.InterfaceVpcEndpoint(this, "BatchEndpoint", {
                     vpc: this.vpc,
@@ -378,13 +381,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                     subnets: { subnets: this.privateSubnets },
                     securityGroups: [vpceSecurityGroup],
                 });
-            }
 
-            //All Lambda and Visualizer Pipeline Required Endpoints
-            if (
-                props.config.app.useGlobalVpc.useForAllLambdas ||
-                props.config.app.pipelines.usePointCloudVisualization.enabled
-            ) {
                 // Create VPC endpoint for ECR API
                 new ec2.InterfaceVpcEndpoint(this, "ECRAPIEndpoint", {
                     vpc: this.vpc,
@@ -412,6 +409,21 @@ export class VPCBuilderNestedStack extends NestedStack {
                     securityGroups: [vpceSecurityGroup],
                 });
 
+                // Create VPC endpoint for SFN
+                new ec2.InterfaceVpcEndpoint(this, "SFNEndpoint", {
+                    vpc: this.vpc,
+                    privateDnsEnabled: true,
+                    service: ec2.InterfaceVpcEndpointAwsService.STEP_FUNCTIONS,
+                    subnets: { subnets: this.privateSubnets },
+                    securityGroups: [vpceSecurityGroup],
+                });
+            }
+
+            //All Lambda and Potree Viewer Pipeline Required Endpoints
+            if (
+                props.config.app.useGlobalVpc.useForAllLambdas &&
+                props.config.app.pipelines.usePreviewPcPotreeViewer.enabled
+            ) {
                 // Create VPC endpoint for SNS
                 new ec2.InterfaceVpcEndpoint(this, "SNSEndpoint", {
                     vpc: this.vpc,
@@ -420,12 +432,27 @@ export class VPCBuilderNestedStack extends NestedStack {
                     subnets: { subnets: this.privateSubnets },
                     securityGroups: [vpceSecurityGroup],
                 });
+            }
 
-                // Create VPC endpoint for SFN
-                new ec2.InterfaceVpcEndpoint(this, "SFNEndpoint", {
+            //All Lambda and Metadata Generation Pipeline Required Endpoints
+            if (
+                props.config.app.useGlobalVpc.useForAllLambdas &&
+                props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled
+            ) {
+                // Create VPC endpoint for Bedrock Runtime
+                new ec2.InterfaceVpcEndpoint(this, "BedrockEndpoint", {
                     vpc: this.vpc,
                     privateDnsEnabled: true,
-                    service: ec2.InterfaceVpcEndpointAwsService.STEP_FUNCTIONS,
+                    service: ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME,
+                    subnets: { subnets: this.privateSubnets },
+                    securityGroups: [vpceSecurityGroup],
+                });
+
+                // Create VPC endpoint for Rekognition
+                new ec2.InterfaceVpcEndpoint(this, "RekognitionEndpoint", {
+                    vpc: this.vpc,
+                    privateDnsEnabled: true,
+                    service: ec2.InterfaceVpcEndpointAwsService.REKOGNITION,
                     subnets: { subnets: this.privateSubnets },
                     securityGroups: [vpceSecurityGroup],
                 });

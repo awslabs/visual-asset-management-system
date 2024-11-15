@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from customLogging.logger import safeLogger
 from typing import Dict, List, Optional
 from pydantic import BaseModel, Json
 from aws_lambda_powertools.utilities.parser.models import (
     APIGatewayProxyEventV2Model
 )
 
+logger = safeLogger(service_name="AssetModels")
 
 class AssetPreviewLocationModel(BaseModel):
     Key: str

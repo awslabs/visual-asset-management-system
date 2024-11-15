@@ -23,9 +23,9 @@ def validateUnallowedFileExtensionAndContentType(keyPath: str, contentType: str)
         return False
     return True
 
-def validateS3AssetExtensionsAndContentType(bucket: str, assetIdPrefixKey: str):
+def validateS3AssetExtensionsAndContentType(bucket: str, prefixKey: str):
     #Get list of all objects in a particular S3 key/prefix
-    resp = s3c.list_objects_v2(Bucket=bucket, Prefix=assetIdPrefixKey)
+    resp = s3c.list_objects_v2(Bucket=bucket, Prefix=prefixKey)
     logger.info(resp)
 
     #Check for each returned object if it is a valid asset based on ContentType

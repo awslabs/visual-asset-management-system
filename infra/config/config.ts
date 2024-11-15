@@ -55,6 +55,7 @@ export function getConfig(app: cdk.App): Config {
             process.env.STACK_NAME) +
         "-" +
         config.env.region;
+
     config.app.bucketMigrationStaging.assetBucketName = <string>(app.node.tryGetContext(
         "staging-bucket"
     ) || //here to keep backwards compatability
@@ -62,10 +63,17 @@ export function getConfig(app: cdk.App): Config {
         config.app.bucketMigrationStaging.assetBucketName ||
         process.env.STAGING_BUCKET || //here to keep backwards compatability
         process.env.ASSET_STAGING_BUCKET);
+
     config.app.adminEmailAddress = <string>(
         (app.node.tryGetContext("adminEmailAddress") ||
             config.app.adminEmailAddress ||
             process.env.ADMIN_EMAIL_ADDRESS)
+    );
+    config.app.authProvider.credTokenTimeoutSeconds = <number>(
+        (app.node.tryGetContext("credTokenTimeoutSeconds") ||
+            config.app.authProvider.credTokenTimeoutSeconds ||
+            process.env.CRED_TOKEN_TIMEOUT_SECONDS ||
+            3600)
     );
     config.app.useFips = <boolean>(
         (app.node.tryGetContext("useFips") ||
@@ -99,12 +107,20 @@ export function getConfig(app: cdk.App): Config {
         config.app.openSearch.useProvisioned.enabled = false;
     }
 
-    if (config.app.pipelines.usePointCloudVisualization.enabled == undefined) {
-        config.app.pipelines.usePointCloudVisualization.enabled = false;
+    if (config.app.pipelines.usePreviewPcPotreeViewer.enabled == undefined) {
+        config.app.pipelines.usePreviewPcPotreeViewer.enabled = false;
+    }
+
+    if (config.app.pipelines.useGenAiMetadata3dLabeling.enabled == undefined) {
+        config.app.pipelines.useGenAiMetadata3dLabeling.enabled = false;
     }
 
     if (config.app.authProvider.useCognito.useUserPasswordAuthFlow == undefined) {
         config.app.authProvider.useCognito.useUserPasswordAuthFlow = false;
+    }
+
+    if (config.app.pipelines.useConversion3dBasic.enabled == undefined) {
+        config.app.pipelines.useConversion3dBasic.enabled = true;
     }
 
     //Load S3 Policy statements JSON
@@ -142,15 +158,16 @@ export function getConfig(app: cdk.App): Config {
         config.app.useLocationService.enabled = false;
     }
 
-    //If using ALB, visualizer pipelines, or opensearch provisioned, make sure Global VPC is on as this needs to be in a VPC
+    //If using ALB, data pipelines , or opensearch provisioned, make sure Global VPC is on as this needs to be in a VPC
     if (
         config.app.useAlb.enabled ||
-        config.app.pipelines.usePointCloudVisualization.enabled ||
+        config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
+        config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
         config.app.openSearch.useProvisioned.enabled
     ) {
         if (!config.app.useGlobalVpc.enabled) {
             console.warn(
-                "Configuration Warning: Due to ALB, Visualization Pipeline, or OpenSearch Provisioned being enabled, auto-enabling Use Global VPC flag"
+                "Configuration Warning: Due to ALB, Use-Case Pipelines, or OpenSearch Provisioned being enabled, auto-enabling Use Global VPC flag"
             );
         }
 
@@ -359,11 +376,18 @@ export interface ConfigPublic {
             optionalHostedZoneId: string;
         };
         pipelines: {
-            usePointCloudVisualization: {
+            useConversion3dBasic: {
+                enabled: boolean;
+            };
+            usePreviewPcPotreeViewer: {
+                enabled: boolean;
+            };
+            useGenAiMetadata3dLabeling: {
                 enabled: boolean;
             };
         };
         authProvider: {
+            credTokenTimeoutSeconds: number;
             useCognito: {
                 enabled: boolean;
                 useSaml: boolean;

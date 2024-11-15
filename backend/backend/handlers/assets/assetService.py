@@ -21,9 +21,10 @@ logger = safeLogger(service_name="AssetService")
 main_rest_response = STANDARD_JSON_RESPONSE
 dynamodb = boto3.resource('dynamodb')
 dynamodb_client = boto3.client('dynamodb')
+s3 = boto3.client('s3')
 asset_database = None
 db_database = None
-s3_assetVisualizer_bucket = None
+s3_assetAuxiliary_bucket = None
 bucket_name = None
 unitTest = {
     "body": {
@@ -36,7 +37,7 @@ try:
     asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
     db_database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
     bucket_name = os.environ["S3_ASSET_STORAGE_BUCKET"]
-    s3_assetVisualizer_bucket = os.environ["S3_ASSET_VISUALIZER_BUCKET"]
+    s3_assetAuxiliary_bucket = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
 
 except:
     logger.exception("Failed Loading Environment Variables")
@@ -183,10 +184,10 @@ def delete_asset(databaseId, assetId, queryParameters):
             if "assetLocation" in item:
                 if item['isMultiFile']:
                     archive_multi_file(item['assetLocation'], databaseId, assetId)
-                    delete_assetVisualizer_files(item['assetLocation'])
+                    delete_assetAuxiliary_files(item['assetLocation'])
                 else:
                     archive_file(item['assetLocation'], databaseId, assetId)
-                    delete_assetVisualizer_files(item['assetLocation'])
+                    delete_assetAuxiliary_files(item['assetLocation'])
             if "previewLocation" in item:
                 archive_file(item['previewLocation'], databaseId, assetId)
             item['databaseId'] = databaseId + "#deleted"
@@ -209,7 +210,6 @@ def delete_asset(databaseId, assetId, queryParameters):
 
 
 def archive_multi_file(location, databaseId, assetId):
-    s3 = boto3.client('s3')
     prefix = ""
     if "Key" in location:
         prefix = location['Key']
@@ -241,7 +241,6 @@ def archive_multi_file(location, databaseId, assetId):
 
 
 def archive_file(location, databaseId, assetId):
-    s3 = boto3.client('s3')
     key = ""
     if "Key" in location:
         key = location['Key']
@@ -266,7 +265,6 @@ def archive_file(location, databaseId, assetId):
 
 
 def move_to_glacier_and_mark_deleted(key, assetId, databaseId):
-    s3 = boto3.client('s3')
     return s3.copy_object(
         CopySource={
             "Bucket": bucket_name,
@@ -283,6 +281,34 @@ def move_to_glacier_and_mark_deleted(key, assetId, databaseId):
         StorageClass='GLACIER',
     )
 
+def delete_assetAuxiliary_files(assetLocation):
+    key = ""
+    if "Key" in assetLocation:
+        key = assetLocation['Key']
+
+    if len(key) == 0:
+        return
+
+    # Add the folder deliminiator to the end of the key
+    key = key + '/'
+
+    logger.info("Deleting Temporary Auxiliary Assets Files Under Folder: " + s3_assetAuxiliary_bucket + ":"+ key)
+
+    try:
+        # Get all assets in assetAuxiliary bucket (unversioned, temporary files for the auxiliary assets) for deletion
+        # Use assetLocation key as root folder key for assetAuxiliaryFiles
+        assetAuxiliaryBucketFilesDeleted = []
+        paginator = s3.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=s3_assetAuxiliary_bucket, Prefix=key):
+            for item in page['Contents']:
+                assetAuxiliaryBucketFilesDeleted.append(item['Key'])
+                logger.info("Deleting auxiliary asset file: " + item['Key'])
+                s3.delete_object(Bucket=s3_assetAuxiliary_bucket, Key=item['Key'])
+
+    except Exception as e:
+        logger.exception(e)
+
+    return
 
 def get_handler(event, response, path_parameters, query_parameters):
     show_deleted = False
@@ -385,38 +411,6 @@ def delete_handler(response, pathParameters, queryParameters):
     return response
 
 
-def delete_assetVisualizer_files(assetLocation):
-    s3 = boto3.client('s3')
-
-    key = ""
-    if "Key" in assetLocation:
-        key = assetLocation['Key']
-
-    if len(key) == 0:
-        return
-
-    # Add the folder deliminiator to the end of the key
-    key = key + '/'
-
-    logger.info("Deleting Temporary Asset Visualizer Files Under Folder: " + s3_assetVisualizer_bucket + ":"+ key)
-
-    try:
-        # Get all assets in assetVisualizer bucket (unversioned, temporary files for the web visualizers) for deletion
-        # Use assetLocation key as root folder key for assetVisualizerFiles
-        assetVisualizerBucketFilesDeleted = []
-        paginator = s3.get_paginator('list_objects_v2')
-        for page in paginator.paginate(Bucket=s3_assetVisualizer_bucket, Prefix=key):
-            for item in page['Contents']:
-                assetVisualizerBucketFilesDeleted.append(item['Key'])
-                logger.info("Deleting visualizer asset file: " + item['Key'])
-                s3.delete_object(Bucket=s3_assetVisualizer_bucket, Key=item['Key'])
-
-    except Exception as e:
-        logger.exception(e)
-
-    return
-
-
 def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
     logger.info(event)
@@ -433,13 +427,9 @@ def lambda_handler(event, context):
         claims_and_roles = request_to_claims(event)
 
         method_allowed_on_api = False
-        request_object = {
-            "object__type": "api",
-            "route__path": event['requestContext']['http']['path']
-        }
         for user_name in claims_and_roles["tokens"]:
             casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", request_object, httpMethod):
+            if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
                 break
 

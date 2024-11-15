@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "3dBasicLambdaPipeline"
+version = "0.1.0"
+description = ""
+authors = ["Kurt Scheuringer <scheurik@amazon.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+pathlib = "^1.0.1"
+trimesh = "^4.4.3"
+aws-lambda-powertools = "^2.43.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -3,7 +3,9 @@
 
 import json
 from typing import Any, Dict, TypedDict
+from customLogging.logger import safeLogger
 
+logger = safeLogger(service_name="CommonModels")
 
 class APIGatewayProxyResponseV2(TypedDict):
     isBase64Encoded: bool
@@ -19,6 +21,7 @@ def commonHeaders() -> Dict[str, str]:
 
 
 def success(status_code: int = 200, body: Any = {'message': 'Success'}) -> APIGatewayProxyResponseV2:
+    logger.info(f"Success response: {body}")
     return APIGatewayProxyResponseV2(
         isBase64Encoded=False,
         statusCode=status_code,
@@ -28,6 +31,16 @@ def success(status_code: int = 200, body: Any = {'message': 'Success'}) -> APIGa
 
 
 def validation_error(status_code: int = 400, body: dict = {'message': 'Validation Error'}) -> APIGatewayProxyResponseV2:
+    logger.error(f"Validation error: {body}")
+    return APIGatewayProxyResponseV2(
+        isBase64Encoded=False,
+        statusCode=status_code,
+        headers=commonHeaders(),
+        body=json.dumps(body)
+    )
+
+def general_error(status_code: int = 400, body: dict = {'message': 'VAMS General Error'}) -> APIGatewayProxyResponseV2:
+    logger.error(f"General error: {body}")
     return APIGatewayProxyResponseV2(
         isBase64Encoded=False,
         statusCode=status_code,
@@ -36,10 +49,31 @@ def validation_error(status_code: int = 400, body: dict = {'message': 'Validatio
     )
 
 
-def internal_error(status_code: int = 500, body: Any = {'message': 'Validation Error'}) -> APIGatewayProxyResponseV2:
+def authorization_error(status_code: int = 403, body: dict = {'message': 'Not Authorized'}) -> APIGatewayProxyResponseV2:
+    logger.error(f"Not Authorized Error: {body}")
     return APIGatewayProxyResponseV2(
         isBase64Encoded=False,
         statusCode=status_code,
         headers=commonHeaders(),
         body=json.dumps(body)
     )
+
+
+def internal_error(status_code: int = 500, body: Any = {'message': 'Internal Server Error'}) -> APIGatewayProxyResponseV2:
+    logger.error(f"Internal Server Error: {body}")
+    return APIGatewayProxyResponseV2(
+        isBase64Encoded=False,
+        statusCode=status_code,
+        headers=commonHeaders(),
+        body=json.dumps(body)
+    )
+
+
+#Define VAMS Custom Exceptions
+
+class VAMSGeneralError(Exception):
+    pass
+
+class VAMSGeneralErrorResponse(VAMSGeneralError):
+    def __init__(self, message):
+        super().__init__(f"VAMS General Error: {message}")

@@ -19,7 +19,7 @@ import { SearchBuilderNestedStack } from "./nestedStacks/search/searchBuilder-ne
 import { StaticWebBuilderNestedStack } from "./nestedStacks/staticWebApp/staticWebBuilder-nestedStack";
 import * as Config from "../config/config";
 import { VAMS_APP_FEATURES } from "../common/vamsAppFeatures";
-import { VisualizerPipelineBuilderNestedStack } from "./nestedStacks/visualizerPipelines/visualizerPipelineBuilder-nestedStack";
+import { PipelineBuilderNestedStack } from "./nestedStacks/pipelines/pipelineBuilder-nestedStack";
 import { LambdaLayersBuilderNestedStack } from "./nestedStacks/apiLambda/lambdaLayersBuilder-nestedStack";
 import { VPCBuilderNestedStack } from "./nestedStacks/vpc/vpcBuilder-nestedStack";
 import { IamRoleTransform } from "./aspects/iam-role-transform.aspect";
@@ -188,6 +188,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 props.config,
                 apiNestedStack.apiGatewayV2,
                 storageResourcesNestedStack.storageResources,
+                authBuilderNestedStack.authResources,
                 lambdaLayers.lambdaCommonBaseLayer,
                 lambdaLayers.lambdaCommonServiceSDKLayer,
                 this.vpc,
@@ -216,18 +217,19 @@ export class CoreVAMSStack extends cdk.Stack {
             }
 
             ///Optional Pipelines (Nested Stack)
-            if (props.config.app.pipelines.usePointCloudVisualization.enabled) {
-                const visualizerPipelineNetworkNestedStack =
-                    new VisualizerPipelineBuilderNestedStack(this, "VisualizerPipelineBuilder", {
-                        ...props,
-                        config: props.config,
-                        storageResources: storageResourcesNestedStack.storageResources,
-                        lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
-                        vpc: this.vpc,
-                        vpceSecurityGroup: this.vpceSecurityGroup,
-                        subnets: this.subnetsPrivate,
-                    });
-            }
+            const pipelineBuilderNestedStack = new PipelineBuilderNestedStack(
+                this,
+                "PipelineBuilder",
+                {
+                    ...props,
+                    config: props.config,
+                    storageResources: storageResourcesNestedStack.storageResources,
+                    lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
+                    vpc: this.vpc,
+                    vpceSecurityGroup: this.vpceSecurityGroup,
+                    subnets: this.subnetsPrivate,
+                }
+            );
 
             //Write final output configurations (pulling forward from nested stacks)
             const endPointURLParamsOutput = new cdk.CfnOutput(this, "WebsiteEndpointURLOutput", {
@@ -256,6 +258,19 @@ export class CoreVAMSStack extends cdk.Stack {
                 value: `${apiNestedStack.apiEndpoint}`,
                 description: "API Gateway endpoint",
             });
+
+            let useCasefunctionNumber = 1;
+            for (const pipelineVamsExecuteLambdaFunction of pipelineBuilderNestedStack.pipelineVamsLambdaFunctionNames) {
+                const pipelineVamsExecuteLambdaFunctionOutput = new cdk.CfnOutput(
+                    this,
+                    `VamsPipelineExecuteLambdaFunctionOutput_${useCasefunctionNumber}`,
+                    {
+                        value: pipelineVamsExecuteLambdaFunction,
+                        description: "Use-case Pipeline - VAMS Execute Lambda Function to Register",
+                    }
+                );
+                useCasefunctionNumber = useCasefunctionNumber + 1;
+            }
 
             //Nag supressions
             const refactorPaths = [
@@ -351,13 +366,14 @@ export class CoreVAMSStack extends cdk.Stack {
             description: "S3 bucket for asset storage",
         });
 
-        const assetVisualizerBucketOutput = new cdk.CfnOutput(
+        const assetAuxiliaryBucketOutput = new cdk.CfnOutput(
             this,
-            "AssetVisualizerS3BucketNameOutput",
+            "AssetAuxiliaryS3BucketNameOutput",
             {
-                value: storageResourcesNestedStack.storageResources.s3.assetVisualizerBucket
+                value: storageResourcesNestedStack.storageResources.s3.assetAuxiliaryBucket
                     .bucketName,
-                description: "S3 bucket for visualization asset storage",
+                description:
+                    "S3 bucket for auto-generated auxiliary working objects associated with asset storage to include auto-generated previews, visualizer files, temporary storage for pipelines",
             }
         );
 
@@ -379,12 +395,14 @@ export class CoreVAMSStack extends cdk.Stack {
         this.node.findAll().forEach((item) => {
             if (item instanceof cdk.aws_lambda.Function) {
                 const fn = item as cdk.aws_lambda.Function;
-                // python3.9 suppressed for CDK Bucket Deployment
-                // python3.10 suppressed for all lambdas due to restriction on file size when going over 3.10 currently (implement layer code reduction size functionality)
+                // python3.9 + 3.11 suppressed for CDK Bucket Deployment
+                // python3.10 + 3.12 suppressed for all lambdas due to restriction on file size when going over 3.10 currently (implement layer code reduction size functionality)
                 // nodejs18.x suppressed for use of custom resource to deploy saml in CustomCognitoConfigConstruct
                 if (
                     fn.runtime.name === "python3.9" ||
                     fn.runtime.name === "python3.10" ||
+                    fn.runtime.name === "python3.11" ||
+                    fn.runtime.name === "python3.12" ||
                     fn.runtime.name === "nodejs18.x"
                 ) {
                     //console.log(item.node.path,fn.runtime.name)
@@ -409,38 +427,6 @@ export class CoreVAMSStack extends cdk.Stack {
                     appliesTo: [
                         {
                             regex: "/^Action::kms:(.*)\\*$/g",
-                        },
-                    ],
-                },
-            ],
-            true
-        );
-
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: "Allow permissions for KMS unencryption/re-encryption for keys generated within VAMS. Policy statements additions on imported keys are No-Op statements and must be set externally to the deployment.",
-                    appliesTo: [
-                        {
-                            regex: "/^Action::kms:(.*)\\*$/g",
-                        },
-                    ],
-                },
-            ],
-            true
-        );
-
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM4",
-                    reason: "Intend to use AWSLambdaBasicExecutionRole as is at this stage of this project.",
-                    appliesTo: [
-                        {
-                            regex: "/.*AWSLambdaBasicExecutionRole$/g",
                         },
                     ],
                 },

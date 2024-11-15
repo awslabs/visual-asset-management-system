@@ -30,8 +30,10 @@ import { downloadAsset } from "../../services/APIService";
 
 export interface FileTree {
     name: string;
+    displayName: string;
     relativePath: string;
     keyPrefix: string;
+    primary: boolean;
     level: number;
     expanded: boolean;
     subTree: FileTree[];
@@ -73,8 +75,10 @@ export interface FileManagerAction {
 }
 
 export interface FileKey {
+    fileName: string;
     key: string;
     relativePath: string;
+    primary: boolean;
 }
 
 function getRootByPath(root: FileTree | null, path: string): FileTree | null {
@@ -111,8 +115,10 @@ function addDirectories(root: FileTree, directories: string): FileTree {
         if (subTree == null) {
             subTree = {
                 name: part,
+                displayName: part,
                 relativePath: parts.slice(0, i + 1).join("/") + "/",
                 keyPrefix: part,
+                primary: false,
                 level: currentRoot.level + 1,
                 expanded: false,
                 subTree: [],
@@ -131,10 +137,18 @@ function addFiles(fileKeys: FileKey[], root: FileTree) {
         return parentPath === "" ? "" : parentPath;
     };
     if (fileKeys.length === 1) {
+        let displayName = fileKeys[0].fileName;
+        //Set "(Primary)" on display name if true
+        if (fileKeys[0].primary) {
+            displayName = fileKeys[0].fileName + " (Primary)";
+        }
+
         root.subTree.push({
-            name: fileKeys[0].key.split("/").pop()!,
+            name: fileKeys[0].fileName,
+            displayName: displayName,
             relativePath: fileKeys[0].relativePath,
             keyPrefix: fileKeys[0].key,
+            primary: fileKeys[0].primary,
             level: 1,
             expanded: false,
             subTree: [],
@@ -151,10 +165,19 @@ function addFiles(fileKeys: FileKey[], root: FileTree) {
             //console.log("parentRoot == null")
             parentRoot = addDirectories(root, parentDir);
         }
+
+        let displayName = fileKey.fileName;
+        //Set "(Primary)" on display name if true
+        if (fileKey.primary) {
+            displayName = fileKey.fileName + " (Primary)";
+        }
+
         parentRoot!.subTree.push({
-            name: fileKey.key.split("/").pop()!,
+            name: fileKey.fileName,
+            displayName: displayName,
             relativePath: fileKey.relativePath,
             keyPrefix: fileKey.key,
+            primary: fileKey.primary,
             level: parentRoot!.level + 1,
             expanded: false,
             subTree: [],
@@ -363,6 +386,8 @@ function FileTreeBlock(props: {
     level: number;
     isFolder: boolean;
     name: string;
+    displayName: string;
+    primary: boolean;
     relativePath: string;
     expanded: boolean;
     dispatch: Dispatch<ReducerAction<typeof fileManagerReducer>>;
@@ -406,7 +431,7 @@ function FileTreeBlock(props: {
                         });
                     }}
                 >
-                    {props.name}
+                    {props.displayName}
                 </span>
             </div>
         </ColumnLayout>
@@ -424,6 +449,8 @@ function FileTreeView({ root }: { root: FileTree }) {
                 level={root.level}
                 isFolder={root.subTree.length > 0}
                 name={root.name}
+                displayName={root.displayName}
+                primary={root.primary}
                 relativePath={root.relativePath}
                 expanded={root.expanded}
                 dispatch={dispatch}
@@ -471,20 +498,25 @@ function FolderActionBar(props: { actionsBarRoot: FileTree }) {
                         Upload Files in {props.actionsBarRoot.name}{" "}
                     </span>
                 </div>
-                <div className="action-bar-item">
-                    <Icon name={"external"} />
-                    <span
-                        onClick={() => {
-                            dispatch({
-                                type: "VIEW_FILE_FOLDER",
-                                payload: { key: props.actionsBarRoot },
-                            });
-                        }}
-                    >
-                        {" "}
-                        View {props.actionsBarRoot.name} Metadata{" "}
-                    </span>
-                </div>
+                {
+                    //Only show this if the keyPrefix is not "/"
+                    props.actionsBarRoot.keyPrefix != "/" && (
+                        <div className="action-bar-item">
+                            <Icon name={"external"} />
+                            <span
+                                onClick={() => {
+                                    dispatch({
+                                        type: "VIEW_FILE_FOLDER",
+                                        payload: { key: props.actionsBarRoot },
+                                    });
+                                }}
+                            >
+                                {" "}
+                                View {props.actionsBarRoot.name} Metadata{" "}
+                            </span>
+                        </div>
+                    )
+                }
             </SpaceBetween>
         </div>
     );
@@ -573,7 +605,7 @@ function FileBrowserGalleryItem({ root }: { root: FileTree }) {
             }
         >
             <Icon name={root.subTree.length > 0 ? "folder" : "file"} size={"large"} />
-            <div className="gallaryItemName">{root.name}</div>
+            <div className="gallaryItemName">{root.displayName}</div>
         </div>
     );
 }
@@ -631,8 +663,10 @@ export function FileManager({ assetName }: { assetName: string }) {
     const initialState = {
         fileTree: {
             name: assetName,
+            displayName: assetName,
             relativePath: "/",
             keyPrefix: "/",
+            primary: false,
             level: 0,
             expanded: true,
             subTree: [],

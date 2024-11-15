@@ -283,11 +283,8 @@ class AOSIndexAssetMetadata():
 
     @staticmethod
     def from_env(env=os.environ):
-        logger.info("env", env.get("METADATA_STORAGE_TABLE_NAME"))
-        logger.info("env", env.get("ASSET_STORAGE_TABLE_NAME"))
-        logger.info("env", env.get("DATABASE_STORAGE_TABLE_NAME"))
-        logger.info("env", env.get("AOS_ENDPOINT"))
-        logger.info("env", env.get("AWS_REGION"))
+        logger.info(env.get("AOS_ENDPOINT"))
+        logger.info(env.get("AWS_REGION"))
         region = env.get('AWS_REGION')
         service = env.get('AOS_TYPE')  # aoss (serverless) or es (provisioned)
         credentials = boto3.Session().get_credentials()
@@ -308,8 +305,7 @@ class AOSIndexAssetMetadata():
 
         if data is None:
             return "str"
-        
-        #logger.info("_determine_field_type input ", data)
+    
 
         try:
             j = re.compile(r"^{.*}$")
@@ -483,7 +479,7 @@ def get_asset_fields(keys):
         )
 
         if result.get("Item") is None:
-            logger.info("asset record is empty on attempt" + attempts+" for keys "+keys)
+            logger.info("asset record is empty on attempt"+ str(attempts))
             time.sleep(1)
 
     return result.get('Item')
@@ -537,6 +533,12 @@ def handle_s3_event_record(record,
                            get_asset_fields_fn=get_asset_fields,
                            s3index_fn=AOSIndexS3Objects.from_env,
                            sleep_fn=time.sleep):
+    
+    #Ignore pipeline and preview files from assets
+    if record.get("s3", {}).get("object", {}).get("key", "").startswith("pipeline") or \
+            record.get("s3", {}).get("object", {}).get("key", "").startswith("preview"):
+        logger.info("Ignoring pipeline and preview files from assets from indexing")
+        return
 
     handle_s3_event_record_removed(record, s3, s3index_fn)
 

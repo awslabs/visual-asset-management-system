@@ -76,6 +76,7 @@ class CreatePipeline():
             "databaseId": body['databaseId'],
             "pipelineId": body['pipelineId'],
             "pipelineType": body['pipelineType'],
+            "pipelineExecutionType": body['pipelineExecutionType'],
         }
         for user_name in claims_and_roles["tokens"]:
             casbin_enforcer = CasbinEnforcer(user_name)
@@ -122,7 +123,7 @@ class CreatePipeline():
         #TODO: Check if we have invoke permission on provided lambdaFunction. Otherwise error. 
 
         logger.info("Running CFT")
-        if body['pipelineType'] == 'Lambda':
+        if body['pipelineExecutionType'] == 'Lambda':
 
             item = {
                 'databaseId': body['databaseId'],
@@ -132,17 +133,18 @@ class CreatePipeline():
                 'description': body['description'],
                 'dateCreated': json.dumps(dtNow),
                 'pipelineType': body['pipelineType'],
+                'pipelineExecutionType': body['pipelineExecutionType'],
+                'inputParameters': body.get("inputParameters", ""),
                 'object__type': 'pipeline',
                 'waitForCallback': body['waitForCallback'],
                 'userProvidedResource': json.dumps(userResource),
                 'enabled': True
             }
 
-            if 'taskTimeout' in body:
-                item['taskTimeout'] = body['taskTimeout']
-
-            if 'taskHeartbeatTimeout' in body:
-                item['taskHeartbeatTimeout'] = body['taskHeartbeatTimeout']
+            #Set callback parameters if waitForCallback is enabled
+            if body['waitForCallback'] == "Enabled":
+                item['taskTimeout'] = body.get("taskTimeout", "86400") #default to 24 hours
+                item['taskHeartbeatTimeout'] = body.get("taskHeartbeatTimeout", "3600") #default to 1 hour
 
             self.table.put_item(
                 Item=item,
@@ -150,7 +152,7 @@ class CreatePipeline():
                 )
 
         else:
-            raise ValueError("Unknown pipelineType")
+            raise ValueError("Unknown Pipeline ExecutionType")
 
 
         return {
@@ -205,11 +207,18 @@ def lambda_handler(event, context, create_pipeline_fn=CreatePipeline.from_env):
     try:
         # Check for missing fields - TODO: would need to keep these synchronized
         #
-        required_field_names = ['databaseId', 'pipelineId', 'description', 'assetType', 'pipelineType', 'outputType',
+        required_field_names = ['databaseId', 'pipelineId', 'description', 'assetType', 'pipelineType','pipelineExecutionType',
                                 'waitForCallback']
         missing_field_names = list(set(required_field_names).difference(event['body']))
         if missing_field_names:
             message = 'Missing body parameter(s) (%s) in API call' % (', '.join(missing_field_names))
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            logger.error(response)
+            return response
+        
+        if event['body']['pipelineType'] == 'standardFile' and 'outputType' not in event['body']:
+            message = 'Missing body parameter(s) (outputType) in API call'
             response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
             logger.error(response)
@@ -236,7 +245,13 @@ def lambda_handler(event, context, create_pipeline_fn=CreatePipeline.from_env):
             },
             'outputType': {
                 'value':  event['body']['outputType'],
-                'validator': 'FILE_EXTENSION'
+                'validator': 'FILE_EXTENSION',
+                'optional': True
+            },
+            'inputParameters': {
+                'value':  event['body'].get('inputParameters', ''),
+                'validator': 'STRING_JSON',
+                'optional': True
             }
         })
 
@@ -248,15 +263,10 @@ def lambda_handler(event, context, create_pipeline_fn=CreatePipeline.from_env):
 
         global claims_and_roles
         claims_and_roles = request_to_claims(event)
-        http_method = event['requestContext']['http']['method']
         method_allowed_on_api = False
-        request_object = {
-            "object__type": "api",
-            "route__path": event['requestContext']['http']['path']
-        }
         for user_name in claims_and_roles["tokens"]:
             casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", request_object, http_method):
+            if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
                 break
 

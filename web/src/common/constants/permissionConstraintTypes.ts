@@ -44,6 +44,7 @@ export const fieldNamesToObjectTypeMapping: { [key: string]: Record<string, stri
         { label: "Database ID", value: "databaseId" },
         { label: "Pipeline ID", value: "pipelineId" },
         { label: "Pipeline Type", value: "pipelineType" },
+        { label: "Pipeline Execution Type", value: "pipelineExecutionType" },
     ],
     workflow: [
         { label: "Database ID", value: "databaseId" },

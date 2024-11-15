@@ -15,8 +15,10 @@ class FolderViewerProps {
 }
 
 class AssetFileList {
+    fileName!: string;
     key!: string;
     relativePath!: string;
+    primary!: boolean;
 }
 
 export default function FolderViewer({
@@ -36,6 +38,7 @@ export default function FolderViewer({
 
     const [treeState, setTreeState] = useState<NodeData>({
         name: "",
+        displayName: "",
         isOpen: true,
         children: [],
     });
@@ -51,6 +54,7 @@ export default function FolderViewer({
             if (!components || components.length === 0) {
                 rootChildren.push({
                     name: filePath.relativePath || filePath.key.split("/").pop()!,
+                    displayName: filePath.fileName,
                     isOpen: true,
                     key: filePath.key,
                 });
@@ -67,7 +71,12 @@ export default function FolderViewer({
                     }
                     currentChildren = foundChild.children!;
                 }
-                currentChildren.push({ name: fileName, isOpen: true, key: filePath.key }); // Add the file name as a child node with the key
+                currentChildren.push({
+                    name: fileName,
+                    displayName: fileName,
+                    isOpen: true,
+                    key: filePath.key,
+                }); // Add the file name as a child node with the key
             }
         }
         root.children = rootChildren;

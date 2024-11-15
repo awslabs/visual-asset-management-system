@@ -17,12 +17,14 @@ export const PipelineListDefinition = new ListDefinition({
         "databaseId",
         "description",
         "pipelineType",
+        "pipelineExecutionType",
         "assetType",
         "outputType",
     ],
     filterColumns: [
         // { name: "databaseId", placeholder: "Database" },
         { name: "pipelineType", placeholder: "Type" },
+        { name: "pipelineExecutionType", placeholder: "Type" },
         { name: "assetType", placeholder: "Input" },
         { name: "outputType", placeholder: "Output" },
     ],
@@ -59,6 +61,12 @@ export const PipelineListDefinition = new ListDefinition({
             header: "Type",
             cellWrapper: (props) => <>{props.children}</>,
             sortingField: "pipelineType",
+        }),
+        new ColumnDefinition({
+            id: "pipelineExecutionType",
+            header: "Execution Type",
+            cellWrapper: (props) => <>{props.children}</>,
+            sortingField: "pipelineExecutionType",
         }),
         new ColumnDefinition({
             id: "assetType",
