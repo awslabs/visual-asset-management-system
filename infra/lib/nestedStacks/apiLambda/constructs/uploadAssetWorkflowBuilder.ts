@@ -22,7 +22,7 @@ export function buildUploadAssetWorkflow(
     updateMetadataFunction: lambda.Function,
     executeWorkflowFunction: lambda.Function,
     assetStagingBucket?: s3.IBucket
-    //assetAuxiliaryStagingBucket?: s3.IBucket
+    //assetVisualizerStagingBucket?: s3.IBucket
 ): sfn.StateMachine {
     const callUploadAssetLambdaTask = new tasks.LambdaInvoke(scope, "Upload Asset Task", {
         lambdaFunction: uploadAssetFunction,
@@ -60,7 +60,7 @@ export function buildUploadAssetWorkflow(
 
     //Setup staging buckets
     let assetStagingCopyObjectChoice = undefined;
-    //let assetAuxiliaryStagingCopyObjectChoice = undefined
+    //let assetVisualizerStagingCopyObjectChoice = undefined
     if (assetStagingBucket) {
         const copyObjectTask = new tasks.CallAwsService(scope, "S3 Copy Object", {
             service: "s3",
@@ -82,11 +82,11 @@ export function buildUploadAssetWorkflow(
             .afterwards();
     }
 
-    // if (assetAuxiliaryStagingBucket) {
+    // if (assetVisualizerStagingBucket) {
     //     const copyObjectTask = new tasks.CallAwsService(scope, "S3 Copy Object", {
     //         service: "s3",
     //         action: "copyObject",
-    //         iamResources: [assetAuxiliaryStagingBucket.arnForObjects("*")],
+    //         iamResources: [assetVisualizerStagingBucket.arnForObjects("*")],
     //         inputPath: "$.copyObjectBody",
     //         parameters: {
     //             Bucket: JsonPath.stringAt("$.bucket"),
@@ -97,16 +97,16 @@ export function buildUploadAssetWorkflow(
     //         outputPath: "$",
     //     });
     //     const passCopy = new sfn.Pass(scope, "Object not provided");
-    //     assetAuxiliaryStagingCopyObjectChoice = new sfn.Choice(scope, "Is Object included?")
+    //     assetVisualizerStagingCopyObjectChoice = new sfn.Choice(scope, "Is Object included?")
     //         .when(sfn.Condition.isNotNull("$.copyObjectBody"), copyObjectTask)
     //         .when(sfn.Condition.isNull("$.copyObjectBody"), passCopy)
     //         .afterwards();
     // }
 
     let definition;
-    // if (assetStagingCopyObjectChoice && assetAuxiliaryStagingCopyObjectChoice) {
+    // if (assetStagingCopyObjectChoice && assetVisualizerStagingCopyObjectChoice) {
     //     definition = assetStagingCopyObjectChoice
-    //         .next(assetAuxiliaryStagingCopyObjectChoice)
+    //         .next(assetVisualizerStagingCopyObjectChoice)
     //         .next(callUploadAssetLambdaTask)
     //         .next(updateMetadataChoice)
     //         .next(callExecuteWorkflowChoice);

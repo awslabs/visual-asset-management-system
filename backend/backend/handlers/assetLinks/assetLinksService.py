@@ -169,9 +169,13 @@ def lambda_handler(event, context):
             return response
 
         method_allowed_on_api = False
+        request_object = {
+            "object__type": "api",
+            "route__path": event['requestContext']['http']['path']
+        }
         for user_name in claims_and_roles["tokens"]:
             casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforceAPI(event):
+            if casbin_enforcer.enforce(f"user::{user_name}", request_object, httpMethod):
                 method_allowed_on_api = True
 
         if method_allowed_on_api and httpMethod == 'POST':

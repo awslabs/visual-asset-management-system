@@ -22,7 +22,6 @@ dynamodb = boto3.resource('dynamodb')
 main_rest_response = STANDARD_JSON_RESPONSE
 asset_Database = None
 bucket_name = None
-timeout = 1800
 unitTest = {
     "body": {
         "databaseId": "Unit_Test"
@@ -34,7 +33,6 @@ try:
     asset_Database = os.environ["ASSET_STORAGE_TABLE_NAME"]
     bucket_name = os.environ["S3_ASSET_STORAGE_BUCKET"]
     region = os.environ['AWS_REGION']
-    timeout = int(os.environ['CRED_TOKEN_TIMEOUT_SECONDS'])
     #s3Endpoint = os.environ['S3_ENDPOINT']
 except:
     logger.exception("Failed Loading Environment Variables")
@@ -83,7 +81,7 @@ def get_Assets(databaseId, assetId):
     return items
 
 
-def get_File(databaseId, assetId, key, version):
+def get_Asset(databaseId, assetId, key, version):
     items = get_Assets(databaseId, assetId)
     if not items and len(items) == 0:
         return "Error: Asset not found or not authorized to view the assets"
@@ -110,7 +108,7 @@ def get_File(databaseId, assetId, key, version):
         return s3_client.generate_presigned_url('get_object', Params={
             'Bucket': bucket_name,
             'Key': key
-        }, ExpiresIn=timeout)
+        }, ExpiresIn=3600)
     else:
         versions = item['versions']
         for i in versions:
@@ -119,7 +117,7 @@ def get_File(databaseId, assetId, key, version):
                     'Bucket': bucket_name,
                     'Key': key,
                     'VersionId': i['S3Version']
-                }, ExpiresIn=timeout)
+                }, ExpiresIn=3600)
         return "Error: Asset not found or not authorized to view the assets"
 
 
@@ -186,10 +184,15 @@ def lambda_handler(event, context):
                 response['statusCode'] = 400
                 return response
 
+        http_method = event['requestContext']['http']['method']
         method_allowed_on_api = False
+        request_object = {
+            "object__type": "api",
+            "route__path": event['requestContext']['http']['path']
+        }
         for user_name in claims_and_roles["tokens"]:
             casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforceAPI(event):
+            if casbin_enforcer.enforce(f"user::{user_name}", request_object, http_method):
                 method_allowed_on_api = True
                 break
 
@@ -206,7 +209,7 @@ def lambda_handler(event, context):
                 version = event['body']['version']
                 logger.info("Version Provided: " + version)
 
-            url = get_File(pathParameters['databaseId'], pathParameters['assetId'], key, version)
+            url = get_Asset(pathParameters['databaseId'], pathParameters['assetId'], key, version)
             response['statusCode'] = 200
 
             if url == "Error: Asset not found or not authorized to view the assets":

@@ -94,9 +94,13 @@ def lambda_handler(event, context):
 
         asset_object = get_asset_object_from_id(event['body']["assetId"])
         asset_object.update({"object__type": "asset"})
+        request_object = {
+            "object__type": "api",
+            "route__path": event['requestContext']['http']['path']
+        }
         for user_name in claims_and_roles["tokens"]:
             casbin_enforcer = CasbinEnforcer(user_name)
-            if (casbin_enforcer.enforceAPI(event) and
+            if (casbin_enforcer.enforce(f"user::{user_name}", request_object, httpMethod) and
                     casbin_enforcer.enforce(f"user::{user_name}", asset_object, "GET")):
                 method_allowed_on_api = True
 

@@ -67,11 +67,11 @@ jobs:
                   dir: "vams/web"
                   cmd: install
 
-            # - name: Run yarn audit web directory
-            #   uses: Borales/actions-yarn@v4.2.0
-            #   with:
-            #       dir: "vams/web"
-            #       cmd: audit
+            - name: Run yarn audit web directory
+              uses: Borales/actions-yarn@v4.2.0
+              with:
+                  dir: "vams/web"
+                  cmd: audit
 
             # - name: Web test
             #   working-directory: vams/web

@@ -40,7 +40,7 @@ You can identify stable releases by their tag. Fetch the tags `git fetch --all -
 
 9. (External VPC Import Only) If importing an external VPC with subnets in the `config.json` configuration, run `cdk deploy --all --require-approval never --context loadContextIgnoreVPCStacks=true` to import the VPC ID/Subnets context and deploy all non-VPC dependant stacks first. Failing to run this with the context setting or configuration setting of `loadContextIgnoreVPCStacks` will cause the final deployment of all stacks step to fail.
 
-10. `npm run deploy.dev` - An account is created in an AWS Cognito User Pool using the email address specified in the infrastructure config file. Expect an email from <`no-reply@verificationemail.com`> with a temporary password.
+10. `npm run deploy.dev` - An account is created in an AWS Cognito User Pool using the email address specified in the infrastructure config file. Expect an email from <no-reply@verificationemail.com> with a temporary password.
 
     10a. Ensure that docker is running before deploying as a container will need to be built
 
@@ -102,16 +102,13 @@ The critical component right now is that the authenticated VAMS username be incl
 }
 ```
 
-NOTE: GovCloud deployments when the GovCloud configuration setting is true only support v1 of the Cognito lambdas. This means that ONLY Access tokens produced by Cognito can be used with VAMS API Calls for authentication/authorization. Otherwise both ID and Access tokens can be used for Non-govcloud deployments.
-
 ### Local Docker Builds - Custom Build Settings
 
 If you are needing to add custom settings to your local docker builds, such as adding custom SSL CA certificates to get through HTTPS proxies, modify the following docker build files:
 
 1. `/infra/config/dockerDockerfile-customDependencyBuildConfig` - Docker file for all local packaging environments such as Lambda Layers and/or Custom Resources. Add extra lines to end of file.
-2. `/backendPipelines/...` - Docker files for use-case pipeline containers. Add extra lines above any package install or downloads.
-
-When specifying docker image pulls, all docker files should be defined/fixed to the `linux/amd64` platform. This alleievates issues with deploying across Windows, Max, and Linux host OS platforms.
+2. `/backendVisualizerPipelines/pc/Dockerfile_PDAL` - Docker file for Visualizer Pipeline container for PointClouds - PDAL Stage. Add extra lines above any package install or downloads.
+3. `/backendVisualizerPipelines/pc/Dockerfile_Potree` - Docker file for Visualizer Pipeline container for PointClouds - PotreeConverter Stage. Add extra lines above any package install or downloads.
 
 ### CDK Deploy with Custom SSL Cert Proxy
 
@@ -200,7 +197,7 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 | AppFeatureEnabledStorageTable | featureName   | n/a        |                                                                                                                                   |
 | AssetStorageTable             | databaseId    | assetId    | assetLocation, assetName, assetType, currentVersion, description, generated_artifacts, isDistributable, previewLocation, versions |
 | JobStorageTable               | jobId         | databaseId |                                                                                                                                   |
-| PipelineStorageTable          | databaseId    | pipelineId | assetType, dateCreated, description, enabled, outputType, pipelineType, pipelineExecutionType                                     |
+| PipelineStorageTable          | databaseId    | pipelineId | assetType, dateCreated, description, enabled, outputType, pipelineType                                                            |
 | DatabaseStorageTable          | databaseId    | n/a        | assetCount, dateCreated, description                                                                                              |
 | WorkflowStorageTable          | databaseId    | workflowId | dateCreated, description, specifiedPipelines, workflow_arn                                                                        |
 | WorkflowExecutionStorageTable | pk            | sk         | asset_id, database_id, execution_arn, execution_id, workflow_arn, workflow_id, assets                                             |
@@ -220,16 +217,14 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 
 ## PipelineStorageTable
 
-| Field                 | Data Type | Description                                                                     |
-| --------------------- | --------- | ------------------------------------------------------------------------------- |
-| assetType             | String    | File extension of the asset                                                     |
-| dateCreated           | String    | Creation date of this record                                                    |
-| description           | String    | User provided description                                                       |
-| enabled               | Boolean   | Whether this pipeline is enabled                                                |
-| outputType            | String    | File extension of the output asset                                              |
-| pipelineType          | String    | Defines the pipeline type — StandardFile/PreviewFile                            |
-| pipelineExecutionType | String    | Defines the pipeline execution type — Lambda                                    |
-| inputParameters       | String    | Defines the optional JSON parameters that get sent to the pipeline at execution |
+| Field        | Data Type | Description                        |
+| ------------ | --------- | ---------------------------------- |
+| assetType    | String    | File extension of the asset        |
+| dateCreated  | String    | Creation date of this record       |
+| description  | String    | User provided description          |
+| enabled      | Boolean   | Whether this pipeline is enabled   |
+| outputType   | String    | File extension of the output asset |
+| pipelineType | String    | Defines the pipeline type — Lambda |
 
 ## DatabaseStorageTable
 
@@ -241,27 +236,24 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 
 ## WorkflowStorageTable
 
-| Field              | Data Type              | Description                                                                            |
-| ------------------ | ---------------------- | -------------------------------------------------------------------------------------- |
-| dateCreated        | String                 | Creation date of this record                                                           |
-| description        | String                 | User provided description                                                              |
-| specifiedPipelines | Map, List, Map, String | List of pipelines given by their name, outputType, pipelineType, pipelineExecutionType |
-| workflow_arn       | String                 | The ARN identifying the step function state machine                                    |
+| Field              | Data Type              | Description                                                         |
+| ------------------ | ---------------------- | ------------------------------------------------------------------- |
+| dateCreated        | String                 | Creation date of this record                                        |
+| description        | String                 | User provided description                                           |
+| specifiedPipelines | Map, List, Map, String | List of pipelines given by their name, outputType, and pipelineType |
+| workflow_arn       | String                 | The ARN identifying the step function state machine                 |
 
 ## WorkflowExecutionStorageTable
 
-| Field           | Data Type | Description                                                                     |
-| --------------- | --------- | ------------------------------------------------------------------------------- |
-| asset_id        | String    | Asset identifier for this workflow execution                                    |
-| database_id     | String    | Database to which the asset belongs                                             |
-| execution_arn   | String    | The state machine execution arn                                                 |
-| execution_id    | String    | Execution identifier                                                            |
-| workflow_arn    | String    | State machine ARN                                                               |
-| workflow_id     | String    | Workflow identifier                                                             |
-| stopDate        | String    | Stop Datetime of the execution (if blank, still running)                        |
-| startDate       | String    | Start Datetime of the execution (if blank, still running)                       |
-| executionStatus | String    | Execution final status (if blank, still running)                                |
-| assets          | List, Map | List of Maps of asset objects (see AssetStorageTable for attribute definitions) |
+| Field         | Data Type | Description                                                                     |
+| ------------- | --------- | ------------------------------------------------------------------------------- |
+| asset_id      | String    | Asset identifier for this workflow execution                                    |
+| database_id   | String    | Database to which the asset belongs                                             |
+| execution_arn | String    | The state machine execution arn                                                 |
+| execution_id  | String    | Execution identifier                                                            |
+| workflow_arn  | String    | State machine ARN                                                               |
+| workflow_id   | String    | Workflow identifier                                                             |
+| assets        | List, Map | List of Maps of asset objects (see AssetStorageTable for attribute definitions) |
 
 ## MetadataStorageTable
 
@@ -277,15 +269,13 @@ From rel 1.4 onwards, when you add metadata on a file / folder, the s3 key prefi
 
 The dependencies for the backend lambda functions are handled using poetry. If you changed the lambda functions make sure to do a `cdk deploy` to reflect the change.
 
-The core VAMS lambda handlers are categorized based on the project domain. E.g you will find all assets related functions in the `/backend/backend/assets` folder.
-
-The pipeline containers and lambda handlers are categorized based pipeline use-case implementations. You will find all pipeline components related to these in the `/backend/backendPipelines` folder.
+The lambda handlers are categorized based on the project domain. E.g you will find all assets related functions in `/backend/backend/assets` folder.
 
 # Adding your own pipelines
 
-When you create pipelines in VAMS, you currently have one execution option and two pipeline type options
+When you create pipelines in VAMS, you have two options
 
-1. Create a lambda execution type pipeline. Pick either standard or preview pipeline type (currently there are no differences as of v2.1, preview will have a future implementation functionality)
+1. Create a lambda pipeline
 
 ## Lambda pipeline
 
@@ -315,36 +305,9 @@ When a VAMS workflow invokes a VAMS Lambda pipeline, it invokes the correspondin
 
 ```
 "body": {
-    "inputS3AssetFilePath": "<S3 URI of the primary asset file to be used as input>",
-    "outputS3AssetFilesPath": "<Predetermined output path for asset files generated by pipeline's execution */**>",
-    "outputS3AssetPreviewPath": "<Predetermined output path for asset preview files generated by pipeline's execution **>",
-    "outputS3AssetMetadataPath": "<Predetermined output path for asset metadata generated by pipeline's execution */**/***>",
-    "inputOutputS3AssetAuxiliaryFilesPath": "<Predetermined path for asset auxiliary files generated by pipeline's execution ****>",
-    "inputParameters": "<Optional input JSON parameters specified at the time of pipeline creation. Generally these map to allowed pipeline configuration parameters of the call-to pipeline>",
-    "inputMetadata": "<Input metadata JSON constructed from the VAMS asset the pipeline was executed from to provide pipelines additional context. See below for the JSON schema>",
-    "executingUsername": <The username of the user who executed the pipeline for use with permissioning>,
-    "executingRequestContext": <The originating lambda request context from executing the pipeline for use with permissioning>
+    "inputPath": "<S3 URI of the asset to be used as input>",
+    "outputPath": "<Predetermined output path for assets generated by pipeline's execution>",
 }
-```
-
--   \* The path specified is a unique location based on the execution job run. No two executions will have the same output path for these paths.
--   \*\* If no files are located at the output locatin at the end of an execution, the respective asset data will not be modified
--   \*\*\* Metadata files are in the form of JSON objects. All key/value fields in the top-level JSOn object will be added to the asset's metadata. Fields that already exist will be overwriten.
--   \*\*\*\* The asset axuliary location is used for pipeline or asset non-versioned files or pipeline temporary files. The file path provided is not unique to the job execution and is a global path based on the asset selected and pipeline name.
-
-Below is the input metadata schema JSON object constructed and passed into each pipeline execution:
-
-```
-    "VAMS": {
-        "assetData": {
-            "assetName":"<Name of the asset the workflow is executed from>",
-            "description": "<Description of the asset the workflow is executed from>",
-            "tags": ["<Array of tags of the asset the workflow is executed from>"]
-        },
-        "assetMetadata": {
-            <... Dynamically constructed fields of all the metadata fields (key/value) from the VAMS asset and metadata of the primary VAMS asset file ...>
-        }
-    }
 ```
 
 A simple lambda handler is provided below for reference. You may chose to override your own function in place of `write_input_output` function in below code.
@@ -361,83 +324,22 @@ def lambda_handler(event, context):
     else:
         data = event['body']
 
-    write_input_output(data['inputS3AssetFilePath'], data['outputS3AssetFilesPath'])
+    write_input_output(data['inputPath'], data['outputPath'])
     return {
         'statusCode': 200,
         'body': 'Success'
     }
 ```
 
-## Use-case Specific Pipelines - Execution Through VAMS Pipelines
+## Visualizer Pipeline - Visualizer Pipeline Execution Through VAMS Pipeline
 
-This section describes use-case specific pipelines that can be activated in the infrastructure deployment configuration file `/infra/config/config.json`. These pipelines can be setup through VAMS pipelines and workflows and/or some may be called directly through other triggering mechanisms. See the [Configuration Guide](./ConfigurationGuide.md) for the use-case pipeline configuration options.
+Visualizer pipelines to generate preview files for certain types of files like points clouds, are implemented outside of the regular VAMS pipeline at this time. Until these get fully integrated as part of the regular VAMS pipeline design, these pipelines are triggered primarily through a S3 Event Notification on uploading new asset files to VAMS.
 
-Pipeline architectures can either be synchronous or asynchonous. If asynchronous, the option of "Wait for Callback with the Task Token" must be used when adding the pipeline to VAMS.
+If you wish to trigger these pipelines additionally/manually through VAMS pipeline, you can setup a new VAMS pipeline using the table below. You will need to lookup the lambda function name in the AWS console based on the base deployment name listed.
 
-See the [NOTICE file](./NOTICE.md) for specific third-party license information regarding each of these pipelines.
-
-### Standard Type - 3D Basic Converter Pipeline (Synchronous)
-
-The 3dBasic Converter Pipeline is used to convert between various 3D mesh file types.
-
-If you wish to trigger this pipelines additionally/manually through VAMS pipeline, you can setup a new VAMS pipeline using the table below. You will need to lookup the lambda function name in the AWS console based on the base deployment name listed.
-
-The pipeline uses the third-party open-source Trimesh library to conduct the conversion.
-
-The pipeline uses the selected file type on the asset as the input type and the registered pipeline `outputType` as the final conversion type. For now a separate pipeline registration is required for each from-to file type conversion that a organization would like to support.
-
-NOTE: Pipeline must be registered in VAMS WITHOUT the option of "Wait for Callback with the Task Token"
-
-| Input File Types Supported                                       | Base Lambda Function Name    |
-| :--------------------------------------------------------------- | :--------------------------- |
-| STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ (3D Meshes) | vamsExecute3dBasicConversion |
-
-### Preview Type - PotreeViewer Point Cloud Visualizer Pipeline (Asynchronous)
-
-The PotreeViewer Point Cloud Visualizer Pipeline is used to generate preview files for certain types of points clouds asset files. Currently preview pipelines like these are aprimarily implemented outside of VAMS pipelines/workflows but also have the ability to be called through traditional pipelines. Until preview type pipelines are fully integrated as part of the regular VAMS pipeline design and execution, this pipeline is triggered primarily through a S3 Event Notification on uploading new asset files to VAMS.
-
-If you wish to trigger this pipelines additionally/manually through VAMS pipeline, you can setup a new VAMS pipeline using the table below. You will need to lookup the lambda function name in the AWS console based on the base deployment name listed.
-
-The PotreeViewer pipeline outputs it's files (Potree OCTREE Formated Files) to the assetAuxiliary bucket. These are then retrieved through the PotreeViewer implementations on the VAMS UX side through the auxiliary assets stream API endpoint. This uses the third-party open-source PDAL and PotreeConverter libraries to convert and generate the final output
-
-There are no defined input parameter configurations for this pipeline. This pipeline ignores inputMetadata as it's not needed for the operation of this pipeline.
-
-NOTE: If pipeline registered separately in VAMS Pipelines, it must be registered in VAMS with the option of "Wait for Callback with the Task Token"
-
-![Preview PotreeViewer Pipeline Architecture](/diagrams/pipeline_usecase_previewPotreeViewer.png)
-
-| Input File Types Supported        | Base Lambda Function Name - VAMS trigger | Base Lambda Function Name - SNS trigger |
-| :-------------------------------- | :--------------------------------------- | --------------------------------------- |
-| LAS, LAZ, E57, PLY (Point Clouds) | vamsExecutePreviewPcPotreeViewerPipeline | snsExecutePrviewPcPotreeViewerPipeline  |
-
-### Standard Type - GenerativeAI 3D Metadata Labeling Pipeline (Asynchronous)
-
-> Notice: This use-case pipeline uses a open-source library that is GPL licensed. Please refer to the ![NOTICE File](/NOTICE.md) and review with your organizations legal team before enabling use.
-
-The GenerativeAI 3D Metadata labeling Pipeline is used to generate 2D renders and metadata JSON labeling information for 3D mesh asset files. This is useful to auto-label asset data as it is ingested.
-
-If you wish to trigger this pipelines additionally/manually through VAMS pipeline, you can setup a new VAMS pipeline using the table below. You will need to lookup the lambda function name in the AWS console based on the base deployment name listed.
-
-The pipeline uses the third-party open-source Blender library to generate 2D renders of the 3D object. This is then ingested into both Amazon Rekognition and Amazon Bedrock to generate and summarize labels on these 2D images. The output is a JSON metadata keywords file in the asset S3 bucket. Input types are currently restricted by the input model formats that Blender can accept.
-
-This pipeline can use the inputMetadata passed into the pipeline as additional seed data for more accurately labeling the 2D image objects. This can be toggled on or off with an inputParameter.
-
-The following inputParameters are supported:
-
-```
-{
-    "includeAllAssetFileHierarchyFiles": "True", #Default: False. Pull in all the asset files from the folder that includes the original input asset and lower (i.e. can pull in other relative texture files or shaders for rendering)
-    "seedMetadataGenerationWithInputMetadata": "True" #Default: False. Seed the metadata label generation with the input metadata (e.g. VAMS asset data, asset metadata) to refine results and reduce outlier keywords
-}
-```
-
-NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback with the Task Token"
-
-![GenAI Metadata 3D Labeling Pipeline Architecture](/diagrams/pipeline_usecase_genAiMetadata3dLabeling.png)
-
-| Input File Types Supported                              | Base Lambda Function Name                  |
-| :------------------------------------------------------ | :----------------------------------------- |
-| OBJ, GLB/GLTF, FBX, ABC, DAE, PLY, STL, USD (3D Meshes) | vamsExecuteGenAiMetadata3dLabelingPipeline |
+| Visualizer Pipeline | Input/Output File Types Supported | Base Lambda Function Name   |
+| :------------------ | :-------------------------------- | :-------------------------- |
+| Point Clouds        | LAS, LAZ, E57                     | executeVisualizerPCPipeline |
 
 # Testing API
 

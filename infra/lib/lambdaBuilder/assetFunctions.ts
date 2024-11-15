@@ -53,13 +53,13 @@ export function buildAssetService(
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
-            S3_ASSET_AUXILIARY_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
+            S3_ASSET_VISUALIZER_BUCKET: storageResources.s3.assetVisualizerBucket.bucketName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
         },
     });
     storageResources.dynamo.assetStorageTable.grantReadWriteData(assetService);
-    storageResources.s3.assetAuxiliaryBucket.grantReadWrite(assetService);
+    storageResources.s3.assetVisualizerBucket.grantReadWrite(assetService);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(assetService);
     storageResources.s3.assetBucket.grantReadWrite(assetService);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(assetService);
@@ -181,6 +181,59 @@ export function buildUploadAssetFunction(
     return uploadAssetFunction;
 }
 
+export function buildUploadAllAssetsFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    uploadAssetLambdaFunction: lambda.Function,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "uploadAllAssets";
+    const uploadAllAssetFunction = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.assets.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
+                storageResources.dynamo.workflowExecutionStorageTable.tableName,
+            UPLOAD_LAMBDA_FUNCTION_NAME: uploadAssetLambdaFunction.functionName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
+        },
+    });
+    uploadAssetLambdaFunction.grantInvoke(uploadAllAssetFunction);
+    storageResources.s3.assetBucket.grantReadWrite(uploadAllAssetFunction);
+    storageResources.dynamo.databaseStorageTable.grantReadWriteData(uploadAllAssetFunction);
+    storageResources.dynamo.assetStorageTable.grantReadData(uploadAllAssetFunction);
+    storageResources.dynamo.workflowExecutionStorageTable.grantReadWriteData(
+        uploadAllAssetFunction
+    );
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(uploadAllAssetFunction);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(uploadAllAssetFunction);
+    kmsKeyLambdaPermissionAddToResourcePolicy(
+        uploadAllAssetFunction,
+        storageResources.encryption.kmsKey
+    );
+    suppressCdkNagErrorsByGrantReadWrite(scope);
+    return uploadAllAssetFunction;
+}
+
 export function buildAssetMetadataFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -267,7 +320,7 @@ export function buildAssetColumnsFunction(
     return assetColumnsFunction;
 }
 
-export function buildStreamAuxiliaryPreviewAssetFunction(
+export function buildFetchVisualizerAssetFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
@@ -275,8 +328,8 @@ export function buildStreamAuxiliaryPreviewAssetFunction(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const name = "streamAuxiliaryPreviewAsset";
-    const streamAuxiliaryPreviewAssetFunction = new lambda.Function(scope, name, {
+    const name = "fetchVisualizerAsset";
+    const fetchVisualizerAssetFunction = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.assets.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -292,26 +345,22 @@ export function buildStreamAuxiliaryPreviewAssetFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            ASSET_AUXILIARY_BUCKET_NAME: storageResources.s3.assetAuxiliaryBucket.bucketName,
+            ASSET_VISUALIZER_BUCKET_NAME: storageResources.s3.assetVisualizerBucket.bucketName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
         },
     });
-    storageResources.s3.assetAuxiliaryBucket.grantRead(streamAuxiliaryPreviewAssetFunction);
-    storageResources.dynamo.assetStorageTable.grantReadData(streamAuxiliaryPreviewAssetFunction);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(
-        streamAuxiliaryPreviewAssetFunction
-    );
-    storageResources.dynamo.userRolesStorageTable.grantReadData(
-        streamAuxiliaryPreviewAssetFunction
-    );
+    storageResources.s3.assetVisualizerBucket.grantRead(fetchVisualizerAssetFunction);
+    storageResources.dynamo.assetStorageTable.grantReadData(fetchVisualizerAssetFunction);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fetchVisualizerAssetFunction);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fetchVisualizerAssetFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(
-        streamAuxiliaryPreviewAssetFunction,
+        fetchVisualizerAssetFunction,
         storageResources.encryption.kmsKey
     );
     suppressCdkNagErrorsByGrantReadWrite(scope);
-    return streamAuxiliaryPreviewAssetFunction;
+    return fetchVisualizerAssetFunction;
 }
 
 export function buildDownloadAssetFunction(
@@ -344,7 +393,6 @@ export function buildDownloadAssetFunction(
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
-            CRED_TOKEN_TIMEOUT_SECONDS: config.app.authProvider.credTokenTimeoutSeconds.toString(),
         },
     });
     storageResources.s3.assetBucket.grantRead(downloadAssetFunction);
@@ -485,7 +533,6 @@ export function buildIngestAssetFunction(
             METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            CRED_TOKEN_TIMEOUT_SECONDS: config.app.authProvider.credTokenTimeoutSeconds.toString(),
         },
     });
 

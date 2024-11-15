@@ -73,14 +73,12 @@ export default function CreateUpdateWorkflow(props) {
                 const loadedPipelines = currentItem?.specifiedPipelines?.functions.map((item) => {
                     return {
                         value: item.name,
-                        pipelineType: item.pipelineType,
-                        pipelineExecutionType: item.pipelineExecutionType,
+                        type: item.pipelineType,
                         outputType: item.outputType,
                         waitForCallback: item.waitForCallback,
                         taskTimeout: item.taskTimeout,
                         taskHeartbeatTimeout: item.taskHeartbeatTimeout,
                         userProvidedResource: item.userProvidedResource,
-                        inputParameters: item.inputParameters,
                     };
                 });
                 setLoadedWorkflowPipelines(loadedPipelines);
@@ -144,14 +142,12 @@ export default function CreateUpdateWorkflow(props) {
             const functions = workflowPipelines.map((item) => {
                 return {
                     name: item.value,
-                    pipelineType: item.pipelineType,
-                    pipelineExecutionType: item.pipelineExecutionType,
+                    pipelineType: item.type,
                     outputType: item.outputType,
                     waitForCallback: item.waitForCallback,
                     taskTimeout: item.taskTimeout,
                     taskHeartbeatTimeout: item.taskHeartbeatTimeout,
                     userProvidedResource: item.userProvidedResource,
-                    inputParameters: item.inputParameters,
                 };
             });
             const config = {

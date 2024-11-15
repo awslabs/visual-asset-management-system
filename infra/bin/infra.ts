@@ -72,7 +72,7 @@ if (config.app.useWaf) {
     coreVamsStack.addDependency(cfWafStack);
 
     //Stack level NAG supressions
-    if (config.app.govCloud.enabled) {
+    if (config.app.govCloud) {
         // Enable checks for NIST 800-53 R5
         // TODO: RE-ENABLE WHEN WORKING THROUGH ISSUES
         // Aspects.of(app).add(new NIST80053R5Checks({verbose: true}));
@@ -102,7 +102,7 @@ else {
     });
 
     //Stack level NAG supressions
-    if (config.app.govCloud.enabled) {
+    if (config.app.govCloud) {
         // Enable checks for NIST 800-53 R5
         // TODO: RE-ENABLE WHEN WORKING THROUGH ISSUES
         // Aspects.of(app).add(new NIST80053R5Checks({verbose: true}));

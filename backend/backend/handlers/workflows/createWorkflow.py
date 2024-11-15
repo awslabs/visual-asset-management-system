@@ -50,7 +50,7 @@ dynamodb = boto3.resource('dynamodb')
 try:
     workflow_Database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
     stack_name = os.environ["VAMS_STACK_NAME"]
-    process_workflow_output_function = os.environ['PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME']
+    upload_all_function = os.environ['UPLOAD_ALL_LAMBDA_FUNCTION_NAME']
     region = os.environ['AWS_REGION']
     role = os.environ['LAMBDA_ROLE_ARN']
     logGroupArn = os.environ['LOG_GROUP_ARN']
@@ -89,12 +89,15 @@ def create_workflow(payload):
 def create_step_function(pipelines, databaseId, workflowId):
     logger.info("Creating state machine flow")
 
+    #account_id = sts_client.get_caller_identity()['Account']
+
     # Generate unique names for Pre-Processing Job, Training Job, and Model Evaluation Job for the Step Functions Workflow
     job_names = [
         # Each Training Job requires a unique name
         x['name'] + "-{}".format(uuid.uuid1().hex) for x in pipelines
     ]
     logger.info(job_names)
+    # instance_type = os.getenv("INSTANCE_TYPE", "ml.m5.large")
 
     # Step function failed state
     failed_state_processing_failure = stepfunctions.steps.states.Fail(
@@ -106,71 +109,45 @@ def create_step_function(pipelines, databaseId, workflowId):
         next_step=failed_state_processing_failure,
     )
 
-
-
     steps = []
     for i, pipeline in enumerate(pipelines):
-
-        assetAuxiliaryAssetSubFolderName = "pipelines"
-        if pipeline.get('pipelineType', 'standardFile') == 'previewFile':
-            assetAuxiliaryAssetSubFolderName = "preview"
-
-        output_s3_asset_files_uri = "States.Format('s3://{}/pipelines/" + \
-                pipeline["name"] + "/" + job_names[i] + "/output/{}/files/', $.bucketAsset, $$.Execution.Name)"
-        
-        output_s3_asset_preview_uri = "States.Format('s3://{}/pipelines/" + \
-                pipeline["name"] + "/" + job_names[i] + "/output/{}/preview/', $.bucketAsset, $$.Execution.Name)"
-        
-        output_s3_asset_metadata_uri = "States.Format('s3://{}/pipelines/" + \
-                pipeline["name"] + "/" + job_names[i] + "/output/{}/metadata/', $.bucketAsset, $$.Execution.Name)"
-        
-        inputOutput_s3_assetAuxiliary_files_uri = "States.Format('s3://{}/{}/" + \
-               assetAuxiliaryAssetSubFolderName + "/" + pipeline["name"] + "/', $.bucketAssetAuxiliary, $.inputAssetFileKey)"
-        
         if i == 0:
-            input_s3_asset_uri = "States.Format('s3://{}/{}', $.bucketAsset, $.inputAssetFileKey)"
+            input_s3_uri = "States.Format('s3://{}/{}', $.bucket, $.key)"
         else:
-            input_s3_asset_uri = output_s3_asset_files_uri
+            input_s3_uri = output_s3_uri
 
-        logger.info(output_s3_asset_files_uri)
-        if ('pipelineExecutionType' in pipeline and pipeline['pipelineExecutionType'] == 'Lambda'):
-            step = create_lambda_step(pipeline, input_s3_asset_uri, output_s3_asset_files_uri, output_s3_asset_preview_uri, output_s3_asset_metadata_uri, inputOutput_s3_assetAuxiliary_files_uri)
-            step.add_retry(retry=stepfunctions.steps.Retry(
-                error_equals=["States.ALL"],
-                interval_seconds=5,
-                backoff_rate=2,
-                max_attempts=3
-            ))
-            step.add_catch(catch_state_processing)
-            logger.info(step)
-            steps.append(step)
+        output_s3_uri = "States.Format('s3://{}/pipelines/" + \
+                        pipeline["name"] + "/" + job_names[i] + "/output/{}/', $.bucket, $$.Execution.Name)"
+        logger.info(output_s3_uri)
+        if ('pipelineType' in pipeline and pipeline['pipelineType'] == 'Lambda'):
+            step = create_lambda_step(pipeline, input_s3_uri, output_s3_uri)
+        step.add_retry(retry=stepfunctions.steps.Retry(
+            error_equals=["States.ALL"],
+            interval_seconds=5,
+            backoff_rate=2,
+            max_attempts=3
+        ))
+        step.add_catch(catch_state_processing)
+        steps.append(step)
 
-        #For standard pipelines executed on a file, add a upload asset step at the end of the workflow
-        #TODO: Make this global after a workflow as right now its being added after pipeline component
         l_payload = {
             "body": {
                 "databaseId.$": "$.databaseId",
                 "assetId.$": "$.assetId",
                 "workflowId.$": "$.workflowId",
-                "filesPathKey.$": "States.Format('pipelines/" + pipeline["name"] + "/" + job_names[
-                    i] + "/output/{}/files/', $$.Execution.Name)",
-                "metadataPathKey.$": "States.Format('pipelines/" + pipeline["name"] + "/" + job_names[
-                    i] + "/output/{}/metadata/', $$.Execution.Name)",
-                "previewPathKey.$": "States.Format('pipelines/" + pipeline["name"] + "/" + job_names[
-                    i] + "/output/{}/preview/', $$.Execution.Name)",
+                "bucket.$": "$.bucket",
+                "key.$": "States.Format('pipelines/" + pipeline["name"] + "/" + job_names[
+                    i] + "/output/{}/', $$.Execution.Name)",
                 "description": f'Output from {pipeline["name"]}',
                 "executionId.$": "$$.Execution.Name",
                 "pipeline": pipeline["name"],
-                "outputType": pipeline["outputType"],
-                "executingUserName.$": "$.executingUserName",
-                "executingRequestContext.$": "$.executingRequestContext"
+                "outputType": pipeline["outputType"]
             }
         }
-
         steps.append(LambdaStep(
-            state_id="process-outputs-{}".format(uuid.uuid1().hex),
+            state_id="upload-assets-{}".format(uuid.uuid1().hex),
             parameters={
-                "FunctionName": process_workflow_output_function,  # replace with the name of your function
+                "FunctionName": upload_all_function,  # replace with the name of your function
                 "Payload": l_payload
             }
         ))
@@ -186,15 +163,14 @@ def create_step_function(pipelines, databaseId, workflowId):
     if len(workFlowName) > 80:
         workFlowName = workFlowName[-79:]  # use 79 characters for buffer
 
-    workflow_graph = Chain(steps)
+    logger.info("Submitting state machine flow 1")
 
+    workflow_graph = Chain(steps)
     branching_workflow = Workflow(
         name=workFlowName,
         definition=workflow_graph,
         role=role
     )
-
-    logger.info("Submitting state machine flow 1")
 
     workflow_arn = branching_workflow.create()
     response = sf_client.describe_state_machine(
@@ -206,13 +182,13 @@ def create_step_function(pipelines, databaseId, workflowId):
         try:
 
             if original_workflow["States"][step_name]["Type"] == "Task":
-                outputResultPath = "$." + step_name + ".output"
-                original_workflow["States"][step_name]["ResultPath"] = outputResultPath
-                
+                original_workflow["States"][step_name]["ResultPath"] = "$." + \
+                                                                       step_name + ".output"
+
             pipelineName = step_name.split("-")[0]
             original_workflow["States"][step_name]["Parameters"].pop(
                 "ProcessingJobName")
-            # Two jobs can't have the same name, appending job name with ExecutionId
+            # Two jobs cant have the same name, appending job name with ExecutionId
             original_workflow["States"][step_name]["Parameters"][
                 "ProcessingJobName.$"] = "States.Format('" + pipelineName + "-" + str(
                 i) + "-{}', $$.Execution.Name)"
@@ -253,33 +229,15 @@ def create_step_function(pipelines, databaseId, workflowId):
     return workflow_arn
 
 
-def create_lambda_step(pipeline, input_s3_asset_file_uri, output_s3_asset_files_uri, output_s3_asset_preview_uri, output_s3_asset_metadata_uri, inputOutput_s3_assetAuxiliary_files_uri):
+def create_lambda_step(pipeline, input_s3_uri, output_s3_uri):
 
     userResource = json.loads(pipeline['userProvidedResource'])
     functionName = userResource['resourceId']
 
-    #Check if we have inputParameters in pipeline and if so, check to make sure we can JSON parse them
-    inputParameters = ''
-    if 'inputParameters' in pipeline and pipeline["inputParameters"] != None and pipeline["inputParameters"] != "":
-        try:
-            json.loads(pipeline['inputParameters'])
-            inputParameters = pipeline['inputParameters']
-        except json.decoder.JSONDecodeError:
-            logger.warn("Input parameters provided is not a JSON object.... skipping inclusion")
-
-    #TODO: Generate Presigned URLs for download to S3. Create function / API for pipelines to call to generate upload URLs. More secure and extensible. 
     lambda_payload = {
         "body": {
-            "inputS3AssetFilePath.$": input_s3_asset_file_uri,
-            "outputS3AssetFilesPath.$": output_s3_asset_files_uri,
-            "outputS3AssetPreviewPath.$": output_s3_asset_preview_uri,
-            "outputS3AssetMetadataPath.$": output_s3_asset_metadata_uri,
-            "outputType": pipeline["outputType"],
-            "inputOutputS3AssetAuxiliaryFilesPath.$": inputOutput_s3_assetAuxiliary_files_uri,
-            "inputMetadata.$": "$.inputMetadata",
-            "inputParameters": inputParameters,
-            "executingUserName.$": "$.executingUserName",
-            "executingRequestContext.$": "$.executingRequestContext"
+            "inputPath.$": input_s3_uri,
+            "outputPath.$": output_s3_uri
         }
     }
 
@@ -318,10 +276,16 @@ def lambda_handler(event, context):
         event['body'] = json.loads(event['body'])
     # event['body']=json.loads(event['body'])
     try:
+        httpMethod = event['requestContext']['http']['method']
+
         method_allowed_on_api = False
+        request_object = {
+            "object__type": "api",
+            "route__path": event['requestContext']['http']['path']
+        }
         for user_name in claims_and_roles["tokens"]:
             casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforceAPI(event):
+            if casbin_enforcer.enforce(f"user::{user_name}", request_object, httpMethod):
                 method_allowed_on_api = True
                 break
 
@@ -351,7 +315,6 @@ def lambda_handler(event, context):
                     "databaseId": event['body']['databaseId'],
                     "pipelineId": pipeline['name'],
                     "pipelineType": pipeline['pipelineType'],
-                    "pipelineExecutionType": pipeline['pipelineExecutionType'],
                 })
                 for user_name in claims_and_roles["tokens"]:
                     casbin_enforcer = CasbinEnforcer(user_name)

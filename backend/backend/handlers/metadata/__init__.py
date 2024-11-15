@@ -110,10 +110,7 @@ def validate_body(event):
     if "body" not in event:
         raise ValidationError(400, {"error": "missing request body"})
 
-    if isinstance(event['body'], str):
-        event['body'] = json.loads(event['body'])
-    
-    body = event['body']
+    body = json.loads(event['body'])
 
     for req_field in ["metadata", "version"]:
         if req_field not in body:

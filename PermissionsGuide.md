@@ -97,14 +97,11 @@ Administrators can create new users for your user pool from the Amazon Cognito c
 ### Object Types and Related Fields
 
 Object types below are specified in the `object__type` policy field. The fields mapped below each object type are possible inputs to check against for each object type within constraint criteria.
-Object types below are specified in the `object__type` policy field. The fields mapped below each object type are possible inputs to check against for each object type within constraint criteria.
 
-If any `AND` constraint criteria are defined, all must be true to allow an action on an object. If any `OR` constraint criteria are defined, at least 1 of the criteria must be true. A constraint must have at least 1 `AND` or `OR` criteria item defined.
 If any `AND` constraint criteria are defined, all must be true to allow an action on an object. If any `OR` constraint criteria are defined, at least 1 of the criteria must be true. A constraint must have at least 1 `AND` or `OR` criteria item defined.
 
 A object type field will only be evaluated in a given set of constraints for an action/object function performed by a user if the field is defined in a criteria. As an example, if `assetName` is not defined in any constraint criteria for a particular user assigned constraints / roles, `assetName` will be ignored during checks.
 
-Fields marked below as `recommended check` are fields that are recommended to be checked in a criteria if constraints are defined for a particular object type for a user or role.
 Fields marked below as `recommended check` are fields that are recommended to be checked in a criteria if constraints are defined for a particular object type for a user or role.
 
 -   API [`api`] (route object)
@@ -141,7 +138,6 @@ Fields marked below as `recommended check` are fields that are recommended to be
 #### Web - Routes
 
 Below are the web routes possible as part of a `GET` method type. Requests for these are made through the `/auth/routes` API. These are only for enabling/disabling front-end functionality and does not impact any data or functionality retrieval from APIs. It uses the field `route__path` field for all WEB object type checks.
-Below are the web routes possible as part of a `GET` method type. Requests for these are made through the `/auth/routes` API. These are only for enabling/disabling front-end functionality and does not impact any data or functionality retrieval from APIs. It uses the field `route__path` field for all WEB object type checks.
 
 -   `*` (Default Landing Page, Static web UI always allows this)
 -   `/` (Default Landing Page, Static web UI always allows this)
@@ -175,7 +171,6 @@ Below are the web routes possible as part of a `GET` method type. Requests for t
 
 #### API - Routes, Methods, and Object Checks
 
-Below are the API routes with the current supported method types. It uses the field `route__path` field for all initial API object type checks.
 Below are the API routes with the current supported method types. It uses the field `route__path` field for all initial API object type checks.
 
 Additionally it shows which object authorization checks it does for a particular object type and field.
@@ -224,17 +219,17 @@ Additionally it shows which object authorization checks it does for a particular
 -   `/database/{databaseId}/assets/{assetId}/workflows/{workflowId}` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
 -   -   `Workflow` (databaseId, workflowId) - POST (api: POST)
--   -   `Pipeline` (databaseId, pipelineId, pipelineType, pipelineExecutionType) - POST (api: POST)
+-   -   `Pipeline` (databaseId, pipelineId, pipelineType) - POST (api: POST)
 -   `/database/{databaseId}/assets/{assetId}/workflows/{workflowId}/executions` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   -   `Workflow` (databaseId, workflowId) - GET (api: GET)
 -   `/database/{databaseId}/pipelines` - GET
--   -   `Pipeline` (databaseId, pipelineId, pipelineType, pipelineExecutionType) - GET (api: GET)
+-   -   `Pipeline` (databaseId, pipelineId, pipelineType) - GET (api: GET)
 -   `/database/{databaseId}/workflows` - GET
 -   -   `Workflow` (databaseId, workflowId) - GET (api: GET)
 -   `/database/{databaseId}/pipelines/{pipelineId}` - GET/DELETE
--   -   `Pipeline` (databaseId, pipelineId, pipelineType, pipelineExecutionType) - GET (api: GET)
--   -   `Pipeline` (databaseId, pipelineId, pipelineType, pipelineExecutionType) - DELETE (api: DELETE)
+-   -   `Pipeline` (databaseId, pipelineId, pipelineType) - GET (api: GET)
+-   -   `Pipeline` (databaseId, pipelineId, pipelineType) - DELETE (api: DELETE)
 -   `/database/{databaseId}/workflows/{workflowId}` - GET/DELETE
 -   -   `Workflow` (databaseId, workflowId) - GET (api: GET)
 -   -   `Workflow` (databaseId, workflowId) - DELETE (api: DELETE)
@@ -258,8 +253,8 @@ Additionally it shows which object authorization checks it does for a particular
 -   `/metadataschema/{databaseId}/{field}` - DELETE
 -   -   `MetadataSchema` (databaseId, field) - DELETE (api: DELETE)
 -   `/pipelines` - GET/PUT
--   -   `Pipeline` (databaseId, pipelineId, pipelineType, pipelineExecutionType) - PUT (api: PUT)
--   -   `Pipeline` (databaseId, pipelineId, pipelineType, pipelineExecutionType) - GET (api: GET)
+-   -   `Pipeline` (databaseId, pipelineId, pipelineType) - PUT (api: PUT)
+-   -   `Pipeline` (databaseId, pipelineId, pipelineType) - GET (api: GET)
 -   `/roles` - GET/PUT/POST
 -   -   `Role` (roleName) - GET (api: GET)
 -   -   `Role` (roleName) - POST (api: POST)
@@ -295,21 +290,19 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `UserRole` (roleName, userId) - POST (api: POST)
 -   -   `UserRole` (roleName, userId) - PUT (api: PUT)
 -   -   `UserRole` (roleName, userId) - DELETE (api: DELETE)
--   `/auxiliaryPreviewAssets/stream/{proxy+}` - GET
+-   `/visualizerAssets/{proxy+}` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/workflows` - GET/PUT
--   -   `Pipeline` (databaseId, pipelineId, pipelineType, pipelineExecutionType) - GET (api: PUT)
+-   -   `Pipeline` (databaseId, pipelineId, pipelineType) - GET (api: PUT)
 -   -   `Workflow` (databaseId, workflowId) - GET (api: GET)
 -   -   `Workflow` (databaseId, workflowId) - PUT (api: PUT)
 
 ### Constraint Statement Criteria Operators
 
 Criteria operators and values are implemented with a REGEX evaluation statement. This means that inputs should be a valid REGEX format. Values are auto-escaped as part of the input to the policy.
-Criteria operators and values are implemented with a REGEX evaluation statement. This means that inputs should be a valid REGEX format. Values are auto-escaped as part of the input to the policy.
 
 Below are the REGEX statements that are evaluated with each operator for the given criteria `criterion[value]` value.
 
-Note: The last two are used for metadata field evaluations that are not yet fully implemented for checks. These use `criterion[field]` to specify the metadata field to evaluate.
 Note: The last two are used for metadata field evaluations that are not yet fully implemented for checks. These use `criterion[field]` to specify the metadata field to evaluate.
 
 -   Equals [`equals`] (value input)

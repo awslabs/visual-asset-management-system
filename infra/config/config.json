@@ -51,18 +51,11 @@
             "optionalHostedZoneId": null
         },
         "pipelines": {
-            "useConversion3dBasic": {
-                "enabled": true
-            },
-            "usePreviewPcPotreeViewer": {
-                "enabled": false
-            },
-            "useGenAiMetadata3dLabeling": {
+            "usePointCloudVisualization": {
                 "enabled": false
             }
         },
         "authProvider": {
-            "credTokenTimeoutSeconds": 3600,
             "useCognito": {
                 "enabled": true,
                 "useSaml": false,

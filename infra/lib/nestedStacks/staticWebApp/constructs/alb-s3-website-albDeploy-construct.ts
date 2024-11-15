@@ -84,7 +84,7 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
             vpc: props.vpc,
             vpcSubnets: { subnets: props.albSubnets },
             securityGroup: props.albSecurityGroup,
-            deletionProtection: false,
+            deletionProtection: true,
         });
 
         //Add access logging on ALB

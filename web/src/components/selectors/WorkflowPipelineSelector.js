@@ -61,19 +61,16 @@ const WorkflowPipelineSelector = (props) => {
                 return {
                     label: item.pipelineId,
                     value: item.pipelineId,
-                    pipelineType: item.pipelineType,
-                    pipelineExecutionType: item.pipelineExecutionType,
+                    type: item.pipelineType,
                     outputType: item.outputType,
                     waitForCallback: item.waitForCallback,
                     taskTimeout: item.taskTimeout,
                     taskHeartbeatTimeout: item.taskHeartbeatTimeout,
                     userProvidedResource: item.userProvidedResource,
-                    inputParameters: item.inputParameters,
                     tags: [
                         `input:${item.assetType}`,
                         `output:${item.outputType}`,
-                        `pipelineType:${item.pipelineType}`,
-                        `pipelineExecutionType:${item.pipelineExecutionType}`,
+                        `type:${item.pipelineType}`,
                     ],
                 };
             })}

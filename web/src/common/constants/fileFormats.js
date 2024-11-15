@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export const pcFileFormats = [".e57", ".las", ".laz", ".ply"];
+export const pcFileFormats = [".e57", ".las", ".laz"];
 export const cadFileFormats = [
     ".step",
     ".dwg",
@@ -22,6 +22,7 @@ export const modelFileFormats = [
     ".glb",
     ".stl",
     ".3ds",
+    ".ply",
     ".fbx",
     ".dae",
     ".wrl",
@@ -53,7 +54,7 @@ export const onlineViewer3DFileFormats = [
     ".stl",
     ".obj",
     ".off",
-    //".ply" //- Excluded as it will be shown on the point clouder viewer instead
+    ".ply",
     ".wrl",
     //".fcstd", //- Excluded by default due to license restrictive sub-library use. Enable if you accept this license. Install the appropriate library listed in documentation.
     //".ifc", //- Excluded by default due to license restrictive sub-library use. Enable if you accept this license. Install the appropriate library listed in documentation.

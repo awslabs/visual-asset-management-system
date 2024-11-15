@@ -50,7 +50,7 @@ class ServiceFormatter {
 
     //public URL() {}
     public get Endpoint() {
-        return this.useFips === true
+        return this.useFips
             ? this.replaceValues(this.service.fipsHostname)
             : this.replaceValues(this.service.hostname);
     }

@@ -25,11 +25,11 @@ export interface storageResources {
     };
     s3: {
         assetBucket: s3.Bucket;
-        assetAuxiliaryBucket: s3.Bucket;
+        assetVisualizerBucket: s3.Bucket;
         artefactsBucket: s3.Bucket;
         accessLogsBucket: s3.Bucket;
         assetStagingBucket?: s3.IBucket;
-        //assetAuxiliaryStagingBucket?: s3.IBucket;
+        //assetVisualizerStagingBucket?: s3.IBucket;
     };
     sns: {
         assetBucketObjectCreatedTopic: sns.Topic;
@@ -113,19 +113,18 @@ export class StorageResourcesBuilderNestedStack extends NestedStack {
             description: "S3 bucket for asset storage",
         });
 
-        const assetAuxiliaryBucketOutput = new cdk.CfnOutput(
+        const assetVisualizerBucketOutput = new cdk.CfnOutput(
             this,
-            "AssetAuxiliaryBucketNameOutput",
+            "AssetVisualizerBucketNameOutput",
             {
-                value: this.storageResources.s3.assetAuxiliaryBucket.bucketName,
-                description:
-                    "S3 bucket for auto-generated auxiliary working objects associated with asset storage to include auto-generated previews, visualizer files, temporary storage for pipelines",
+                value: this.storageResources.s3.assetVisualizerBucket.bucketName,
+                description: "S3 bucket for visualization asset storage",
             }
         );
 
         const artefactsBucketOutput = new cdk.CfnOutput(this, "ArtefactsBucketNameOutput", {
             value: this.storageResources.s3.artefactsBucket.bucketName,
-            description: "S3 bucket for artefacts",
+            description: "S3 bucket for template notebooks",
         });
     }
 }
@@ -153,7 +152,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
 
             //Add policy
             kmsEncryptionKey.addToResourcePolicy(
-                kmsKeyPolicyStatementPrincipalGenerator(config, kmsEncryptionKey)
+                kmsKeyPolicyStatementPrincipalGenerator(kmsEncryptionKey)
             );
         }
     }
@@ -194,8 +193,8 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         lifecycleRules: [
             {
                 enabled: true,
-                expiration: Duration.days(90),
-                noncurrentVersionExpiration: Duration.days(90),
+                expiration: Duration.days(30),
+                noncurrentVersionExpiration: Duration.days(30),
             },
         ],
     });
@@ -221,12 +220,6 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
                     s3.HttpMethods.HEAD,
                 ],
                 exposedHeaders: ["ETag"],
-            },
-        ],
-        lifecycleRules: [
-            {
-                enabled: true,
-                abortIncompleteMultipartUploadAfter: Duration.days(14),
             },
         ],
         serverAccessLogsBucket: accessLogsBucket,
@@ -308,7 +301,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
 
     EventEmailSubscriptionTopic.addToResourcePolicy(EventEmailSubscriptionTopicPolicy);
 
-    const assetAuxiliaryBucket = new s3.Bucket(scope, "AssetAuxiliaryBucket", {
+    const assetVisualizerBucket = new s3.Bucket(scope, "AssetVisualizerBucket", {
         ...s3DefaultProps,
         cors: [
             {
@@ -323,16 +316,10 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
                 exposedHeaders: ["ETag"],
             },
         ],
-        lifecycleRules: [
-            {
-                enabled: true,
-                abortIncompleteMultipartUploadAfter: Duration.days(14),
-            },
-        ],
         serverAccessLogsBucket: accessLogsBucket,
-        serverAccessLogsPrefix: "assetAuxiliary-bucket-logs/",
+        serverAccessLogsPrefix: "assetVisualizer-bucket-logs/",
     });
-    requireTLSAndAdditionalPolicyAddToResourcePolicy(assetAuxiliaryBucket, config);
+    requireTLSAndAdditionalPolicyAddToResourcePolicy(assetVisualizerBucket, config);
 
     const artefactsBucket = new s3.Bucket(scope, "ArtefactsBucket", {
         ...s3DefaultProps,
@@ -354,9 +341,9 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
             config.app.bucketMigrationStaging.assetBucketName
         );
 
-    // let assetAuxiliaryStagingBucket = undefined;
-    // if (config.app.bucketMigrationStaging.assetAuxiliaryBucketName && config.app.bucketMigrationStaging.assetAuxiliaryBucketName != "" && config.app.bucketMigrationStaging.assetAuxiliaryBucketName != "UNDEFINED")
-    //     assetAuxiliaryStagingBucket = s3.Bucket.fromBucketName(scope, "Asset Visualizer Staging Bucket", config.app.bucketMigrationStaging.assetAuxiliaryBucketName);
+    // let assetVisualizerStagingBucket = undefined;
+    // if (config.app.bucketMigrationStaging.assetVisualizerBucketName && config.app.bucketMigrationStaging.assetVisualizerBucketName != "" && config.app.bucketMigrationStaging.assetVisualizerBucketName != "UNDEFINED")
+    //     assetVisualizerStagingBucket = s3.Bucket.fromBucketName(scope, "Asset Visualizer Staging Bucket", config.app.bucketMigrationStaging.assetVisualizerBucketName);
 
     new s3deployment.BucketDeployment(scope, "DeployArtefacts", {
         sources: [s3deployment.Source.asset("./lib/artefacts")],
@@ -592,11 +579,11 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         },
         s3: {
             assetBucket: assetBucket,
-            assetAuxiliaryBucket: assetAuxiliaryBucket,
+            assetVisualizerBucket: assetVisualizerBucket,
             artefactsBucket: artefactsBucket,
             accessLogsBucket: accessLogsBucket,
             assetStagingBucket: assetStagingBucket,
-            //assetAuxiliaryStagingBucket: assetAuxiliaryStagingBucket,
+            //assetVisualizerStagingBucket: assetVisualizerStagingBucket,
         },
         sns: {
             assetBucketObjectCreatedTopic: S3AssetsObjectCreatedTopic,

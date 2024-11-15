@@ -182,7 +182,7 @@ def delete_pipeline(databaseId, pipelineId):
             logger.info(pipeline)
             userResource = json.loads(pipeline['userProvidedResource'])
             if userResource['isProvided'] == False:
-                if pipeline['pipelineExecutionType'] == 'Lambda':
+                if pipeline['pipelineType'] == 'Lambda':
                     delete_lambda(userResource['resourceId'])
 
             pipeline['databaseId'] = databaseId + "#deleted"
@@ -320,9 +320,13 @@ def lambda_handler(event, context):
         logger.info(http_method)
 
         method_allowed_on_api = False
+        request_object = {
+            "object__type": "api",
+            "route__path": event['requestContext']['http']['path']
+        }
         for user_name in claims_and_roles["tokens"]:
             casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforceAPI(event):
+            if casbin_enforcer.enforce(f"user::{user_name}", request_object, http_method):
                 method_allowed_on_api = True
                 break
 

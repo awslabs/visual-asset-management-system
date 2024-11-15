@@ -23,8 +23,7 @@ export default function ViewPipeline() {
     const [pipelineDescription, setPipelineDescription] = useState("");
     const [assetType, setAssetType] = useState("");
     const [outputType, setOutputType] = useState("");
-    const [pipelineType, setPipelineType] = useState("standardFile");
-    const [pipelineExecutionType, setPipelineExecutionType] = useState("Lambda");
+    const [pipelineType, setPipelineType] = useState("Lambda");
 
     useEffect(() => {
         const getData = async () => {
@@ -37,7 +36,6 @@ export default function ViewPipeline() {
                 setAssetType(currentItem?.assetType);
                 setOutputType(currentItem?.outputType);
                 setPipelineType(currentItem?.pipelineType);
-                setPipelineExecutionType(currentItem?.pipelineExecutionType);
             }
         };
         if (reload) {
@@ -75,8 +73,6 @@ export default function ViewPipeline() {
                     />
                     <TextContent>Pipeline Type</TextContent>
                     <Input name="pipelineType" value={pipelineType} disabled />
-                    <TextContent>Pipeline Execution Type</TextContent>
-                    <Input name="pipelineExecutionType" value={pipelineExecutionType} disabled />
                     <TextContent>Description</TextContent>
                     <Textarea
                         placeholder="Description"

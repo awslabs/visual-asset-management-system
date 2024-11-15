@@ -73,18 +73,13 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
         const webAppAccessLogsBucket = new s3.Bucket(this, "WebAppAccessLogsBucket", {
             ...s3DefaultProps,
-            encryption:
-                props.config.app.useKmsCmkEncryption.enabled && !props.config.app.useAlb.enabled //ALB doesn't support encryption logs bucket encrypted with KMS
-                    ? s3.BucketEncryption.KMS
-                    : s3.BucketEncryption.S3_MANAGED,
-            encryptionKey:
-                props.config.app.useKmsCmkEncryption.enabled && !props.config.app.useAlb.enabled //ALB doesn't support encryption logs bucket encrypted with KMS
-                    ? props.storageResources.encryption.kmsKey
-                    : undefined,
-            bucketKeyEnabled:
-                props.config.app.useKmsCmkEncryption.enabled && !props.config.app.useAlb.enabled //ALB doesn't support encryption logs bucket encrypted with KMS
-                    ? true
-                    : false,
+            encryption: props.config.app.useKmsCmkEncryption.enabled
+                ? s3.BucketEncryption.KMS
+                : s3.BucketEncryption.S3_MANAGED,
+            encryptionKey: props.config.app.useKmsCmkEncryption.enabled
+                ? props.storageResources.encryption.kmsKey
+                : undefined,
+            bucketKeyEnabled: props.config.app.useKmsCmkEncryption.enabled ? true : false,
             lifecycleRules: [
                 {
                     enabled: true,

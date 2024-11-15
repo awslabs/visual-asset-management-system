@@ -18,7 +18,7 @@ export default function PointCloudViewer(props) {
 
     useEffect(() => {
         const loadAsset = async () => {
-            let url = `${config.api}auxiliaryPreviewAssets/stream/${assetKey}/preview/PotreeViewer/metadata.json`;
+            let url = `${config.api}visualizerAssets/${assetKey}/metadata.json`;
 
             const authHeader = {
                 Authorization: `Bearer ${Auth.Credentials.Auth.user.signInUserSession.idToken.jwtToken}`,
@@ -87,10 +87,10 @@ export default function PointCloudViewer(props) {
                             transform: "translate(-50%, -50%)",
                         }}
                     >
-                        Potree Viewer Auxililary Preview files not currently available
+                        Visualizer files not currently available
                         <br></br>
-                        Please run the Point Cloud Potree Viewer Pipeline to enable visualization
-                        for this asset file
+                        Please run the Point Cloud Visualizer Pipeline to enable visualization for
+                        this asset
                     </div>
                 )}
             </div>

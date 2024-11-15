@@ -23,7 +23,6 @@ def lambda_handler(event, _):
     try:
         claims_and_roles = request_to_claims(event)
 
-        #No API Casbin check on this call as it's a primary authService to verify other routes
         for route_obj in routes:
             route_obj.update({
                 "object__type": "web"

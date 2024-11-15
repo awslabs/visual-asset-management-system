@@ -80,59 +80,24 @@ def get_executions(asset_id, workflow_id, query_params):
                         execution_arn = workflow_arn.replace("stateMachine", "execution")
                         execution_arn = execution_arn + ":" + item['execution_id']
                         logger.info(execution_arn)
-
-                        startDate = item.get('startDate', "")
-                        stopDate = item.get('stopDate', "")
-                        executionStatus = item.get('executionStatus', "")
-                        executionId = item['execution_id']
-
-                        #If we don't have start/stop information, this means we could still have a running process (or now stopped). 
-                        # Fetch it from step functions.
-                        if not stopDate:
-                            execution = sfn.describe_execution(
-                                executionArn=execution_arn
-                            )
-                            logger.info(execution)
-                            startDate = execution.get('startDate', "")
-                            executionStatus = execution['status']
-                            executionId = execution['name']
-
-                            if startDate:
-                                startDate = startDate.strftime("%m/%d/%Y, %H:%M:%S")
-                            stopDate = execution.get('stopDate', "")
-                            if stopDate:
-                                stopDate = stopDate.strftime("%m/%d/%Y, %H:%M:%S")
-
-                                #Update the execution table to add start/end date and Status once something is found to have stopped running
-                                logger.info("Update Execution Table")
-                                table = dynamodb.Table(workflow_execution_database)
-                                table.put_item(
-                                    Item={
-                                        'pk': f'{asset_id}-{workflow_id}',
-                                        'sk': item['execution_id'],
-                                        'database_id': asset_of_workflow.get("databaseId"),
-                                        'asset_id': asset_id,
-                                        'workflow_id': workflow_id,
-                                        'workflow_arn': workflow_arn,
-                                        'execution_arn': execution_arn,
-                                        'execution_id': item['execution_id'],
-                                        'startDate': startDate,
-                                        'stopDate': stopDate,
-                                        'executionStatus': execution['status'],
-                                        'assets': []
-                                    }
-                                )
+                        execution = sfn.describe_execution(
+                            executionArn=execution_arn
+                        )
+                        logger.info(execution)
+                        startDate = execution.get('startDate', "")
+                        if startDate:
+                            startDate = startDate.strftime("%m/%d/%Y, %H:%M:%S")
+                        stopDate = execution.get('stopDate', "")
+                        if stopDate:
+                            stopDate = stopDate.strftime("%m/%d/%Y, %H:%M:%S")
 
                         result["Items"].append({
-                            'executionId': executionId,
-                            'executionStatus': executionStatus,
+                            'executionId': execution['name'],
+                            'executionStatus': execution['status'],
                             'startDate': startDate,
                             'stopDate': stopDate,
                             'Items': assets
                         })
-
-
-                        #Only do the top user in tokens, so break
                         break
             except Exception as e:
                 logger.exception(e)
@@ -183,11 +148,18 @@ def lambda_handler(event, context):
             response['statusCode'] = 400
             return response
 
+        httpMethod = event['requestContext']['http']['method']
+        logger.info(httpMethod)
         claims_and_roles = request_to_claims(event)
+
         method_allowed_on_api = False
+        request_object = {
+            "object__type": "api",
+            "route__path": event['requestContext']['http']['path']
+        }
         for user_name in claims_and_roles["tokens"]:
             casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforceAPI(event):
+            if casbin_enforcer.enforce(f"user::{user_name}", request_object, httpMethod):
                 method_allowed_on_api = True
                 break
 

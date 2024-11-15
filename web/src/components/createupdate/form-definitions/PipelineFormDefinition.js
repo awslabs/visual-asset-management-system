@@ -34,17 +34,6 @@ const fileTypeOptions = modelFileFormats
 
 const pipelineTypeOptions = [
     {
-        label: "Standard - File",
-        value: "standardFile",
-    },
-    {
-        label: "Preview - File",
-        value: "previewFile",
-    },
-];
-
-const pipelineExecutionTypeOptions = [
-    {
         label: "Lambda",
         value: "Lambda",
     },
@@ -78,7 +67,7 @@ export const PipelineFormDefinition = new FormDefinition({
             required: true,
         }),
         new ControlDefinition({
-            label: "Pipeline  Type",
+            label: "Pipeline Type",
             id: "pipelineType",
             constraintText: "",
             options: pipelineTypeOptions,
@@ -88,21 +77,6 @@ export const PipelineFormDefinition = new FormDefinition({
                 elementProps: {
                     disabled: false,
                     "data-testid": "pipelineType",
-                },
-            }),
-            required: true,
-        }),
-        new ControlDefinition({
-            label: "Pipeline Execution Type",
-            id: "pipelineExecutionType",
-            constraintText: "",
-            options: pipelineExecutionTypeOptions,
-            defaultOption: pipelineExecutionTypeOptions[0],
-            elementDefinition: new ElementDefinition({
-                formElement: Select,
-                elementProps: {
-                    disabled: false,
-                    "data-testid": "pipelineExecutionType",
                 },
             }),
             required: true,
@@ -128,7 +102,7 @@ export const PipelineFormDefinition = new FormDefinition({
                     value: "Disabled",
                 },
             ],
-            appearsWhen: ["pipelineExecutionType", "Lambda"],
+            appearsWhen: ["pipelineType", "Lambda"],
             defaultOption: {
                 label: "No",
                 value: "Disabled",
@@ -145,7 +119,7 @@ export const PipelineFormDefinition = new FormDefinition({
                     autoFocus: false,
                     type: "number",
                     inputMode: "numeric",
-                    placeholder: "86400",
+                    placeholder: "99999999",
                 },
             }),
             appearsWhen: ["waitForCallback", "Yes"],
@@ -161,7 +135,7 @@ export const PipelineFormDefinition = new FormDefinition({
                     autoFocus: false,
                     type: "number",
                     inputMode: "numeric",
-                    placeholder: "3600",
+                    placeholder: "99999999",
                 },
             }),
             appearsWhen: ["waitForCallback", "Yes"],
@@ -175,7 +149,7 @@ export const PipelineFormDefinition = new FormDefinition({
                 formElement: Input,
                 elementProps: { autoFocus: false },
             }),
-            appearsWhen: ["pipelineExecutionType", "Lambda"],
+            appearsWhen: ["pipelineType", "Lambda"],
             required: false,
         }),
         new ControlDefinition({
@@ -213,20 +187,6 @@ export const PipelineFormDefinition = new FormDefinition({
                 },
             }),
             required: true,
-        }),
-        new ControlDefinition({
-            label: "Input Parameters (Optional)",
-            id: "inputParameters",
-            constraintText:
-                "Optional input parameters that will be forwarded to the pipeline. Any input parameter defined must be in valid JSON format.",
-            elementDefinition: new ElementDefinition({
-                formElement: Textarea,
-                elementProps: {
-                    rows: 4,
-                    "data-testid": "inputParameters",
-                },
-            }),
-            required: false,
         }),
     ],
 });

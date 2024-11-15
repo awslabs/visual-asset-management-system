@@ -14,8 +14,35 @@ import { Service } from "../helper/service-helper";
 import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 
+/*
+
+    from https://aws.amazon.com/premiumsupport/knowledge-center/s3-bucket-policy-for-config-rule/
+
+    {
+      "Id": "ExamplePolicy",
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Sid": "AllowSSLRequestsOnly",
+          "Action": "s3:*",
+          "Effect": "Deny",
+          "Resource": [
+            `arn:${Service.Partition()}:s3:::DOC-EXAMPLE-BUCKET`,
+            `arn:${Service.Partition()}:s3:::DOC-EXAMPLE-BUCKET/*`
+          ],
+          "Condition": {
+            "Bool": {
+              "aws:SecureTransport": "false"
+            }
+          },
+          "Principal": "*"
+        }
+      ]
+    }
+
+    */
 export function requireTLSAndAdditionalPolicyAddToResourcePolicy(
-    bucket: s3.IBucket,
+    bucket: s3.Bucket,
     config: Config.Config
 ) {
     bucket.addToResourcePolicy(
@@ -43,7 +70,7 @@ export function requireTLSAndAdditionalPolicyAddToResourcePolicy(
 }
 
 export function kmsKeyLambdaPermissionAddToResourcePolicy(
-    lambdaFunction: lambda.IFunction,
+    lambdaFunction: lambda.Function,
     kmsKey?: kms.IKey
 ) {
     if (kmsKey) {
@@ -72,15 +99,12 @@ export function kmsKeyPolicyStatementGenerator(kmsKey?: kms.IKey): iam.PolicySta
     });
 }
 
-export function kmsKeyPolicyStatementPrincipalGenerator(
-    config: Config.Config,
-    kmsKey?: kms.IKey
-): iam.PolicyStatement {
+export function kmsKeyPolicyStatementPrincipalGenerator(kmsKey?: kms.IKey): iam.PolicyStatement {
     if (!kmsKey) {
         throw new Error("Cannot generate policy statement for KMS key if no KMS key provided.");
     }
 
-    const policyStatement = new iam.PolicyStatement({
+    return new iam.PolicyStatement({
         actions: [
             "kms:GenerateDataKey*",
             "kms:Decrypt",
@@ -101,22 +125,9 @@ export function kmsKeyPolicyStatementPrincipalGenerator(
             Service("LOGS").Principal,
             Service("LAMBDA").Principal,
             Service("STS").Principal,
+            Service("CLOUDFRONT").Principal,
         ],
     });
-
-    if (!config.app.useAlb.enabled) {
-        policyStatement.addPrincipals(Service("CLOUDFRONT").Principal);
-    }
-
-    if (config.app.openSearch.useProvisioned.enabled) {
-        policyStatement.addPrincipals(Service("ES").Principal);
-    }
-
-    if (config.app.openSearch.useServerless.enabled) {
-        policyStatement.addPrincipals(Service("AOSS").Principal);
-    }
-
-    return policyStatement;
 }
 
 export function generateUniqueNameHash(
@@ -138,8 +149,7 @@ export function generateUniqueNameHash(
 export function generateContentSecurityPolicy(
     storageResources: storageResources,
     authenticationDomain: string,
-    apiUrl: string,
-    config: Config.Config
+    apiUrl: string
 ): string {
     const connectSrc = [
         "'self'",
@@ -147,17 +157,13 @@ export function generateContentSecurityPolicy(
         authenticationDomain,
         `https://${Service("COGNITO_IDP").Endpoint}/`,
         `https://${Service("COGNITO_IDENTITY").Endpoint}/`,
+        `https://maps.${Service("GEO").Endpoint}/`,
         `https://${apiUrl}`,
         //`https://${props.storageResources.s3.assetBucket.bucketRegionalDomainName}/`, //Virtual Host Format Connection
         //`https://${props.storageResources.s3.assetBucket.bucketDomainName}/`, //Virtual Host Format Connection
         `https://${Service("S3").PrincipalString}/${storageResources.s3.assetBucket.bucketName}/`, //Path Addressable Format Connection
         `https://${Service("S3").Endpoint}/${storageResources.s3.assetBucket.bucketName}/`, //Path Addressable Format Connection
     ];
-
-    //Add GeoLocation service URL if feature turned on
-    if (config.app.useLocationService.enabled) {
-        connectSrc.push(`https://maps.${Service("GEO").Endpoint}/`);
-    }
 
     const scriptSrc = [
         "'self'",

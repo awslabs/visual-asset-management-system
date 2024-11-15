@@ -10,7 +10,6 @@ from casbin import model
 from casbin.persist.adapters import string_adapter
 from simpleeval import AttributeDoesNotExist
 from customLogging.logger import safeLogger
-from handlers.auth import request_to_claims
 from datetime import datetime, timedelta
 from common.constants import PERMISSION_CONSTRAINT_FIELDS, PERMISSION_CONSTRAINT_POLICY
 from locked_dict import locked_dict
@@ -66,47 +65,9 @@ class CasbinEnforcer:
             # Cache the user-specific enforcer future calls
             #
             casbin_user_enforcer_map[user_id] = self.service_object
-
     def enforce(self, sub, obj, act):
         return self.service_object.enforce(sub, obj, act)
-    
-    def enforceAPI(self, lambdaEvent, apiMethodOverrideValue = ''):
-        claims_and_roles = request_to_claims(lambdaEvent)
 
-        if 'requestContext' in lambdaEvent and 'http' in lambdaEvent['requestContext']:
-            # This should be a regular API Gateway call
-            #
-
-            http_method = lambdaEvent['requestContext']['http']['method']
-            if apiMethodOverrideValue != '':
-                http_method = apiMethodOverrideValue
-
-            request_object = {
-                "object__type": "api",
-                "route__path": lambdaEvent['requestContext']['http']['path'] #"/" + event['requestContext']['http']['path'].split("/")[1]
-            }
-
-            #Exits out after the first user (what we want!)
-            for user_name in claims_and_roles["tokens"]:
-                return self.service_object.enforce(f"user::{user_name}", request_object, http_method)
-                
-            #If nothing found, exit with false
-            return False
-            
-        # elif 'lambdaCrossCall' in lambdaEvent:
-        #     # This is a cross-call from another approved lambda.
-        #     # Credentials logic in claims_and_roles should already account for this
-        #     #
-
-        #     #Auto approve if executing username in token
-        #     if(len(claims_and_roles["tokens"]) > 0):
-        #         return True
-        #     else:
-        #         return False
-        else:
-            #This is not a normal structered call so automatiacally fail
-            return False
-        
 class CasbinEnforcerService:
     def __init__(self, user_id):
         # Handle user policy-specific caching and updates (globally)

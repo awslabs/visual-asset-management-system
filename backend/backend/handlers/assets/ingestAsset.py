@@ -12,7 +12,6 @@ from customLogging.logger import safeLogger
 from common.s3 import validateS3AssetExtensionsAndContentType
 
 region = os.environ['AWS_REGION']
-timeout = int(os.environ['CRED_TOKEN_TIMEOUT_SECONDS'])
 s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'})
 s3 = boto3.client('s3', region_name=region, config=s3_config)
 
@@ -36,7 +35,7 @@ def calculate_num_parts(file_size, max_part_size=12 * 1024 * 1024):
     return -(-file_size // max_part_size)
 
 
-def generate_presigned_url(key, upload_id, part_number, expiration=timeout):
+def generate_presigned_url(key, upload_id, part_number, expiration=3600):
     url = s3.generate_presigned_url(
         ClientMethod='upload_part',
         Params={
@@ -75,7 +74,7 @@ def generate_upload_asset_payload(event):
                 "Key": key
             },
             "previewLocation": {
-                "Key": None
+                "Key": key
             }
         },
         "returnAsset": True
@@ -170,6 +169,11 @@ def lambda_handler(event, context):
     #ABAC Checks
     http_method = event['requestContext']['http']['method']
     operation_allowed_on_asset = False
+    request_object = {
+        "object__type": "api",
+        "route__path": event['requestContext']['http']['path'] #"/" + event['requestContext']['http']['path'].split("/")[1]
+    }
+    logger.info(request_object)
 
     asset = {
         "object__type": "asset",
@@ -182,7 +186,8 @@ def lambda_handler(event, context):
 
     for user_name in claims_and_roles["tokens"]:
         casbin_enforcer = CasbinEnforcer(user_name)
-        if casbin_enforcer.enforce(f"user::{user_name}", asset, "PUT") and casbin_enforcer.enforceAPI(event):
+        if casbin_enforcer.enforce(f"user::{user_name}", asset, "PUT") and casbin_enforcer.enforce(
+                f"user::{user_name}", request_object, http_method):
             operation_allowed_on_asset = True
             break
 
@@ -228,7 +233,20 @@ def lambda_handler(event, context):
 
                                 payload = generate_upload_asset_payload(event)
                                 payload.update({
-                                    "requestContext": event['requestContext']
+                                    "requestContext": {
+                                        "http": {
+                                            "path": event['requestContext']['http']['path'],
+                                            "method": event['requestContext']['http']['method']
+                                        },
+                                        "authorizer": event['requestContext']['authorizer']
+                                            # "jwt": {
+                                            #     "claims": {
+                                            #         "vams:externalAttributes": json.dumps([]),
+                                            #         "vams:roles": json.dumps([]),
+                                            #         "vams:tokens": json.dumps(["asset_ingest_lambda_vams"])
+                                            #     }
+                                            # }
+                                    }
                                 })
                                 logger.info("Payload:")
                                 logger.info(payload)
@@ -287,7 +305,7 @@ def lambda_handler(event, context):
                     upload_id = resp['UploadId']
 
                     # Generate pre-signed URLs for part uploads
-                    part_urls = [generate_presigned_url(key, upload_id, part_number) for part_number in range(1, num_parts + 1)]
+                    part_urls = [generate_presigned_url(bucket_name, key, upload_id, part_number) for part_number in range(1, num_parts + 1)]
 
                     response['body'] = json.dumps({"message": {
                         'uploadId': upload_id,

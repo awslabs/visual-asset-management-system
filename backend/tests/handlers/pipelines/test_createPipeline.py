@@ -8,8 +8,7 @@ from backend.handlers.pipelines.createPipeline import CreatePipeline
 
 body = {
     "waitForCallback": "Disabled",
-    "pipelineExecutionType": "Lambda",
-    "pipelineType": "standardFile",
+    "pipelineType": "Lambda",
     "databaseId": "default",
     "description": "demo",
     "pipelineId": "demo",

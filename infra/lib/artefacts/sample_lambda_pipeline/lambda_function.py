@@ -66,7 +66,7 @@ def lambda_handler(event, context):
     else:
         data = event['body']
 
-    write_input_output(data['inputS3AssetFilePath'], data['outputS3AssetFilesPath'])
+    write_input_output(data['inputPath'], data['outputPath'])
     return {
         'statusCode': 200, 
         'body': 'Success'

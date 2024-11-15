@@ -10,7 +10,7 @@
             }
         },
         {
-            "bucketDescriptor": "assetAuxiliaryStorageBucket",
+            "bucketDescriptor": "assetVisualizerStorageBucket",
             "buckets": {
                 "from": "S3Bucket_OldStack_Name",
                 "to": "S3Bucket_NewStack_Name"

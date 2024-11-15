@@ -11,7 +11,6 @@ from common.constants import STANDARD_JSON_RESPONSE
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from urllib.parse import unquote_plus
 
 claims_and_roles = {}
 logger = safeLogger(service="ExecuteWorkflow")
@@ -24,17 +23,14 @@ try:
 except Exception as e:
     logger.exception("Failed Loading Error Functions")
 
-bucket_name_asset = None
-bucket_name_assetAuxiliary = None
+bucket_name = None
 
 try:
     asset_Database = os.environ["ASSET_STORAGE_TABLE_NAME"]
     pipeline_Database = os.environ["PIPELINE_STORAGE_TABLE_NAME"]
     workflow_database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
     workflow_execution_database = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_NAME"]
-    bucket_name_asset = os.environ["S3_ASSET_STORAGE_BUCKET"]
-    bucket_name_assetAuxiliary = os.environ["S3_ASSETAUXILIARY_STORAGE_BUCKET"]
-    metadata_read_function = os.environ['METADATA_READ_LAMBDA_FUNCTION_NAME']
+    bucket_name = os.environ["S3_ASSET_STORAGE_BUCKET"]
 except:
     logger.exception("Failed loading environment variables")
 
@@ -48,64 +44,13 @@ def get_pipelines(databaseId, pipelineId):
     return response['Items']
 
 
-def _metadata_lambda(payload): return client.invoke(FunctionName=metadata_read_function,
-                                           InvocationType='RequestResponse', Payload=json.dumps(payload).encode('utf-8'))
-
-
-def get_asset_metadata(databaseId, assetId, keyPrefix, event):
-    try:
-        l_payload = {
-            "pathParameters": {
-                "databaseId": databaseId,
-                "assetId": assetId
-            },
-            "queryStringParameters": {
-                "prefix": keyPrefix
-            }
-        }
-        l_payload.update({
-            "requestContext": {
-                "http": {
-                    "path": "event['requestContext']['http']['path']",
-                    "method": event['requestContext']['http']['method']
-                },
-                "authorizer": event['requestContext']['authorizer']
-            }
-        })
-        logger.info("Fetching metadata:")
-        logger.info(l_payload)
-        metadata_response = _metadata_lambda(l_payload)
-        logger.info("metaData read response:")
-        logger.info(metadata_response)
-        stream = metadata_response.get('Payload', "")
-        response_body = {}
-        if stream:
-            json_response = json.loads(stream.read().decode("utf-8"))
-            logger.info("uploadAsset payload:", json_response)
-            if "body" in json_response:
-                response_body = json.loads(json_response['body'])
-                
-                # if "asset" in response_body:
-                #     assets.append(response_body['asset'])
-        return response_body
-    except Exception as e:
-        logger.exception("Failed fetching metadata")
-        logger.exception(e)
-        return {}
-
-
-def launchWorkflow(inputAssetFileKey, workflow_arn, asset_id, workflow_id, database_id, executingUserName, executingRequestContext, inputMetadata = {}):
+def launchWorkflow(key, workflow_arn, asset_id, workflow_id, database_id):
 
     logger.info("Launching workflow with arn: "+workflow_arn)
-
-    #Modify asset key to turn + sympbols into spaces for the final processing entry
-    inputAssetFileKey = unquote_plus(inputAssetFileKey)
-
     response = sfn_client.start_execution(
         stateMachineArn=workflow_arn,
-        input=json.dumps({'bucketAsset': bucket_name_asset, 'bucketAssetAuxiliary': bucket_name_assetAuxiliary, 'inputAssetFileKey': inputAssetFileKey, 'databaseId': database_id,
-                          'assetId': asset_id, 'inputMetadata': json.dumps(inputMetadata),
-                          'workflowId': workflow_id, 'executingUserName': executingUserName, 'executingRequestContext': executingRequestContext})
+        input=json.dumps({'bucket': bucket_name, 'key': key, 'databaseId': database_id,
+                          'assetId': asset_id, 'workflowId': workflow_id})
     )
     # response = {
     #     'executionArn': "XXX:AAA",
@@ -170,81 +115,6 @@ def validate_pipelines(databaseId, workflow):
 
     return (True, '')
 
-def get_workflow_executions(assetId, workflowId):
-        logger.info("Getting current executions")
-        pk = f'{assetId}-{workflowId}'
-
-        paginator = dynamodb.meta.client.get_paginator('query')
-        page_iterator = paginator.paginate(
-            TableName=workflow_execution_database,
-            KeyConditionExpression=Key('pk').eq(pk),
-            ScanIndexForward=False,
-            PaginationConfig={
-                'MaxItems': 500,
-                'PageSize': 500,
-                'StartingToken': None
-            }
-        ).build_full_result()
-
-        items = []
-        items.extend(page_iterator['Items'])
-
-        while 'NextToken' in page_iterator:
-            nextToken = page_iterator['NextToken']
-            page_iterator = paginator.paginate(
-                TableName=workflow_execution_database,
-                KeyConditionExpression=Key('pk').eq(pk),
-                ScanIndexForward=False,
-                PaginationConfig={
-                    'MaxItems': 500,
-                    'PageSize': 500,
-                    'StartingToken': nextToken
-                }
-            ).build_full_result()
-            items.extend(page_iterator['Items'])
-
-        result = {
-            "Items": []
-        }
-
-        logger.info(items)
-        for item in items:
-            try:
-                workflow_arn = item['workflow_arn']
-                execution_arn = workflow_arn.replace("stateMachine", "execution")
-                execution_arn = execution_arn + ":" + item['execution_id']
-
-                startDate = item.get('startDate', "")
-                stopDate = item.get('stopDate', "")
-
-                #If our table doesn't have a stopDate on a execution, continue to look for a running execution
-                if not stopDate:
-                    logger.info("Fetching SFN execution information")
-                    execution = sfn_client.describe_execution(
-                        executionArn=execution_arn
-                    )
-                    startDate = execution.get('startDate', "")
-                    if startDate:
-                        startDate = startDate.strftime("%m/%d/%Y, %H:%M:%S")
-                    stopDate = execution.get('stopDate', "")
-                    if stopDate:
-                        stopDate = stopDate.strftime("%m/%d/%Y, %H:%M:%S")
-
-                    #Add to results as even our step functions say a execution is still running
-                    if not stopDate:
-                        logger.info("Adding to results: " + execution['name'])
-                        result["Items"].append({
-                            'executionId': execution['name'],
-                            'executionStatus': execution['status'],
-                            'startDate': startDate,
-                        })
-
-            except Exception as e:
-                logger.exception(e)
-                logger.info("Continuing with trying to fetch exceutions...")
-        
-        return result
-
 
 def lambda_handler(event, context):
     global claims_and_roles
@@ -286,10 +156,17 @@ def lambda_handler(event, context):
             response['statusCode'] = 400
             return response
 
+        httpMethod = event['requestContext']['http']['method']
+        logger.info(httpMethod)
+
         method_allowed_on_api = False
+        request_object = {
+            "object__type": "api",
+            "route__path": event['requestContext']['http']['path']
+        }
         for user_name in claims_and_roles["tokens"]:
             casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforceAPI(event):
+            if casbin_enforcer.enforce(f"user::{user_name}", request_object, httpMethod):
                 method_allowed_on_api = True
                 break
 
@@ -303,14 +180,10 @@ def lambda_handler(event, context):
                 asset.update({
                     "object__type": "asset"
                 })
-
-                executingUserName = ''
-                executingRequestContext = event['requestContext']
                 for user_name in claims_and_roles["tokens"]:
                     casbin_enforcer = CasbinEnforcer(user_name)
                     if casbin_enforcer.enforce(f"user::{user_name}", asset, "POST"):
                         asset_allowed = True
-                        executingUserName = user_name
                         break
                 if asset_allowed:
                     workflowResponse = get_workflow(pathParams['databaseId'], pathParams['workflowId'])
@@ -338,40 +211,10 @@ def lambda_handler(event, context):
                                 logger.info("All pipelines are enabled. Continuing to run run workflow")
 
 
-                            #Get current executions for workflow on asset. If currently one running, error.
-                            executionResults = get_workflow_executions(pathParams['assetId'], pathParams['workflowId'])
-                            if len(executionResults['Items']) > 0:
-                                logger.error("Workflow has a currently running execution on the asset")
-                                response['statusCode'] = 400
-                                response['body'] = json.dumps({'message': 'Workflow has a currently running execution on the asset'})
-                                return response
-
-                            ##Formulate pipeline input metadata for VAMS
-                            #TODO: Implement additional user input fields on execute (from a new UX popup?)
-                            metadataResponse = get_asset_metadata(pathParams['databaseId'], pathParams['assetId'], asset['assetLocation']['Key'], event)
-                            metadata = metadataResponse.get("metadata", {})
-
-                            #remove databaseId/assetId from metadata if exists
-                            metadata.pop('databaseId', None)
-                            metadata.pop('assetId', None)
-
-                            inputMetadata = {
-                                "VAMS": {
-                                    "assetData": {
-                                        "assetName":asset.get("assetName", ""),
-                                        "description": asset.get("description", ""),
-                                        "tags": asset.get("tags", [])
-                                    },
-                                    "assetMetadata": metadata
-                                },
-                                #"User": {}
-                            }
-
                             logger.info("Launching Workflow:"
                                         )
                             executionId = launchWorkflow(asset['assetLocation']['Key'], workflow['workflow_arn'], 
-                                                         pathParams['assetId'], workflow['workflowId'], 
-                                                         pathParams['databaseId'], executingUserName, executingRequestContext, inputMetadata)
+                                                         pathParams['assetId'], workflow['workflowId'], pathParams['databaseId'])
                             response["statusCode"] = 200
                             response['body'] = json.dumps({'message': executionId})
                             return response

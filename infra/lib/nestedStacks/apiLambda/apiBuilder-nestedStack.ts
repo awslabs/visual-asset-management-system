@@ -20,18 +20,18 @@ import {
     buildDatabaseService,
 } from "../../lambdaBuilder/databaseFunctions";
 import {
-    buildListWorkflowExecutionsFunction,
+    buildListlWorkflowExecutionsFunction,
     buildWorkflowService,
     buildCreateWorkflowFunction,
     buildRunWorkflowFunction,
-    buildProcessWorkflowExecutionOutputFunction,
 } from "../../lambdaBuilder/workflowFunctions";
 import {
     buildAssetColumnsFunction,
     buildAssetMetadataFunction,
     buildAssetService,
+    buildUploadAllAssetsFunction,
     buildUploadAssetFunction,
-    buildStreamAuxiliaryPreviewAssetFunction,
+    buildFetchVisualizerAssetFunction,
     buildDownloadAssetFunction,
     buildRevertAssetFunction,
     buildUploadAssetWorkflowFunction,
@@ -78,7 +78,6 @@ import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../config/config";
 import { generateUniqueNameHash } from "../../helper/security";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
-import { authResources } from "../auth/authBuilder-nestedStack";
 
 interface apiGatewayLambdaConfiguration {
     routePath: string;
@@ -93,7 +92,6 @@ export class ApiBuilderNestedStack extends NestedStack {
         config: Config.Config,
         api: apigwv2.HttpApi,
         storageResources: storageResources,
-        authResources: authResources,
         lambdaCommonBaseLayer: LayerVersion,
         lambdaCommonServiceSDKLayer: LayerVersion,
         vpc: ec2.IVpc,
@@ -106,7 +104,6 @@ export class ApiBuilderNestedStack extends NestedStack {
             config,
             api,
             storageResources,
-            authResources,
             lambdaCommonBaseLayer,
             lambdaCommonServiceSDKLayer,
             vpc,
@@ -138,7 +135,6 @@ export function apiBuilder(
     config: Config.Config,
     api: apigwv2.HttpApi,
     storageResources: storageResources,
-    authResources: authResources,
     lambdaCommonBaseLayer: LayerVersion,
     lambdaCommonServiceSDKLayer: LayerVersion,
     vpc: ec2.IVpc,
@@ -590,7 +586,23 @@ export function apiBuilder(
         api: api,
     });
 
-    const streamAuxiliaryPreviewAssetFunction = buildStreamAuxiliaryPreviewAssetFunction(
+    const uploadAllAssetFunction = buildUploadAllAssetsFunction(
+        scope,
+        lambdaCommonBaseLayer,
+        storageResources,
+        uploadAssetFunction,
+        config,
+        vpc,
+        subnets
+    );
+
+    // attachFunctionToApi(scope, uploadAllAssetFunction, {
+    //     routePath: "/assets/all",
+    //     method: apigwv2.HttpMethod.PUT,
+    //     api: api,
+    // });
+
+    const fetchVisualizerAssetFunction = buildFetchVisualizerAssetFunction(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
@@ -598,8 +610,8 @@ export function apiBuilder(
         vpc,
         subnets
     );
-    attachFunctionToApi(scope, streamAuxiliaryPreviewAssetFunction, {
-        routePath: "/auxiliaryPreviewAssets/stream/{proxy+}",
+    attachFunctionToApi(scope, fetchVisualizerAssetFunction, {
+        routePath: "/visualizerAssets/{proxy+}",
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
@@ -629,56 +641,6 @@ export function apiBuilder(
     attachFunctionToApi(scope, assetRevertFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/revert",
         method: apigwv2.HttpMethod.POST,
-        api: api,
-    });
-
-    // metdata
-    const metadataCrudFunctions = buildMetadataFunctions(
-        scope,
-        lambdaCommonBaseLayer,
-        storageResources,
-        config,
-        vpc,
-        subnets
-    );
-    const methods = [
-        apigwv2.HttpMethod.PUT,
-        apigwv2.HttpMethod.GET,
-        apigwv2.HttpMethod.POST,
-        apigwv2.HttpMethod.DELETE,
-    ];
-    for (let i = 0; i < methods.length; i++) {
-        attachFunctionToApi(scope, metadataCrudFunctions[i], {
-            routePath: "/metadata/{databaseId}/{assetId}",
-            method: methods[i],
-            api: api,
-        });
-    }
-
-    const metadataSchemaFunctions = buildMetadataSchemaService(
-        scope,
-        lambdaCommonBaseLayer,
-        storageResources,
-        config,
-        vpc,
-        subnets
-    );
-
-    const metadataSchemaMethods = [
-        apigwv2.HttpMethod.GET,
-        apigwv2.HttpMethod.POST,
-        apigwv2.HttpMethod.PUT,
-    ];
-    for (let i = 0; i < metadataSchemaMethods.length; i++) {
-        attachFunctionToApi(scope, metadataSchemaFunctions, {
-            routePath: "/metadataschema/{databaseId}",
-            method: metadataSchemaMethods[i],
-            api: api,
-        });
-    }
-    attachFunctionToApi(scope, metadataSchemaFunctions, {
-        routePath: "/metadataschema/{databaseId}/{field}",
-        method: apigwv2.HttpMethod.DELETE,
         api: api,
     });
 
@@ -766,7 +728,7 @@ export function apiBuilder(
         api: api,
     });
 
-    const listWorkflowExecutionsFunction = buildListWorkflowExecutionsFunction(
+    const listWorkflowExecutionsFunction = buildListlWorkflowExecutionsFunction(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
@@ -780,23 +742,11 @@ export function apiBuilder(
         api: api,
     });
 
-    const processWorkflowExecutionOutputFunction = buildProcessWorkflowExecutionOutputFunction(
-        scope,
-        lambdaCommonBaseLayer,
-        storageResources,
-        uploadAssetFunction,
-        metadataCrudFunctions[1],
-        metadataCrudFunctions[0],
-        config,
-        vpc,
-        subnets
-    );
-
     const createWorkflowFunction = buildCreateWorkflowFunction(
         scope,
         lambdaCommonServiceSDKLayer,
         storageResources,
-        processWorkflowExecutionOutputFunction,
+        uploadAllAssetFunction,
         config.env.coreStackName,
         config,
         vpc,
@@ -812,12 +762,10 @@ export function apiBuilder(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
-        metadataCrudFunctions[1],
         config,
         vpc,
         subnets
     );
-
     attachFunctionToApi(scope, runWorkflowFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/workflows/{workflowId}",
         method: apigwv2.HttpMethod.POST,
@@ -826,6 +774,56 @@ export function apiBuilder(
     //Enabling API Gateway Access Logging: Currently the only way to do this is via V1 constructs
     //https://github.com/aws/aws-cdk/issues/11100#issuecomment-904627081
 
+    // metadata
+    const metadataCrudFunctions = buildMetadataFunctions(
+        scope,
+        lambdaCommonBaseLayer,
+        storageResources,
+        config,
+        vpc,
+        subnets
+    );
+    const methods = [
+        apigwv2.HttpMethod.PUT,
+        apigwv2.HttpMethod.GET,
+        apigwv2.HttpMethod.POST,
+        apigwv2.HttpMethod.DELETE,
+    ];
+    for (let i = 0; i < methods.length; i++) {
+        attachFunctionToApi(scope, metadataCrudFunctions[i], {
+            routePath: "/metadata/{databaseId}/{assetId}",
+            method: methods[i],
+            api: api,
+        });
+    }
+
+    const metadataSchemaFunctions = buildMetadataSchemaService(
+        scope,
+        lambdaCommonBaseLayer,
+        storageResources,
+        config,
+        vpc,
+        subnets
+    );
+
+    const metadataSchemaMethods = [
+        apigwv2.HttpMethod.GET,
+        apigwv2.HttpMethod.POST,
+        apigwv2.HttpMethod.PUT,
+    ];
+    for (let i = 0; i < metadataSchemaMethods.length; i++) {
+        attachFunctionToApi(scope, metadataSchemaFunctions, {
+            routePath: "/metadataschema/{databaseId}",
+            method: metadataSchemaMethods[i],
+            api: api,
+        });
+    }
+    attachFunctionToApi(scope, metadataSchemaFunctions, {
+        routePath: "/metadataschema/{databaseId}/{field}",
+        method: apigwv2.HttpMethod.DELETE,
+        api: api,
+    });
+
     const uploadAssetWorkflowStateMachine = buildUploadAssetWorkflow(
         scope,
         config,
@@ -833,7 +831,7 @@ export function apiBuilder(
         metadataCrudFunctions[2],
         runWorkflowFunction,
         storageResources.s3.assetStagingBucket
-        //storageResources.s3.assetAuxiliaryStagingBucket
+        //storageResources.s3.assetVisualizerStagingBucket
     );
     uploadAssetFunction.grantInvoke(uploadAssetWorkflowStateMachine);
     storageResources.s3.assetBucket.grantReadWrite(uploadAssetWorkflowStateMachine);
@@ -841,8 +839,8 @@ export function apiBuilder(
         storageResources.s3.assetStagingBucket.grantRead(uploadAssetWorkflowStateMachine);
     }
 
-    // if (storageResources.s3.assetAuxiliaryStagingBucket) {
-    //     storageResources.s3.assetAuxiliaryStagingBucket.grantRead(uploadAssetStagingMigrationWorkflowStateMachine);
+    // if (storageResources.s3.assetVisualizerStagingBucket) {
+    //     storageResources.s3.assetVisualizerStagingBucket.grantRead(uploadAssetStagingMigrationWorkflowStateMachine);
     // }
     const ingestAssetFunction = buildIngestAssetFunction(
         scope,
@@ -879,7 +877,6 @@ export function apiBuilder(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
-        authResources,
         config,
         vpc,
         subnets

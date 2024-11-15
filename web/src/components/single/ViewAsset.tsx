@@ -483,13 +483,13 @@ export default function ViewAsset() {
         let currAsset = assetId;
         switch (linktype) {
             case "parent":
-                assetLinkBody.assetIdFrom = currAsset!;
-                assetLinkBody.assetIdTo = selectAsset;
+                assetLinkBody.assetIdFrom = selectAsset;
+                assetLinkBody.assetIdTo = currAsset!;
                 assetLinkBody.relationshipType = "parent-child";
                 break;
             case "child":
-                assetLinkBody.assetIdFrom = selectAsset;
-                assetLinkBody.assetIdTo = currAsset!;
+                assetLinkBody.assetIdFrom = currAsset!;
+                assetLinkBody.assetIdTo = selectAsset;
                 assetLinkBody.relationshipType = "parent-child";
                 break;
             case "related":
