@@ -117,11 +117,20 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
                 responseHeadersPolicy: {
                     responseHeadersPolicyId: responseHeadersPolicy.responseHeadersPolicyId,
                 },
-                origin: new cdk.aws_cloudfront_origins.S3Origin(props.webAppBucket),
+                origin: new cdk.aws_cloudfront_origins.OriginGroup({
+                    primaryOrigin:
+                        cdk.aws_cloudfront_origins.S3BucketOrigin.withOriginAccessControl(
+                            props.webAppBucket
+                        ),
+                    fallbackOrigin:
+                        cdk.aws_cloudfront_origins.S3BucketOrigin.withOriginAccessControl(
+                            props.webAppBucket
+                        ),
+                }),
                 cachePolicy: new cloudfront.CachePolicy(this, "CachePolicy", {
                     defaultTtl: cdk.Duration.hours(1),
                 }),
-                allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+                allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
                 viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
             },
 

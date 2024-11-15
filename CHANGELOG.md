@@ -10,6 +10,7 @@ Recommended Upgrade Path: A/B Stack Deployment with data migration using staging
 
 ### ⚠ BREAKING CHANGES
 
+-   Due to packaged library version upgrades in the solution, customer must make sure they are using the latest global installs of aws cli/CDK
 -   Pipelines are now changed to support a new pipelineType meaning, and the old pipelineType was renamed to pipelineExecutionType.
 -   Execution workflow input parameter names to pipelines have also changed, which can break existing workflows/pipelines.
 
