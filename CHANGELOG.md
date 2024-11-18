@@ -18,6 +18,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   Fix opensearch lambda event source mapping for regions that don't support event source tagging yet (ie GovCloud) [bug introduced in v2.1.0 with CDK version upgrade]
+
 ### Chores
 
 -   Upgraded lambda and all associated libraries (including use-case pipelines) to use Python 3.12 runtimes
