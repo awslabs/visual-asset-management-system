@@ -107,16 +107,38 @@ export function searchBuilder(
             new LambdaSubscription(indexingFunction)
         );
 
-        indexingFunction.addEventSource(
-            new eventsources.DynamoEventSource(storageResources.dynamo.metadataStorageTable, {
+        // Due to cdk upgrade, not all regions support tags for EventSourceMapping
+        // this line should remove the tags for regions that dont support it (govcloud currently not supported)
+        if (config.app.govCloud.enabled){
+            const esmIndexing = new lambda.EventSourceMapping(scope, 'idxmDynamoDBEventSourceStorageResourcesBuilderMetadataStorageTable', {
+                target: indexingFunction,
+                eventSourceArn: storageResources.dynamo.metadataStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-            })
-        );
-        assetIndexingFunction.addEventSource(
-            new eventsources.DynamoEventSource(storageResources.dynamo.assetStorageTable, {
+                batchSize: 100
+            });
+            const cfnEsmIndexing = esmIndexing.node.defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsmIndexing.addPropertyDeletionOverride('Tags');
+
+            const esmAssetIndexing = new lambda.EventSourceMapping(scope, 'idxaDynamoDBEventSourceStorageResourcesBuilderAssetStorageTable', {
+                target: assetIndexingFunction,
+                eventSourceArn: storageResources.dynamo.assetStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-            })
-        );
+                batchSize: 100
+            });
+            const cfnEsmAssetIndexing = esmAssetIndexing.node.defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsmAssetIndexing.addPropertyDeletionOverride('Tags');
+        } else {
+            indexingFunction.addEventSource(
+                new eventsources.DynamoEventSource(storageResources.dynamo.metadataStorageTable, {
+                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                })
+            );
+            assetIndexingFunction.addEventSource(
+                new eventsources.DynamoEventSource(storageResources.dynamo.assetStorageTable, {
+                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                })
+            );
+        }
 
         aoss.grantCollectionAccess(indexingFunction);
         aoss.grantCollectionAccess(assetIndexingFunction);
@@ -180,16 +202,38 @@ export function searchBuilder(
             new LambdaSubscription(indexingFunction)
         );
 
-        indexingFunction.addEventSource(
-            new eventsources.DynamoEventSource(storageResources.dynamo.metadataStorageTable, {
+        // Due to cdk upgrade, not all regions support tags for EventSourceMapping
+        // this line should remove the tags for regions that dont support it (govcloud currently not supported)
+        if (config.app.govCloud.enabled){
+            const esmIndexing = new lambda.EventSourceMapping(scope, 'idxmDynamoDBEventSourceStorageResourcesBuilderMetadataStorageTable', {
+                target: indexingFunction,
+                eventSourceArn: storageResources.dynamo.metadataStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-            })
-        );
-        assetIndexingFunction.addEventSource(
-            new eventsources.DynamoEventSource(storageResources.dynamo.assetStorageTable, {
+                batchSize: 100
+            });
+            const cfnEsmIndexing = esmIndexing.node.defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsmIndexing.addPropertyDeletionOverride('Tags');
+
+            const esmAssetIndexing = new lambda.EventSourceMapping(scope, 'idxaDynamoDBEventSourceStorageResourcesBuilderAssetStorageTable', {
+                target: assetIndexingFunction,
+                eventSourceArn: storageResources.dynamo.assetStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-            })
-        );
+                batchSize: 100
+            });
+            const cfnEsmAssetIndexing = esmAssetIndexing.node.defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsmAssetIndexing.addPropertyDeletionOverride('Tags');
+        } else {
+            indexingFunction.addEventSource(
+                new eventsources.DynamoEventSource(storageResources.dynamo.metadataStorageTable, {
+                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                })
+            );
+            assetIndexingFunction.addEventSource(
+                new eventsources.DynamoEventSource(storageResources.dynamo.assetStorageTable, {
+                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                })
+            );
+        }
 
         //grant search function access to AOS
         aos.grantOSDomainAccess(searchFun);
