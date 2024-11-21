@@ -267,6 +267,7 @@ export function buildAuthLoginProfile(
         environment: {
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             USER_STORAGE_TABLE_NAME: storageResources.dynamo.userStorageTable.tableName,
             EXTERNAL_OATH_IDP_URL: config.app.authProvider.useExternalOAuthIdp.enabled ?
                 config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl : "", //Optional environment field they may get used for customConfigCommon method
@@ -275,7 +276,8 @@ export function buildAuthLoginProfile(
     });
 
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(authLoginProfileFunc);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(authLoginProfileFunc);
+    storageResources.dynamo.userRolesStorageTable.grantReadWriteData(authLoginProfileFunc);
+    storageResources.dynamo.rolesStorageTable.grantReadData(authLoginProfileFunc);
     storageResources.dynamo.userStorageTable.grantReadWriteData(authLoginProfileFunc);
     kmsKeyLambdaPermissionAddToResourcePolicy(authLoginProfileFunc, storageResources.encryption.kmsKey);
 

@@ -62,6 +62,15 @@ Please note, depending on what changes are in flight, VAMS may not be available 
 
 Deployment data migration documentation and scripts between major VAMS version deployments are located in `/infra/deploymentDataMigration`
 
+### Deployment Troubleshooting
+
+#### CDK Error: failed commit on ref "manifest-sha256:...": unexpected status from PUT request to https://....dkr.ecr.REGION.amazonaws.com/v2/foo/manifests/bar: 400 Bad Request
+
+If you receive this error, it may be related to a bug/defect in the latest CDK version documented here: https://github.com/aws/aws-cdk/issues/31549
+
+As a possible workaround if you are using the docker buildx platform, set the following terminal or operating system environment variable to stop the error: 
+BUILDX_NO_DEFAULT_ATTESTATIONS=1
+
 ### SAML Authentication - Cognito
 
 SAML authentication enables you to provision access to your VAMS instance using your organization's federated identity provider such as Auth0, Active Directory, or Google Workspace.

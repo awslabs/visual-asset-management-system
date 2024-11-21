@@ -244,7 +244,7 @@ def getRequiredTagTypes():
         deserialized_document = {k: deserializer.deserialize(v) for k, v in tagType.items()}
 
         #if tagtype has "required" set to true and there are tags in formatted_tag_results for the type, add to list
-        if bool(deserialized_document.get("required", "False")):
+        if deserialized_document.get("required", "False") == "True":
             if deserialized_document["tagTypeName"] in formatted_tag_results:
                 tagTypesRequired.append(deserialized_document["tagTypeName"])
 
