@@ -13,10 +13,11 @@ import Input from "@cloudscape-design/components/input";
 import { useEffect, useState } from "react";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
 import { Storage, API } from "aws-amplify";
-import { AssetDetail } from "../../pages/AssetUpload";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
 import { UploadAssetWorkflowApi } from "../../pages/AssetUpload/onSubmit";
-import { fetchTags } from "../../services/APIService";
+import { fetchTags, fetchtagTypes } from "../../services/APIService";
+import { TagType } from "../../pages/Tag/TagType.interface";
+import { validateRequiredTagTypeSelected } from "../../pages/AssetUpload/validations";
 
 interface UpdateAssetProps {
     asset: any;
@@ -32,14 +33,18 @@ const isDistributableOptions: OptionDefinition[] = [
 
 var tags: any[] = [];
 var assetTags: any[] = [];
+var tagTypes: TagType[] = [];
 
 const update = async (
     updatedAsset: any,
     files: File[],
     setProgress: (progress: number) => void,
     setError: (error: { isError: boolean; message: string }) => void,
-    setComplete: (complete: boolean) => void
+    setComplete: (complete: boolean) => void,
+    isFormValid: boolean
 ) => {
+    if(!isFormValid) return; // Don't attempt to update if form is not valid
+
     let uploadBody = Object.assign({}, updatedAsset);
     uploadBody.key = updatedAsset.assetLocation.Key;
     uploadBody.Comment = updatedAsset.currentVersion.Comment;
@@ -96,11 +101,28 @@ const update = async (
             });
     }
 };
+
 export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     const [assetDetail, setAssetDetail] = useState(asset);
     const [progress, setProgress] = useState(0);
     const [error, setError] = useState({ isError: false, message: "" });
     const [complete, setComplete] = useState(false);
+    const [isValid, setIsValid] = useState(true)
+    const [isFormTouched, setIsFormTouched] = useState(false);
+
+    const [value, setValue] = useState<File[]>([]);
+    if (complete) {
+        props.onComplete();
+    }
+    const [selectedTags, setSelectedTags] = useState<OptionDefinition[]>([]);
+
+    const [validationText, setValidationText] = useState<{
+        tags?: string
+    }>({});
+
+    const [constraintText, setConstraintText] = useState<{
+        tags?: string
+    }>({});
 
     useEffect(() => {
         setAssetDetail(asset);
@@ -131,14 +153,52 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
         setSelectedTags(initTags);
     }, [asset]);
 
-    const [value, setValue] = useState<File[]>([]);
-    if (complete) {
-        props.onComplete();
-    }
-    const [selectedTags, setSelectedTags] = useState<OptionDefinition[]>([]);
+    useEffect(() => {
+        // Get Tag Types to enforce when they are required
+        tagTypes = [];
+
+        fetchtagTypes().then((res) => {
+            tagTypes = res;
+
+            if (tagTypes.length) {
+                const requiredTagTypes = tagTypes.filter((tagType) => tagType.required === "True");
+
+                if (requiredTagTypes.length) {
+                    // Set constraint text if there are required tag types
+                    setConstraintText({
+                        tags:
+                            "The following tag types, listed in parentheses, require at least one selection: " +
+                            requiredTagTypes.map((tagType) => tagType.tagTypeName).join(', ')
+                    });
+
+                    //Set initial validation text
+                    if(selectedTags.length) {
+                        setValidationText({...validationText, tags: validateRequiredTagTypeSelected(selectedTags.map(tag => tag.value!), tagTypes)})
+                    }
+                }
+            }
+        });
+    }, []);
+
+    useEffect(() => { // Form Validation Error Check
+        const validation = {
+            tags: validateRequiredTagTypeSelected(selectedTags.map(tag => tag.value!), tagTypes)
+        }
+        setValidationText(validation)
+
+        const isValid = !(
+            validation.tags
+        )
+        setIsValid(isValid)
+    }, [selectedTags, isFormTouched]);
+
+
     return (
         <Modal
-            onDismiss={() => props.onClose()}
+            onDismiss={() => {
+                setIsFormTouched(false);
+                props.onClose()
+            }}
             visible={props.isOpen}
             closeAriaLabel="Close modal"
             size="medium"
@@ -148,6 +208,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                         <Button
                             variant="link"
                             onClick={() => {
+                                setIsFormTouched(false);
                                 props.onClose();
                             }}
                         >
@@ -156,7 +217,8 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                         <Button
                             variant="primary"
                             onClick={() => {
-                                update(assetDetail, value, setProgress, setError, setComplete);
+                                setIsFormTouched(true)
+                                update(assetDetail, value, setProgress, setError, setComplete, isValid);
                             }}
                         >
                             Update Asset
@@ -176,6 +238,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                                 ...assetDetail,
                                 assetName: e.detail.value,
                             }));
+                            setIsFormTouched(true)
                         }}
                     />
                 </FormField>
@@ -188,6 +251,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                                 ...assetDetail,
                                 description: e.detail.value,
                             }));
+                            setIsFormTouched(true)
                         }}
                     />
                 </FormField>
@@ -208,13 +272,16 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                                 ...assetDetail,
                                 isDistributable: detail.selectedOption.label === "Yes",
                             }));
+                            setIsFormTouched(true)
                         }}
                         filteringType="auto"
                         selectedAriaLabel="Selected"
                         data-testid="isDistributable-select"
                     />
                 </FormField>
-                <FormField label="Tags">
+                <FormField label="Tags"
+                    constraintText={constraintText.tags}
+                    errorText={isFormTouched && validationText.tags}>
                     <Multiselect
                         selectedOptions={selectedTags}
                         placeholder="Tags"
@@ -229,12 +296,16 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                                 ...assetDetail,
                                 tags: assetTags,
                             }));
+                            setIsFormTouched(true)
                         }}
                     />
                 </FormField>
                 <FormField label="Preview">
                     <FileUpload
-                        onChange={({ detail }) => setValue(detail.value)}
+                        onChange={({ detail }) => {
+                            setValue(detail.value)
+                            setIsFormTouched(true)
+                        }}
                         value={value}
                         i18nStrings={{
                             uploadButtonText: (e) => (e ? "Choose files" : "Choose file"),

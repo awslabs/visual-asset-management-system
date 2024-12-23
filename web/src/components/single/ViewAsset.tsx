@@ -765,7 +765,7 @@ export default function ViewAsset() {
                                                       );
 
                                                       //If tagType has required field add [R] to tag type name
-                                                      if (tagType && tagType.required) {
+                                                      if (tagType && tagType.required === 'True') {
                                                           tagType.tagTypeName += " [R]";
                                                       }
 

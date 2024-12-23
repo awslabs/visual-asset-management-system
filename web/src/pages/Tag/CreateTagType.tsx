@@ -1,6 +1,7 @@
 import {
     Box,
     Button,
+    Checkbox,
     Form,
     FormField,
     Input,
@@ -33,14 +34,6 @@ function validateNameLowercase(name: string) {
     return name.match(/^[a-z0-9_-]+$/) !== null
         ? null
         : "All lower case letters only. No special characters except '-' and '_'";
-}
-
-// when a required string is either "True" or "False", otherwise return the string "'True' or 'False' only"
-function validateRequiredText(required: string) {
-    if (required === undefined) return undefined;
-    return required == "True" || required == "False"
-        ? null
-        : "'True' or 'False' only";
 }
 
 // when a string is between 4 and 64 characters, return null, otherwise return the string "Between 4 and 64 characters"
@@ -100,6 +93,10 @@ export default function CreateTagType({
     const [nameError, setNameError] = useState<string | null>(null);
 
     const [requiredError, setRequiredError] = useState<string | null>(null);
+
+    // The Tag Type checkbox requires a boolean to hold and display the checked or not checked state. Since interface is a string,
+    // created this, which initializes based on the string from formState.required
+    const [requiredTagTypeChecked, setRequiredTagTypeChecked] = useState(formState.required === 'True' ? true : false);
 
     return (
         <Modal
@@ -262,20 +259,20 @@ export default function CreateTagType({
                     </FormField>
 
                     <FormField
-                        label="Required on Asset"
-                        constraintText="Required. Only 'True' or 'False' values allowed"
-                        errorText={requiredError || validateRequiredText(formState.required)}
+                        label="Options"
                     >
-                        <Input
-                            value={formState.required}
-                            disabled={false}
+                        <Checkbox
                             onChange={({ detail }) => {
-                                setFormState({ ...formState, required: detail.value });
+                                setRequiredTagTypeChecked(detail.checked); // update visual state boolean
+                                setFormState({ ...formState, required: detail.checked ? 'True' : 'False' }); // update form state string
                                 setRequiredError("");
                             }}
-                            placeholder="Required on Asset"
+                            checked={requiredTagTypeChecked}
                             data-testid="required"
-                        />
+                            >
+                            Require tag of this tag type on asset modification
+                        </Checkbox>
+
                     </FormField>
                 </SpaceBetween>
             </Form>

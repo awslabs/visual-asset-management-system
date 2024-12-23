@@ -34,12 +34,19 @@ def customAuthProfileLoginWriteOverride(userProfile, lambdaRequestEvent):
 
     #Example to reach out to a custom IDP (PingFederate) to grab user data such as email for the profile
     # access_token = lambdaRequestEvent["headers"]["authorization"].split()[1]
-    # response = requests.get('{external_oath_idp_url}/idp/userinfo.openid', headers={
+    # response = requests.get(f'{external_oath_idp_url}/idp/userinfo.openid', headers={
     #     'Content-Type': 'application/json',
     #     'Authorization': f'Bearer {access_token}'
     # })
 
-    # userProfile["email"] = response["email"]
+    # try:
+    #     data = response.json()
+    # except requests.JSONDecodeError:
+    #     data = None
+
+    # if data and "email" in data:
+    #     userProfile["email"] = data["email"]
+
 
     #########################################################################################################
     return userProfile
