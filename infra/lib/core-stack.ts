@@ -348,27 +348,29 @@ export class CoreVAMSStack extends cdk.Stack {
             });
         }
 
-        const authCognitoUserPoolIdParamsOutput = new cdk.CfnOutput(
-            this,
-            "AuthCognito_UserPoolId",
-            {
-                value: authBuilderNestedStack.authResources.cognito.userPoolId,
-            }
-        );
-        const authCognitoIdentityPoolIdParamsOutput = new cdk.CfnOutput(
-            this,
-            "AuthCognito_IdentityPoolId",
-            {
-                value: authBuilderNestedStack.authResources.cognito.identityPoolId,
-            }
-        );
-        const authCognitoUserWebClientIdParamsOutput = new cdk.CfnOutput(
-            this,
-            "AuthCognito_WebClientId",
-            {
-                value: authBuilderNestedStack.authResources.cognito.webClientId,
-            }
-        );
+        if (props.config.app.authProvider.useCognito.enabled){
+            const authCognitoUserPoolIdParamsOutput = new cdk.CfnOutput(
+                this,
+                "AuthCognito_UserPoolId",
+                {
+                    value: authBuilderNestedStack.authResources.cognito.userPoolId,
+                }
+            );
+            const authCognitoIdentityPoolIdParamsOutput = new cdk.CfnOutput(
+                this,
+                "AuthCognito_IdentityPoolId",
+                {
+                    value: authBuilderNestedStack.authResources.cognito.identityPoolId,
+                }
+            );
+            const authCognitoUserWebClientIdParamsOutput = new cdk.CfnOutput(
+                this,
+                "AuthCognito_WebClientId",
+                {
+                    value: authBuilderNestedStack.authResources.cognito.webClientId,
+                }
+            );
+        }
 
         const assetBucketOutput = new cdk.CfnOutput(this, "AssetS3BucketNameOutput", {
             value: storageResourcesNestedStack.storageResources.s3.assetBucket.bucketName,
