@@ -36,13 +36,13 @@ function renderApp(config) {
         Auth: {
             mandatorySignIn: true,
             region: config.region || "us-east-1",
-            userPoolId: config.userPoolId,
-            identityPoolId: config.identityPoolId,
-            userPoolWebClientId: config.appClientId,
+            userPoolId: config.cognitoUserPoolId,
+            identityPoolId: config.cognitoIdentityPoolId,
+            userPoolWebClientId: config.cognitoAppClientId,
         },
         Storage: {
             region: config.region,
-            identityPoolId: config.identityPoolId,
+            identityPoolId: config.cognitoIdentityPoolId,
             bucket: config.bucket,
             customPrefix: {
                 public: "",

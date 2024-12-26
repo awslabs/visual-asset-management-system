@@ -64,7 +64,7 @@ export class AuthBuilderNestedStack extends NestedStack {
     constructor(parent: Construct, name: string, props: AuthBuilderNestedStackProps) {
         super(parent, name);
 
-        if (props.config.app.authProvider.useCognito) {
+        if (props.config.app.authProvider.useCognito.enabled) {
             //Use Cognito
             const cognitoProps: CognitoWebNativeConstructStackProps = {
                 ...props,

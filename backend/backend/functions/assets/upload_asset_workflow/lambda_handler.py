@@ -267,7 +267,7 @@ def lambda_handler(event: Dict[Any, Any], context: LambdaContext) -> APIGatewayP
             #Check for required tags on assets and throw error otherwise
             verifyAllRequiredTagsSatisfied(event['body']['uploadAssetBody'].get('tags', []))
 
-            response = handler.process_request(request=request, request_context=request_context)
+            response = handler.process_request(request=request, request_context=request_context, request_headers=event["headers"])
             return success(body=response.dict())
         else:
             return {

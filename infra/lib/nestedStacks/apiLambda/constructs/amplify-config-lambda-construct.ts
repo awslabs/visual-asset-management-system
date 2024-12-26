@@ -39,18 +39,6 @@ export interface AmplifyConfigFederatedIdentityProps {
 
 interface InlineLambdaProps {
     /**
-     * The Cognito UserPoolId to authenticate users in the front-end
-     */
-    userPoolId: string;
-    /**
-     * The Cognito AppClientId to authenticate users in the front-end
-     */
-    appClientId: string;
-    /**
-     * The Cognito IdentityPoolId to authenticate users in the front-end
-     */
-    identityPoolId: string;
-    /**
      * The ApiGatewayV2 HttpApi to attach the lambda
      */
     api: string;
@@ -58,10 +46,24 @@ interface InlineLambdaProps {
      * region
      */
     region: string;
+
+    /**
+     * The Cognito UserPoolId to authenticate users in the front-end
+     */
+    cognitoUserPoolId: string;
+    /**
+     * The Cognito AppClientId to authenticate users in the front-end
+     */
+    cognitoAppClientId: string;
+    /**
+     * The Cognito IdentityPoolId to authenticate users in the front-end
+     */
+    cognitoIdentityPoolId: string;
+
     /**
      * Additional configuration needed for federated auth
      */
-    federatedConfig?: AmplifyConfigFederatedIdentityProps;
+    cognitoFederatedConfig?: AmplifyConfigFederatedIdentityProps;
 
     /**
      * External OAUTH IDP URL Configuration
@@ -73,10 +75,25 @@ interface InlineLambdaProps {
      */
     externalOAuthIdpClientId?: string;
 
-    // /**
-    //  * External OAUTH IDP ClientSecret Configuration
-    //  */
-    // externalOAuthIdpClientSecret?: string;
+    /**
+     * External OAUTH IDP Scope Configuration
+     */
+    externalOAuthIdpScope?: string;
+
+    /**
+     * External OAUTH IDP Token Endpoint Configuration
+     */
+    externalOAuthIdpTokenEndpoint?: string;
+
+    /**
+     * External OAUTH IDP Authorization Endpoint Configuration
+     */
+    externalOAuthIdpAuthorizationEndpoint?: string;
+
+    /**
+     * External OAUTH IDP Discovery Endpoint Configuration
+     */
+    externalOAuthIdpDiscoveryEndpoint?: string;
 
     /**
      * Name of deployed stack
@@ -120,7 +137,7 @@ export interface AmplifyConfigLambdaConstructProps extends cdk.StackProps {
     /**
      * Additional configuration needed for federated auth
      */
-    federatedConfig?: AmplifyConfigFederatedIdentityProps;
+    cognitoFederatedConfig?: AmplifyConfigFederatedIdentityProps;
 
     /**
      * Content Security Policy to apply (generally for ALB deployment where CSP is not injected)
@@ -145,14 +162,17 @@ export class AmplifyConfigLambdaConstruct extends Construct {
             code: lambda.Code.fromInline(
                 this.getJavascriptInlineFunction({
                     region: props.region,
-                    userPoolId: props.config.app.authProvider.useCognito.enabled? props.authResources.cognito.userPoolId : "undefined",
-                    appClientId: props.config.app.authProvider.useCognito.enabled? props.authResources.cognito.webClientId : "undefined",
-                    identityPoolId: props.config.app.authProvider.useCognito.enabled? props.authResources.cognito.identityPoolId : "undefined",
                     api: props.apiUrl || "us-east-1",
-                    federatedConfig: props.federatedConfig,
+                    cognitoUserPoolId: props.config.app.authProvider.useCognito.enabled? props.authResources.cognito.userPoolId : "undefined",
+                    cognitoAppClientId: props.config.app.authProvider.useCognito.enabled? props.authResources.cognito.webClientId : "undefined",
+                    cognitoIdentityPoolId: props.config.app.authProvider.useCognito.enabled? props.authResources.cognito.identityPoolId : "undefined",
+                    cognitoFederatedConfig: props.cognitoFederatedConfig,
                     externalOAuthIdpURL: props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl || "undefined",
                     externalOAuthIdpClientId: props.config.app.authProvider.useExternalOAuthIdp.idpAuthClientId || "undefined",
-                    //externalOAuthIdpClientSecret: props.config.app.authProvider.useExternalOAuthIdp.idpAuthClientSecret || "undefined",
+                    externalOAuthIdpScope: props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope || "undefined",
+                    externalOAuthIdpTokenEndpoint: props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint || "undefined",
+                    externalOAuthIdpAuthorizationEndpoint: props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint || "undefined",
+                    externalOAuthIdpDiscoveryEndpoint: props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderDiscoveryEndpoint || "undefined",
                     stackName: props.stackName!,
                     contentSecurityPolicy: props.contentSecurityPolicy || "",
                     bannerHtmlMessage: props.config.app.webUi.optionalBannerHtmlMessage || ""

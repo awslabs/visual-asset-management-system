@@ -28,7 +28,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   Optimized some backend lambda initialization code in various functions and globally in the casbin authorization functions for cold start performance improvement
 -   Updated S3 bucket name for WebAppAccessLogs for ALB deployment (to be based on the domain name used `<ALBDomainName>-webappaccesslogs`) to help with organization policy exceptions
 
-## [2.1.0] (2024-10-31)
+## [2.1.0] (2024-11-15)
 
 This minor version includes changes to VAMS pipelines, use-case pipeline implementations, and v2.0 bug fixes.
 
@@ -36,6 +36,7 @@ Recommended Upgrade Path: A/B Stack Deployment with data migration using staging
 
 ### ⚠ BREAKING CHANGES
 
+-   Due to packaged library version upgrades in the solution, customer must make sure they are using the latest global installs of aws cli/CDK
 -   Pipelines are now changed to support a new pipelineType meaning, and the old pipelineType was renamed to pipelineExecutionType.
 -   Execution workflow input parameter names to pipelines have also changed, which can break existing workflows/pipelines.
 

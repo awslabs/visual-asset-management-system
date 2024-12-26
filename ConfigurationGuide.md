@@ -62,7 +62,11 @@ Some configuration options can be overriden at time of deployment with either en
 -   `app.authProvider.useExternalOathIdp.enabled` | default: false | Feature to use an external OAUTH IDP. Switches front-end web to use new IDP from Cognito. Cannot currently use location services with this option. Switches API gateway authorizers to an external JWT authorizer hook
 -   `app.authProvider.useExternalOathIdp.idpAuthProviderUrl` | default: NULL | URL for external OAUTH IDP authentication endpoint such as https://ping-federate.com
 -   `app.authProvider.useExternalOathIdp.idpAuthClientId` | default: NULL | The clientId provided by the external IDP system to recognize this application deployment
+-   `app.authProvider.useExternalOathIdp.idpAuthProviderScope` | default: NULL | The external OAuth IDP scope this application is requesting
 -   `app.authProvider.useExternalOathIdp.idpAuthPrincipalDomain` | default: NULL | Principal domain for the IDP endpoint for use in role authorization permissions ping-federate.com
+-   `app.authProvider.useExternalOathIdp.idpAuthProviderTokenEndpoint` | default: NULL | The external OAuth IDP Token Endpoint path, such as /as/token.oauth2
+-   `app.authProvider.useExternalOathIdp.idpAuthProviderAuthorizationEndpoint` | default: NULL | The external OAuth IDP Authorization Endpoint path, such as /as/authorization.oauth2
+-   `app.authProvider.useExternalOathIdp.idpAuthProviderDiscoveryEndpoint` | default: NULL | The external OAuth IDP Discovery Endpoint path, such as /.well-known/openid-configuration
 -   `app.authProvider.useExternalOathIdp.lambdaAuthorizorJWTIssuerUrl` | default: NULL | URL for external OAUTH IDP authentication endpoint for authorizer verification
 -   `app.authProvider.useExternalOathIdp.lambdaAuthorizorJWTAudience` | default: NULL | The audience provided by the external IDP system to recognize this application deployment for JWT token verification
 

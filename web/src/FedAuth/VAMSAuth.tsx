@@ -34,18 +34,6 @@ export interface AmplifyConfigFederatedIdentityProps {
 
 interface Config {
     /**
-     * The Cognito UserPoolId to authenticate users in the front-end
-     */
-    userPoolId: string;
-    /**
-     * The Cognito AppClientId to authenticate users in the front-end
-     */
-    appClientId: string;
-    /**
-     * The Cognito IdentityPoolId to authenticate users in the front-end
-     */
-    identityPoolId: string;
-    /**
      * The ApiGatewayV2 HttpApi to attach the lambda
      */
     api: string;
@@ -53,10 +41,24 @@ interface Config {
      * region
      */
     region: string;
+    
+    /**
+     * The Cognito UserPoolId to authenticate users in the front-end
+     */
+    cognitoUserPoolId: string;
+    /**
+     * The Cognito AppClientId to authenticate users in the front-end
+     */
+    cognitoAppClientId: string;
+    /**
+     * The Cognito IdentityPoolId to authenticate users in the front-end
+     */
+    cognitoIdentityPoolId: string;
+
     /**
      * Additional configuration needed for federated auth
      */
-    federatedConfig?: AmplifyConfigFederatedIdentityProps;
+    cognitoFederatedConfig?: AmplifyConfigFederatedIdentityProps;
 
     /**
      * External OAUTH IDP URL Configuration
@@ -98,9 +100,9 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
         Auth: {
             mandatorySignIn: true,
             region: config.region,
-            userPoolId: config.userPoolId,
-            userPoolWebClientId: config.appClientId,
-            identityPoolId: config.identityPoolId,
+            userPoolId: config.cognitoUserPoolId,
+            userPoolWebClientId: config.cognitoAppClientId,
+            identityPoolId: config.cognitoIdentityPoolId,
             cookieStorage: {
                 domain: " ", // process.env.REACT_APP_COOKIE_DOMAIN, // Use a single space " " for host-only cookies
                 expires: null, // null means session cookies
@@ -109,16 +111,16 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
                 sameSite: "lax",
             },
             oauth: {
-                domain: config.federatedConfig?.customCognitoAuthDomain,
+                domain: config.cognitoFederatedConfig?.customCognitoAuthDomain,
                 scope: ["openid", "email", "profile"], //  process.env.REACT_APP_USER_POOL_SCOPES.split(","),
-                redirectSignIn: window.location.origin, // config.federatedConfig?.redirectSignIn,
-                redirectSignOut: window.location.origin, // config.federatedConfig?.redirectSignOut,
+                redirectSignIn: window.location.origin, // config.cognitoFederatedConfig?.redirectSignIn,
+                redirectSignOut: window.location.origin, // config.cognitoFederatedConfig?.redirectSignOut,
                 responseType: "code",
             },
         },
         Storage: {
             region: config.region,
-            identityPoolId: config.identityPoolId,
+            identityPoolId: config.cognitoIdentityPoolId,
             bucket: config.bucket,
             customPrefix: {
                 public: "",
@@ -282,7 +284,7 @@ const VAMSAuth: React.FC<AuthProps> = (props) => {
 
     useEffect(() => {
         if (config) {
-            setUseLocal(!config.federatedConfig || userWantsLocal);
+            setUseLocal(!config.cognitoFederatedConfig || userWantsLocal);
             configureAmplify(config, setAmpInit);
         } else {
             fetch(`${basePath}/api/amplify-config`).then(async (response) => {
@@ -351,7 +353,7 @@ const VAMSAuth: React.FC<AuthProps> = (props) => {
             onLocal={() => setUserWantsLocal(true)}
             onLogin={() =>
                 Auth.federatedSignIn({
-                    customProvider: config.federatedConfig?.customFederatedIdentityProviderName,
+                    customProvider: config.cognitoFederatedConfig?.customFederatedIdentityProviderName,
                 })
             }
         />
