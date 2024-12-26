@@ -2,6 +2,8 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
+import requests
 
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -28,13 +30,18 @@ def lambda_handler(event, _):
             route_obj.update({
                 "object__type": "web"
             })
-            for user_name in claims_and_roles["tokens"]:
-                casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", route_obj, route_obj["method"]):
-                    allowed_routes.append(route_obj)
-                    break
 
-        response["body"] = json.dumps({"allowedRoutes": allowed_routes})
+            if 'USE_LOCAL_MOCKS' in os.environ:
+                allowed_routes.append(route_obj)
+            else:
+                for user_name in claims_and_roles["tokens"]:
+                    print("casbin enforce", user_name)
+                    casbin_enforcer = CasbinEnforcer(user_name)
+                    if casbin_enforcer.enforce(f"user::{user_name}", route_obj, route_obj["method"]):
+                        allowed_routes.append(route_obj)
+                        break
+
+        response["body"] = json.dumps({"allowedRoutes": allowed_routes, "email": claims_and_roles["tokens"][0]})
         return response
 
     except Exception as e:
@@ -43,7 +50,6 @@ def lambda_handler(event, _):
         response["body"] = json.dumps({"message": "Internal Server Error"})
 
         return response
-
 
 if __name__ == "__main__":
     test_response = lambda_handler(None, None)

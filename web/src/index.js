@@ -7,23 +7,28 @@
  * Establishes global css, fetches server-side resource,
  * configures amplify and initialized react app.
  */
-import React, { Suspense } from "react";
+import React, { Suspense, useEffect } from "react";
 import ReactDOM from "react-dom";
 import "./styles/index.scss";
 import reportWebVitals from "./reportWebVitals";
-// import ConfigLoader from "./ConfigLoader";
-import VAMSAuth from "./FedAuth/VAMSAuth";
+import Auth from "./FedAuth/Auth";
+import { default as vamsConfig } from "./config";
 
-window.LOG_LEVEL = "INFO";
+window.LOG_LEVEL = "DEBUG";
+
+console.log('vamsConfig', vamsConfig);
+
+// Needed for overrides in custom amplify lib.
+window.DISABLE_COGNITO = vamsConfig.DISABLE_COGNITO;
 
 const App = React.lazy(() => import("./App"));
 ReactDOM.render(
     <React.StrictMode>
-        <VAMSAuth>
+        <Auth>
             <Suspense fallback={<div />}>
                 <App />
             </Suspense>
-        </VAMSAuth>
+        </Auth>
     </React.StrictMode>,
     document.getElementById("root")
 );

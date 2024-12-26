@@ -4,6 +4,41 @@
  */
 
 import { API } from "aws-amplify";
+import { default as vamsConfig } from '../config';
+
+export const getAmplifyConfig = async () => {
+    console.log('getAmplifyConfig');
+    try {
+        const amplifyConfigUrl = new URL('/api/amplify-config', !vamsConfig.LOCAL_DEVELOPMENT ? window.location.origin : vamsConfig.DEV_API_ENDPOINT);
+        console.log(amplifyConfigUrl.href);
+        const response = await fetch(amplifyConfigUrl);
+        return response.json();
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+export const getSecureConfig = async () => {
+    console.log('getSecureConfig');
+    return API.get("api", `secure-config`, {});
+};
+
+export const webRoutes = async (body) => {
+    console.log('webRoutes');
+    try {
+        const response = await API.post("api", "auth/routes", {
+            body: {
+                routes: body.routes
+            }
+        });
+        console.log("response", response);
+        return response;
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
 
 /**
  * Returns array of boolean and response/error message for the element that the current user is downloading, or false if error.

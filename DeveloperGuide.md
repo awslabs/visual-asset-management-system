@@ -16,6 +16,76 @@
 
 ### Deploy VAMS for the First Time
 
+#### Local Development
+For local development, there are 2 options in regards to the backend: pointing to a local mocked backend or a remote backend that has already been deployed.
+
+##### Local Backend
+Some local development is possible when using a local backend, but not all APIs are available locally.
+
+Pre-reqs for local development:
+* Conda installed and on PATH
+* In `web/src/config.ts`, update the following values:
+  * Set `LOCAL_DEVELOPMENT=true`
+  * Set `DISABLE_COGNITO=true`
+  * Set `DEV_API_ENDPOINT='http://localhost:8002'`
+
+Terminal 1 (Running mocked API server):
+Before running the mockup API server, make sure to update amplifyConfig and secureConfig values accordingly in `backend/backend/localWebDevelopment/local_api_server.py`
+```bash
+source ~/.bash_profile # for conda
+cd ./backend
+conda env create --name vams --file=vams-local.conda.yaml -y
+conda activate vams
+USE_LOCAL_MOCKS=true python3 backend/localWebDevelopment/local_api_server.py # port 8002
+```
+
+Terminal 2 (Running mocked auth server):
+```bash
+source ~/.bash_profile # for conda
+cd ./backend
+conda env create --name vams --file=vams-local.conda.yaml -y
+conda activate vams
+python3 backend/localWebDevelopment/local_auth_server.py # port 9031
+```
+
+Terminal 3 (Running web server):
+```bash
+cd ./web && yarn install && npm run build && python3 -m http.server 8001 -d build
+```
+
+The `yarn install` only need to be run once if dependencies haven't been modified, local frontend can be started with only:
+
+`npm run build && python3 -m http.server 8001 -d build`
+
+or `npm run start` to have **live reload** on code changes.
+
+_Note_: `npm run start` will need the port set via an environment variable `PORT=8001`.
+
+Now load [http://localhost:8001](http://localhost:8001) in a browser. (Don't need to provide any credentials on login)
+
+##### Remote Backend
+Pointing local frontend to a remote backend assumes the backend has already been deployed and functioning.
+
+* In `web/src/config.ts`, update the following values:
+  * Set `LOCAL_DEVELOPMENT=true`
+  * Set `DISABLE_COGNITO=true`
+  * Update `DEV_API_ENDPOINT` to point to the remote API endpoint
+
+Terminal 1 (Running web server):
+```bash
+cd ./web && yarn install && npm run build && cd ./build
+```
+
+The `yarn install` only need to be run once if dependencies haven't been modified, local frontend can be started with only:
+
+`npm run build && python3 -m http.server 8001 -d build`
+
+or `npm run start` to have **live reload** on code changes.
+
+_Note_: `npm run start` will need the port set via an environment variable `PORT=8001`.
+
+Now load [http://localhost:8001](http://localhost:8001) in a browser.
+
 #### Build & Deploy Steps (Linux/Mac)
 
 VAMS Codebase is changing frequently and we recommend you checkout the stable released version from github.

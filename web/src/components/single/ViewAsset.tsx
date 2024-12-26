@@ -124,7 +124,7 @@ export default function ViewAsset() {
     };
 
     useEffect(() => {
-        userName = localStorage.getItem("userName")!;
+        userName = JSON.parse(localStorage.getItem('user')!).username;
         const getData = async () => {
             setLoading(true);
             const items = await fetchDatabaseWorkflows({ databaseId: databaseId });

@@ -7,11 +7,11 @@
         "yarn": ">= 1.22.18"
     },
     "dependencies": {
-        "@aws-amplify/storage": "^5.4.0",
         "@aws-amplify/ui-react": "^2.1.5",
         "@aws-sdk/client-s3": "^3.400.0",
         "@aws-sdk/lib-storage": "^3.400.0",
         "@aws-sdk/s3-request-presigner": "^3.400.0",
+        "@badgateway/oauth2-client": "2.4.2",
         "@cloudscape-design/collection-hooks": "^1.0.19",
         "@cloudscape-design/components": "^3.0.196",
         "@cloudscape-design/design-tokens": "^3.0.8",
@@ -23,7 +23,7 @@
         "@types/styled-components": "^5.1.21",
         "@types/wicg-file-system-access": "2020.9.6",
         "arraybuffer-to-buffer": "^0.0.7",
-        "aws-amplify": "^5.3.12",
+        "aws-amplify": "^5.3.19",
         "aws-amplify-react": "^5.1.9",
         "axios": "^1.6.0",
         "babylonjs": "^4.2.0",
@@ -78,6 +78,7 @@
         "@types/react": "^17.0.2"
     },
     "scripts": {
+        "copy-custom-amplify": "cp -R ./customInstalls/@aws-amplify-custom ./node_modules/ && cp -R ./customInstalls/aws-amplify-custom ./node_modules/",
         "start": "react-scripts start",
         "build": "react-scripts build",
         "build.lowmem": "GENERATE_SOURCEMAP=false react-scripts --max_old_space_size=4096 build",

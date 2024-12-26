@@ -13,6 +13,8 @@ export function GlobalHeader() {
     const contentSecurityPolicy = config.contentSecurityPolicy;
     const bannerMessageHtml = config.bannerHtmlMessage;
 
+    console.log(`config: ${JSON.stringify(config, null, 2)}`)
+
     const [useContentSecurityPolicy] = useState(
         contentSecurityPolicy !== undefined && contentSecurityPolicy !== ""
     );

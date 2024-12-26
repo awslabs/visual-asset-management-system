@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+    <body>
+        <h2>Login</h2>
+        <form action="/signin" method="POST">
+            <label for="username">Username</label><br>
+            <input type="text" id="username" name="username" value="">
+            <br/>
+            <label for="password">Password</label>
+            <br/>
+            <input type="password" id="password" name="password" value="">
+            <br/>
+            <input type="hidden" id="client_id" name="client_id" value="">
+            <input type="hidden" id="response_type" name="response_type" value="">
+            <input type="hidden" id="scope" name="scope" value="">
+            <input type="hidden" id="redirect_uri" name="redirect_uri" value="">
+            <input type="hidden" id="state" name="state" value="">
+            <input type="hidden" id="code_challenge_method" name="code_challenge_method" value="">
+            <input type="hidden" id="code_challenge" name="code_challenge" value="">
+            <br/>
+            <br/>
+            <input type="submit" value="Submit">
+        </form> 
+    </body>
+    <script type="text/javascript">
+        const url = new URL(window.location.href);
+        console.log('client_id', url.searchParams.get('client_id'));
+        console.log('response_type', url.searchParams.get('response_type'));
+        console.log('client_id', url.searchParams.get('scope'));
+        console.log('redirect_uri', url.searchParams.get('redirect_uri'));
+        console.log('state', url.searchParams.get('state'));
+        console.log('code_challenge_method', url.searchParams.get('code_challenge_method'));
+        console.log('code_challenge', url.searchParams.get('code_challenge'));
+
+        document.getElementById('client_id').value = url.searchParams.get('client_id');
+        document.getElementById('response_type').value = url.searchParams.get('response_type');
+        document.getElementById('scope').value = url.searchParams.get('scope');
+        document.getElementById('redirect_uri').value = url.searchParams.get('redirect_uri');
+        document.getElementById('state').value = url.searchParams.get('state');
+        document.getElementById('code_challenge_method').value = url.searchParams.get('code_challenge_method');
+        document.getElementById('code_challenge').value = url.searchParams.get('code_challenge');
+    </script>
+</html>
