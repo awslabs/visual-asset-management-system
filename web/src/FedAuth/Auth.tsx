@@ -526,9 +526,9 @@ const accessTokenValid = async (): Promise<boolean> => {
     }
 
     try {
-        const canPostRoutes = await webRoutes({ routes: allRoutes });
+        const canPostWebRoutes = await webRoutes({ routes: allRoutes });
 
-        if(canPostRoutes?.message === "Unauthorized" || (Array.isArray(canPostRoutes) && canPostRoutes[0] === false)) {
+        if(canPostWebRoutes?.message === "Unauthorized" || (Array.isArray(canPostWebRoutes) && canPostWebRoutes[0] === false)) {
             // postRoutes returns either an object with a message if it is successful or unauthorized or an array where the first item is false for other errors
             // canPostRoutes[0] is undefined if it is successful, so checking if it's an array then doing the strict equality check for false
             return false
