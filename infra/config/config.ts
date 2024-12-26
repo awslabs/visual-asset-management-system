@@ -347,7 +347,15 @@ export function getConfig(app: cdk.App): Config {
             config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "" ||
             config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "UNDEFINED" ||
             config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "UNDEFINED" 
+            config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderDiscoveryEndpoint == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderDiscoveryEndpoint == "UNDEFINED"
             )
     ) {
         throw new Error(
@@ -447,10 +455,13 @@ export interface ConfigPublic {
                 enabled: boolean;
                 idpAuthProviderUrl: string;
                 idpAuthClientId: string;
+                idpAuthProviderScope: string;
                 idpAuthPrincipalDomain: string;
+                idpAuthProviderTokenEndpoint: string;
+                idpAuthProviderAuthorizationEndpoint: string;
+                idpAuthProviderDiscoveryEndpoint: string;
                 lambdaAuthorizorJWTIssuerUrl: string;
-                lambdaAuthorizorJWTAudience: string;
-                
+                lambdaAuthorizorJWTAudience: string;      
             };
         };
         webUi: {

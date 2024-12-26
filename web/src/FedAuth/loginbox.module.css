@@ -4,6 +4,8 @@
     justify-content: center;
     align-items: center;
     min-height: 50vh;
+    flex-direction: column;
+    flex-wrap: nowrap;
 }
 .centeredBox {
     display: flex;
@@ -21,4 +23,7 @@
 .link {
     color: #007bff;
     text-decoration: none;
+}
+.alertError {
+    margin-top: 2rem;
 }

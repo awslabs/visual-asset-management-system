@@ -153,7 +153,7 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
         };
 
         if (props.config.app.authProvider.useCognito.useSaml) {
-            amplifyConfigProps.federatedConfig = {
+            amplifyConfigProps.cognitoFederatedConfig = {
                 customCognitoAuthDomain: authDomain,
                 customFederatedIdentityProviderName: samlSettings.name,
                 // if necessary, the callback urls can be determined here and passed to the UI through the config endpoint

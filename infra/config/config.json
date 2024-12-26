@@ -75,10 +75,13 @@
                 "enabled": false,
                 "idpAuthProviderUrl": null,
                 "idpAuthClientId": null,
+                "idpAuthProviderScope": null,
                 "idpAuthPrincipalDomain": null,
+                "idpAuthProviderTokenEndpoint": null,
+                "idpAuthProviderAuthorizationEndpoint": null,
+                "idpAuthProviderDiscoveryEndpoint": null,
                 "lambdaAuthorizorJWTIssuerUrl": null,
                 "lambdaAuthorizorJWTAudience": null
-                
             }
         },
         "webUi": {

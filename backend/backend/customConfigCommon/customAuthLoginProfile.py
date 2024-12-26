@@ -44,8 +44,11 @@ def customAuthProfileLoginWriteOverride(userProfile, lambdaRequestEvent):
     # except requests.JSONDecodeError:
     #     data = None
 
-    # if data and "email" in data:
-    #     userProfile["email"] = data["email"]
+    # if data:
+    #     if "email" in data:
+    #         userProfile["email"] = data["email"]
+    #     if "name" in data:
+    #         userProfile["name"] = data["name"]
 
 
     #########################################################################################################
