@@ -9,7 +9,7 @@ import { default as vamsConfig } from '../config';
 export const getAmplifyConfig = async () => {
     console.log('getAmplifyConfig');
     try {
-        const amplifyConfigUrl = new URL('/api/amplify-config', !vamsConfig.LOCAL_DEVELOPMENT ? window.location.origin : vamsConfig.DEV_API_ENDPOINT);
+        const amplifyConfigUrl = new URL('/api/amplify-config', vamsConfig.DEV_API_ENDPOINT === '' ? window.location.origin : vamsConfig.DEV_API_ENDPOINT);
         console.log(amplifyConfigUrl.href);
         const response = await fetch(amplifyConfigUrl);
         return response.json();

@@ -5,31 +5,12 @@
 
 import { useEffect, useState } from "react";
 import ReactDOM from "react-dom";
-import { Cache, Hub } from "aws-amplify";
-//import { Authenticator } from "@aws-amplify/ui-react";
+import { Cache, Auth as AmplifyAuth} from "aws-amplify";
 import { HashRouter } from "react-router-dom";
 import { TopNavigation } from "@cloudscape-design/components";
 import { AppRoutes } from "./routes";
 import logoWhite from "./resources/img/logo_white.png";
 import "@aws-amplify/ui-react/styles.css";
-import { Auth } from "@aws-amplify/auth";
-import {default as vamsConfig} from "./config";
-
-import { GlobalHeader } from "./common/GlobalHeader";
-import { Header } from "./authenticator/Header";
-import { Footer } from "./authenticator/Footer";
-import { SignInHeader } from "./authenticator/SignInHeader";
-import { SignInFooter } from "./authenticator/SignInFooter";
-
-const components = {
-    GlobalHeader,
-    Header,
-    SignIn: {
-        Header: SignInHeader,
-        Footer: SignInFooter,
-    },
-    Footer,
-};
 
 const HeaderPortal = ({ children }) => {
     const domNode = document.querySelector("#headerWrapper");
@@ -38,7 +19,6 @@ const HeaderPortal = ({ children }) => {
 
 function App() {
     const [navigationOpen, setNavigationOpen] = useState(true);
-    const [loginProfile, setLoginProfile] = useState(Cache.getItem("loginProfile"));
 
     const user = localStorage.getItem('user') ?
         JSON.parse(localStorage.getItem('user')) : undefined;
@@ -65,18 +45,21 @@ function App() {
     console.log('current user is', user);
 
     const menuText = user?.username;
+    localStorage.setItem("email", user?.username);
 
     const signOut = () => {
         localStorage.clear();
-        window.location.href = '/';
+        AmplifyAuth.signOut().then(() => {
+            console.log("User signed out - signout button clicked");
+        }).catch((error) => {
+            console.log("User sign out error - signout button clicked", error);
+        })
 
-        // TODO amplify clear session?
+        window.location.href = '/';
     }
 
-    localStorage.setItem("email", user?.username);
     return (
         <>
-                <GlobalHeader />
                 <HeaderPortal>
                 <TopNavigation
                     identity={{

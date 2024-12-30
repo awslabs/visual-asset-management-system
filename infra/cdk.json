@@ -1,6 +1,5 @@
 {
     "app": "npx ts-node --prefer-ts-exts bin/infra.ts",
-    "profile": "vams-prod-deploy",
     "context": {
         "@aws-cdk/aws-apigateway:usagePlanKeyOrderInsensitiveId": true,
         "@aws-cdk/core:stackRelativeExports": true,

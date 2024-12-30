@@ -5,55 +5,12 @@
  */
 
 import loginBgImageSrc from "../resources/img/login_bg.png";
-import { Cache } from "aws-amplify";
-import React, { useState } from "react";
-import sanitizeHtml from 'sanitize-html';
 
 export function Header() {
-    const config = Cache.getItem("config");
-    const contentSecurityPolicy = config.contentSecurityPolicy;
-    const bannerMessageHtml = config.bannerHtmlMessage;
-
-    const [useContentSecurityPolicy] = useState(
-        contentSecurityPolicy !== undefined && contentSecurityPolicy !== ""
-    );
-
-    const [useBannerMessageHtml] = useState(
-        bannerMessageHtml !== undefined && bannerMessageHtml !== ""
-    );
-
-    const sanitizedBannerMessage = sanitizeHtml(bannerMessageHtml, {
-        allowedTags: ['b', 'em', 'strong', 'u'],
-    });
 
     return (
         <>
             {" "}
-            {useContentSecurityPolicy && (
-                <head>
-                    <meta httpEquiv="Content-Security-Policy" content={contentSecurityPolicy} />
-                </head>
-            )}
-
-            {useBannerMessageHtml && (
-                <div style={{
-                    position: "fixed",
-                    backgroundColor: "rgba(231, 94, 64, 1)", 
-                    top: 0,
-                    left: 0,
-                    width: "100vw",
-                    zIndex: "100", 
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: "white",
-                    wordWrap: "break-word", // Enable word wrapping
-                    overflowWrap: "break-word", // For cross-browser compatibility
-                    textAlign: "center" // Center the text
-                }}>
-                    <div dangerouslySetInnerHTML={{ __html: sanitizedBannerMessage }} />
-                </div>
-            )}
             <div
                 style={{
                     position: "fixed",

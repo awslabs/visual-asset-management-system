@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Suspense, useEffect, useState } from 'react';
+import React, { PropsWithChildren, Suspense, useEffect, useState } from 'react';
 import { API, Cache, Hub, Amplify, Auth as AmplifyAuth } from 'aws-amplify';
 import { OAuth2Client, OAuth2Token, generateCodeVerifier } from '@badgateway/oauth2-client';
 
@@ -11,13 +11,21 @@ import Button from '@cloudscape-design/components/button';
 import styles from './loginbox.module.css';
 import loginBgImageSrc from '../resources/img/login_bg.png';
 import logoDarkImageSrc from '../resources/img/logo_dark.svg';
-import { Heading } from '@aws-amplify/ui-react';
+import { Heading, useTheme } from "@aws-amplify/ui-react";
 import { webRoutes } from '../services/APIService';
 import { routeTable } from '../routes';
 import { default as vamsConfig } from '../config';
 import { getSecureConfig, getAmplifyConfig } from '../services/APIService';
 import LoadingScreen from '../components/loading/LoadingScreen';
 import { Alert } from '@cloudscape-design/components';
+
+import { GlobalHeader } from "./../common/GlobalHeader";
+
+import { Authenticator } from "@aws-amplify/ui-react";
+import { Header } from "./../authenticator/Header";
+import { Footer } from "./../authenticator/Footer";
+import { SignInHeader } from "./../authenticator/SignInHeader";
+import { SignInFooter } from "./../authenticator/SignInFooter";
 
 /**
  * Additional configuration needed to use federated identities
@@ -64,7 +72,7 @@ interface Config {
     cognitoIdentityPoolId: string;
 
     /**
-     * Additional configuration needed for federated auth
+     * Additional configuration needed for cognito federated auth
      */
     cognitoFederatedConfig?: AmplifyConfigFederatedIdentityProps;
 
@@ -119,21 +127,26 @@ interface Config {
 function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
     //console.log('configureAmplify', config, vamsConfig);
 
-    localStorage.setItem('api_path', config.api);
+    const api_path = vamsConfig.DEV_API_ENDPOINT === '' ? config.api : vamsConfig.DEV_API_ENDPOINT
+
+    localStorage.setItem('api_path', api_path);
     //console.log('apiPath', localStorage.getItem('api_path'));
+
+    console.log('DISABLE COGNITO ENV',window.DISABLE_COGNITO) 
+    console.log('COGNITO_FEDERATED ENV',window.COGNITO_FEDERATED) 
 
     Amplify.configure({
         Auth: {
-            mandatorySignIn: vamsConfig.DISABLE_COGNITO ? false : true,
+            mandatorySignIn: window['DISABLE_COGNITO'] ? false : true,
             region: config.region,
-            userPoolId: vamsConfig.DISABLE_COGNITO ? 'XX-XXXX-X_abcd1234' : config.cognitoUserPoolId,
-            userPoolWebClientId: vamsConfig.DISABLE_COGNITO ? '1' : config.cognitoAppClientId,
-            identityPoolId: vamsConfig.DISABLE_COGNITO ? undefined : config.cognitoIdentityPoolId,
+            userPoolId: window.DISABLE_COGNITO ? 'XX-XXXX-X_abcd1234' : config.cognitoUserPoolId,
+            userPoolWebClientId: window.DISABLE_COGNITO ? '1' : config.cognitoAppClientId,
+            identityPoolId: window.DISABLE_COGNITO ? undefined : config.cognitoIdentityPoolId,
             cookieStorage: {
                 domain: ' ', // process.env.REACT_APP_COOKIE_DOMAIN, // Use a single space ' ' for host-only cookies
                 expires: null, // null means session cookies
                 path: '/',
-                secure: false, // for developing on localhost over http: set to false
+                secure: vamsConfig.DEV_API_ENDPOINT === '' ? true : false, // for developing on localhost over http: set to false 
                 sameSite: 'lax',
             },
             oauth: {
@@ -146,7 +159,7 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
         },
         Storage: {
             region: config.region,
-            identityPoolId: vamsConfig.DISABLE_COGNITO ? undefined : config.cognitoIdentityPoolId,
+            identityPoolId: window.DISABLE_COGNITO ? undefined : config.cognitoIdentityPoolId,
             bucket: config.bucket,
             customPrefix: {
                 public: '',
@@ -157,18 +170,19 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
             endpoints: [
                 {
                     name: 'api',
-                    endpoint: config.api,
+                    endpoint: api_path,
                     region: config.region,
                     custom_header: async () => {
-                        if (vamsConfig.DISABLE_COGNITO) {
+                        if (window.DISABLE_COGNITO) {
                             const accessToken = localStorage.getItem('idp_access_token');
                             return { Authorization: `Bearer ${accessToken}` }
                         }
-
-                        return {
-                            Authorization: `Bearer ${(await AmplifyAuth.currentSession())
-                                .getIdToken()
-                                .getJwtToken()}`,
+                        else {
+                            return {
+                                Authorization: `Bearer ${(await AmplifyAuth.currentSession())
+                                    .getIdToken()
+                                    .getJwtToken()}`,
+                            }
                         };
                     },
                 },
@@ -204,23 +218,74 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
     setAmpInit(true);
 }
 
-/**
- * Checks environment and either uses the URL for the API to get the project
- * resources, or goes with whatever default you've set in your local env.
- */
-let basePath: string;
-if (process.env.NODE_ENV === 'production') {
-    basePath = window.location.origin;
-} else {
-    basePath = process.env.REACT_APP_API_URL || '';
-}
-
 type AuthProps = {};
 
+//Cognito components
+const CenteredBox: React.FC<PropsWithChildren<{}>> = ({ children }) => {
+    return (
+        <div className={styles.container}>
+            <div className={styles.centeredBox}>{children}</div>
+        </div>
+    );
+};
+
+const cognitoAuthenticatorComponents = {
+    Header,
+    SignIn: {
+        Header: SignInHeader,
+        Footer: SignInFooter,
+    },
+    Footer,
+};
+
+interface CognitoFederatedLoginProps {
+    onLogin: () => void;
+}
+
+const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({ onLogin}) => {
+    const { tokens } = useTheme();
+
+    return (
+        <>
+            <div className={styles.container}>
+                <div className={styles.centeredBox}>
+                    <Heading level={3} padding={`${tokens.space.xl} ${tokens.space.xl} 0`}>
+                        <img
+                            style={{ width: "100%" }}
+                            src={logoDarkImageSrc}
+                            alt="Visual Asset Management System Logo"
+                        />
+                    </Heading>
+                    <button
+                        className={styles.button}
+                        onClick={onLogin}
+                        data-testid="federated-login-button"
+                    >
+                        Login with Federated Identity Provider
+                    </button>
+                </div>
+            </div>
+            <img
+                alt="background texture"
+                src={loginBgImageSrc}
+                style={{
+                    position: "fixed",
+                    top: 0,
+                    width: "100vw",
+                    left: 0,
+                    zIndex: "-100",
+                }}
+            />
+        </>
+    );
+};
+
+//External OAUTH components
 let oauth2Client: OAuth2Client;
 
 const Auth: React.FC<AuthProps> = (props) => {
 
+    //External Oauth Configuration Function
     function configureOAuthClient(config: Config) {
         if (config.externalOAuthIdpURL && config.externalOAuthIdpClientId &&
             config.externalOAuthIdpTokenEndpoint && config.externalOAuthIdpAuthorizationEndpoint &&
@@ -242,12 +307,9 @@ const Auth: React.FC<AuthProps> = (props) => {
     const [state, setState] = useState<any>({
         email: undefined,
         username: undefined,
-        authenticated: undefined,
+        authenticated: false,
     });
 
-    const [user, setUser] = useState(null);
-    const [useLocal, setUseLocal] = useState(false);
-    const [userWantsLocal, setUserWantsLocal] = useState(false);
     const [config, setConfig] = useState(Cache.getItem('config'));
     let [authError, setauthError] = useState<string | null>(() => localStorage.getItem('auth_error'));
 
@@ -258,10 +320,27 @@ const Auth: React.FC<AuthProps> = (props) => {
 
     const accessToken = localStorage.getItem('idp_access_token');
 
+    //Both Affect
+    //Fetch && Setup Initial global configurations
     useEffect(() => {
         if (config) {
-            setUseLocal(!config.cognitoFederatedConfig || userWantsLocal);
-            configureOAuthClient(config);
+            //Set global variables for cognito mode or external OAUTH. 
+            //If config.config.cognitoUserPoolId is undefined or empty, then disable cognito and setup external oauth
+            if (config.cognitoUserPoolId === undefined || config.cognitoUserPoolId === '') {
+                window.DISABLE_COGNITO = true;
+                configureOAuthClient(config);
+            } else {
+                window.DISABLE_COGNITO = false;
+            }
+
+            if(config.cognitoFederatedConfig === undefined) {
+                window.COGNITO_FEDERATED = false;
+            }
+            else {
+                window.COGNITO_FEDERATED = true;
+            }
+
+            //Configure Amplify
             configureAmplify(config, setAmpInit);
         } else {
             getAmplifyConfig().then(async (config) => {
@@ -269,48 +348,147 @@ const Auth: React.FC<AuthProps> = (props) => {
                 setConfig(config);
             });
         }
-    }, [ampInit, config, setConfig, useLocal, userWantsLocal]);
+    }, [ampInit, config, setConfig]);
 
+    //Both Effect
+    //Auth session checks
     useEffect(() => {
-        // Try set logged in
-        if (accessToken && accessToken.length !== 0) {
-           // Have access token, decoding...
-            const jwt = parseJwt(accessToken);
-            setIsLoading(true)
+        if (!ampInit) return;
 
-            // validating access token works to make api requests...
-            accessTokenValid()
-                .then((valid) => {
-                    if (!valid) {
+        AmplifyAuth.currentAuthenticatedUser()
+        .then((currentUser) => {
+            if (!localStorage.getItem('user')) {
+                // No valid user session state
+                AmplifyAuth.signOut().then(() => {
+                    console.log("User signed out - invalid session state");
+                }).catch((error) => {
+                    console.log("User sign out error - invalid session state", error);
+                })
+                setisLoggedIn(false);
+                resetSession();
+            }
+        })
+        .catch((error) => {});
+    }, [ampInit]);
+
+
+    //External OAUTH Effect
+    //Set user session once oauth access key login confirmed, start refresh interval
+    useEffect(() => {
+        if(window.DISABLE_COGNITO === true) {
+            // Try set logged in
+            if (accessToken && accessToken.length !== 0) {
+            // Have access token, decoding...
+                const jwt = parseJwt(accessToken);
+                setIsLoading(true)
+
+                // validating access token works to make api requests...
+                accessTokenValid()
+                    .then((valid) => {
+                        if (!valid) {
+                            // invalid access token, setisLoggedIn, false
+                            setisLoggedIn(false);
+                            signOutWithError('auth_error', 'Access token invalid');
+
+                            return;
+                        }
+
+                        // valid access token, setisLoggedIn, true
+                        setisLoggedIn(true);
+                        localStorage.setItem('user', JSON.stringify({ username: jwt.sub }));
+
+                        // @ts-expect-error
+                        AmplifyAuth.setUserSession({ username: jwt.sub }, accessToken);
+                        Hub.dispatch('auth', { event: 'signIn', data: { username: jwt.sub }, message: 'User was signed in' });
+                        clearPreviousLoginErrors() // On successful login, remove old error keys stored in local storage
+                        setIsLoading(false)
+                    }).catch(() => {
                         // invalid access token, setisLoggedIn, false
                         setisLoggedIn(false);
                         signOutWithError('auth_error', 'Access token invalid');
-
-                        return;
-                    }
-
-                    // valid access token, setisLoggedIn, true
-                    setisLoggedIn(true);
-                    localStorage.setItem('user', JSON.stringify({ username: jwt.sub }));
-
-                    // @ts-expect-error
-                    AmplifyAuth.setUserSession({ username: jwt.sub }, accessToken);
-                    Hub.dispatch('auth', { event: 'signIn', data: { username: jwt.sub }, message: 'User was signed in' });
-                    clearPreviousLoginErrors() // On successful login, remove old error keys stored in local storage
-                    setIsLoading(false)
-                }).catch(() => {
-                    // invalid access token, setisLoggedIn, false
-                    setisLoggedIn(false);
-                    signOutWithError('auth_error', 'Access token invalid');
-                });
-        } else {
-            // no access token, setisLoggedIn, false)
-            setisLoggedIn(false);
-            resetSession();
+                    });
+            } else {
+                // no access token, setisLoggedIn, false)
+                setisLoggedIn(false);
+                resetSession();
+            }
         }
     }, [accessToken]);
 
+    //Cognito Effect
+    // Sets the user on login/logout (Authenticator UI Callbacks)
     useEffect(() => {
+        if (!ampInit) return;
+
+        if(window.DISABLE_COGNITO === false) {
+            const amplifyHubLIstener = Hub.listen("auth", ({ payload: { event, data } }) => {
+                switch (event) {
+                    case "signIn":
+                        localStorage.setItem('user', JSON.stringify({ username: data.username }));
+                        setisLoggedIn(true);
+                        break;
+                    case "signOut":
+                        setisLoggedIn(false);
+                        resetSession();
+                        break;
+                }
+            });
+
+            //Check/set for being logged for subsequent page loads
+            AmplifyAuth.currentAuthenticatedUser()
+                .then((currentUser) => {
+                    localStorage.setItem('user', JSON.stringify({ username: currentUser.getUsername() }));
+                    setisLoggedIn(true);
+                    console.log('Cognito Page Load - Login set for Page Load')
+                })
+                .catch((error) => console.log("Cognito Page Load - Not signed in... sending to login - ", error));
+
+            return amplifyHubLIstener;
+        }
+    }, [ampInit]);
+
+    //External OAUTH Effect
+    //Try to get access token at this point after redirect
+    useEffect(() => {
+        if(window.DISABLE_COGNITO === true) {
+            // Try request access token
+            if (accessToken) {
+                //already have access token, accessToken
+                return;
+            }
+
+            if (!localStorage.getItem('auth_state') || !localStorage.getItem('code_verifier')) {
+                // no auth_state or code_verifier in local storage
+                return;
+            }
+
+            // request access token
+            setIsLoading(true);
+            const redirectUri = window.location.href.split(/[?#]/)[0];
+
+            oauth2Client.authorizationCode
+                .getTokenFromCodeRedirect(
+                    document.location.toString(),
+                    {
+                        redirectUri,
+                        state: localStorage.getItem('auth_state')!,
+                        codeVerifier: localStorage.getItem('code_verifier')!
+                    }
+                ).then(oauth2Token => {
+                    setOauth2Token(oauth2Token);
+                    document.location = localStorage.getItem('auth_state')!;
+                }).catch(error => {
+                    console.error(error)
+                    signOutWithError('auth_error', 'Failed to get access token') // Catching error when redirect code is missing and start new sign in process.
+            });
+        }
+    }, [accessToken]);
+
+
+    //Both Effect
+    //Once logged in, get/set other configuration and profile information
+    useEffect(() => {
+        //Secure Config Fetch
         if (config && (!config.bucket || !config.featuresEnabled) && isLoggedIn) {
             getSecureConfig().then((value) => {
                 config.bucket = value.bucket;
@@ -318,7 +496,11 @@ const Auth: React.FC<AuthProps> = (props) => {
                 Cache.setItem('config', config);
                 setConfig(config);
             });
+            console.log('Fetched secure config')
         }
+
+        //Hit login profile end-point to fetch and update latest backend login profiles
+        //This could also update roles behind the scenes if configured to synchronize with external systems
         let loginProfile = Cache.getItem("loginProfile");
         if (isLoggedIn && !loginProfile) {
             const user = JSON.parse(localStorage.getItem('user')!);
@@ -328,43 +510,12 @@ const Auth: React.FC<AuthProps> = (props) => {
                 loginProfile.email = value.message.Items[0].email;
                 Cache.setItem("loginProfile", loginProfile);
             });
+            console.log('Pinged LoginProfile API')
         }
     }, [config, isLoggedIn]);
 
-    useEffect(() => {
-        // Try request access token
-        if (accessToken) {
-            //already have access token, accessToken
-            return;
-        }
-
-        if (!localStorage.getItem('auth_state') || !localStorage.getItem('code_verifier')) {
-            // no auth_state or code_verifier in local storage
-            return;
-        }
-
-        // request access token
-        setIsLoading(true);
-        const redirectUri = window.location.href.split(/[?#]/)[0];
-
-        oauth2Client.authorizationCode
-            .getTokenFromCodeRedirect(
-                document.location.toString(),
-                {
-                    redirectUri,
-                    state: localStorage.getItem('auth_state')!,
-                    codeVerifier: localStorage.getItem('code_verifier')!
-                }
-            ).then(oauth2Token => {
-                setOauth2Token(oauth2Token);
-                document.location = localStorage.getItem('auth_state')!;
-            }).catch(error => {
-                console.error(error)
-                signOutWithError('auth_error', 'Failed to get access token') // Catching error when redirect code is missing and start new sign in process.
-        });
-    }, [accessToken]);
-
-    const handleSignIn = async () => {
+    //External OAUTH Function for handling sign-in
+    const handleExternalOauthSignIn = async () => {
         // Sign in
         setIsLoading(true)
 
@@ -401,7 +552,10 @@ const Auth: React.FC<AuthProps> = (props) => {
             }
         }
     };
+    
 
+    //Both Auth Effect
+    //Check access token validity, expirations, and refreshs
     useEffect(() => {
         if (!ampInit || !localStorage.getItem('user')) return;
 
@@ -415,93 +569,173 @@ const Auth: React.FC<AuthProps> = (props) => {
             return;
         }
 
-        AmplifyAuth.currentSession()
-            .then((user) => {
-                setState({
-                    email: currentUser.username,
-                    authenticated: true,
-                });
-            })
-            .catch((e) => {
-                // Check if the access token has expired and initiate the oauth flow
-                const accessToken = localStorage.getItem('idp_access_token');
-                if (accessToken) {
-                    const decodedToken = parseJwt(accessToken);
-                    const expirationTime = decodedToken.exp * 1000; // the 'exp' property is in seconds, the 'expiresAt' property is in milliseconds, so need to multiply by 1000 here
-
-                    if (Date.now() > expirationTime) {
-                        // Access Token Expired - Starting New Session
-                        handleSignIn();
-                    } else {
-                        // Access Token Not Expired - Starting Refresh Interval
-                        startAccessTokenRefreshInterval();
-                    }
-                } else {
+        if(window.DISABLE_COGNITO === false) {
+            //Cognito Checks
+            AmplifyAuth.currentSession()
+                .then((user) => {
+                    setState({
+                        email: user.getIdToken().decodePayload().sub,
+                        username: user.getIdToken().decodePayload().sub,
+                        authenticated: true,
+                    });
+                })
+                .catch((e) => {
                     setState({ authenticated: false });
-                }
-            });
+                });
 
-    // return () => clearInterval(i);
+            // Schedule check and refresh (when needed) of JWT's every 5 min:
+            const i = setInterval(() => AmplifyAuth.currentSession(), 5 * 60 * 1000);
+            return () => clearInterval(i);
+        }
+        else {
+
+            //External Oauth checks
+            AmplifyAuth.currentSession()
+                .then((user) => {
+                    setState({
+                        email: currentUser.username,
+                        authenticated: true,
+                    });
+                })
+                .catch((e) => {
+                    // Check if the access token has expired and initiate the oauth flow
+                    const accessToken = localStorage.getItem('idp_access_token');
+                    if (accessToken) {
+                        const decodedToken = parseJwt(accessToken);
+                        const expirationTime = decodedToken.exp * 1000; // the 'exp' property is in seconds, the 'expiresAt' property is in milliseconds, so need to multiply by 1000 here
+
+                        if (Date.now() > expirationTime) {
+                            // Access Token Expired - Starting New Session
+                            handleExternalOauthSignIn();
+                        } else {
+                            // Access Token Not Expired - Starting Refresh Interval
+                            startAccessTokenRefreshInterval();
+                        }
+                    } else {
+                        setState({ authenticated: false });
+                    }
+                });
+        }
+
     }, [ampInit]);
 
+    //Initial loading screen when going through config init
+    if (config === null || !ampInit) { 
+        return (
+            <CenteredBox>
+                <p className="explanation">One moment please ...</p>
+            </CenteredBox>
+        );
+    }
+
+    //Show loading after login (mostly for External OAUTH Process)
     if(isLoading) {
         return <LoadingScreen />
     }
 
+    //Show rest of app, we are all logged in. 
     if (isLoggedIn && ampInit) {
-        return <Suspense fallback={<LoadingScreen />}>{props.children}</Suspense>;
+        return (
+             <>
+                <GlobalHeader authorizationHeader={false} />
+                <Suspense fallback={<LoadingScreen />}>
+                {props.children}
+                </Suspense>
+             </>
+             );
     }
 
-    return (
-        <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center'
-        }}>
-            <div className={styles.container}>
-                <div className={styles.centeredBox}>
-                    <Heading level={3}>
-                        <img
-                            style={{ width: "100%" }}
-                            src={logoDarkImageSrc}
-                            alt="Visual Asset Management System Logo"
-                        />
-                    </Heading>
-                    <Button
-                        variant='primary'
-                        className={styles.button}
-                        onClick={handleSignIn}
-                    >
-                        Login
-                    </Button>
-                </div>
-                { authError ?
-                    <div className={styles.alertError}>
-                        <Alert
-                            type="error"
-                            statusIconAriaLabel="Error"
-                            header="Error"
-                        >
-                            Failed to login or session timed out. Please try again.
-                        </Alert>
+    //External OAUTH Login Page Return
+    if(window.DISABLE_COGNITO === true && !isLoggedIn && ampInit) {
+        return (
+            <>
+                <GlobalHeader authorizationHeader={true} />
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                }}>
+                    <div className={styles.container}>
+                        <div className={styles.centeredBox}>
+                            <Heading level={3}>
+                                <img
+                                    style={{ width: "100%" }}
+                                    src={logoDarkImageSrc}
+                                    alt="Visual Asset Management System Logo"
+                                />
+                            </Heading>
+                            <Button
+                                variant='primary'
+                                className={styles.button}
+                                onClick={handleExternalOauthSignIn}
+                            >
+                                Login
+                            </Button>
+                        </div>
+                        { authError ?
+                            <div className={styles.alertError}>
+                                <Alert
+                                    type="error"
+                                    statusIconAriaLabel="Error"
+                                    header="Error"
+                                >
+                                    Failed to login or session timed out. Please try again.
+                                </Alert>
+                            </div>
+                        : null }
                     </div>
-                : null }
-            </div>
-            <img
-                alt="background texture"
-                src={loginBgImageSrc}
-                style={{
-                    position: "fixed",
-                    top: 0,
-                    width: "100vw",
-                    left: 0,
-                    zIndex: "-100",
-                }}
-            />
-        </div>
-    );
+                    <img
+                        alt="background texture"
+                        src={loginBgImageSrc}
+                        style={{
+                            position: "fixed",
+                            top: 0,
+                            width: "100vw",
+                            left: 0,
+                            zIndex: "-100",
+                        }}
+                    />
+                </div>
+            </>
+        );
+    }
+
+    //Cognito Login Page Return
+    if (window.DISABLE_COGNITO === false && !isLoggedIn && ampInit) {
+
+        if(window.COGNITO_FEDERATED === false) {
+            //Non-federated login
+            return (
+                <>
+                    <GlobalHeader authorizationHeader={true} />
+                    <Authenticator components={cognitoAuthenticatorComponents} loginMechanisms={["username"]} hideSignUp={true} />
+                </>
+            )
+        }
+        else {
+            //Federated Login
+            return (
+                <>
+                    <GlobalHeader authorizationHeader={true} />
+                    <FedLoginBox
+                        onLogin={() =>
+                            AmplifyAuth.federatedSignIn({
+                                customProvider: config.cognitoFederatedConfig?.customFederatedIdentityProviderName,
+                            })
+                        }
+                    />
+                </>
+            );
+        }
+    }
+
+    //Blank return if other options not available (fallback)
+    console.log('Auth.tsx Error - No Valid Workflow Detected')
+    return (<></>)
 };
 
+/////////////////////////////////////////////////
+//External OAUTH Helper Functions
 const parseJwt = (accessToken: string): {
     exp: number; sub: string;
 } => {

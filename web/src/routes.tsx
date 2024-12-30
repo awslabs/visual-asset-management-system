@@ -14,7 +14,7 @@ import { useNavigate } from "react-router";
 
 const Databases = React.lazy(() => import("./pages/Databases"));
 const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
-const Assets = React.lazy(() => import("./pages/Assets")); //Deprecated
+//const Assets = React.lazy(() => import("./pages/Assets")); //Deprecated
 const Comments = React.lazy(() => import("./pages/Comments/Comments"));
 const AssetUploadPage = React.lazy(() => import("./pages/AssetUpload"));
 const ViewAsset = React.lazy(() => import("./components/single/ViewAsset"));
