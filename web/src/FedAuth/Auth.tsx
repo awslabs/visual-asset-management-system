@@ -121,13 +121,31 @@ interface Config {
      */
     featuresEnabled?: string;
 
+    /**
+     * VAMS Backend Stackname
+     */
     stackName: string;
+
+    /**
+     * Content Security Policy to apply (generally for ALB deployment where CSP is not injected)
+     */
+    contentSecurityPolicy?: string;
+
+    /**
+     * HTML banner message to be displayed at the top of all web UI pages
+     */
+    bannerHtmlMessage?: string
 }
 
 function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
     //console.log('configureAmplify', config, vamsConfig);
 
-    const api_path = vamsConfig.DEV_API_ENDPOINT === '' ? config.api : vamsConfig.DEV_API_ENDPOINT
+    let api_path = vamsConfig.DEV_API_ENDPOINT === '' ? config.api : vamsConfig.DEV_API_ENDPOINT
+
+    //if API path doesn't end in a /, add one
+    if (api_path.length > 0 && api_path[api_path.length - 1] !== '/') {
+        api_path = api_path + '/';
+    }
 
     localStorage.setItem('api_path', api_path);
     //console.log('apiPath', localStorage.getItem('api_path'));
@@ -588,7 +606,6 @@ const Auth: React.FC<AuthProps> = (props) => {
             return () => clearInterval(i);
         }
         else {
-
             //External Oauth checks
             AmplifyAuth.currentSession()
                 .then((user) => {

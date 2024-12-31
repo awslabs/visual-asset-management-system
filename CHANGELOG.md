@@ -8,7 +8,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Features
 
--   Updated backend infrastructure configuration options and functionality to support External OAuth IDP systems besides AWS cognito (Note: Does not yet include any of the front-end changes for this which is where the authentication mechanism happens)
+-   Updated backend infrastructure configuration options and functionality to support External OAuth IDP systems besides AWS cognito. Includes many additional infrastructure configuration settings.
+-   **Web** Added web support for External OAuth IDP configuration
 -   Added configuration option `addStackCloudTrailLogs` for creating AWS CloudTrail log groups and trails for the stack. This is defaulted to `true`.
 -   Added configuration option `useAlb.addAlbS3SpecialVpcEndpoint` for creating the special S3 VPC Interface Endpoint for ALB deployment configurations. This is defaulted to `true`. See documentation for this setting if turned false.
 -   **Web** Added infrastructure configuration option `webUi.optionalBannerHtmlMessage` for adding a persistent banner (HTML) message at the top of the WebUI
@@ -20,13 +21,18 @@ All notable changes to this project will be documented in this file. See [standa
 
 -   Fix opensearch lambda event source mapping for regions that don't support event source tagging yet (ie GovCloud) [bug introduced in v2.1.0 with CDK version upgrade]
 -   Additional checks are made for valid parameter data in the asset deletion/archiving service
+-   Fixed local web local development support, updated documentation for new local development processes
+-   Miscellaneous minor bug fixes across web and backend components
 
 ### Chores
 
+-   **Web** Cleaned up unused web files and consolidated functionalities for authentication and amplify configuration setting
 -   Upgraded lambda and all associated libraries (including use-case pipelines) to use Python 3.12 runtimes
 -   Upgraded infrastructure NPM package dependencies
 -   Optimized some backend lambda initialization code in various functions and globally in the casbin authorization functions for cold start performance improvement
 -   Updated S3 bucket name for WebAppAccessLogs for ALB deployment (to be based on the domain name used `<ALBDomainName>-webappaccesslogs`) to help with organization policy exceptions
+-   Added scripts and documentation for external oauth IDP and API local development servers
+-   **Web** Turned on amplify gen1 Secure Cookie Storage option
 
 ## [2.1.0] (2024-11-15)
 

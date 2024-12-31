@@ -7,6 +7,8 @@ import jwt as pyjwt
 
 oauth2_routes = Blueprint('oauth', __name__)
 
+jwt_secret = 'secret'
+
 @oauth2_routes.after_request
 def after_request(response):
   response.headers['Access-Control-Allow-Origin'] = '*'
@@ -81,9 +83,9 @@ def token():
     'email': 'vams-test-user@amazon.com' #codes[request.args.get('code')] FIXME
   }
 
-  id_token = pyjwt.encode(payload, key=None, algorithm=None)
-  access_token = pyjwt.encode(payload, key=None, algorithm=None)
-  refresh_token = pyjwt.encode(payload, key=None, algorithm=None)
+  id_token = pyjwt.encode(payload, key=jwt_secret)
+  access_token = pyjwt.encode(payload, key=jwt_secret)
+  refresh_token = pyjwt.encode(payload, key=jwt_secret)
 
   print('access_token', access_token)
 
@@ -162,7 +164,7 @@ def wellKnown():
   }
 
 if __name__ == '__main__':
-  app = Flask(__name__, template_folder='oauth2_local_templates')
+  app = Flask(__name__, template_folder='localDev_oauth2_templates')
   app.secret_key = 'development'
   app.register_blueprint(oauth2_routes)
   app.run(debug=True, port=9031, ssl_context='adhoc', host='0.0.0.0')

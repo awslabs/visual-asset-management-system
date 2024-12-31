@@ -10,6 +10,7 @@
 -   Node >=18.7
 -   Yarn >=1.22.19
 -   Node Version Manager (nvm)
+-   Conda-forge [only for optional local development]
 -   AWS cli
 -   AWS CDK cli
 -   Programatic access to AWS account at minimum access levels outlined above.
@@ -25,18 +26,16 @@ Some local development is possible when using a local backend, but not all APIs 
 Pre-reqs for local development:
 * Conda installed and on PATH
 * In `web/src/config.ts`, update the following values:
-  * Set `LOCAL_DEVELOPMENT=true`
-  * Set `DISABLE_COGNITO=true`
-  * Set `DEV_API_ENDPOINT='http://localhost:8002'`
+  * Set `DEV_API_ENDPOINT='http://localhost:8002/'`
 
 Terminal 1 (Running mocked API server):
-Before running the mockup API server, make sure to update amplifyConfig and secureConfig values accordingly in `backend/backend/localWebDevelopment/local_api_server.py`
+Before running the mockup API server, make sure to update amplifyConfig and secureConfig values accordingly in `backend/backend/localDev_api_server.py`
 ```bash
 source ~/.bash_profile # for conda
 cd ./backend
 conda env create --name vams --file=vams-local.conda.yaml -y
 conda activate vams
-USE_LOCAL_MOCKS=true python3 backend/localWebDevelopment/local_api_server.py # port 8002
+USE_LOCAL_MOCKS=true python3 backend/localDev_api_server.py # port 8002
 ```
 
 Terminal 2 (Running mocked auth server):
@@ -45,7 +44,7 @@ source ~/.bash_profile # for conda
 cd ./backend
 conda env create --name vams --file=vams-local.conda.yaml -y
 conda activate vams
-python3 backend/localWebDevelopment/local_auth_server.py # port 9031
+python3 localDev_oauth2_server.py # port 9031
 ```
 
 Terminal 3 (Running web server):
@@ -67,8 +66,6 @@ Now load [http://localhost:8001](http://localhost:8001) in a browser. (Don't nee
 Pointing local frontend to a remote backend assumes the backend has already been deployed and functioning.
 
 * In `web/src/config.ts`, update the following values:
-  * Set `LOCAL_DEVELOPMENT=true`
-  * Set `DISABLE_COGNITO=true`
   * Update `DEV_API_ENDPOINT` to point to the remote API endpoint
 
 Terminal 1 (Running web server):
@@ -85,6 +82,7 @@ or `npm run start` to have **live reload** on code changes.
 _Note_: `npm run start` will need the port set via an environment variable `PORT=8001`.
 
 Now load [http://localhost:8001](http://localhost:8001) in a browser.
+
 
 #### Build & Deploy Steps (Linux/Mac)
 
