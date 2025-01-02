@@ -6,26 +6,29 @@
 import React, { PropsWithChildren, Suspense, useEffect, useState } from 'react';
 import { API, Cache, Hub, Amplify, Auth as AmplifyAuth } from 'aws-amplify';
 import { OAuth2Client, OAuth2Token, generateCodeVerifier } from '@badgateway/oauth2-client';
-
-import Button from '@cloudscape-design/components/button';
-import styles from './loginbox.module.css';
-import loginBgImageSrc from '../resources/img/login_bg.png';
-import logoDarkImageSrc from '../resources/img/logo_dark.svg';
-import { Heading, useTheme } from "@aws-amplify/ui-react";
+import { getSecureConfig, getAmplifyConfig } from '../services/APIService';
 import { webRoutes } from '../services/APIService';
 import { routeTable } from '../routes';
 import { default as vamsConfig } from '../config';
-import { getSecureConfig, getAmplifyConfig } from '../services/APIService';
+
+import { Authenticator } from "@aws-amplify/ui-react";
+import Button from '@cloudscape-design/components/button';
+import loginBgImageSrc from '../resources/img/login_bg.png';
+import logoDarkImageSrc from '../resources/img/logo_dark.svg';
+import { Heading, useTheme } from "@aws-amplify/ui-react";
+
 import LoadingScreen from '../components/loading/LoadingScreen';
 import { Alert } from '@cloudscape-design/components';
 
 import { GlobalHeader } from "./../common/GlobalHeader";
 
-import { Authenticator } from "@aws-amplify/ui-react";
 import { Header } from "./../authenticator/Header";
 import { Footer } from "./../authenticator/Footer";
 import { SignInHeader } from "./../authenticator/SignInHeader";
 import { SignInFooter } from "./../authenticator/SignInFooter";
+import styles from './loginbox.module.css';
+import "@aws-amplify/ui-react/styles.css";
+
 
 /**
  * Additional configuration needed to use federated identities
@@ -650,18 +653,6 @@ const Auth: React.FC<AuthProps> = (props) => {
         return <LoadingScreen />
     }
 
-    //Show rest of app, we are all logged in. 
-    if (isLoggedIn && ampInit) {
-        return (
-             <>
-                <GlobalHeader authorizationHeader={false} />
-                <Suspense fallback={<LoadingScreen />}>
-                {props.children}
-                </Suspense>
-             </>
-             );
-    }
-
     //External OAUTH Login Page Return
     if(window.DISABLE_COGNITO === true && !isLoggedIn && ampInit) {
         return (
@@ -744,6 +735,18 @@ const Auth: React.FC<AuthProps> = (props) => {
                 </>
             );
         }
+    }
+
+    //Show rest of app, we are all logged in. 
+    if (isLoggedIn && ampInit) {
+        return (
+             <>
+                <GlobalHeader authorizationHeader={false} />
+                <Suspense fallback={<LoadingScreen />}>
+                {props.children}
+                </Suspense>
+             </>
+             );
     }
 
     //Blank return if other options not available (fallback)

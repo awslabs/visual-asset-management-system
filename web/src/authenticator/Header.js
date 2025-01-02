@@ -10,7 +10,6 @@ export function Header() {
 
     return (
         <>
-            {" "}
             <div
                 style={{
                     position: "fixed",
