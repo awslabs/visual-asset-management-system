@@ -13,7 +13,7 @@ import "./styles/index.scss";
 import reportWebVitals from "./reportWebVitals";
 import Auth from "./FedAuth/Auth";
 
-window.LOG_LEVEL = "DEBUG";
+window.LOG_LEVEL = "INFO";
 
 const App = React.lazy(() => import("./App"));
 ReactDOM.render(
