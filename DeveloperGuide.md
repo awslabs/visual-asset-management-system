@@ -30,12 +30,13 @@ Pre-reqs for local development:
 
 Terminal 1 (Running mocked API server):
 Before running the mockup API server, make sure to update amplifyConfig and secureConfig values accordingly in `backend/backend/localDev_api_server.py`
+Note: You may get errors due to other environment variables not set, you can ignore these as they do not hold up the mock API server
 ```bash
 source ~/.bash_profile # for conda
 cd ./backend
 conda env create --name vams --file=vams-local.conda.yaml -y
 conda activate vams
-USE_LOCAL_MOCKS=true python3 backend/localDev_api_server.py # port 8002
+USE_LOCAL_MOCKS=true python3 backend/localDev_api_server.py # port 8002 # powershell: $env:USE_LOCAL_MOCKS = "true"
 ```
 
 Terminal 2 (Running mocked auth server):
