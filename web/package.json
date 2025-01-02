@@ -7,6 +7,8 @@
         "yarn": ">= 1.22.18"
     },
     "dependencies": {
+        "@aws-amplify/auth": "5.6.15",
+        "@aws-amplify/core": "5.8.14",
         "@aws-amplify/ui-react": "^2.1.5",
         "@aws-sdk/client-s3": "^3.400.0",
         "@aws-sdk/lib-storage": "^3.400.0",
@@ -23,7 +25,7 @@
         "@types/styled-components": "^5.1.21",
         "@types/wicg-file-system-access": "2020.9.6",
         "arraybuffer-to-buffer": "^0.0.7",
-        "aws-amplify": "^5.3.19",
+        "aws-amplify": "5.3.27",
         "aws-amplify-react": "^5.1.9",
         "axios": "^1.6.0",
         "babylonjs": "^4.2.0",

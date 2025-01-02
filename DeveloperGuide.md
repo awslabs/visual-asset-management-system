@@ -193,6 +193,16 @@ LoginProfile is updated via a authenticated API call by the user from the webUI 
 
 Email field of the loginProfile is used by systems that need to send emails to the user. It will revert to the userId of email is blank or not in an email format as a backup.
 
+### MFACheck Custom Organizational Updates
+
+VAMS supports adding custom logic to how to check if Multi-Factor Authentication (MFA) is enabled for a logged in user when using an external OAUTH IDP configuration
+
+This logic should be overriden by each oranization as needed within `/backend/backend/customConfigCommon/customMFATokenScopeCheck.py`
+
+The default logic is for external OAUTH IDP is to just set the MFA enabled flag hard-coded to false. As each IDP is different, this must be a custom call.
+
+NOTE: Be mindful of the logic used as this can have great performance impacts for VAMS. Try to use caches in this method or reduce the amount of external API calls as this method is called very frequently during VAMS API authorization checks. 
+
 ### Local Docker Builds - Custom Build Settings
 
 If you are needing to add custom settings to your local docker builds, such as adding custom SSL CA certificates to get through HTTPS proxies, modify the following docker build files:

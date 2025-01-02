@@ -198,7 +198,7 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
                         else {
                             return {
                                 Authorization: `Bearer ${(await AmplifyAuth.currentSession())
-                                    .getIdToken()
+                                    .getAccessToken()
                                     .getJwtToken()}`,
                             }
                         };

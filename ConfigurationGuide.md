@@ -206,3 +206,5 @@ See [CDK SSL Deploy in the developer guide](./DeveloperGuide.md#CDK-Deploy-with-
 ## Additional Configuration LoginProfile Updatng
 
 See [LoginProfile in the developer guide](./DeveloperGuide.md#loginprofile-custom-organizational-updates) for information on customized user loginprofile override code for lambdas when login profile information needs to be fetched externally or overwritten otherwise
+
+See [External IDP MFA Check in the developer guide](./DeveloperGuide.md#mfacheck-custom-organizational-updates) for information on how to setup a customized Multi-Factor Authentication (MFA) check when using the external OAUTH IDP settings. 

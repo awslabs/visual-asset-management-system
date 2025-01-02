@@ -14,6 +14,20 @@ import { Service } from "../helper/service-helper";
 import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 
+export function globalLambdaEnvironmentsAndPermissions(
+    lambdaFunction: lambda.Function,
+    config: Config.Config
+) {
+    if(config.app.authProvider.useCognito.enabled)
+    {
+        lambdaFunction.addEnvironment("COGNITO_AUTH_ENABLED", "TRUE")
+    }
+    else
+    {
+        lambdaFunction.addEnvironment("COGNITO_AUTH_ENABLED", "FALSE")
+    }
+}
+
 export function requireTLSAndAdditionalPolicyAddToResourcePolicy(
     bucket: s3.IBucket,
     config: Config.Config

@@ -48,7 +48,7 @@ cognito_client = boto3.client('cognito-identity')
 def lambda_handler(event, context):
     global claims_and_roles
     response = STANDARD_JSON_RESPONSE
-    logger.info(event)
+    #logger.info(event)
 
     try:
 
@@ -62,6 +62,7 @@ def lambda_handler(event, context):
         body = json.loads(event["body"])
         assetId = body.get("assetId", None)
         databaseId = body.get("databaseId", None)
+        idJwtToken = body.get("idJwtToken", None)
 
         if assetId is None:
             response['body'] = json.dumps({
@@ -73,6 +74,13 @@ def lambda_handler(event, context):
         if databaseId is None:
             response['body'] = json.dumps({
                 "message": "No Database Id",
+            })
+            response['statusCode'] = 400
+            return response
+        
+        if (idJwtToken is None or idJwtToken == "") and use_external_oauth == "false":
+            response['body'] = json.dumps({
+                "message": "No JWT ID Token",
             })
             response['statusCode'] = 400
             return response
@@ -178,7 +186,7 @@ def lambda_handler(event, context):
                 else:
                     # Use Cognito client to create a session to extend the timeout seconds
                     account_id = sts_client.get_caller_identity()['Account']
-                    authorizer_jwt_token=event["headers"]["authorization"].split(" ")[1]
+                    authorizer_jwt_token = idJwtToken #event["headers"]["authorization"].split(" ")[1] -- Need ID token and not access token
 
                     login={cognito_auth:authorizer_jwt_token}
                     cognito_id = cognito_client.get_id(

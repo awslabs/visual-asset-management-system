@@ -13,7 +13,7 @@ import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as kms from "aws-cdk-lib/aws-kms";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
-import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../helper/security";
+import { kmsKeyLambdaPermissionAddToResourcePolicy, globalLambdaEnvironmentsAndPermissions } from "../helper/security";
 
 export function buildCreateDatabaseLambdaFunction(
     scope: Construct,
@@ -51,6 +51,7 @@ export function buildCreateDatabaseLambdaFunction(
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(createDatabaseFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(createDatabaseFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(createDatabaseFunction, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(createDatabaseFunction, config);
     return createDatabaseFunction;
 }
 
@@ -96,6 +97,7 @@ export function buildDatabaseService(
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(databaseService);
     storageResources.dynamo.userRolesStorageTable.grantReadData(databaseService);
     kmsKeyLambdaPermissionAddToResourcePolicy(databaseService, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(databaseService, config);
 
     return databaseService;
 }

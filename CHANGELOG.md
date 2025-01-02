@@ -16,12 +16,15 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** Added capability to define which tag types are required to be added to an asset. If tag types are required, at least one of the defined tags on the tag type must always be included on the asset.
 -   The ingestAsset API now supports passing in tags (to support required tag types)
 -   Changed UserId to no longer need to be an email, added a new LoginProfile table to track user emails for notification service which gets updated from JWT tokens or organization custom logic for retrieving user emails. New API for updating LoginProfile added to web login.
+-   Enabled cognito user pool optional Multi-Factor Authentication (MFA) for created accounts across TOTP or SMS. **Note: SMS sending requires additional AWS cognito / SNS setup to a SNS production account and originiation identity (if sending to US phone #'s). 
+-   -   Added backend broken out custom logic and flag to know if a user is logged in with MFA or not. For external OAUTH IDP implementations, this logic must be tailored to it the IDP system. 
 
 ### Bug Fixes
 
 -   Fix opensearch lambda event source mapping for regions that don't support event source tagging yet (ie GovCloud) [bug introduced in v2.1.0 with CDK version upgrade]
 -   Additional checks are made for valid parameter data in the asset deletion/archiving service
 -   Fixed local web local development support, updated documentation for new local development processes
+-   Fixed numerous lambda functions that were not adhering to the VPC/subnet configuration options for placing behind a VPC from v2.0 update
 -   Miscellaneous minor bug fixes across web and backend components
 
 ### Chores
@@ -32,7 +35,10 @@ All notable changes to this project will be documented in this file. See [standa
 -   Optimized some backend lambda initialization code in various functions and globally in the casbin authorization functions for cold start performance improvement
 -   Updated S3 bucket name for WebAppAccessLogs for ALB deployment (to be based on the domain name used `<ALBDomainName>-webappaccesslogs`) to help with organization policy exceptions
 -   Added scripts and documentation for external oauth IDP and API local development servers
--   **Web** Turned on amplify gen1 Secure Cookie Storage option
+-   **Web** Turned on amplify gen1 Secure Cookie storage option
+-   Updated docker file(s) environment variables to not use legacy format (old: ENV key value, new: ENV key=value)
+-   Updated GenAIMetadataLabeling pipeline container to use the latest blender version when deploying due to Alpine APK restrictions on holding earlier versions
+-   Switched web API calls to use Cognito user access token for all requests authorizations instead of Id token. Created separate parameter for scopedS3Access to pass in ID token for this specifc API call that needs it. 
 
 ## [2.1.0] (2024-11-15)
 

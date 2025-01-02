@@ -80,11 +80,18 @@ export class CognitoWebNativeConstructStack extends Construct {
         const userPool = new cognito.UserPool(this, "UserPool", {
             selfSignUpEnabled: false,
             autoVerify: { email: true },
+            mfa: cognito.Mfa.OPTIONAL,
+            mfaSecondFactor: {
+                otp: true,
+                sms: true,
+                email: false
+            },
+            accountRecovery: cognito.AccountRecovery.PHONE_WITHOUT_MFA_AND_EMAIL,
             userVerification: {
                 emailSubject: "Verify your email with Visual Asset Management System!",
                 emailBody: message,
                 emailStyle: cognito.VerificationEmailStyle.CODE,
-                smsMessage: message,
+                smsMessage: message
             },
             passwordPolicy: {
                 minLength: 8,
@@ -288,6 +295,18 @@ export class CognitoWebNativeConstructStack extends Construct {
         this.userPoolId = userPool.userPoolId;
         this.identityPoolId = identityPool.ref;
         this.webClientId = userPoolWebClient.userPoolClientId;
+
+        //Nag supressions
+        NagSuppressions.addResourceSuppressions(
+            userPool,
+            [
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason: "Intend to use Cognito SMS Role as-is.",
+                },
+            ],
+            true
+        );
     }
 
     private createAuthenticatedRole(

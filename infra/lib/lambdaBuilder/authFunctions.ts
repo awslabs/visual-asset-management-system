@@ -17,6 +17,7 @@ import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
     kmsKeyPolicyStatementGenerator,
 } from "../helper/security";
 import { authResources } from "../nestedStacks/auth/authBuilder-nestedStack";
@@ -123,6 +124,9 @@ export function buildAuthFunctions(
         })
     );
 
+    kmsKeyLambdaPermissionAddToResourcePolicy(scopeds3accessFunction, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(scopeds3accessFunction, config);
+
     return {
         authConstraintsService: buildAuthConstraintsFunction(
             scope,
@@ -193,6 +197,7 @@ export function buildAuthConstraintsFunction(
     storageResources.dynamo.databaseStorageTable.grantReadData(authServiceFun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(authServiceFun);
     kmsKeyLambdaPermissionAddToResourcePolicy(authServiceFun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(authServiceFun, config);
     return authServiceFun;
 }
 
@@ -236,6 +241,7 @@ export function buildScopedS3Function(
     storageResources.dynamo.databaseStorageTable.grantReadData(authServiceFun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(authServiceFun);
     kmsKeyLambdaPermissionAddToResourcePolicy(authServiceFun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(authServiceFun, config);
     return authServiceFun;
 }
 
@@ -280,6 +286,7 @@ export function buildAuthLoginProfile(
     storageResources.dynamo.rolesStorageTable.grantReadData(authLoginProfileFunc);
     storageResources.dynamo.userStorageTable.grantReadWriteData(authLoginProfileFunc);
     kmsKeyLambdaPermissionAddToResourcePolicy(authLoginProfileFunc, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(authLoginProfileFunc, config);
 
     return authLoginProfileFunc;
 }
@@ -319,6 +326,7 @@ export function buildRoutesService(
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(routesFunc);
     storageResources.dynamo.userRolesStorageTable.grantReadData(routesFunc);
     kmsKeyLambdaPermissionAddToResourcePolicy(routesFunc, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(routesFunc, config);
 
     return routesFunc;
 }

@@ -1,6 +1,7 @@
 #  Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 import json
+from customConfigCommon.customMFATokenScopeCheck import customMFATokenScopeCheckOverride
 
 def request_to_claims(request):
     if 'requestContext' not in request:
@@ -15,7 +16,8 @@ def request_to_claims(request):
         return {
             "tokens": [],
             "roles": [],
-            "externalAttributes": []
+            "externalAttributes": [],
+            "mfaEnabled": False
         }
     
     claims = request['requestContext']['authorizer']['jwt']['claims']
@@ -42,8 +44,16 @@ def request_to_claims(request):
     if 'vams:externalAttributes' in claims:
         externalAttributes = json.loads(claims['vams:externalAttributes'])
 
+    #Conduct MFA sign-in check using custom scope check
+    mfaEnabled = False
+    try:
+        mfaEnabled = customMFATokenScopeCheckOverride(tokens[0], request)
+    except:
+        pass
+
     return {
         "tokens": tokens,
         "roles": roles,
-        "externalAttributes": externalAttributes
+        "externalAttributes": externalAttributes,
+        "mfaEnabled": mfaEnabled
     }
