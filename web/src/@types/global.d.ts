@@ -1,4 +1,4 @@
 interface Window {
-    DISABLE_COGNITO:any;
-    COGNITO_FEDERATED:any;
+    DISABLE_COGNITO: any;
+    COGNITO_FEDERATED: any;
 }

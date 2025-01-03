@@ -109,24 +109,33 @@ export function searchBuilder(
 
         // Due to cdk upgrade, not all regions support tags for EventSourceMapping
         // this line should remove the tags for regions that dont support it (govcloud currently not supported)
-        if (config.app.govCloud.enabled){
-            const esmIndexing = new lambda.EventSourceMapping(scope, 'idxmDynamoDBEventSourceStorageResourcesBuilderMetadataStorageTable', {
-                target: indexingFunction,
-                eventSourceArn: storageResources.dynamo.metadataStorageTable.tableStreamArn,
-                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                batchSize: 100
-            });
+        if (config.app.govCloud.enabled) {
+            const esmIndexing = new lambda.EventSourceMapping(
+                scope,
+                "idxmDynamoDBEventSourceStorageResourcesBuilderMetadataStorageTable",
+                {
+                    target: indexingFunction,
+                    eventSourceArn: storageResources.dynamo.metadataStorageTable.tableStreamArn,
+                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                    batchSize: 100,
+                }
+            );
             const cfnEsmIndexing = esmIndexing.node.defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsmIndexing.addPropertyDeletionOverride('Tags');
+            cfnEsmIndexing.addPropertyDeletionOverride("Tags");
 
-            const esmAssetIndexing = new lambda.EventSourceMapping(scope, 'idxaDynamoDBEventSourceStorageResourcesBuilderAssetStorageTable', {
-                target: assetIndexingFunction,
-                eventSourceArn: storageResources.dynamo.assetStorageTable.tableStreamArn,
-                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                batchSize: 100
-            });
-            const cfnEsmAssetIndexing = esmAssetIndexing.node.defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsmAssetIndexing.addPropertyDeletionOverride('Tags');
+            const esmAssetIndexing = new lambda.EventSourceMapping(
+                scope,
+                "idxaDynamoDBEventSourceStorageResourcesBuilderAssetStorageTable",
+                {
+                    target: assetIndexingFunction,
+                    eventSourceArn: storageResources.dynamo.assetStorageTable.tableStreamArn,
+                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                    batchSize: 100,
+                }
+            );
+            const cfnEsmAssetIndexing = esmAssetIndexing.node
+                .defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsmAssetIndexing.addPropertyDeletionOverride("Tags");
         } else {
             indexingFunction.addEventSource(
                 new eventsources.DynamoEventSource(storageResources.dynamo.metadataStorageTable, {
@@ -204,24 +213,33 @@ export function searchBuilder(
 
         // Due to cdk upgrade, not all regions support tags for EventSourceMapping
         // this line should remove the tags for regions that dont support it (govcloud currently not supported)
-        if (config.app.govCloud.enabled){
-            const esmIndexing = new lambda.EventSourceMapping(scope, 'idxmDynamoDBEventSourceStorageResourcesBuilderMetadataStorageTable', {
-                target: indexingFunction,
-                eventSourceArn: storageResources.dynamo.metadataStorageTable.tableStreamArn,
-                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                batchSize: 100
-            });
+        if (config.app.govCloud.enabled) {
+            const esmIndexing = new lambda.EventSourceMapping(
+                scope,
+                "idxmDynamoDBEventSourceStorageResourcesBuilderMetadataStorageTable",
+                {
+                    target: indexingFunction,
+                    eventSourceArn: storageResources.dynamo.metadataStorageTable.tableStreamArn,
+                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                    batchSize: 100,
+                }
+            );
             const cfnEsmIndexing = esmIndexing.node.defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsmIndexing.addPropertyDeletionOverride('Tags');
+            cfnEsmIndexing.addPropertyDeletionOverride("Tags");
 
-            const esmAssetIndexing = new lambda.EventSourceMapping(scope, 'idxaDynamoDBEventSourceStorageResourcesBuilderAssetStorageTable', {
-                target: assetIndexingFunction,
-                eventSourceArn: storageResources.dynamo.assetStorageTable.tableStreamArn,
-                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                batchSize: 100
-            });
-            const cfnEsmAssetIndexing = esmAssetIndexing.node.defaultChild as lambda.CfnEventSourceMapping;
-            cfnEsmAssetIndexing.addPropertyDeletionOverride('Tags');
+            const esmAssetIndexing = new lambda.EventSourceMapping(
+                scope,
+                "idxaDynamoDBEventSourceStorageResourcesBuilderAssetStorageTable",
+                {
+                    target: assetIndexingFunction,
+                    eventSourceArn: storageResources.dynamo.assetStorageTable.tableStreamArn,
+                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                    batchSize: 100,
+                }
+            );
+            const cfnEsmAssetIndexing = esmAssetIndexing.node
+                .defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsmAssetIndexing.addPropertyDeletionOverride("Tags");
         } else {
             indexingFunction.addEventSource(
                 new eventsources.DynamoEventSource(storageResources.dynamo.metadataStorageTable, {

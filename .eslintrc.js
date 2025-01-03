@@ -5,7 +5,7 @@ module.exports = {
         node: true,
     },
     globals: {
-        window: true
+        window: true,
     },
     extends: [
         "eslint:recommended",

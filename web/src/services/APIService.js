@@ -4,12 +4,17 @@
  */
 
 import { API } from "aws-amplify";
-import { default as vamsConfig } from '../config';
+import { default as vamsConfig } from "../config";
 
 export const getAmplifyConfig = async () => {
-    console.log('getAmplifyConfig');
+    console.log("getAmplifyConfig");
     try {
-        const amplifyConfigUrl = new URL('/api/amplify-config', vamsConfig.DEV_API_ENDPOINT === '' ? window.location.origin : vamsConfig.DEV_API_ENDPOINT);
+        const amplifyConfigUrl = new URL(
+            "/api/amplify-config",
+            vamsConfig.DEV_API_ENDPOINT === ""
+                ? window.location.origin
+                : vamsConfig.DEV_API_ENDPOINT
+        );
         console.log(amplifyConfigUrl.href);
         const response = await fetch(amplifyConfigUrl);
         return response.json();
@@ -20,17 +25,17 @@ export const getAmplifyConfig = async () => {
 };
 
 export const getSecureConfig = async () => {
-    console.log('getSecureConfig');
+    console.log("getSecureConfig");
     return API.get("api", `secure-config`, {});
 };
 
 export const webRoutes = async (body) => {
-    console.log('webRoutes');
+    console.log("webRoutes");
     try {
         const response = await API.post("api", "auth/routes", {
             body: {
-                routes: body.routes
-            }
+                routes: body.routes,
+            },
         });
         console.log("response", response);
         return response;

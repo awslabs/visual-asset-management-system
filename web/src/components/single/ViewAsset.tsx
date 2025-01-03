@@ -124,7 +124,7 @@ export default function ViewAsset() {
     };
 
     useEffect(() => {
-        userName = JSON.parse(localStorage.getItem('user')!).username;
+        userName = JSON.parse(localStorage.getItem("user")!).username;
         const getData = async () => {
             setLoading(true);
             const items = await fetchDatabaseWorkflows({ databaseId: databaseId });
@@ -765,7 +765,7 @@ export default function ViewAsset() {
                                                       );
 
                                                       //If tagType has required field add [R] to tag type name
-                                                      if (tagType && tagType.required === 'True') {
+                                                      if (tagType && tagType.required === "True") {
                                                           tagType.tagTypeName += " [R]";
                                                       }
 

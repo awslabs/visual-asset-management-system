@@ -44,20 +44,18 @@ class AssetCredentials {
         }
 
         //If we are using cognito, also pass the sessions ID token as the access token can't be used in the current scoped S3 access STS role fetching
-        let cognitoIdJwtToken = ""
+        let cognitoIdJwtToken = "";
         if (!window.DISABLE_COGNITO) {
-            cognitoIdJwtToken = (await AmplifyAuth.currentSession())
-            .getIdToken()
-            .getJwtToken()
+            cognitoIdJwtToken = (await AmplifyAuth.currentSession()).getIdToken().getJwtToken();
         }
 
         let bodyToSubmit = {
             ...this.identifiers,
-            idJwtToken: cognitoIdJwtToken
-        }
+            idJwtToken: cognitoIdJwtToken,
+        };
 
         const resp: ScopedS3Response = await API.post("api", "auth/scopeds3access", {
-            body: bodyToSubmit
+            body: bodyToSubmit,
         });
 
         if (!resp.Credentials) {

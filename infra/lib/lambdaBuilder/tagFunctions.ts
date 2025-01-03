@@ -13,7 +13,10 @@ import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import * as kms from "aws-cdk-lib/aws-kms";
-import { kmsKeyLambdaPermissionAddToResourcePolicy, globalLambdaEnvironmentsAndPermissions } from "../helper/security";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
+} from "../helper/security";
 import * as Config from "../../config/config";
 
 export function buildTagService(

@@ -108,16 +108,15 @@ interface InlineLambdaProps {
     /**
      * HTML banner message to be displayed at the top of all web UI pages
      */
-    bannerHtmlMessage?: string
+    bannerHtmlMessage?: string;
 }
 
 export interface AmplifyConfigLambdaConstructProps extends cdk.StackProps {
-    
-     /**
+    /**
      * Main Configuration Provider
      */
-    config: Config.Config,
-    
+    config: Config.Config;
+
     /**
      * The AuthResources Provider
      */
@@ -163,19 +162,37 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                 this.getJavascriptInlineFunction({
                     region: props.region,
                     api: props.apiUrl || "us-east-1",
-                    cognitoUserPoolId: props.config.app.authProvider.useCognito.enabled? props.authResources.cognito.userPoolId : "undefined",
-                    cognitoAppClientId: props.config.app.authProvider.useCognito.enabled? props.authResources.cognito.webClientId : "undefined",
-                    cognitoIdentityPoolId: props.config.app.authProvider.useCognito.enabled? props.authResources.cognito.identityPoolId : "undefined",
+                    cognitoUserPoolId: props.config.app.authProvider.useCognito.enabled
+                        ? props.authResources.cognito.userPoolId
+                        : "undefined",
+                    cognitoAppClientId: props.config.app.authProvider.useCognito.enabled
+                        ? props.authResources.cognito.webClientId
+                        : "undefined",
+                    cognitoIdentityPoolId: props.config.app.authProvider.useCognito.enabled
+                        ? props.authResources.cognito.identityPoolId
+                        : "undefined",
                     cognitoFederatedConfig: props.cognitoFederatedConfig,
-                    externalOAuthIdpURL: props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl || "undefined",
-                    externalOAuthIdpClientId: props.config.app.authProvider.useExternalOAuthIdp.idpAuthClientId || "undefined",
-                    externalOAuthIdpScope: props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope || "undefined",
-                    externalOAuthIdpTokenEndpoint: props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint || "undefined",
-                    externalOAuthIdpAuthorizationEndpoint: props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint || "undefined",
-                    externalOAuthIdpDiscoveryEndpoint: props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderDiscoveryEndpoint || "undefined",
+                    externalOAuthIdpURL:
+                        props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl ||
+                        "undefined",
+                    externalOAuthIdpClientId:
+                        props.config.app.authProvider.useExternalOAuthIdp.idpAuthClientId ||
+                        "undefined",
+                    externalOAuthIdpScope:
+                        props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope ||
+                        "undefined",
+                    externalOAuthIdpTokenEndpoint:
+                        props.config.app.authProvider.useExternalOAuthIdp
+                            .idpAuthProviderTokenEndpoint || "undefined",
+                    externalOAuthIdpAuthorizationEndpoint:
+                        props.config.app.authProvider.useExternalOAuthIdp
+                            .idpAuthProviderAuthorizationEndpoint || "undefined",
+                    externalOAuthIdpDiscoveryEndpoint:
+                        props.config.app.authProvider.useExternalOAuthIdp
+                            .idpAuthProviderDiscoveryEndpoint || "undefined",
                     stackName: props.stackName!,
                     contentSecurityPolicy: props.contentSecurityPolicy || "",
-                    bannerHtmlMessage: props.config.app.webUi.optionalBannerHtmlMessage || ""
+                    bannerHtmlMessage: props.config.app.webUi.optionalBannerHtmlMessage || "",
                 })
             ),
             timeout: cdk.Duration.seconds(15),

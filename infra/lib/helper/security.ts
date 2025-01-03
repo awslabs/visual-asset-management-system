@@ -18,13 +18,10 @@ export function globalLambdaEnvironmentsAndPermissions(
     lambdaFunction: lambda.Function,
     config: Config.Config
 ) {
-    if(config.app.authProvider.useCognito.enabled)
-    {
-        lambdaFunction.addEnvironment("COGNITO_AUTH_ENABLED", "TRUE")
-    }
-    else
-    {
-        lambdaFunction.addEnvironment("COGNITO_AUTH_ENABLED", "FALSE")
+    if (config.app.authProvider.useCognito.enabled) {
+        lambdaFunction.addEnvironment("COGNITO_AUTH_ENABLED", "TRUE");
+    } else {
+        lambdaFunction.addEnvironment("COGNITO_AUTH_ENABLED", "FALSE");
     }
 }
 
@@ -186,7 +183,7 @@ export function generateContentSecurityPolicy(
         `https://${Service("S3").Endpoint}/${storageResources.s3.assetBucket.bucketName}/`, //Path Addressable Format Connection
     ];
 
-    if(config.app.authProvider.useCognito.enabled) {
+    if (config.app.authProvider.useCognito.enabled) {
         connectSrc.push(`https://${Service("COGNITO_IDP").Endpoint}/`);
         connectSrc.push(`https://${Service("COGNITO_IDENTITY").Endpoint}/`);
         scriptSrc.push(`https://${Service("COGNITO_IDP").Endpoint}/`);

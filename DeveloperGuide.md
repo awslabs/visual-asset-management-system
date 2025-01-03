@@ -18,19 +18,23 @@
 ### Deploy VAMS for the First Time
 
 #### Local Development
+
 For local development, there are 2 options in regards to the backend: pointing to a local mocked backend or a remote backend that has already been deployed.
 
 ##### Local Backend
+
 Some local development is possible when using a local backend, but not all APIs are available locally.
 
 Pre-reqs for local development:
-* Conda installed and on PATH
-* In `web/src/config.ts`, update the following values:
-  * Set `DEV_API_ENDPOINT='http://localhost:8002/'`
+
+-   Conda installed and on PATH
+-   In `web/src/config.ts`, update the following values:
+    -   Set `DEV_API_ENDPOINT='http://localhost:8002/'`
 
 Terminal 1 (Running mocked API server):
 Before running the mockup API server, make sure to update amplifyConfig and secureConfig values accordingly in `backend/backend/localDev_api_server.py`
 Note: You may get errors due to other environment variables not set, you can ignore these as they do not hold up the mock API server
+
 ```bash
 source ~/.bash_profile # for conda
 cd ./backend
@@ -40,6 +44,7 @@ USE_LOCAL_MOCKS=true python3 backend/localDev_api_server.py # port 8002 # powers
 ```
 
 Terminal 2 (Running mocked auth server):
+
 ```bash
 source ~/.bash_profile # for conda
 cd ./backend
@@ -49,6 +54,7 @@ python3 localDev_oauth2_server.py # port 9031
 ```
 
 Terminal 3 (Running web server):
+
 ```bash
 cd ./web && yarn install && npm run build && python3 -m http.server 8001 -d build
 ```
@@ -64,12 +70,14 @@ _Note_: `npm run start` will need the port set via an environment variable `PORT
 Now load [http://localhost:8001](http://localhost:8001) in a browser. (Don't need to provide any credentials on login)
 
 ##### Remote Backend
+
 Pointing local frontend to a remote backend assumes the backend has already been deployed and functioning.
 
-* In `web/src/config.ts`, update the following values:
-  * Update `DEV_API_ENDPOINT` to point to the remote API endpoint
+-   In `web/src/config.ts`, update the following values:
+    -   Update `DEV_API_ENDPOINT` to point to the remote API endpoint
 
 Terminal 1 (Running web server):
+
 ```bash
 cd ./web && yarn install && npm run build && cd ./build
 ```
@@ -83,7 +91,6 @@ or `npm run start` to have **live reload** on code changes.
 _Note_: `npm run start` will need the port set via an environment variable `PORT=8001`.
 
 Now load [http://localhost:8001](http://localhost:8001) in a browser.
-
 
 #### Build & Deploy Steps (Linux/Mac)
 
@@ -137,7 +144,7 @@ Deployment data migration documentation and scripts between major VAMS version d
 
 If you receive this error, it may be related to a bug/defect in the latest CDK version documented here: https://github.com/aws/aws-cdk/issues/31549
 
-As a possible workaround if you are using the docker buildx platform, set the following terminal or operating system environment variable to stop the error: 
+As a possible workaround if you are using the docker buildx platform, set the following terminal or operating system environment variable to stop the error:
 BUILDX_NO_DEFAULT_ATTESTATIONS=1
 
 ### SAML Authentication - Cognito
@@ -202,7 +209,7 @@ This logic should be overriden by each oranization as needed within `/backend/ba
 
 The default logic is for external OAUTH IDP is to just set the MFA enabled flag hard-coded to false. As each IDP is different, this must be a custom call.
 
-NOTE: Be mindful of the logic used as this can have great performance impacts for VAMS. Try to use caches in this method or reduce the amount of external API calls as this method is called very frequently during VAMS API authorization checks. 
+NOTE: Be mindful of the logic used as this can have great performance impacts for VAMS. Try to use caches in this method or reduce the amount of external API calls as this method is called very frequently during VAMS API authorization checks.
 
 ### Local Docker Builds - Custom Build Settings
 

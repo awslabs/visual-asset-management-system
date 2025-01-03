@@ -114,8 +114,7 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
 
         //Create the VPCe if enabled
         //NOTE: Only time we should disable this is for stack deployments where the VPCe needs to be created outside of the stack manually
-        if(props.config.app.useAlb.addAlbS3SpecialVpcEndpoint) {
-
+        if (props.config.app.useAlb.addAlbS3SpecialVpcEndpoint) {
             // Create VPC interface endpoint for S3 (Needed for ALB<->S3)
             //Note: This endpoint should be created despite the GlobalVPC flag of create endpoint or not in order to setup ALB listeners properly
             const s3VPCEndpoint = new ec2.InterfaceVpcEndpoint(this, "S3InterfaceVPCEndpoint", {
@@ -126,14 +125,17 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
                 securityGroups: [props.albSecurityGroup],
             });
 
-            this.s3VpcEndpoint = s3VPCEndpoint
+            this.s3VpcEndpoint = s3VPCEndpoint;
 
             //TODO: Figure out why this policy is not working and still letting requests through for other bucket names (use ALB dns name to test)
             //TODO?: Specifically add a deny policy for anything outside of bucket
             //Add policy to VPC endpoint to only allow access to the specific S3 Bucket
             s3VPCEndpoint.addToPolicy(
                 new iam.PolicyStatement({
-                    resources: [props.webAppBucket.arnForObjects("*"), props.webAppBucket.bucketArn],
+                    resources: [
+                        props.webAppBucket.arnForObjects("*"),
+                        props.webAppBucket.bucketArn,
+                    ],
                     actions: ["s3:Get*", "s3:List*"],
                     principals: [new iam.AnyPrincipal()],
                 })
@@ -185,7 +187,9 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
                 );
                 targetGroup1.addTarget(
                     new elbv2_targets.IpTarget(
-                        getEndpointIp.getResponseField(`NetworkInterfaces.${index}.PrivateIpAddress`)
+                        getEndpointIp.getResponseField(
+                            `NetworkInterfaces.${index}.PrivateIpAddress`
+                        )
                     )
                 );
             }

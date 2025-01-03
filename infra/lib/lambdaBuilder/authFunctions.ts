@@ -38,12 +38,11 @@ export function buildAuthFunctions(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): AuthFunctions {
-
     const lambdaIdentityPrincipal: string = Service("LAMBDA").PrincipalString;
-    let storageBucketScopedS3AccessRole = undefined
+    let storageBucketScopedS3AccessRole = undefined;
 
-    if(config.app.authProvider.useCognito.enabled) {
-        let idpPrincipal = Service("COGNITO_IDENTITY").PrincipalString;
+    if (config.app.authProvider.useCognito.enabled) {
+        const idpPrincipal = Service("COGNITO_IDENTITY").PrincipalString;
         storageBucketScopedS3AccessRole = new iam.Role(scope, "storageBucketScopedS3AccessRole", {
             assumedBy: new iam.CompositePrincipal(
                 new iam.FederatedPrincipal(
@@ -62,18 +61,18 @@ export function buildAuthFunctions(
             ),
             maxSessionDuration: Duration.seconds(config.app.authProvider.credTokenTimeoutSeconds),
         });
-    }
-    else if (config.app.authProvider.useExternalOAuthIdp.enabled) {
+    } else if (config.app.authProvider.useExternalOAuthIdp.enabled) {
         //experimental however currently scopeds3access still uses AssumeRole with externalOAuthIDP enabled
-        let idpPrincipal = config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain;
+        const idpPrincipal = config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain;
         storageBucketScopedS3AccessRole = new iam.Role(scope, "storageBucketScopedS3AccessRole", {
             assumedBy: new iam.CompositePrincipal(
                 new iam.FederatedPrincipal(
                     idpPrincipal,
                     {
                         StringEquals: {
-                            [`${idpPrincipal}:aud`]: config.app.authProvider.useExternalOAuthIdp.idpAuthClientId
-                        }
+                            [`${idpPrincipal}:aud`]:
+                                config.app.authProvider.useExternalOAuthIdp.idpAuthClientId,
+                        },
                     },
                     "sts:AssumeRoleWithWebIdentity"
                 ),
@@ -105,13 +104,18 @@ export function buildAuthFunctions(
             KMS_KEY_ARN: storageResources.encryption.kmsKey
                 ? storageResources.encryption.kmsKey.keyArn
                 : "",
-            USE_EXTERNAL_OAUTH: config.app.authProvider.useExternalOAuthIdp.enabled ? "true" : "false",
-            COGNITO_AUTH: config.app.authProvider.useCognito.enabled ?
-                "cognito-idp." +
-                config.env.region +
-                ".amazonaws.com/" +
-                authResources.cognito.userPoolId : "",
-            IDENTITY_POOL_ID: config.app.authProvider.useCognito.enabled ? authResources.cognito.identityPoolId : "",
+            USE_EXTERNAL_OAUTH: config.app.authProvider.useExternalOAuthIdp.enabled
+                ? "true"
+                : "false",
+            COGNITO_AUTH: config.app.authProvider.useCognito.enabled
+                ? "cognito-idp." +
+                  config.env.region +
+                  ".amazonaws.com/" +
+                  authResources.cognito.userPoolId
+                : "",
+            IDENTITY_POOL_ID: config.app.authProvider.useCognito.enabled
+                ? authResources.cognito.identityPoolId
+                : "",
             CRED_TOKEN_TIMEOUT_SECONDS: config.app.authProvider.credTokenTimeoutSeconds.toString(),
         }
     );
@@ -124,7 +128,10 @@ export function buildAuthFunctions(
         })
     );
 
-    kmsKeyLambdaPermissionAddToResourcePolicy(scopeds3accessFunction, storageResources.encryption.kmsKey);
+    kmsKeyLambdaPermissionAddToResourcePolicy(
+        scopeds3accessFunction,
+        storageResources.encryption.kmsKey
+    );
     globalLambdaEnvironmentsAndPermissions(scopeds3accessFunction, config);
 
     return {
@@ -135,7 +142,7 @@ export function buildAuthFunctions(
             authResources,
             config,
             vpc,
-            subnets,
+            subnets
         ),
         scopeds3access: scopeds3accessFunction,
         authLoginProfile: buildAuthLoginProfile(
@@ -275,8 +282,9 @@ export function buildAuthLoginProfile(
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             USER_STORAGE_TABLE_NAME: storageResources.dynamo.userStorageTable.tableName,
-            EXTERNAL_OATH_IDP_URL: config.app.authProvider.useExternalOAuthIdp.enabled ?
-                config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl : "", //Optional environment field they may get used for customConfigCommon method
+            EXTERNAL_OATH_IDP_URL: config.app.authProvider.useExternalOAuthIdp.enabled
+                ? config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl
+                : "", //Optional environment field they may get used for customConfigCommon method
             ...environment,
         },
     });
@@ -285,7 +293,10 @@ export function buildAuthLoginProfile(
     storageResources.dynamo.userRolesStorageTable.grantReadWriteData(authLoginProfileFunc);
     storageResources.dynamo.rolesStorageTable.grantReadData(authLoginProfileFunc);
     storageResources.dynamo.userStorageTable.grantReadWriteData(authLoginProfileFunc);
-    kmsKeyLambdaPermissionAddToResourcePolicy(authLoginProfileFunc, storageResources.encryption.kmsKey);
+    kmsKeyLambdaPermissionAddToResourcePolicy(
+        authLoginProfileFunc,
+        storageResources.encryption.kmsKey
+    );
     globalLambdaEnvironmentsAndPermissions(authLoginProfileFunc, config);
 
     return authLoginProfileFunc;

@@ -78,7 +78,6 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
             role: props.customResourceRole,
         });
 
-
         const awsSdkCallUserRolesAdmin: AwsSdkCall = {
             service: "DynamoDB",
             action: "putItem",

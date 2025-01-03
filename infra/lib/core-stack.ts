@@ -48,8 +48,7 @@ export class CoreVAMSStack extends cdk.Stack {
 
         const adminUserId = new cdk.CfnParameter(this, "adminUserId", {
             type: "String",
-            description:
-                "Admin User ID for login",
+            description: "Admin User ID for login",
             default: props.config.app.adminUserId,
         });
 
@@ -124,7 +123,7 @@ export class CoreVAMSStack extends cdk.Stack {
         );
 
         //Setup cloud trail and log groups (if enabled)
-        if(props.config.app.addStackCloudTrailLogs) {
+        if (props.config.app.addStackCloudTrailLogs) {
             const trailLogGroup = new logs.LogGroup(this, "CloudTrailLogGroup", {
                 logGroupName:
                     "/aws/vendedlogs/VAMSCloudTrailLogs" +
@@ -311,7 +310,10 @@ export class CoreVAMSStack extends cdk.Stack {
         }
 
         //Deploy Location Services (Nested Stack) and setup feature enabled
-        if (props.config.app.useLocationService.enabled && props.config.app.authProvider.useCognito.enabled) {
+        if (
+            props.config.app.useLocationService.enabled &&
+            props.config.app.authProvider.useCognito.enabled
+        ) {
             const locationServiceNestedStack = new LocationServiceNestedStack(
                 this,
                 "LocationService",
@@ -348,7 +350,7 @@ export class CoreVAMSStack extends cdk.Stack {
             });
         }
 
-        if (props.config.app.authProvider.useCognito.enabled){
+        if (props.config.app.authProvider.useCognito.enabled) {
             const authCognitoUserPoolIdParamsOutput = new cdk.CfnOutput(
                 this,
                 "AuthCognito_UserPoolId",
@@ -407,7 +409,7 @@ export class CoreVAMSStack extends cdk.Stack {
             if (item instanceof cdk.aws_lambda.Function) {
                 const fn = item as cdk.aws_lambda.Function;
                 // python3.11 suppressed for CDK Bucket Deployment which is fixed to python 3.11 (https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.aws_s3_deployment/README.html)
-                // python3.12 suppressed for all other lambdas. Latest version for non-breaking changes as of 10/2024. 
+                // python3.12 suppressed for all other lambdas. Latest version for non-breaking changes as of 10/2024.
                 // nodejs20.x suppressed for use of custom resource to deploy saml in CustomCognitoConfigConstruct
                 if (
                     fn.runtime.name === "python3.11" ||

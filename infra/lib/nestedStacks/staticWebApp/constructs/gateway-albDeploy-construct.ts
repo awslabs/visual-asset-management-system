@@ -80,7 +80,6 @@ export class GatewayAlbDeployConstruct extends Construct {
             webAppVPCE: webAppVPCESecurityGroup,
         };
 
-
         //Nag Supressions
         NagSuppressions.addResourceSuppressions(webAppVPCESecurityGroup, [
             {

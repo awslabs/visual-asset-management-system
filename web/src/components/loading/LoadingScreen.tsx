@@ -11,13 +11,11 @@ const LoadingScreen = () => {
                 justifyContent: "center",
                 alignItems: "center",
                 height: "100%",
-                flexFlow: "column"
+                flexFlow: "column",
             }}
         >
             <Spinner size="large" />
-            <p>
-                Loading, Please Wait...
-            </p>
+            <p>Loading, Please Wait...</p>
         </div>
     );
 };

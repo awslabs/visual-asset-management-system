@@ -34,7 +34,10 @@ import DatabaseSelector from "../components/selectors/DatabaseSelector";
 import { previewFileFormats } from "../common/constants/fileFormats";
 import { Metadata } from "../components/single/Metadata";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
-import { validateNonZeroLengthTextAsYouType, validateRequiredTagTypeSelected } from "./AssetUpload/validations";
+import {
+    validateNonZeroLengthTextAsYouType,
+    validateRequiredTagTypeSelected,
+} from "./AssetUpload/validations";
 import { DisplayKV, FileUpload } from "./AssetUpload/components";
 import ProgressScreen from "./AssetUpload/ProgressScreen";
 import ControlledMetadata from "../components/metadata/ControlledMetadata";
@@ -375,7 +378,7 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
         assetDetailState.frontendTags as OptionDefinition[]
     );
     const [constraintText, setConstraintText] = useState<{
-        tags?: string
+        tags?: string;
     }>({});
     const [tagsValid, setTagsValid] = useState(true);
 
@@ -402,14 +405,14 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
             databaseId: validateNonZeroLengthTextAsYouType(assetDetailState.databaseId),
             description: validateNonZeroLengthTextAsYouType(assetDetailState.description),
             Comment: "",
-            tags: validateRequiredTagTypeSelected(assetDetailState.tags, tagTypes)
+            tags: validateRequiredTagTypeSelected(assetDetailState.tags, tagTypes),
         };
         setValidationText(validation);
 
         // Handle displaying error when tag is selected
-        if(validation.tags && assetDetailState?.tags?.length) {
+        if (validation.tags && assetDetailState?.tags?.length) {
             // If the validation.tags string contains text and there are selected tags, it is not valid
-            setTagsValid(false)
+            setTagsValid(false);
         }
 
         const isValid = !(
@@ -426,7 +429,7 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
         assetDetailState.assetId,
         assetDetailState.databaseId,
         assetDetailState.description,
-        assetDetailState.tags
+        assetDetailState.tags,
     ]);
 
     useEffect(() => {
@@ -444,11 +447,14 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
                     setConstraintText({
                         tags:
                             "The following tag types, listed in parentheses, require at least one selection: " +
-                            requiredTagTypes.map((tagType) => tagType.tagTypeName).join(', ')
+                            requiredTagTypes.map((tagType) => tagType.tagTypeName).join(", "),
                     });
 
                     // Set initial validation text
-                    setValidationText({...validationText, tags: validateRequiredTagTypeSelected(assetDetailState.tags, tagTypes)})
+                    setValidationText({
+                        ...validationText,
+                        tags: validateRequiredTagTypeSelected(assetDetailState.tags, tagTypes),
+                    });
                 }
             }
         });
@@ -534,10 +540,11 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
                     />
                 </FormField>
 
-                <FormField 
+                <FormField
                     label="Tags"
                     constraintText={constraintText.tags}
-                    errorText={(showErrors || !tagsValid) ? validationText.tags : null}>
+                    errorText={showErrors || !tagsValid ? validationText.tags : null}
+                >
                     <Multiselect
                         selectedOptions={selectedTags}
                         onChange={({ detail }) => {

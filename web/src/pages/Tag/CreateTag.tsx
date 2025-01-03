@@ -63,14 +63,13 @@ function validateTagType(selectedOption: string | undefined): string | null {
 }
 
 function removeStringFromEnd(str: string | undefined, strToRemove: string) {
-    if(str?.endsWith(strToRemove)) {
-        return str.slice(0, -strToRemove.length)
+    if (str?.endsWith(strToRemove)) {
+        return str.slice(0, -strToRemove.length);
     }
-    return str
+    return str;
 }
 
 export default function CreateTag({
-
     open,
     setOpen,
     setReload,

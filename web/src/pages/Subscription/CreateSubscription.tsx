@@ -53,7 +53,9 @@ function validateUsers(users: string) {
         return /^[\w\-\.\+\@]{3,256}$/.test(user);
     });
 
-    return isValidUser ? null : "User IDs (comma seperated) should be at least 3 characters alphanumeric with support for special characters (. + - @). Direct email addresses are allowed too if it's non-user email like a resource account.";
+    return isValidUser
+        ? null
+        : "User IDs (comma seperated) should be at least 3 characters alphanumeric with support for special characters (. + - @). Direct email addresses are allowed too if it's non-user email like a resource account.";
 }
 
 export default function CreateSubscription({

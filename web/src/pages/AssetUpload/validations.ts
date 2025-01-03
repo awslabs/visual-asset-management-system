@@ -35,31 +35,36 @@ export const validateNonZeroLengthTextAsYouType = (s?: string): string | undefin
     }
 };
 
-export const validateRequiredTagTypeSelected = (selectedTags: string[] | undefined, allTagTypes: TagType[]): string | undefined => {
+export const validateRequiredTagTypeSelected = (
+    selectedTags: string[] | undefined,
+    allTagTypes: TagType[]
+): string | undefined => {
     // Get required tag types
-    let requiredTagTypes: TagType[] = allTagTypes.filter((tagType) => tagType.required === 'True');
+    let requiredTagTypes: TagType[] = allTagTypes.filter((tagType) => tagType.required === "True");
 
     // If no tags are selected but there are required tag types, when Next button is pressed, return this
-    if((!selectedTags || !selectedTags.length) && requiredTagTypes.length) {
+    if ((!selectedTags || !selectedTags.length) && requiredTagTypes.length) {
         return "Required Field.";
     }
 
     // If tags are selected, determine which are missing
     if (selectedTags?.length) {
         // For each required tag type, check if there is at least one selected tag
-        let missingTagTypes: string[] = []
+        let missingTagTypes: string[] = [];
         requiredTagTypes.forEach((tagType) => {
-            const found = tagType.tags.some(tag => selectedTags.includes(tag))
+            const found = tagType.tags.some((tag) => selectedTags.includes(tag));
 
             // If selected tag is not found in the required tag list, add it to the missing list
-            if(!found) {
-                missingTagTypes.push(tagType.tagTypeName)
+            if (!found) {
+                missingTagTypes.push(tagType.tagTypeName);
             }
-        })
+        });
 
         // If there are missing tags, return error text
-        if(missingTagTypes.length) {
-            return "A selection from the following tag type(s) required: " + missingTagTypes.join(', ')
+        if (missingTagTypes.length) {
+            return (
+                "A selection from the following tag type(s) required: " + missingTagTypes.join(", ")
+            );
         }
     }
-}
+};

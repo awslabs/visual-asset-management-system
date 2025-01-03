@@ -552,7 +552,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         partitionKey: {
             name: "userId",
             type: dynamodb.AttributeType.STRING,
-        }
+        },
     });
 
     const authEntitiesTable = new dynamodb.Table(scope, "AuthEntitiesTable", {
@@ -630,7 +630,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
             assetLinksStorageTable: assetLinksStorageTable,
             rolesStorageTable: rolesStorageTable,
             userRolesStorageTable: userRolesStorageTable,
-            userStorageTable: userStorageTable
+            userStorageTable: userStorageTable,
         },
     };
 }

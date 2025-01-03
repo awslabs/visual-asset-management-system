@@ -76,7 +76,7 @@ export default function CreateTagType({
     const tagtypeBody = {
         tagTypeName: formState.tagTypeName,
         description: formState.description,
-        required: formState.required
+        required: formState.required,
     };
     const handleModalClose = () => {
         setShowModal(false);
@@ -96,7 +96,9 @@ export default function CreateTagType({
 
     // The Tag Type checkbox requires a boolean to hold and display the checked or not checked state. Since interface is a string,
     // created this, which initializes based on the string from formState.required
-    const [requiredTagTypeChecked, setRequiredTagTypeChecked] = useState(formState.required === 'True' ? true : false);
+    const [requiredTagTypeChecked, setRequiredTagTypeChecked] = useState(
+        formState.required === "True" ? true : false
+    );
 
     return (
         <Modal
@@ -258,21 +260,21 @@ export default function CreateTagType({
                         />
                     </FormField>
 
-                    <FormField
-                        label="Options"
-                    >
+                    <FormField label="Options">
                         <Checkbox
                             onChange={({ detail }) => {
                                 setRequiredTagTypeChecked(detail.checked); // update visual state boolean
-                                setFormState({ ...formState, required: detail.checked ? 'True' : 'False' }); // update form state string
+                                setFormState({
+                                    ...formState,
+                                    required: detail.checked ? "True" : "False",
+                                }); // update form state string
                                 setRequiredError("");
                             }}
                             checked={requiredTagTypeChecked}
                             data-testid="required"
-                            >
+                        >
                             Require tag of this tag type on asset modification
                         </Checkbox>
-
                     </FormField>
                 </SpaceBetween>
             </Form>

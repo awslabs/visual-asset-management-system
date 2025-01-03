@@ -84,14 +84,14 @@ export class CognitoWebNativeConstructStack extends Construct {
             mfaSecondFactor: {
                 otp: true,
                 sms: true,
-                email: false
+                email: false,
             },
             accountRecovery: cognito.AccountRecovery.PHONE_WITHOUT_MFA_AND_EMAIL,
             userVerification: {
                 emailSubject: "Verify your email with Visual Asset Management System!",
                 emailBody: message,
                 emailStyle: cognito.VerificationEmailStyle.CODE,
-                smsMessage: message
+                smsMessage: message,
             },
             passwordPolicy: {
                 minLength: 8,

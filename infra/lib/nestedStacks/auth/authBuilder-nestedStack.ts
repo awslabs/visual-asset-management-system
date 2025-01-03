@@ -99,7 +99,6 @@ export class AuthBuilderNestedStack extends NestedStack {
             };
         } else {
             //TODO - Other Authentications Setup
-
         }
 
         //Setup Custom Resource Role Policy
@@ -165,13 +164,12 @@ export class AuthBuilderNestedStack extends NestedStack {
                     },
                     createdOn: {
                         S: new Date().toISOString(),
-                    }
+                    },
                 },
                 //ConditionExpression: "attribute_not_exists(userId)",
             },
             physicalResourceId: PhysicalResourceId.of(
-                props.storageResources.dynamo.userStorageTable.tableName +
-                    `_admin_initialization`
+                props.storageResources.dynamo.userStorageTable.tableName + `_admin_initialization`
             ),
         };
 

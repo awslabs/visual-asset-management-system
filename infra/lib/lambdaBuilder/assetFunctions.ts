@@ -22,7 +22,10 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { buildSendEmailFunction } from "./sendEmailFunctions";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import * as kms from "aws-cdk-lib/aws-kms";
-import { kmsKeyLambdaPermissionAddToResourcePolicy, globalLambdaEnvironmentsAndPermissions } from "../helper/security";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
+} from "../helper/security";
 
 export function buildAssetService(
     scope: Construct,
@@ -458,7 +461,7 @@ export function buildUploadAssetWorkflowFunction(
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName,
-            TAG_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName
+            TAG_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName,
         },
     });
 

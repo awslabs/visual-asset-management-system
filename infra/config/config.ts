@@ -69,13 +69,11 @@ export function getConfig(app: cdk.App): Config {
             config.app.adminEmailAddress ||
             process.env.ADMIN_EMAIL_ADDRESS)
     );
-    config.app.adminUserId = <string>(
-        (app.node.tryGetContext("adminUserId") ||
-            app.node.tryGetContext("adminEmailAddress") || //user email in this case for ENV backwards compatibility
-            config.app.adminUserId ||
-            process.env.ADMIN_EMAIL_ADDRESS || //user email in this case for ENV backwards compatibility
-            process.env.ADMIN_USER_ID)
-    );
+    config.app.adminUserId = <string>(app.node.tryGetContext("adminUserId") ||
+        app.node.tryGetContext("adminEmailAddress") || //user email in this case for ENV backwards compatibility
+        config.app.adminUserId ||
+        process.env.ADMIN_EMAIL_ADDRESS || //user email in this case for ENV backwards compatibility
+        process.env.ADMIN_USER_ID);
     config.app.authProvider.credTokenTimeoutSeconds = <number>(
         (app.node.tryGetContext("credTokenTimeoutSeconds") ||
             config.app.authProvider.credTokenTimeoutSeconds ||
@@ -130,15 +128,15 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useConversion3dBasic.enabled = true;
     }
 
-    if(config.app.authProvider.useExternalOAuthIdp.enabled == undefined) {
+    if (config.app.authProvider.useExternalOAuthIdp.enabled == undefined) {
         config.app.authProvider.useExternalOAuthIdp.enabled = false;
     }
 
-    if(config.app.addStackCloudTrailLogs == undefined) {
+    if (config.app.addStackCloudTrailLogs == undefined) {
         config.app.addStackCloudTrailLogs = true;
     }
 
-    if(config.app.useAlb.addAlbS3SpecialVpcEndpoint == undefined) {
+    if (config.app.useAlb.addAlbS3SpecialVpcEndpoint == undefined) {
         config.app.useAlb.addAlbS3SpecialVpcEndpoint = true;
     }
 
@@ -192,7 +190,6 @@ export function getConfig(app: cdk.App): Config {
 
         config.app.useGlobalVpc.enabled = true;
     }
-
 
     //Any configuration warnings/errors checks
     if (
@@ -340,9 +337,11 @@ export function getConfig(app: cdk.App): Config {
         (!config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl ||
             config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl == "UNDEFINED" ||
             config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl == "" ||
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl ==
+                "UNDEFINED" ||
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl == "" ||
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience ==
+                "UNDEFINED" ||
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience == "" ||
             config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "" ||
             config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "UNDEFINED" ||
@@ -351,12 +350,15 @@ export function getConfig(app: cdk.App): Config {
             config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "" ||
             config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "UNDEFINED" ||
             config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint ==
+                "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint ==
+                "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint ==
+                "UNDEFINED" ||
             config.app.authProvider.useExternalOAuthIdp.idpAuthProviderDiscoveryEndpoint == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderDiscoveryEndpoint == "UNDEFINED"
-            )
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderDiscoveryEndpoint ==
+                "UNDEFINED")
     ) {
         throw new Error(
             "Configuration Error: Must specify a external IDP auth URL, external IDP principal domain, external IDP client ID, external IDP client secret, Lambda Authorizer JWT Issuer URL, Lambda Authorizer JWT Identity Source, and Lambda Authorizer JWT Audience when using an external OAUTH provider!"
@@ -364,7 +366,7 @@ export function getConfig(app: cdk.App): Config {
     }
 
     //If using Location services, for now must use cognito due to IDP authenticated role need
-    if(config.app.useLocationService.enabled && config.app.authProvider.useCognito.enabled) {
+    if (config.app.useLocationService.enabled && config.app.authProvider.useCognito.enabled) {
         throw new Error(
             "Configuration Error: Cannot use location services without using the Cognito authentication method."
         );
@@ -461,12 +463,12 @@ export interface ConfigPublic {
                 idpAuthProviderAuthorizationEndpoint: string;
                 idpAuthProviderDiscoveryEndpoint: string;
                 lambdaAuthorizorJWTIssuerUrl: string;
-                lambdaAuthorizorJWTAudience: string;      
+                lambdaAuthorizorJWTAudience: string;
             };
         };
         webUi: {
             optionalBannerHtmlMessage: string;
-        }
+        };
     };
 }
 

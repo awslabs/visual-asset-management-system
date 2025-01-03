@@ -55,7 +55,7 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
 
         props = { ...defaultProps, ...props };
 
-        let apiGatewayAuthorizer = undefined
+        let apiGatewayAuthorizer = undefined;
 
         //Setup Gateway Authorizer
         if (props.config.app.authProvider.useCognito.enabled) {
@@ -68,15 +68,17 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
                     identitySource: ["$request.header.Authorization"],
                 }
             );
-        }
-        else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
+        } else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
             //init external OATH IDP JWT authorizer
 
             apiGatewayAuthorizer = new apigwAuthorizers.HttpJwtAuthorizer(
                 "DefaultJwtAuthorizer",
                 props.config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl,
                 {
-                    jwtAudience: [props.config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience],
+                    jwtAudience: [
+                        props.config.app.authProvider.useExternalOAuthIdp
+                            .lambdaAuthorizorJWTAudience,
+                    ],
                     identitySource: ["$request.header.Authorization"],
                 }
             );
@@ -121,13 +123,12 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
         this.apiEndpoint = apiEndpoint;
 
         //Generate Global CSP policy
-        let authDomain = ""
-        
-        if(props.config.app.authProvider.useCognito.useSaml) {
-            authDomain = `https://${samlSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`
-        }
-        else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
-            authDomain = props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl
+        let authDomain = "";
+
+        if (props.config.app.authProvider.useCognito.useSaml) {
+            authDomain = `https://${samlSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`;
+        } else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
+            authDomain = props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl;
         }
 
         const cspPolicy = generateContentSecurityPolicy(

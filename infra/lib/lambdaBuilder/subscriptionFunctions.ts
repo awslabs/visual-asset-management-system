@@ -16,7 +16,10 @@ import { Duration } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import * as kms from "aws-cdk-lib/aws-kms";
-import { kmsKeyLambdaPermissionAddToResourcePolicy, globalLambdaEnvironmentsAndPermissions } from "../helper/security";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
+} from "../helper/security";
 import * as Service from "../../lib/helper/service-helper";
 import * as Config from "../../config/config";
 
@@ -55,7 +58,7 @@ export function buildSubscriptionService(
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
             AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
-            USER_STORAGE_TABLE_NAME: userStorageTable.tableName
+            USER_STORAGE_TABLE_NAME: userStorageTable.tableName,
         },
     });
 

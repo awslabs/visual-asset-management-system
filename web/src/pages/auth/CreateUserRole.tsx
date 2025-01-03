@@ -42,7 +42,9 @@ function validateUsers(users: string) {
         return /^[\w\-\.\+\@]{3,256}$/.test(user);
     });
 
-    return isValidUser ? null : "User ID should be at least 3 characters alphanumeric with support for special characters: . + - @";
+    return isValidUser
+        ? null
+        : "User ID should be at least 3 characters alphanumeric with support for special characters: . + - @";
 }
 
 export default function CreateTagType({

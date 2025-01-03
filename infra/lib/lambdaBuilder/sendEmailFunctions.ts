@@ -13,7 +13,10 @@ import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
-import { kmsKeyLambdaPermissionAddToResourcePolicy, globalLambdaEnvironmentsAndPermissions } from "../helper/security";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
+} from "../helper/security";
 import * as Service from "../../lib/helper/service-helper";
 import * as Config from "../../config/config";
 
@@ -44,7 +47,7 @@ export function buildSendEmailFunction(
                 : undefined,
 
         environment: {
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
         },
     });
 

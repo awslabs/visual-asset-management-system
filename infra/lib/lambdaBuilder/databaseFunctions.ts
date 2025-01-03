@@ -13,7 +13,10 @@ import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as kms from "aws-cdk-lib/aws-kms";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
-import { kmsKeyLambdaPermissionAddToResourcePolicy, globalLambdaEnvironmentsAndPermissions } from "../helper/security";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
+} from "../helper/security";
 
 export function buildCreateDatabaseLambdaFunction(
     scope: Construct,

@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from "react";
 import ReactDOM from "react-dom";
-import { Cache, Auth as AmplifyAuth} from "aws-amplify";
+import { Cache, Auth as AmplifyAuth } from "aws-amplify";
 import { HashRouter } from "react-router-dom";
 import { TopNavigation } from "@cloudscape-design/components";
 import { AppRoutes } from "./routes";
@@ -20,8 +20,9 @@ const HeaderPortal = ({ children }) => {
 function App() {
     const [navigationOpen, setNavigationOpen] = useState(true);
 
-    const user = localStorage.getItem('user') ?
-        JSON.parse(localStorage.getItem('user')) : undefined;
+    const user = localStorage.getItem("user")
+        ? JSON.parse(localStorage.getItem("user"))
+        : undefined;
 
     useEffect(() => {
         const cachedNavigationOpen = Cache.getItem("navigationOpen");
@@ -42,25 +43,27 @@ function App() {
         }
     }, [navigationOpen]);
 
-    console.log('current user is', user);
+    console.log("current user is", user);
 
     const menuText = user?.username;
     localStorage.setItem("email", user?.username);
 
     const signOut = () => {
         localStorage.clear();
-        AmplifyAuth.signOut().then(() => {
-            console.log("User signed out - signout button clicked");
-        }).catch((error) => {
-            console.log("User sign out error - signout button clicked", error);
-        })
+        AmplifyAuth.signOut()
+            .then(() => {
+                console.log("User signed out - signout button clicked");
+            })
+            .catch((error) => {
+                console.log("User sign out error - signout button clicked", error);
+            });
 
-        window.location.href = '/';
-    }
+        window.location.href = "/";
+    };
 
     return (
         <>
-                <HeaderPortal>
+            <HeaderPortal>
                 <TopNavigation
                     identity={{
                         href: "/",

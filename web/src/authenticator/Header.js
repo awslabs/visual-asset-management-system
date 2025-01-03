@@ -7,7 +7,6 @@
 import loginBgImageSrc from "../resources/img/login_bg.png";
 
 export function Header() {
-
     return (
         <>
             <div

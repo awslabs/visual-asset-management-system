@@ -240,7 +240,7 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
         }
 
         try {
-            webRoutes({ routes: allRoutes }).then(value => {
+            webRoutes({ routes: allRoutes }).then((value) => {
                 for (let allowedRoute of value.allowedRoutes) {
                     allAllowedRoutes.push(allowedRoute.route__path);
                 }
