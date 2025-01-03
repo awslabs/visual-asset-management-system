@@ -145,7 +145,7 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
     let api_path = vamsConfig.DEV_API_ENDPOINT === "" ? config.api : vamsConfig.DEV_API_ENDPOINT;
 
     //if API path doesn't end in a /, add one
-    if (api_path.length > 0 && api_path[api_path.length - 1] !== "/") {
+    if (api_path != undefined && api_path.length > 0 && api_path[api_path.length - 1] !== "/") {
         api_path = api_path + "/";
     }
 
