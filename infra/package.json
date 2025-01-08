@@ -47,7 +47,6 @@
         "cdk-nag": "^2.34.2",
         "constructs": "^10.4.2",
         "dotenv": "^16.4.5",
-        "npm-check-updates": "^16.10.7",
         "source-map-support": "^0.5.21"
     }
 }

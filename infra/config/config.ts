@@ -330,7 +330,6 @@ export function getConfig(app: cdk.App): Config {
             "Configuration Warning: UserPasswordAuth flow is enabled for Cognito which allows non-SRP authentication methods with username/passwords. This could be a security finding in some deployment environments!"
         );
     }
-    config.app.authProvider.useCognito.useUserPasswordAuthFlow;
 
     if (
         config.app.authProvider.useExternalOAuthIdp.enabled &&
@@ -366,7 +365,7 @@ export function getConfig(app: cdk.App): Config {
     }
 
     //If using Location services, for now must use cognito due to IDP authenticated role need
-    if (config.app.useLocationService.enabled && config.app.authProvider.useCognito.enabled) {
+    if (config.app.useLocationService.enabled && !config.app.authProvider.useCognito.enabled) {
         throw new Error(
             "Configuration Error: Cannot use location services without using the Cognito authentication method."
         );
