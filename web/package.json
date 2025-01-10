@@ -80,7 +80,6 @@
         "@types/react": "^17.0.2"
     },
     "scripts": {
-        "copy-custom-amplify": "cp -R ./customInstalls/@aws-amplify-custom ./node_modules/ && cp -R ./customInstalls/aws-amplify-custom ./node_modules/",
         "start": "react-scripts start",
         "build": "react-scripts build",
         "build.lowmem": "GENERATE_SOURCEMAP=false react-scripts --max_old_space_size=4096 build",

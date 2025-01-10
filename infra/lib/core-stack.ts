@@ -410,10 +410,12 @@ export class CoreVAMSStack extends cdk.Stack {
                 const fn = item as cdk.aws_lambda.Function;
                 // python3.11 suppressed for CDK Bucket Deployment which is fixed to python 3.11 (https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.aws_s3_deployment/README.html)
                 // python3.12 suppressed for all other lambdas. Latest version for non-breaking changes as of 10/2024.
+                // nodejs18.x suppressed for use of custom resource to deploy saml in CustomCognitoConfigConstruct
                 // nodejs20.x suppressed for use of custom resource to deploy saml in CustomCognitoConfigConstruct
                 if (
                     fn.runtime.name === "python3.11" ||
                     fn.runtime.name === "python3.12" ||
+                    fn.runtime.name === "nodejs18.x" ||
                     fn.runtime.name === "nodejs20.x"
                 ) {
                     //console.log(item.node.path,fn.runtime.name)
