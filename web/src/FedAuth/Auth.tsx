@@ -10,24 +10,24 @@ import { getSecureConfig, getAmplifyConfig } from "../services/APIService";
 import { webRoutes } from "../services/APIService";
 import { routeTable } from "../routes";
 import { default as vamsConfig } from "../config";
-
 import { Authenticator } from "@aws-amplify/ui-react";
+
 import Button from "@cloudscape-design/components/button";
 import loginBgImageSrc from "../resources/img/login_bg.png";
 import logoDarkImageSrc from "../resources/img/logo_dark.svg";
-import { Heading, useTheme } from "@aws-amplify/ui-react";
 
 import LoadingScreen from "../components/loading/LoadingScreen";
 import { Alert } from "@cloudscape-design/components";
+import styles from "./loginbox.module.css";
+import "@aws-amplify/ui-react/styles.css";
+import { Heading, useTheme } from "@aws-amplify/ui-react";
 
 import { GlobalHeader } from "./../common/GlobalHeader";
-
 import { Header } from "./../authenticator/Header";
 import { Footer } from "./../authenticator/Footer";
 import { SignInHeader } from "./../authenticator/SignInHeader";
 import { SignInFooter } from "./../authenticator/SignInFooter";
-import styles from "./loginbox.module.css";
-import "@aws-amplify/ui-react/styles.css";
+
 
 /**
  * Additional configuration needed to use federated identities
@@ -353,14 +353,20 @@ const Auth: React.FC<AuthProps> = (props) => {
         if (config) {
             //Set global variables for cognito mode or external OAUTH.
             //If config.config.cognitoUserPoolId is undefined or empty, then disable cognito and setup external oauth
-            if (config.cognitoUserPoolId === undefined || config.cognitoUserPoolId === "") {
+            if (config.cognitoUserPoolId === undefined ||
+                config.cognitoUserPoolId === "undefined" ||
+                config.cognitoUserPoolId === ""
+                ) {
                 window.DISABLE_COGNITO = true;
                 configureOAuthClient(config);
             } else {
                 window.DISABLE_COGNITO = false;
             }
 
-            if (config.cognitoFederatedConfig === undefined) {
+            if (config.cognitoFederatedConfig === undefined ||
+                config.cognitoFederatedConfig === "undefined" ||
+                config.cognitoFederatedConfig === ""
+            ) {
                 window.COGNITO_FEDERATED = false;
             } else {
                 window.COGNITO_FEDERATED = true;
@@ -645,7 +651,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                             handleExternalOauthSignIn();
                         } else {
                             // Access Token Not Expired - Starting Refresh Interval
-                            startAccessTokenRefreshInterval();
+                            startAccessTokenRefreshTimer();
                         }
                     } else {
                         setState({ authenticated: false });
@@ -815,38 +821,57 @@ const accessTokenValid = async (): Promise<boolean> => {
             return false;
         }
 
-        startAccessTokenRefreshInterval();
+        startAccessTokenRefreshTimer();
         return true;
     } catch (error) {
         return false;
     }
 };
 
-const startAccessTokenRefreshInterval = () => {
-    // Schedule check and refresh (when needed) of JWT's every 5 min:
-    const i = setInterval(async () => {
-        // attempt of refresh token
-        const accessToken = localStorage.getItem("idp_access_token");
-        const oauth2Token = localStorage.getItem("oauth2_token");
+let refreshTimer: NodeJS.Timeout | null;
+const startAccessTokenRefreshTimer = (startNewTimer: boolean = false) => {
+    // If there was a previous refresh timer, the boolean param will clear it
+    if (startNewTimer && refreshTimer) {
+        clearTimeout(refreshTimer);
+        refreshTimer = null;
+    }
 
-        if (!accessToken || !oauth2Token) {
-            // no access token found when trying to refresh
-            signOutWithError("auth_error", "No access token found when refreshing");
-            return;
+    const accessToken = localStorage.getItem("idp_access_token");
+    const oauth2Token = localStorage.getItem("oauth2_token");
+
+    let refreshTimeLength = 5 * 60 * 1000; // Default to 5 minutes, if no expiresAt timestamp found below
+    const percentOfTokenLengthToRefresh = 0.75; // Percentage of time to trigger refresh, default to 75% per other oauth library recommendations
+
+    // If there is an oauth token and no refresh timer, calculate the percentage of it's lifetime from the expiration time and now
+    if (oauth2Token && !refreshTimer) {
+        const expiresAtTimestamp = (JSON.parse(oauth2Token) as OAuth2Token).expiresAt;
+        if (expiresAtTimestamp) {
+            refreshTimeLength = Math.ceil(
+                (expiresAtTimestamp - Date.now()) * percentOfTokenLengthToRefresh
+            ); // rounding so we don't have fractions of a millisecond
         }
 
-        try {
-            const oauth2TokenResponse = await oauth2Client.refreshToken(
-                JSON.parse(oauth2Token) as OAuth2Token
-            );
-            setOauth2Token(oauth2TokenResponse);
-        } catch (error) {
-            clearInterval(i);
-            console.error("error: ", error);
-            signOutWithError("auth_error", "Failed to refresh access token.");
-        }
-    }, 5 * 60 * 1000);
-};
+        // Start the timer that will run at the percentage of the expiration time calculated above
+        refreshTimer = setTimeout(async () => {
+            // Run the following logic when the timer triggers
+            if (!accessToken || !oauth2Token) {
+                // no access token found when trying to refresh
+                signOutWithError("auth_error", "No access token found when refreshing");
+                return;
+            }
+
+            try {
+                const oauth2TokenResponse = await oauth2Client.refreshToken(
+                    JSON.parse(oauth2Token) as OAuth2Token
+                );
+                setOauth2Token(oauth2TokenResponse); // Set when previous line is successful and within here, restart this timer
+            } catch (error) {
+                console.error("error: ", error);
+                signOutWithError("auth_error", "Failed to refresh access token.");
+            }
+        }, refreshTimeLength);
+    }
+}
 
 const signOutWithError = (key: string = "auth_error", value: string = "Unauthorized") => {
     localStorage.clear();
@@ -863,6 +888,7 @@ const resetSession = () => {
 const setOauth2Token = (oauth2Token: OAuth2Token) => {
     localStorage.setItem("oauth2_token", JSON.stringify(oauth2Token));
     localStorage.setItem("idp_access_token", oauth2Token.accessToken);
+    startAccessTokenRefreshTimer(true); // Restart timer upon successfully setting the new oauth token
 };
 
 function clearPreviousLoginErrors() {

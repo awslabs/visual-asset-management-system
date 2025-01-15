@@ -39,6 +39,13 @@ export function GlobalHeader({ authorizationHeader = false }) {
                 !authorizationHeader && ( //Used for non-authorization pages
                     <div
                         style={{
+                            position: "sticky",
+                            top: 56,
+                            left: 0,
+                            zIndex: "900",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
                             backgroundColor: "rgba(231, 94, 64, 1)",
                             width: "100vw",
                             color: "white",
@@ -54,7 +61,7 @@ export function GlobalHeader({ authorizationHeader = false }) {
                 authorizationHeader && ( //Used for authorization pages
                     <div
                         style={{
-                            position: "fixed",
+                            position: "sticky",
                             backgroundColor: "rgba(231, 94, 64, 1)",
                             top: 0,
                             left: 0,

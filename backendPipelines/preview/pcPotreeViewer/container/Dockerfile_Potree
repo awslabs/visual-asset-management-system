@@ -14,9 +14,9 @@ ARG GITHUB_SERVER_URL="https://github.com"
 # install build deps, download Potree Source, and build for Potree Conveter
 RUN apk add --no-cache git cmake make gcc g++ libtbb-dev 
 
-#git clone --depth 1 "https://github.com/potree/PotreeConverter" PotreeConverter
+#git clone  "https://github.com/potree/PotreeConverter" PotreeConverter
 
-RUN git clone --depth 1 "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" PotreeConverter && \
+RUN git clone "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" PotreeConverter && \
     cd PotreeConverter ; \
     git checkout ${GITHUB_SHA}
 

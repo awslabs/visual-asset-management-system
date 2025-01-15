@@ -31,7 +31,7 @@ code {
 
 #headerWrapper {
     display: block;
-    position: fixed;
+    position: sticky;
     top: 0;
     left: 0;
     right: 0;
@@ -42,7 +42,7 @@ code {
 }
 
 #root {
-    margin-top: 56px;
+    margin-top: 0px;
 }
 
 #root div[class^="awsui_drawer-content"] {
