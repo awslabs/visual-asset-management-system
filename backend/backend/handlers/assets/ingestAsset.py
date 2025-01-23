@@ -129,6 +129,13 @@ def lambda_handler(event, context):
         response['statusCode'] = 400
         response['body'] = json.dumps({"message": message})
         return response
+    
+    if 'tags' in event['body'] and not isinstance(event['body']['tags'], list):
+        message = "Tags must passed as a list in API Call"
+        logger.error(message)
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": message})
+        return response
 
     logger.info("Validating parameters")
     (valid, message) = validate({
@@ -151,6 +158,12 @@ def lambda_handler(event, context):
         'description': {
             'value': event['body']['description'],
             'validator': 'STRING_256'
+        },
+        'tags': {
+            'value': event['body'].get('tags', []),
+            'validator': 'OBJECT_NAME_ARRAY',
+            'optional': True
+
         }
     })
     if not valid:

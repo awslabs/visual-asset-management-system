@@ -3,6 +3,9 @@
 
 FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.11-alpine
 
+#Create appuser for container runtime processes
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
 #Build PotreeConverter
 WORKDIR /
 
@@ -42,6 +45,9 @@ COPY ./ ./pc_pipeline
 
 # install python app and deps
 RUN pip3 install -r ./pc_pipeline/requirements.txt
+
+#Switch suer to app user for runtime operations
+USER appuser
 
 # set entry point to app
 ENTRYPOINT ["python3", "-m", "pc_pipeline"]

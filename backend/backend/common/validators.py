@@ -81,6 +81,8 @@ def validate_sagemaker_notebook_id(name, value):
     return (True, '')
 
 def validate_id_array(name, values):
+    if not isinstance(values, list):
+        return (False, name + " must be an array.")
     for val in values:
         (valid, message) = validate_id(name, val)
         if not valid:
@@ -88,6 +90,8 @@ def validate_id_array(name, values):
     return (True, '')
 
 def validate_uuid_array(name, values):
+    if not isinstance(values, list):
+        return (False, name + " must be an array.")
     for val in values:
         (valid, message) = validate_uuid(name, val)
         if not valid:
@@ -100,6 +104,8 @@ def validate_objectName(name, value):
     return (True, '')
 
 def validate_objectName_array(name, values):
+    if not isinstance(values, list):
+        return (False, name + " must be an array.")
     for val in values:
         (valid, message) = validate_objectName(name, val)
         if not valid:
@@ -107,6 +113,8 @@ def validate_objectName_array(name, values):
     return (True, '')
 
 def validate_email_array(name, values):
+    if not isinstance(values, list):
+        return (False, name + " must be an array.")
     for val in values:
         (valid, message) = validate_email(name, val)
         if not valid:
@@ -114,6 +122,8 @@ def validate_email_array(name, values):
     return (True, '')
 
 def validate_userid_array(name, values):
+    if not isinstance(values, list):
+        return (False, name + " must be an array.")
     for val in values:
         (valid, message) = validate_userid(name, val)
         if not valid:
@@ -133,6 +143,8 @@ def validate_string_json(name, value):
         return (False, name + " is invalid. Must be a valid json string.")
 
 def validate_string_max_length_array(name, values, max_length):
+    if not isinstance(values, list):
+        return (False, name + " must be an array.")
     for val in values:
         (valid, message) = validate_string_max_length(name, val, max_length)
         if not valid:

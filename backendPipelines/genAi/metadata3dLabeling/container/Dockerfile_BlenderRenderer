@@ -3,6 +3,9 @@
 
 FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.12-alpine
 
+#Create appuser for container runtime processes
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
 #Install blender + openCV (has all the libraries needed for blender rendering)
 RUN apk add --no-cache blender py3-numpy py3-opencv
 
@@ -18,6 +21,9 @@ RUN pip install --upgrade pip
 
 # install python app and deps
 RUN pip3 install -r ./requirements.txt
+
+#Switch suer to app user for runtime operations
+USER appuser
 
 # set entry point to app
 ENTRYPOINT ["python3", "-m", "main"]

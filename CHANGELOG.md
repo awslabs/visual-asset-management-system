@@ -25,6 +25,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   Additional checks are made for valid parameter data in the asset deletion/archiving service
 -   Fixed local web local development support, updated documentation for new local development processes
 -   Fixed numerous lambda functions that were not adhering to the VPC/subnet configuration options for placing behind a VPC from v2.0 update
+-   Fixed more validation bugs to ensure API fields that take in arrays are actually arrays
 -   Miscellaneous minor bug fixes across web and backend components
 
 ### Chores
