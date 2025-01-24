@@ -1,6 +1,11 @@
 # Changelog
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
+## [2.2.0] (2025-XX-XX)
+
+### Features
+
+-   Added a new use-case pipeline and configuration option for `RapidPipeline` that optimize 3D assets using mesh decimation & remeshing, texture baking, UV aggregation, and more. RapidPipeline can also convert assets between GLTF, GLB, USD, OBJ, FBX, VRM, STL, and PLY file types. VAMS pipeline registration `outputType` will define for each pipeline registration what the output file extension type will be. Pipeline can be called by registering 'vamsExecuteRapidPipeline' lambda function with VAMS pipelines / workflows.
 
 ## [2.1.1] (2025-01-17)
 

@@ -624,3 +624,4 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         },
     };
 }
+

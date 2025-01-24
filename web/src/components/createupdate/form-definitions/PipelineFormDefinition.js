@@ -19,7 +19,7 @@ import {
 import OptionDefinition from "./types/OptionDefinition";
 import { ENTITY_TYPES_NAMES } from "../entity-types/EntitieTypes";
 
-const fileTypeOptions = modelFileFormats
+export const fileTypeOptions = modelFileFormats
     .concat(columnarFileFormats)
     .concat(cadFileFormats)
     .concat(archiveFileFormats)
@@ -32,7 +32,7 @@ const fileTypeOptions = modelFileFormats
         });
     });
 
-const pipelineTypeOptions = [
+export const pipelineTypeOptions = [
     {
         label: "Standard - File",
         value: "standardFile",
@@ -43,7 +43,7 @@ const pipelineTypeOptions = [
     },
 ];
 
-const pipelineExecutionTypeOptions = [
+export const pipelineExecutionTypeOptions = [
     {
         label: "Lambda",
         value: "Lambda",

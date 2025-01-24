@@ -39,6 +39,7 @@ export class CoreVAMSStack extends cdk.Stack {
     private webAppBuildPath = "../web/build";
 
     private vpc: ec2.IVpc;
+    private subnetsIsolated: ec2.ISubnet[];
     private subnetsPrivate: ec2.ISubnet[];
     private subnetsPublic: ec2.ISubnet[];
     private vpceSecurityGroup: ec2.ISecurityGroup;
@@ -100,6 +101,7 @@ export class CoreVAMSStack extends cdk.Stack {
 
             this.vpc = vpcBuilderNestedStack.vpc;
             this.vpceSecurityGroup = vpcBuilderNestedStack.vpceSecurityGroup;
+            this.subnetsIsolated = vpcBuilderNestedStack.isolatedSubnets;
             this.subnetsPrivate = vpcBuilderNestedStack.privateSubnets;
             this.subnetsPublic = vpcBuilderNestedStack.publicSubnets;
 
@@ -154,7 +156,7 @@ export class CoreVAMSStack extends cdk.Stack {
             storageResources: storageResourcesNestedStack.storageResources,
             config: props.config,
             vpc: this.vpc,
-            subnets: this.subnetsPrivate,
+            subnets: this.subnetsIsolated,
         });
 
         //Ignore stacks if we are only loading context (mostly for Imported VPC)
@@ -171,6 +173,7 @@ export class CoreVAMSStack extends cdk.Stack {
             const staticWebBuilderNestedStack = new StaticWebBuilderNestedStack(this, "StaticWeb", {
                 config: props.config,
                 vpc: this.vpc,
+                subnetsIsolated: this.subnetsIsolated,
                 subnetsPrivate: this.subnetsPrivate,
                 subnetsPublic: this.subnetsPublic,
                 webAppBuildPath: this.webAppBuildPath,
@@ -192,7 +195,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 lambdaLayers.lambdaCommonBaseLayer,
                 lambdaLayers.lambdaCommonServiceSDKLayer,
                 this.vpc,
-                this.subnetsPrivate
+                this.subnetsIsolated
             );
 
             //Deploy OpenSearch Serverless (nested stack)
@@ -205,7 +208,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 storageResourcesNestedStack.storageResources,
                 lambdaLayers.lambdaCommonBaseLayer,
                 this.vpc,
-                this.subnetsPrivate
+                this.subnetsIsolated
             );
 
             //Set feature for no opensearch in neither provisioned or serverless selected
@@ -227,7 +230,8 @@ export class CoreVAMSStack extends cdk.Stack {
                     lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
                     vpc: this.vpc,
                     vpceSecurityGroup: this.vpceSecurityGroup,
-                    subnets: this.subnetsPrivate,
+                    isolatedSubnets: this.subnetsIsolated,
+                    privateSubnets: this.subnetsPrivate,
                 }
             );
 
