@@ -204,16 +204,24 @@ def validate(values):
                 return (True, "")
             else:
                 return (False, k + " is a required field.")
-        if isinstance(v['value'], str) and v['value'] == '':
+        if not "_ARRAY" in v['validator'] and isinstance(v['value'], str) and v['value'] == '':
             if optional:
                 return (True, "")
             else:
                 return (False, k + " is a required field.")
-        if isinstance(v['value'], (list, dict)) and len(v['value']) == 0:
+        if "_ARRAY" in v['validator'] and isinstance(v['value'], (list)) and len(v['value']) == 0:
             if optional:
                 return (True, "")
             else:
                 return (False, k + " is a required field.")
+            
+        #Check input types first. If not string or array for respective validator, error.
+        if isinstance(v['value'], dict):
+            return (False, k + " is invalid. Must be a string or an array of strings for validator, not a dict.")
+        elif "_ARRAY" in v['validator'] and not isinstance(v['value'], list):
+            return (False, k + " is invalid. Must be a list for array validators, not a " + str(type(v['value'])))
+        elif not isinstance(v['value'], str):
+            return (False, k + " is invalid. Must be a string for non-array validators, not a " + str(type(v['value'])))
 
         #Type checks after we check for empties.
         if v['validator'] == 'ID':

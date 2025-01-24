@@ -378,7 +378,6 @@ function SearchPage(props: SearchPageProps) {
                             type="error"
                             header={state.error.message}
                         >
-                            {state.error.stack}
                         </Alert>
                     )}
                     {state?.notifications.length > 0 && <Flashbar items={state.notifications} />}
