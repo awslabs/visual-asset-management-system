@@ -439,6 +439,23 @@ NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback 
 | :------------------------------------------------------ | :----------------------------------------- |
 | OBJ, GLB/GLTF, FBX, ABC, DAE, PLY, STL, USD (3D Meshes) | vamsExecuteGenAiMetadata3dLabelingPipeline |
 
+### Standard Type - RapidPipeline Asset Optimization & Conversion Pipeline (Asynchronous)
+
+RapidPipeline 3D Processor is used to convert between various 3D mesh file types, as well as optimize mesh files using techniques like mesh decimation & remeshing, texture baking, UV aggregation, LOD generation, configurable scene graph flattening, and more.
+
+If you wish to trigger this pipelines additionally/manually through VAMS pipeline, you can setup a new VAMS pipeline using the table below. You will need to lookup the lambda function name in the AWS console based on the base deployment name listed.
+
+The pipeline uses a third-party tool from Darmstadt Graphics Group (DGG), RapidPipeline 3D Processor, and requires an active subscription to their [AWS Marketplace Listing](https://aws.amazon.com/marketplace/pp/prodview-zdg4blxeviyyi?sr=0-1&ref_=beagle&applicationId=AWSMPContessa).
+
+The pipeline uses the selected file type on the asset as the input type and the registered pipeline `outputType` as the final conversion type. For now, a separate pipeline registration is required for each from-to file type conversion that a organization would like to support.
+
+NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback with the Task Token".
+
+| Input File Types Supported                                | Base Lambda Function Name    |
+| :-------------------------------------------------------- | :--------------------------- |
+| GLTF, GLB, USD, OBJ, FBX, VRM, STL, PLY (3D Meshes)       | vamsExecuteRapidPipeline     |
+
+
 # Testing API
 
 Please see the corresponding [Postman Collection](https://github.com/awslabs/visual-asset-management-system/blob/main/VAMS_API_Tests.postman_collection.json) provided.
