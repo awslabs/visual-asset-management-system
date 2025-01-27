@@ -214,7 +214,9 @@ export function buildMetadataGenerationPipelineFunction(
         effect: iam.Effect.ALLOW,
         actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
         resources: [
-            "arn:aws:bedrock:"+config.env.region+"::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0",
+            "arn:aws:bedrock:" +
+                config.env.region +
+                "::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0",
         ],
     });
     fun.addToRolePolicy(bedrockPolicy);
