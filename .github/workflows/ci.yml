@@ -67,6 +67,7 @@ jobs:
                   dir: "vams/web"
                   cmd: install
 
+            #####
             # - name: Run yarn audit web directory
             #   uses: Borales/actions-yarn@v4.2.0
             #   with:
@@ -78,6 +79,7 @@ jobs:
             #   env:
             #       CI: "true"
             #   run: npm run test
+            #####
 
             - name: Web build
               working-directory: vams/web
@@ -100,7 +102,7 @@ jobs:
                   export REGION=us-east-1
                   npm -g uninstall aws-cdk
                   npm -g install aws-cdk
-                  npx cdk synth
+                  cdk synth
 
             - name: eslint
               working-directory: vams
@@ -116,6 +118,8 @@ jobs:
               with:
                   input_path: vams/infra/cdk.out/vams-core-prod-us-east-1.template.json
 
+            #####
             #- name: run checks
             #  working-directory: vams/backend
             #  run: make all
+            #####
