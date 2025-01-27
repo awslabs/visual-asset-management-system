@@ -17,7 +17,8 @@ export interface SecurityGroupGatewayPipelineConstructProps extends cdk.StackPro
     config: Config.Config;
     vpc: ec2.IVpc;
     vpceSecurityGroup: ec2.ISecurityGroup;
-    subnets: ec2.ISubnet[];
+    privateSubnets: ec2.ISubnet[];
+    isolatedSubnets: ec2.ISubnet[];
 }
 
 const defaultProps: Partial<SecurityGroupGatewayPipelineConstructProps> = {
@@ -30,7 +31,10 @@ const defaultProps: Partial<SecurityGroupGatewayPipelineConstructProps> = {
  */
 export class SecurityGroupGatewayPipelineConstruct extends Construct {
     readonly vpc: ec2.IVpc;
-    readonly subnets: {
+    readonly privateSubnets: {
+        pipeline: ec2.ISubnet[];
+    };
+    readonly isolatedSubnets: {
         pipeline: ec2.ISubnet[];
     };
     readonly securityGroups: {
@@ -50,8 +54,11 @@ export class SecurityGroupGatewayPipelineConstruct extends Construct {
 
         //For pipelines we are only deploying in 1 subnet/AZ, so just grab the top one from the isolated/private subnet list
         //At this point we already know there is at least 1  subnet with other checks previously done
-        this.subnets = {
-            pipeline: props.subnets != undefined ? [props.subnets[0]] : [],
+        this.privateSubnets = {
+            pipeline: props.privateSubnets != undefined? [props.privateSubnets[0]] : [],
+        };
+        this.isolatedSubnets = {
+            pipeline: props.isolatedSubnets != undefined? [props.isolatedSubnets[0]] : [],
         };
 
         this.securityGroups = {

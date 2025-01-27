@@ -25,6 +25,7 @@
             "useForAllLambdas": true,
             "addVpcEndpoints": true,
             "optionalExternalVpcId": null,
+            "optionalExternalIsolatedSubnetIds": null,
             "optionalExternalPrivateSubnetIds": null,
             "optionalExternalPublicSubnetIds": null,
             "vpcCidrRange": "10.1.0.0/16"
@@ -52,13 +53,17 @@
         },
         "pipelines": {
             "useConversion3dBasic": {
-                "enabled": false
+                "enabled": true
             },
             "usePreviewPcPotreeViewer": {
                 "enabled": false
             },
             "useGenAiMetadata3dLabeling": {
                 "enabled": false
+            },
+            "useRapidPipeline": {
+                "enabled": false,
+                "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>:<IMAGE-TAG>"
             }
         },
         "authProvider": {
