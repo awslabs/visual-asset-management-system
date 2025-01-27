@@ -18,7 +18,7 @@ jobs:
             - name: Setup Python Version
               uses: actions/setup-python@v2
               with:
-                  python-version: 3.10.11
+                  python-version: 3.12.0
 
             - name: Setup node for the whole package
               uses: actions/setup-node@v3
@@ -98,6 +98,8 @@ jobs:
               run: |
                   CDK_NAG_ENABLED=true
                   export REGION=us-east-1
+                  npm -g uninstall aws-cdk
+                  npm -g install aws-cdk
                   npx cdk synth
 
             - name: eslint
