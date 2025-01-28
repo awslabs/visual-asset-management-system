@@ -8,31 +8,31 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
 
 ### ⚠ BREAKING CHANGES
 
-Due VPC subnet breakout changes, this may break existing deployments. It is reccomended to use a A/B deployment if you run into subnet configuration issues. 
+Due to VPC subnet breakout changes, this may break existing deployments. It is recommended to use an A/B deployment if you run into subnet configuration issues. 
 
-Recommended Upgrade Path: A/B Stack Deployment with data migration using staging bucket configuration and upgrade migration scripts for DynamoDB tables in `./infra/upgradeMigrationScripts`
+**Recommended Upgrade Path:** A/B Stack Deployment with data migration using staging bucket configuration and upgrade migration scripts for DynamoDB tables in `./infra/upgradeMigrationScripts`
 
 ### Features
 
--   Changed VPC subnet so now break-out subnets for isolated, private, and public. Previously only private (was actually isolated) and public existed. 
--   -   For those using external VPC and subnet import configuration, previously private subnet IDs should now be copied into isolated subnets configuration option. 
--   Added a new use-case pipeline and configuration option for `RapidPipeline` that optimize 3D assets using mesh decimation & remeshing, texture baking, UV aggregation, and more. 
--   -   RapidPipeline can also convert assets between GLTF, GLB, USD, OBJ, FBX, VRM, STL, and PLY file types. 
+-   Changed VPC subnet to now break out subnets for isolated, private, and public. Previously, only private (which was actually isolated) and public existed.
+-   -   For those using external VPC and subnet import configuration, previously private subnet IDs should now be copied into isolated subnets configuration option.
+-   Added a new use-case pipeline and configuration option for `RapidPipeline` that optimizes 3D assets using mesh decimation & remeshing, texture baking, UV aggregation, and more.
+-   -   RapidPipeline can also convert assets between GLTF, GLB, USD, OBJ, FBX, VRM, STL, and PLY file types.
 -   -   Pipeline can be called by registering 'vamsExecuteRapidPipeline' lambda function with VAMS pipelines / workflows.
--   Updated backend infrastructure configuration options and functionality to support External OAuth IDP systems besides AWS cognito. Includes many additional infrastructure configuration settings.
+-   Updated backend infrastructure configuration options and functionality to support External OAuth IDP systems besides AWS Cognito. Includes many additional infrastructure configuration settings.
 -   **Web** Added web support for External OAuth IDP configuration
 -   Added configuration option `addStackCloudTrailLogs` for creating AWS CloudTrail log groups and trails for the stack. This is defaulted to `true`.
--   Added configuration option `useAlb.addAlbS3SpecialVpcEndpoint` for creating the special S3 VPC Interface Endpoint for ALB deployment configurations. This is defaulted to `true`. See documentation for this setting if turned false.
+-   Added configuration option `useAlb.addAlbS3SpecialVpcEndpoint` for creating the special S3 VPC Interface Endpoint for ALB deployment configurations. This is defaulted to `true`. See documentation for this setting if turned off.
 -   **Web** Added infrastructure configuration option `webUi.optionalBannerHtmlMessage` for adding a persistent banner (HTML) message at the top of the WebUI
 -   **Web** Added capability to define which tag types are required to be added to an asset. If tag types are required, at least one of the defined tags on the tag type must always be included on the asset.
 -   The ingestAsset API now supports passing in tags (to support required tag types)
 -   Changed UserId to no longer need to be an email, added a new LoginProfile table to track user emails for notification service which gets updated from JWT tokens or organization custom logic for retrieving user emails. New API for updating LoginProfile added to web login.
--   Enabled cognito user pool optional Multi-Factor Authentication (MFA) for created accounts across TOTP or SMS. \*\*Note: SMS sending requires additional AWS cognito / SNS setup to a SNS production account and originiation identity (if sending to US phone #'s).
--   -   Added backend broken out custom logic and flag to know if a user is logged in with MFA or not. For external OAUTH IDP implementations, this logic must be tailored to it the IDP system.
+-   Enabled Cognito user pool optional Multi-Factor Authentication (MFA) for created accounts across TOTP or SMS. **Note:** SMS sending requires additional AWS Cognito / SNS setup to a SNS production account and origination identity (if sending to US phone #'s).
+-   -   Added backend broken out custom logic and flag to know if a user is logged in with MFA or not. For external OAuth IDP implementations, this logic must be tailored to the IDP system.
 
 ### Bug Fixes
 
--   Fix opensearch lambda event source mapping for regions that don't support event source tagging yet (ie GovCloud) [bug introduced in v2.1.0 with CDK version upgrade]
+-   Fixed opensearch lambda event source mapping for regions that don't support event source tagging yet (i.e., GovCloud) [bug introduced in v2.1.0 with CDK version upgrade]
 -   Additional checks are made for valid parameter data in the asset deletion/archiving service
 -   Fixed local web local development support, updated documentation for new local development processes
 -   Fixed numerous lambda functions that were not adhering to the VPC/subnet configuration options for placing behind a VPC from v2.0 update
@@ -50,7 +50,7 @@ Recommended Upgrade Path: A/B Stack Deployment with data migration using staging
 -   **Web** Turned on amplify gen1 Secure Cookie storage option
 -   Updated docker file(s) environment variables to not use legacy format (old: ENV key value, new: ENV key=value)
 -   Updated GenAIMetadataLabeling pipeline container to use the latest blender version when deploying due to Alpine APK restrictions on holding earlier versions
--   Switched web API calls to use Cognito user access token for all requests authorizations instead of Id token. Created separate parameter for scopedS3Access to pass in ID token for this specifc API call that needs it.
+-   Switched web API calls to use Cognito user access token for all requests authorizations instead of Id token. Created separate parameter for scopedS3Access to pass in ID token for this specific API call that needs it.
 
 ## [2.1.1] (2025-01-17)
 
