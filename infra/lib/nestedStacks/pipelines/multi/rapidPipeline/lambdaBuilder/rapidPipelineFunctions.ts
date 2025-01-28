@@ -15,14 +15,10 @@ import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../config/config";
 import * as Config from "../../../../../../config/config";
 import * as kms from "aws-cdk-lib/aws-kms";
-import {
-    kmsKeyLambdaPermissionAddToResourcePolicy,
-    globalLambdaEnvironmentsAndPermissions,
-} from "../../../../../helper/security";
+import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
-import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
 
-export function buildVamsExecuteMetadata3dLabelingPipelineFunction(
+export function buildVamsExecuteRapidPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     assetBucket: s3.Bucket,
@@ -33,12 +29,12 @@ export function buildVamsExecuteMetadata3dLabelingPipelineFunction(
     subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
 ): lambda.Function {
-    const name = "vamsExecuteGenAiMetadata3dLabelingPipeline";
+    const name = "vamsExecuteRapidPipeline";
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
             path.join(
                 __dirname,
-                `../../../../../../../backendPipelines/genAi/metadata3dLabeling/lambda`
+                `../../../../../../../backendPipelines/multi/rapidPipeline/lambda`
             )
         ),
         handler: `${name}.lambda_handler`,
@@ -63,8 +59,6 @@ export function buildVamsExecuteMetadata3dLabelingPipelineFunction(
     assetAuxiliaryBucket.grantRead(fun);
     openPipelineLambdaFunction.grantInvoke(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
-    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
 }
@@ -90,7 +84,7 @@ export function buildOpenPipelineFunction(
         code: lambda.Code.fromAsset(
             path.join(
                 __dirname,
-                `../../../../../../../backendPipelines/genAi/metadata3dLabeling/lambda`
+                `../../../../../../../backendPipelines/multi/rapidPipeline/lambda`
             )
         ),
         handler: `${name}.lambda_handler`,
@@ -116,8 +110,6 @@ export function buildOpenPipelineFunction(
     assetAuxiliaryBucket.grantRead(fun);
     pipelineStateMachine.grantStartExecution(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
-    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
 }
@@ -129,7 +121,8 @@ export function buildConstructPipelineFunction(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
     pipelineSecurityGroups: ec2.ISecurityGroup[],
-    kmsKey?: kms.IKey
+    assetAuxiliaryBucket: s3.Bucket,
+    kmsKey?: kms.IKey,
 ): lambda.Function {
     const name = "constructPipeline";
     const vpcSubnets = vpc.selectSubnets({
@@ -140,7 +133,7 @@ export function buildConstructPipelineFunction(
         code: lambda.Code.fromAsset(
             path.join(
                 __dirname,
-                `../../../../../../../backendPipelines/genAi/metadata3dLabeling/lambda`
+                `../../../../../../../backendPipelines/multi/rapidPipeline/lambda`
             )
         ),
         handler: `${name}.lambda_handler`,
@@ -162,98 +155,16 @@ export function buildConstructPipelineFunction(
                 : undefined,
     });
 
+    // Giving Lambda function permission to upload RapidPipeline config file to auxiliary bucket
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ['s3:PutObject'],
+            effect: iam.Effect.ALLOW,
+            resources: [assetAuxiliaryBucket.bucketArn + "/*"]
+        }),
+    );
+
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
-
-    return fun;
-}
-
-export function buildMetadataGenerationPipelineFunction(
-    scope: Construct,
-    lambdaCommonBaseLayer: LayerVersion,
-    lambdaMetadataGenerationLayer: LayerVersion,
-    assetBucket: s3.Bucket,
-    assetAuxiliaryBucket: s3.Bucket,
-    config: Config.Config,
-    vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[],
-    pipelineSecurityGroups: ec2.ISecurityGroup[],
-    kmsKey?: kms.IKey
-): lambda.Function {
-    const name = "metadataGenerationPipeline";
-    const vpcSubnets = vpc.selectSubnets({
-        subnets: subnets,
-    });
-
-    const fun = new lambda.Function(scope, name, {
-        code: lambda.Code.fromAsset(
-            path.join(
-                __dirname,
-                `../../../../../../../backendPipelines/genAi/metadata3dLabeling/lambda`
-            )
-        ),
-        handler: `${name}.lambda_handler`,
-        runtime: LAMBDA_PYTHON_RUNTIME,
-        layers: [lambdaCommonBaseLayer, lambdaMetadataGenerationLayer],
-        timeout: Duration.minutes(5),
-        memorySize: Config.LAMBDA_MEMORY_SIZE,
-        vpc:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? vpc
-                : undefined, //Use VPC when flagged to use for all lambdas
-        vpcSubnets:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? { subnets: subnets }
-                : undefined,
-        securityGroups:
-            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
-                ? pipelineSecurityGroups
-                : undefined,
-    });
-    assetBucket.grantReadWrite(fun);
-    assetAuxiliaryBucket.grantReadWrite(fun);
-    kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
-    suppressCdkNagErrorsByGrantReadWrite(scope);
-
-    // Add permissions to Lambda function to access Bedrock
-    const bedrockPolicy = new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
-        resources: [
-            "arn:aws:bedrock:" +
-                config.env.region +
-                "::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0",
-        ],
-    });
-    fun.addToRolePolicy(bedrockPolicy);
-
-    // Add permissions to Lambda function to access Rekognition
-    // No resource-level permissioning. * Resource needed. https://docs.aws.amazon.com/rekognition/latest/dg/security_iam_id-based-policy-examples.html
-    const rekognitionPolicy = new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: [
-            "rekognition:ListCollections",
-            "rekognition:DetectModerationLabels",
-            "rekognition:GetLabelDetection",
-            "rekognition:DetectText",
-            "rekognition:DetectLabels",
-            "rekognition:DetectProtectiveEquipment",
-            "rekognition:ListTagsForResource",
-            "rekognition:ListDatasetEntries",
-            "rekognition:ListDatasetLabels",
-            "rekognition:DescribeDataset",
-            "rekognition:DetectCustomLabels",
-            "rekognition:GetTextDetection",
-            "rekognition:GetSegmentDetection",
-            "rekognition:DescribeStreamProcessor",
-            "rekognition:ListStreamProcessors",
-            "rekognition:DescribeProjects",
-            "rekognition:DescribeProjectVersions",
-        ],
-        resources: ["*"],
-    });
-    fun.addToRolePolicy(rekognitionPolicy);
 
     return fun;
 }
@@ -278,7 +189,7 @@ export function buildPipelineEndFunction(
         code: lambda.Code.fromAsset(
             path.join(
                 __dirname,
-                `../../../../../../../backendPipelines/genAi/metadata3dLabeling/lambda`
+                `../../../../../../../backendPipelines/multi/rapidPipeline/lambda`
             )
         ),
         handler: `${name}.lambda_handler`,
@@ -304,8 +215,6 @@ export function buildPipelineEndFunction(
     assetBucket.grantRead(fun);
     assetAuxiliaryBucket.grantRead(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
-    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     const stateTaskPolicy = new iam.PolicyStatement({
         actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],

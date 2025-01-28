@@ -32,6 +32,7 @@ export interface StaticWebBuilderNestedStackProps extends cdk.StackProps {
     ssmWafArn: string;
     authResources: authResources;
     vpc: ec2.IVpc;
+    subnetsIsolated: ec2.ISubnet[];
     subnetsPrivate: ec2.ISubnet[];
     subnetsPublic: ec2.ISubnet[];
 }
@@ -229,7 +230,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
             const webAppDistroNetwork = new GatewayAlbDeployConstruct(this, "WebAppDistroNetwork", {
                 ...props,
                 vpc: props.vpc,
-                subnetsPrivate: props.subnetsPrivate,
+                subnetsIsolated: props.subnetsIsolated,
                 subnetsPublic: props.subnetsPublic,
             });
 

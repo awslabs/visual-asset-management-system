@@ -178,3 +178,4 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
         this.apiGatewayV2 = api;
     }
 }
+

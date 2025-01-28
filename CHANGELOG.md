@@ -4,10 +4,15 @@ All notable changes to this project will be documented in this file. See [standa
 
 ## [2.2.0] (2025-03-31)
 
+This minor version includes changes to VAMS authentication, web UI, pipelines, use-case pipeline implementations, and v2.0+ bug fixes.
+
 ### ⚠ BREAKING CHANGES
 
 ### Features
 
+-   Added a new use-case pipeline and configuration option for `RapidPipeline` that optimize 3D assets using mesh decimation & remeshing, texture baking, UV aggregation, and more. 
+-   -   RapidPipeline can also convert assets between GLTF, GLB, USD, OBJ, FBX, VRM, STL, and PLY file types. 
+-   -   Pipeline can be called by registering 'vamsExecuteRapidPipeline' lambda function with VAMS pipelines / workflows.
 -   Updated backend infrastructure configuration options and functionality to support External OAuth IDP systems besides AWS cognito. Includes many additional infrastructure configuration settings.
 -   **Web** Added web support for External OAuth IDP configuration
 -   Added configuration option `addStackCloudTrailLogs` for creating AWS CloudTrail log groups and trails for the stack. This is defaulted to `true`.
@@ -45,12 +50,15 @@ All notable changes to this project will be documented in this file. See [standa
 
 This hotfix version includes bug fixes related to dependency tools and library updates.
 
+This release may require a installation of the latest aws-cdk library to either your global npm or as part of your local VAMS infra folder. Please re-run "npm install" in VAMS infra to install the latest local dependencies for existing deployments.
+
 ### Bug Fixes
 
 -   Fixed and added Poetry export plugin library used during Lambda layer building due to Poetry no longer including "export" as part of the core library.
 -   Fixed Dockerfile container environment variable formats to no longer use the deprecated Docker format. `ENV KEY VALUE` -> `ENV KEY=VALUE`
 -   Fixed 3D Metadata Labeling pipeline use-case to use the latest Blender version due to Alpine APK support deprecation for earlier specified versions.
 -   Fixed 3D Metadata Labeling pipeline use-case state machine Lambda to not hard-code the `us-east-1` region for IAM role resource permission and use the stack-deployed region instead.
+-   Updated aws-cdk dependency versions to the latest and updated GitHub CI/CD pipeline build checks
 
 ## [2.1.0] (2024-11-15)
 

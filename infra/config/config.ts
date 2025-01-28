@@ -120,6 +120,10 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useGenAiMetadata3dLabeling.enabled = false;
     }
 
+    if (config.app.pipelines.useRapidPipeline.enabled == undefined) {
+        config.app.pipelines.useRapidPipeline.enabled = false;
+    }
+
     if (config.app.authProvider.useCognito.useUserPasswordAuthFlow == undefined) {
         config.app.authProvider.useCognito.useUserPasswordAuthFlow = false;
     }
@@ -180,6 +184,7 @@ export function getConfig(app: cdk.App): Config {
         config.app.useAlb.enabled ||
         config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
         config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
+        config.app.pipelines.useRapidPipeline.enabled ||
         config.app.openSearch.useProvisioned.enabled
     ) {
         if (!config.app.useGlobalVpc.enabled) {
@@ -243,23 +248,45 @@ export function getConfig(app: cdk.App): Config {
         config.app.useGlobalVpc.optionalExternalVpcId != ""
     ) {
         if (
-            !config.app.useGlobalVpc.optionalExternalPrivateSubnetIds ||
-            config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == "UNDEFINED" ||
-            config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == ""
+            !config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds ||
+            config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds == "UNDEFINED" ||
+            config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds == ""
         ) {
             throw new Error(
-                "Configuration Error: Must define at least one private subnet ID when using an External VPC ID."
+                "Configuration Error: Must define at least one isolated subnet ID when using an External VPC ID."
             );
         }
     }
 
+    //If using RapidPipeline, make sure Imported VPC has at least one private subnet included
     if (
         config.app.useGlobalVpc.enabled &&
-        config.app.useAlb.enabled &&
-        config.app.useAlb.usePublicSubnet &&
         config.app.useGlobalVpc.optionalExternalVpcId &&
         config.app.useGlobalVpc.optionalExternalVpcId != "UNDEFINED" &&
         config.app.useGlobalVpc.optionalExternalVpcId != ""
+    ) {
+        if (config.app.pipelines.useRapidPipeline.enabled) {
+            if (
+                !config.app.useGlobalVpc.optionalExternalPrivateSubnetIds ||
+                config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == "UNDEFINED" ||
+                config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == ""
+            ) {
+                throw new Error(
+                    "Configuration Error: Must define at least one private subnet ID when using RapidPipeline."
+                );
+            }
+        }
+    }
+
+    if (
+        ((config.app.useAlb.enabled &&
+        config.app.useAlb.usePublicSubnet) ||
+        config.app.pipelines.useRapidPipeline.enabled) &&
+        config.app.useGlobalVpc.enabled &&
+        config.app.useGlobalVpc.optionalExternalVpcId &&
+        config.app.useGlobalVpc.optionalExternalVpcId != "UNDEFINED" &&
+        config.app.useGlobalVpc.optionalExternalVpcId != ""
+
     ) {
         if (
             !config.app.useGlobalVpc.optionalExternalPublicSubnetIds ||
@@ -267,7 +294,7 @@ export function getConfig(app: cdk.App): Config {
             config.app.useGlobalVpc.optionalExternalPublicSubnetIds == ""
         ) {
             throw new Error(
-                "Configuration Error: Must define at least one public subnet ID when using an External VPC ID and Public ALB configuration."
+                "Configuration Error: Must define at least one public subnet ID when using an External VPC ID and Public ALB or RapidPipeline configuration."
             );
         }
     }
@@ -408,7 +435,8 @@ export interface ConfigPublic {
             useForAllLambdas: boolean;
             addVpcEndpoints: boolean;
             optionalExternalVpcId: string;
-            optionalExternalPrivateSubnetIds: string;
+            optionalExternalIsolatedSubnetIds: string,
+            optionalExternalPrivateSubnetIds: string,
             optionalExternalPublicSubnetIds: string;
             vpcCidrRange: string;
         };
@@ -443,6 +471,10 @@ export interface ConfigPublic {
             };
             useGenAiMetadata3dLabeling: {
                 enabled: boolean;
+            };
+            useRapidPipeline: {
+                enabled: boolean;
+                ecrContainerImageURI: string;
             };
         };
         authProvider: {

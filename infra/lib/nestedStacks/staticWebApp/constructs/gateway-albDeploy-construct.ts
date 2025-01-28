@@ -16,6 +16,7 @@ import { generateUniqueNameHash } from "../../../helper/security";
 export interface GatewayAlbDeployConstructProps extends cdk.StackProps {
     config: Config.Config;
     vpc: ec2.IVpc;
+    subnetsIsolated: ec2.ISubnet[];
     subnetsPrivate: ec2.ISubnet[];
     subnetsPublic: ec2.ISubnet[];
 }
@@ -50,7 +51,7 @@ export class GatewayAlbDeployConstruct extends Construct {
         this.subnets = {
             webApp: props.config.app.useAlb.usePublicSubnet
                 ? props.subnetsPublic
-                : props.subnetsPrivate,
+                : props.subnetsIsolated,
         };
 
         //Create ALB security group and open to any IP on port 443/80
