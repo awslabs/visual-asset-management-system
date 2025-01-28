@@ -182,7 +182,6 @@ export class CoreVAMSStack extends cdk.Stack {
                 config: props.config,
                 vpc: this.vpc,
                 subnetsIsolated: this.subnetsIsolated,
-                subnetsPrivate: this.subnetsPrivate,
                 subnetsPublic: this.subnetsPublic,
                 webAppBuildPath: this.webAppBuildPath,
                 apiUrl: apiNestedStack.apiEndpoint,

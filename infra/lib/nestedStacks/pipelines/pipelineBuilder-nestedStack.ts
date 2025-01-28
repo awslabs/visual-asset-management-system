@@ -169,7 +169,7 @@ export class PipelineBuilderNestedStack extends NestedStack {
                 : undefined, //Use VPC when flagged to use for all lambdas
             vpcSubnets:
             props.config.app.useGlobalVpc.enabled && props.config.app.useGlobalVpc.useForAllLambdas
-                ? { subnets: pipelineNetwork.subnets.pipeline }
+                ? { subnets: props.isolatedSubnets }
                 : undefined,
             securityGroups:
             props.config.app.useGlobalVpc.enabled && props.config.app.useGlobalVpc.useForAllLambdas

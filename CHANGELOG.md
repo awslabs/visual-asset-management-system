@@ -4,12 +4,18 @@ All notable changes to this project will be documented in this file. See [standa
 
 ## [2.2.0] (2025-03-31)
 
-This minor version includes changes to VAMS authentication, web UI, pipelines, use-case pipeline implementations, and v2.0+ bug fixes.
+This minor version includes changes to VAMS infrastructure, authentication, web UI, pipelines, use-case pipeline implementations, and v2.0+ bug fixes.
 
 ### ⚠ BREAKING CHANGES
 
+Due VPC subnet breakout changes, this may break existing deployments. It is reccomended to use a A/B deployment if you run into subnet configuration issues. 
+
+Recommended Upgrade Path: A/B Stack Deployment with data migration using staging bucket configuration and upgrade migration scripts for DynamoDB tables in `./infra/upgradeMigrationScripts`
+
 ### Features
 
+-   Changed VPC subnet so now break-out subnets for isolated, private, and public. Previously only private (was actually isolated) and public existed. 
+-   -   For those using external VPC and subnet import configuration, previously private subnet IDs should now be copied into isolated subnets configuration option. 
 -   Added a new use-case pipeline and configuration option for `RapidPipeline` that optimize 3D assets using mesh decimation & remeshing, texture baking, UV aggregation, and more. 
 -   -   RapidPipeline can also convert assets between GLTF, GLB, USD, OBJ, FBX, VRM, STL, and PLY file types. 
 -   -   Pipeline can be called by registering 'vamsExecuteRapidPipeline' lambda function with VAMS pipelines / workflows.

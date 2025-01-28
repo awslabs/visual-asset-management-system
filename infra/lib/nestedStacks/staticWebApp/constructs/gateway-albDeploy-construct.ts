@@ -17,7 +17,6 @@ export interface GatewayAlbDeployConstructProps extends cdk.StackProps {
     config: Config.Config;
     vpc: ec2.IVpc;
     subnetsIsolated: ec2.ISubnet[];
-    subnetsPrivate: ec2.ISubnet[];
     subnetsPublic: ec2.ISubnet[];
 }
 

@@ -33,7 +33,6 @@ export interface StaticWebBuilderNestedStackProps extends cdk.StackProps {
     authResources: authResources;
     vpc: ec2.IVpc;
     subnetsIsolated: ec2.ISubnet[];
-    subnetsPrivate: ec2.ISubnet[];
     subnetsPublic: ec2.ISubnet[];
 }
 

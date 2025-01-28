@@ -7,8 +7,6 @@ import React, { PropsWithChildren, Suspense, useEffect, useState } from "react";
 import { API, Cache, Hub, Amplify, Auth as AmplifyAuth } from "aws-amplify";
 import { OAuth2Client, OAuth2Token, generateCodeVerifier } from "@badgateway/oauth2-client";
 import { getSecureConfig, getAmplifyConfig } from "../services/APIService";
-import { webRoutes } from "../services/APIService";
-import { routeTable } from "../routes";
 import { default as vamsConfig } from "../config";
 import { Authenticator } from "@aws-amplify/ui-react";
 
@@ -27,6 +25,7 @@ import { Header } from "./../authenticator/Header";
 import { Footer } from "./../authenticator/Footer";
 import { SignInHeader } from "./../authenticator/SignInHeader";
 import { SignInFooter } from "./../authenticator/SignInFooter";
+import { isAxiosError } from "../common/typeUtils";
 
 
 /**
@@ -194,7 +193,7 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
                     region: config.region,
                     custom_header: async () => {
                         if (window.DISABLE_COGNITO) {
-                            const accessToken = localStorage.getItem("idp_access_token");
+                            const accessToken = getOAuth2Token().accessToken;
                             return { Authorization: `Bearer ${accessToken}` };
                         } else {
                             return {
@@ -329,12 +328,6 @@ const Auth: React.FC<AuthProps> = (props) => {
         }
     }
 
-    const [state, setState] = useState<any>({
-        email: undefined,
-        username: undefined,
-        authenticated: false,
-    });
-
     const [config, setConfig] = useState(Cache.getItem("config"));
     let [authError, setauthError] = useState<string | null>(() =>
         localStorage.getItem("auth_error")
@@ -345,7 +338,9 @@ const Auth: React.FC<AuthProps> = (props) => {
     const [isLoggedIn, setisLoggedIn] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
 
-    const accessToken = localStorage.getItem("idp_access_token");
+    // TODO: Refactor how/when handleExternalOauthSignIn() & External OAuth Effects are called without needing to do this
+    // This line in combination with the useEffect dependency allows for the useEffects to execute in the right order
+    const triggerExternalOAuth = "";
 
     //Both Affect
     //Fetch && Setup Initial global configurations
@@ -410,48 +405,31 @@ const Auth: React.FC<AuthProps> = (props) => {
     useEffect(() => {
         if (window.DISABLE_COGNITO === true) {
             // Try set logged in
+            const accessToken = getOAuth2Token().accessToken;
             if (accessToken && accessToken.length !== 0) {
                 // Have access token, decoding...
                 const jwt = parseJwt(accessToken);
-                setIsLoading(true);
+                setisLoggedIn(true);
 
-                // validating access token works to make api requests...
-                accessTokenValid()
-                    .then((valid) => {
-                        if (!valid) {
-                            // invalid access token, setisLoggedIn, false
-                            setisLoggedIn(false);
-                            signOutWithError("auth_error", "Access token invalid");
+                localStorage.setItem("user", JSON.stringify({ username: jwt.sub }));
 
-                            return;
-                        }
+                // @ts-expect-error
+                AmplifyAuth.setUserSession({ username: jwt.sub }, accessToken);
+                Hub.dispatch("auth", {
+                    event: "signIn",
+                    data: { username: jwt.sub },
+                    message: "User was signed in",
+                });
 
-                        // valid access token, setisLoggedIn, true
-                        setisLoggedIn(true);
-                        localStorage.setItem("user", JSON.stringify({ username: jwt.sub }));
-
-                        // @ts-expect-error
-                        AmplifyAuth.setUserSession({ username: jwt.sub }, accessToken);
-                        Hub.dispatch("auth", {
-                            event: "signIn",
-                            data: { username: jwt.sub },
-                            message: "User was signed in",
-                        });
-                        clearPreviousLoginErrors(); // On successful login, remove old error keys stored in local storage
-                        setIsLoading(false);
-                    })
-                    .catch(() => {
-                        // invalid access token, setisLoggedIn, false
-                        setisLoggedIn(false);
-                        signOutWithError("auth_error", "Access token invalid");
-                    });
+                clearPreviousLoginErrors(); // On successful login, remove old error keys stored in local storage
+                startAccessTokenRefreshTimer();
             } else {
                 // no access token, setisLoggedIn, false)
                 setisLoggedIn(false);
                 resetSession();
             }
         }
-    }, [accessToken]);
+    }, [triggerExternalOAuth]); // triggerExternalOAuth dependency is needed to for the useEffect to execute in the right order
 
     //Cognito Effect
     // Sets the user on login/logout (Authenticator UI Callbacks)
@@ -495,6 +473,7 @@ const Auth: React.FC<AuthProps> = (props) => {
     useEffect(() => {
         if (window.DISABLE_COGNITO === true) {
             // Try request access token
+            const accessToken = getOAuth2Token().accessToken;
             if (accessToken) {
                 //already have access token, accessToken
                 return;
@@ -524,7 +503,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                     signOutWithError("auth_error", "Failed to get access token"); // Catching error when redirect code is missing and start new sign in process.
                 });
         }
-    }, [accessToken]);
+    }, [triggerExternalOAuth]); // triggerExternalOAuth dependency is needed to for the useEffect to execute in the right order
 
     //Both Effect
     //Once logged in, get/set other configuration and profile information
@@ -536,6 +515,13 @@ const Auth: React.FC<AuthProps> = (props) => {
                 config.featuresEnabled = value.featuresEnabled;
                 Cache.setItem("config", config);
                 setConfig(config);
+            }).catch((error: Error) => {
+                console.error("Error getting secure-config:", error.message)
+
+                // if response status code was 401 unauthorized, token may be invalid, so sign out
+                if(isAxiosError(error) && error.response?.status === 401) {
+                    signOutWithError()
+                }
             });
             console.log("Fetched secure config");
         }
@@ -550,6 +536,13 @@ const Auth: React.FC<AuthProps> = (props) => {
                 loginProfile.userId = value.message.Items[0].userId;
                 loginProfile.email = value.message.Items[0].email;
                 Cache.setItem("loginProfile", loginProfile);
+            }).catch((error: Error) => {
+                console.error("Error getting login-profile:", error.message)
+
+                // if response status code was 401 unauthorized, token may be invalid, so sign out
+                if(isAxiosError(error) && error.response?.status === 401) {
+                    signOutWithError()
+                }
             });
             console.log("Pinged LoginProfile API");
         }
@@ -560,7 +553,7 @@ const Auth: React.FC<AuthProps> = (props) => {
         // Sign in
         setIsLoading(true);
 
-        const accessToken = localStorage.getItem("idp_access_token");
+        const accessToken = getOAuth2Token().accessToken;
 
         if (!accessToken) {
             // No access token, will start oauth2 flow'
@@ -597,7 +590,7 @@ const Auth: React.FC<AuthProps> = (props) => {
         }
     };
 
-    //Both Auth Effect
+    //Cognito Auth Effect
     //Check access token validity, expirations, and refreshs
     useEffect(() => {
         if (!ampInit || !localStorage.getItem("user")) return;
@@ -608,55 +601,13 @@ const Auth: React.FC<AuthProps> = (props) => {
             : undefined;
 
         if (!currentUser) {
-            setState({ authenticated: false });
-
             return;
         }
 
         if (window.DISABLE_COGNITO === false) {
-            //Cognito Checks
-            AmplifyAuth.currentSession()
-                .then((user) => {
-                    setState({
-                        email: user.getIdToken().decodePayload().sub,
-                        username: user.getIdToken().decodePayload().sub,
-                        authenticated: true,
-                    });
-                })
-                .catch((e) => {
-                    setState({ authenticated: false });
-                });
-
             // Schedule check and refresh (when needed) of JWT's every 5 min:
             const i = setInterval(() => AmplifyAuth.currentSession(), 5 * 60 * 1000);
             return () => clearInterval(i);
-        } else {
-            //External Oauth checks
-            AmplifyAuth.currentSession()
-                .then((user) => {
-                    setState({
-                        email: currentUser.username,
-                        authenticated: true,
-                    });
-                })
-                .catch((e) => {
-                    // Check if the access token has expired and initiate the oauth flow
-                    const accessToken = localStorage.getItem("idp_access_token");
-                    if (accessToken) {
-                        const decodedToken = parseJwt(accessToken);
-                        const expirationTime = decodedToken.exp * 1000; // the 'exp' property is in seconds, the 'expiresAt' property is in milliseconds, so need to multiply by 1000 here
-
-                        if (Date.now() > expirationTime) {
-                            // Access Token Expired - Starting New Session
-                            handleExternalOauthSignIn();
-                        } else {
-                            // Access Token Not Expired - Starting Refresh Interval
-                            startAccessTokenRefreshTimer();
-                        }
-                    } else {
-                        setState({ authenticated: false });
-                    }
-                });
         }
     }, [ampInit]);
 
@@ -780,52 +731,24 @@ const Auth: React.FC<AuthProps> = (props) => {
 const parseJwt = (
     accessToken: string
 ): {
-    exp: number;
     sub: string;
 } => {
+    var jsonPayload = "{}";
     var base64Url = accessToken.split(".")[1];
-    var base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
-    var jsonPayload = decodeURIComponent(
-        window
-            .atob(base64)
-            .split("")
-            .map(function (c) {
-                return "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2);
-            })
-            .join("")
-    );
+    if (base64Url){
+        var base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+        jsonPayload = decodeURIComponent(
+            window
+                .atob(base64)
+                .split("")
+                .map(function (c) {
+                    return "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2);
+                })
+                .join("")
+        );
+    }
 
     return JSON.parse(jsonPayload);
-};
-
-const accessTokenValid = async (): Promise<boolean> => {
-    let allRoutes = [];
-    for (let route of routeTable) {
-        if (route.path) {
-            allRoutes.push({
-                method: "GET",
-                route__path: route.path,
-            });
-        }
-    }
-
-    try {
-        const canPostWebRoutes = await webRoutes({ routes: allRoutes });
-
-        if (
-            canPostWebRoutes?.message === "Unauthorized" ||
-            (Array.isArray(canPostWebRoutes) && canPostWebRoutes[0] === false)
-        ) {
-            // postRoutes returns either an object with a message if it is successful or unauthorized or an array where the first item is false for other errors
-            // canPostRoutes[0] is undefined if it is successful, so checking if it's an array then doing the strict equality check for false
-            return false;
-        }
-
-        startAccessTokenRefreshTimer();
-        return true;
-    } catch (error) {
-        return false;
-    }
 };
 
 let refreshTimer: NodeJS.Timeout | null;
@@ -836,15 +759,15 @@ const startAccessTokenRefreshTimer = (startNewTimer: boolean = false) => {
         refreshTimer = null;
     }
 
-    const accessToken = localStorage.getItem("idp_access_token");
-    const oauth2Token = localStorage.getItem("oauth2_token");
+    const oauth2Token = getOAuth2Token();
+    const accessToken = oauth2Token.accessToken;
 
     let refreshTimeLength = 5 * 60 * 1000; // Default to 5 minutes, if no expiresAt timestamp found below
     const percentOfTokenLengthToRefresh = 0.75; // Percentage of time to trigger refresh, default to 75% per other oauth library recommendations
 
     // If there is an oauth token and no refresh timer, calculate the percentage of it's lifetime from the expiration time and now
     if (oauth2Token && !refreshTimer) {
-        const expiresAtTimestamp = (JSON.parse(oauth2Token) as OAuth2Token).expiresAt;
+        const expiresAtTimestamp = oauth2Token.expiresAt;
         if (expiresAtTimestamp) {
             refreshTimeLength = Math.ceil(
                 (expiresAtTimestamp - Date.now()) * percentOfTokenLengthToRefresh
@@ -854,16 +777,14 @@ const startAccessTokenRefreshTimer = (startNewTimer: boolean = false) => {
         // Start the timer that will run at the percentage of the expiration time calculated above
         refreshTimer = setTimeout(async () => {
             // Run the following logic when the timer triggers
-            if (!accessToken || !oauth2Token) {
+            if (!accessToken) {
                 // no access token found when trying to refresh
                 signOutWithError("auth_error", "No access token found when refreshing");
                 return;
             }
 
             try {
-                const oauth2TokenResponse = await oauth2Client.refreshToken(
-                    JSON.parse(oauth2Token) as OAuth2Token
-                );
+                const oauth2TokenResponse = await oauth2Client.refreshToken(oauth2Token);
                 setOauth2Token(oauth2TokenResponse); // Set when previous line is successful and within here, restart this timer
             } catch (error) {
                 console.error("error: ", error);
@@ -880,15 +801,22 @@ const signOutWithError = (key: string = "auth_error", value: string = "Unauthori
 };
 
 const resetSession = () => {
-    localStorage.removeItem("idp_access_token");
     localStorage.removeItem("oauth2_token");
     localStorage.removeItem("user");
 };
 
 const setOauth2Token = (oauth2Token: OAuth2Token) => {
     localStorage.setItem("oauth2_token", JSON.stringify(oauth2Token));
-    localStorage.setItem("idp_access_token", oauth2Token.accessToken);
     startAccessTokenRefreshTimer(true); // Restart timer upon successfully setting the new oauth token
+};
+
+function getOAuth2Token() {
+    let oauth2Token = {} as OAuth2Token;
+    const oauth2TokenStr = localStorage.getItem("oauth2_token");
+    if (oauth2TokenStr){
+        oauth2Token = JSON.parse(oauth2TokenStr);
+    }
+    return oauth2Token;
 };
 
 function clearPreviousLoginErrors() {
