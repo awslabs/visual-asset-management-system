@@ -18,6 +18,17 @@ This hotfix version includes bug fixes related to dependency tools and library u
 -   Fixed 3D Metadata Labeling pipeline use-case to use the latest Blender version due to Alpine APK support deprecation for earlier specified versions.
 -   Fixed 3D Metadata Labeling pipeline use-case state machine Lambda to not hard-code the `us-east-1` region for IAM role resource permission and use the stack-deployed region instead.
 
+## [2.1.1] (2025-01-17)
+
+This hotfix version includes bug fixes related to dependency tools and library updates.
+
+### Bug Fixes
+
+-   Fixed and added Poetry export plugin library used during Lambda layer building due to Poetry no longer including "export" as part of the core library.
+-   Fixed Dockerfile container environment variable formats to no longer use the deprecated Docker format. `ENV KEY VALUE` -> `ENV KEY=VALUE`
+-   Fixed 3D Metadata Labeling pipeline use-case to use the latest Blender version due to Alpine APK support deprecation for earlier specified versions.
+-   Fixed 3D Metadata Labeling pipeline use-case state machine Lambda to not hard-code the `us-east-1` region for IAM role resource permission and use the stack-deployed region instead.
+
 ## [2.1.0] (2024-11-15)
 
 This minor version includes changes to VAMS pipelines, use-case pipeline implementations, and v2.0 bug fixes.
