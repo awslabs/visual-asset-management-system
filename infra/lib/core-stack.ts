@@ -403,7 +403,8 @@ export class CoreVAMSStack extends cdk.Stack {
                     fn.runtime.name === "python3.10" ||
                     fn.runtime.name === "python3.11" ||
                     fn.runtime.name === "python3.12" ||
-                    fn.runtime.name === "nodejs18.x"
+                    fn.runtime.name === "nodejs18.x" ||
+                    fn.runtime.name === "nodejs20.x"
                 ) {
                     //console.log(item.node.path,fn.runtime.name)
                     NagSuppressions.addResourceSuppressions(fn, [

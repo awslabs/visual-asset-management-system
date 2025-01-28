@@ -3,5 +3,6 @@
     "tabWidth": 4,
     "arrowParens": "always",
     "singleQuote": false,
-    "bracketSpacing": true
+    "bracketSpacing": true,
+    "endOfLine": "auto"
 }
