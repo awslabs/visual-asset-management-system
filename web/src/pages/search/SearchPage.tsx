@@ -377,8 +377,7 @@ function SearchPage(props: SearchPageProps) {
                             statusIconAriaLabel="Error"
                             type="error"
                             header={state.error.message}
-                        >
-                        </Alert>
+                        ></Alert>
                     )}
                     {state?.notifications.length > 0 && <Flashbar items={state.notifications} />}
 

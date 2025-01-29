@@ -152,7 +152,7 @@ export function generateContentSecurityPolicy(
     apiUrl: string,
     config: Config.Config
 ): string {
-    let connectSrc = [
+    const connectSrc = [
         "'self'",
         "blob:",
         authenticationDomain,

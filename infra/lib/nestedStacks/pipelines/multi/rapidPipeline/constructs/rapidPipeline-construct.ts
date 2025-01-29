@@ -29,7 +29,7 @@ import * as Config from "../../../../../../config/config";
 import { generateUniqueNameHash } from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 
-import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs"; // remove once ECS cluster is moved to VAMS vpc 
+import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs"; // remove once ECS cluster is moved to VAMS vpc
 
 export interface RapidPipelineConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -58,7 +58,7 @@ const defaultProps: Partial<RapidPipelineConstructProps> = {
  * On redeployment, will automatically invalidate the CloudFront distribution cache
  */
 export class RapidPipelineConstruct extends NestedStack {
-    public pipelineVamsLambdaFunctionName: string
+    public pipelineVamsLambdaFunctionName: string;
     constructor(parent: Construct, name: string, props: RapidPipelineConstructProps) {
         super(parent, name);
 
@@ -136,25 +136,21 @@ export class RapidPipelineConstruct extends NestedStack {
             ],
         });
 
-        const containerExecutionRole = new iam.Role(
-            this,
-            "RapidPipelineContainerExecutionRole",
-            {
-                assumedBy: Service("ECS_TASKS").Principal,
-                inlinePolicies: {
-                    InputBucketPolicy: inputBucketPolicy,
-                    OutputBucketPolicy: outputBucketPolicy,
-                    StateTaskPolicy: stateTaskPolicy,
-                    MarketplaceUsagePolicy: marketplaceUsagePolicy, 
-                },
-                managedPolicies: [
-                    iam.ManagedPolicy.fromAwsManagedPolicyName(
-                        "service-role/AmazonECSTaskExecutionRolePolicy"
-                    ),
-                    iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
-                ],
-            }
-        );
+        const containerExecutionRole = new iam.Role(this, "RapidPipelineContainerExecutionRole", {
+            assumedBy: Service("ECS_TASKS").Principal,
+            inlinePolicies: {
+                InputBucketPolicy: inputBucketPolicy,
+                OutputBucketPolicy: outputBucketPolicy,
+                StateTaskPolicy: stateTaskPolicy,
+                MarketplaceUsagePolicy: marketplaceUsagePolicy,
+            },
+            managedPolicies: [
+                iam.ManagedPolicy.fromAwsManagedPolicyName(
+                    "service-role/AmazonECSTaskExecutionRolePolicy"
+                ),
+                iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
+            ],
+        });
 
         const containerJobRole = new iam.Role(this, "RapidPipelineContainerJobRole", {
             assumedBy: Service("ECS_TASKS").Principal,
@@ -235,17 +231,18 @@ export class RapidPipelineConstruct extends NestedStack {
             resultPath: "$",
         }).next(pipeLineEndTask);
 
-
-         /**
-         * RapidPipeline Container Setup  
+        /**
+         * RapidPipeline Container Setup
          */
 
-        const containerName = "RapidPipelineContainer" + generateUniqueNameHash(
-            props.config.env.coreStackName,
-            props.config.env.account,
-            "VAMS-ECR-Container",
-            10
-        );
+        const containerName =
+            "RapidPipelineContainer" +
+            generateUniqueNameHash(
+                props.config.env.coreStackName,
+                props.config.env.account,
+                "VAMS-ECR-Container",
+                10
+            );
 
         // Note: temporary resource until cluster is moved to VAMS vpc
         // const vpcLogsGroups = new LogGroup(this, "CloudWatchVAMSVpc", {
@@ -283,20 +280,22 @@ export class RapidPipelineConstruct extends NestedStack {
         // })
 
         const containerImage = ecs.ContainerImage.fromRegistry(
-            props.config.app.pipelines.useRapidPipeline.ecrContainerImageURI 
+            props.config.app.pipelines.useRapidPipeline.ecrContainerImageURI
         );
 
         // Overriding cluster name bc AWS Marketplace team is having issues with long cluster names
         const cluster = new ecs.Cluster(this, "RapidPipelineEcsCluster", {
-            clusterName: "rapid-cluster" + generateUniqueNameHash(
-                props.config.env.coreStackName,
-                props.config.env.account,
-                "VAMS-ECS-Cluster",
-                10
-            ), 
+            clusterName:
+                "rapid-cluster" +
+                generateUniqueNameHash(
+                    props.config.env.coreStackName,
+                    props.config.env.account,
+                    "VAMS-ECS-Cluster",
+                    10
+                ),
             // vpc, // temporarily placed in separate VPC with public subnet until VAMS vpc can handle private subnet with egress
             vpc: props.vpc,
-            containerInsights: true
+            containerInsights: true,
         });
 
         const logGroup = new cdk.aws_logs.LogGroup(this, "RapidPipelineLogGroup", {
@@ -304,44 +303,54 @@ export class RapidPipelineConstruct extends NestedStack {
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             retention: logs.RetentionDays.ONE_MONTH,
         });
-      
+
         const taskDefinition = new ecs.FargateTaskDefinition(this, "RapidPipelineTaskDefinition", {
-            executionRole: containerExecutionRole, 
+            executionRole: containerExecutionRole,
             taskRole: containerJobRole,
             memoryLimitMiB: 16384, // 16 GB
-            cpu: 2048 // 2 vCPU
+            cpu: 2048, // 2 vCPU
         });
 
-        const containerDefinition = taskDefinition.addContainer('RapidPipelineContainerDefinition', {
-            image: containerImage,
-            logging: ecs.LogDrivers.awsLogs({
-                logGroup: logGroup,
-                streamPrefix: "ecs",
-            }),
-            memoryLimitMiB: 16384,
-            cpu: 2048
-        });
+        const containerDefinition = taskDefinition.addContainer(
+            "RapidPipelineContainerDefinition",
+            {
+                image: containerImage,
+                logging: ecs.LogDrivers.awsLogs({
+                    logGroup: logGroup,
+                    streamPrefix: "ecs",
+                }),
+                memoryLimitMiB: 16384,
+                cpu: 2048,
+            }
+        );
 
         // ECS cluster needs to be in private subnet (with egress) to connect to AWS Marketplace API
-        const subnetSelection : ec2.SubnetSelection = {
-            subnets: props.pipelineSubnetsPrivate
+        const subnetSelection: ec2.SubnetSelection = {
+            subnets: props.pipelineSubnetsPrivate,
         };
 
         // Note: temporary resource until cluster is moved to VAMS vpc
         // const securityGroup = new cdk.aws_ec2.SecurityGroup(this, "RapidPipelineTaskRunSG", { vpc: props.vpc, allowAllOutbound: true });
         // securityGroup.addIngressRule(Peer.anyIpv4(), Port.tcp(443), "Allow HTTPS access");
 
-        // Step function task for ECS 
+        // Step function task for ECS
         const runRapidPipelineJob = new tasks.EcsRunTask(this, "RapidPipelineRunFargate", {
             integrationPattern: sfn.IntegrationPattern.RUN_JOB,
-            cluster, 
-            taskDefinition, 
+            cluster,
+            taskDefinition,
             assignPublicIp: false,
-            containerOverrides: [{
-                containerDefinition,
-                command: sfn.JsonPath.listAt("$.commands"),
-                environment: [{name: "externalSfnTaskToken", value: sfn.JsonPath.stringAt("$.externalSfnTaskToken")}],
-            }],
+            containerOverrides: [
+                {
+                    containerDefinition,
+                    command: sfn.JsonPath.listAt("$.commands"),
+                    environment: [
+                        {
+                            name: "externalSfnTaskToken",
+                            value: sfn.JsonPath.stringAt("$.externalSfnTaskToken"),
+                        },
+                    ],
+                },
+            ],
             launchTarget: new tasks.EcsFargateLaunchTarget(),
             propagatedTagSource: ecs.PropagatedTagSource.TASK_DEFINITION,
             // securityGroups: [securityGroup], // temporary until ECS cluster is moved to VAMS vpc
@@ -404,7 +413,7 @@ export class RapidPipelineConstruct extends NestedStack {
 
         //Build Lambda Pipeline Resources to Open the Pipeline
         // ******  See RapidPipeline documentation for available file extensions *******
-        const allowedInputFileExtensions = ".glb,.gltf,.fbx,.obj,.stl,.ply,.usd,.usdz,.dae,.abc"; 
+        const allowedInputFileExtensions = ".glb,.gltf,.fbx,.obj,.stl,.ply,.usd,.usdz,.dae,.abc";
         const openPipelineFunction = buildOpenPipelineFunction(
             this,
             props.lambdaCommonBaseLayer,
@@ -419,26 +428,24 @@ export class RapidPipelineConstruct extends NestedStack {
         );
 
         //Build Lambda VAMS Execution Function (as an optional pipeline execution action)
-        const rapidPipelineExecuteFunction =
-            buildVamsExecuteRapidPipelineFunction(
-                this,
-                props.lambdaCommonBaseLayer,
-                props.storageResources.s3.assetBucket,
-                props.storageResources.s3.assetAuxiliaryBucket,
-                openPipelineFunction,
-                props.config,
-                props.vpc,
-                props.pipelineSubnetsIsolated,
-                props.storageResources.encryption.kmsKey
-            );
-        
-        this.pipelineVamsLambdaFunctionName = rapidPipelineExecuteFunction.functionName
+        const rapidPipelineExecuteFunction = buildVamsExecuteRapidPipelineFunction(
+            this,
+            props.lambdaCommonBaseLayer,
+            props.storageResources.s3.assetBucket,
+            props.storageResources.s3.assetAuxiliaryBucket,
+            openPipelineFunction,
+            props.config,
+            props.vpc,
+            props.pipelineSubnetsIsolated,
+            props.storageResources.encryption.kmsKey
+        );
+
+        this.pipelineVamsLambdaFunctionName = rapidPipelineExecuteFunction.functionName;
 
         //Output VAMS Pipeline Execution Function name
         new CfnOutput(this, "RapidPipelineLambdaExecutionFunctionName", {
             value: rapidPipelineExecuteFunction.functionName,
-            description:
-                "The RapidPipeline Lambda Function Name to use in a VAMS Pipeline",
+            description: "The RapidPipeline Lambda Function Name to use in a VAMS Pipeline",
             exportName: "RapidPipelineLambdaExecutionFunctionName",
         });
 

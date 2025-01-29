@@ -31,7 +31,7 @@ export const modelFileFormats = [
     ".ifc",
     ".amf",
     ".usdz",
-    ".usd"
+    ".usd",
 ];
 export const columnarFileFormats = [".rds", ".fcs", ".csv"];
 export const imageFileFormats = [".png", ".jpg", ".svg", ".gif"];

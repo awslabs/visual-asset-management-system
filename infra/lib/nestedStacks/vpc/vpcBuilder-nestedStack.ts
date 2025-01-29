@@ -104,7 +104,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                                 //console.log(element.subnetId, vpcSubnet.subnetId, "Pu")
                                 if (vpcSubnet.subnetId == element && !foundVPCSubnet) {
                                     foundVPCSubnet = true;
-                                    this.isolatedSubnets.push(vpcSubnet); 
+                                    this.isolatedSubnets.push(vpcSubnet);
                                 }
                             });
                         }
@@ -149,7 +149,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                                 //console.log(element.subnetId, vpcSubnet.subnetId, "Pu")
                                 if (vpcSubnet.subnetId == element && !foundVPCSubnet) {
                                     foundVPCSubnet = true;
-                                    this.privateSubnets.push(vpcSubnet); 
+                                    this.privateSubnets.push(vpcSubnet);
                                 }
                             });
                         }
@@ -224,7 +224,8 @@ export class VPCBuilderNestedStack extends NestedStack {
                 if (
                     props.config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds &&
                     props.config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds != "" &&
-                    props.config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds != "UNDEFINED" &&
+                    props.config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds !=
+                        "UNDEFINED" &&
                     azIsolatedUsed.length < this.azCount
                 ) {
                     throw new Error(
@@ -248,7 +249,6 @@ export class VPCBuilderNestedStack extends NestedStack {
                 //         `Existing Private VPC Subnets must be spread across a minimum of ${this.azCount} availabilty zones based on the confiuguration options chosen, currently only representing ${azPrivateUsed.length}!`
                 //     );
                 // }
-
 
                 this.publicSubnets.forEach((element) => {
                     if (azPublicUsed.indexOf(element.availabilityZone) == -1) {
@@ -285,7 +285,8 @@ export class VPCBuilderNestedStack extends NestedStack {
 
                 if (
                     props.config.app.useAlb.enabled &&
-                    ((!props.config.app.useAlb.usePublicSubnet && this.isolatedSubnets.length < 2) ||
+                    ((!props.config.app.useAlb.usePublicSubnet &&
+                        this.isolatedSubnets.length < 2) ||
                         (props.config.app.useAlb.usePublicSubnet && this.publicSubnets.length < 2))
                 ) {
                     throw new Error(
@@ -314,7 +315,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                 subnetType: ec2.SubnetType.PUBLIC,
                 cidrMask: 26, // 62 usable IPs
             };
-            
+
             /**
              * VPC
              */
@@ -331,11 +332,14 @@ export class VPCBuilderNestedStack extends NestedStack {
                 removalPolicy: cdk.RemovalPolicy.DESTROY,
             });
 
-            var subnetConfigurations: ec2.SubnetConfiguration[] = [subnetIsolatedConfig]
+            const subnetConfigurations: ec2.SubnetConfiguration[] = [subnetIsolatedConfig];
 
-            if(props.config.app.useAlb.enabled && props.config.app.useAlb.usePublicSubnet || props.config.app.pipelines.useRapidPipeline.enabled) {
-                subnetConfigurations.push(subnetPublicConfig)
-                subnetConfigurations.push(subnetPrivateConfig)
+            if (
+                (props.config.app.useAlb.enabled && props.config.app.useAlb.usePublicSubnet) ||
+                props.config.app.pipelines.useRapidPipeline.enabled
+            ) {
+                subnetConfigurations.push(subnetPublicConfig);
+                subnetConfigurations.push(subnetPrivateConfig);
             }
 
             // const cidrRange = "10.0.0.0/16"; // 4096
@@ -418,7 +422,7 @@ export class VPCBuilderNestedStack extends NestedStack {
         //Note: More switching is done to avoid creating endpoints when not needed (mostly for cost)
         //Note: Don't add any end points if we are just loading context
 
-        // var vpcEndpointSubnets:  ec2.ISubnet[]; 
+        // var vpcEndpointSubnets:  ec2.ISubnet[];
 
         // if (this.privateSubnets.length > 0) {
         //     vpcEndpointSubnets = [...this.isolatedSubnets, ...this.privateSubnets];
@@ -438,10 +442,10 @@ export class VPCBuilderNestedStack extends NestedStack {
                     vpc: this.vpc,
                     privateDnsEnabled: true,
                     service: ec2.InterfaceVpcEndpointAwsService.KMS,
-                    subnets: {subnets: this.isolatedSubnets},
+                    subnets: { subnets: this.isolatedSubnets },
                     securityGroups: [vpceSecurityGroup],
                 });
-                
+
                 //Add KMS FIPS endpoints if we are using FIPS
                 if (props.config.app.useFips) {
                     // Create VPC endpoint for KMS FIPS
@@ -583,9 +587,7 @@ export class VPCBuilderNestedStack extends NestedStack {
             }
 
             // NEW: Adding VPC endpoint for ECS if RapidPipeline is enabled
-            if (
-                props.config.app.pipelines.useRapidPipeline.enabled
-            ) {
+            if (props.config.app.pipelines.useRapidPipeline.enabled) {
                 // Create VPC endpoint for ECS
                 new ec2.InterfaceVpcEndpoint(this, "ECSEndpoint", {
                     vpc: this.vpc,

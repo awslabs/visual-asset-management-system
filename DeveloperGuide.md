@@ -141,6 +141,7 @@ Deployment data migration documentation and scripts between major VAMS version d
 ### Deployment Troubleshooting
 
 #### CDK Error: failed commit on ref "manifest-sha256:...": unexpected status from PUT request to https://....dkr.ecr.REGION.amazonaws.com/v2/foo/manifests/bar: 400 Bad Request
+
 #### CDK Error: Lambda function XXX reached terminal FAILED state due to InvalidImage(ImageLayerFailure: UnsupportedImageLayerDetected - Layer Digest sha256:XXX) and failed to stabilize
 
 If you receive these errors, it may be related to a defect in the latest CDK version working with Docker documented here: https://github.com/aws/aws-cdk/issues/31549
@@ -149,8 +150,9 @@ As a possible workaround if you are using the docker buildx platform, set the fo
 `BUILDX_NO_DEFAULT_ATTESTATIONS=1`
 
 Additionally, you may need to clear docker cache and set docker to handle cross-platform emulation when deploying from ARM64 deployment machines (i.e., Mac M3):
-* Clear your Docker cache: `docker system prune -a`
-* Set cross-platform emulation: `docker run --rm --privileged multiarch/qemu-user-static --reset -p yes`
+
+-   Clear your Docker cache: `docker system prune -a`
+-   Set cross-platform emulation: `docker run --rm --privileged multiarch/qemu-user-static --reset -p yes`
 
 ### SAML Authentication - Cognito
 
@@ -586,10 +588,9 @@ The pipeline uses the selected file type on the asset as the input type and the 
 
 NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback with the Task Token".
 
-| Input File Types Supported                                | Base Lambda Function Name    |
-| :-------------------------------------------------------- | :--------------------------- |
-| GLTF, GLB, USD, OBJ, FBX, VRM, STL, PLY (3D Meshes)       | vamsExecuteRapidPipeline     |
-
+| Input File Types Supported                          | Base Lambda Function Name |
+| :-------------------------------------------------- | :------------------------ |
+| GLTF, GLB, USD, OBJ, FBX, VRM, STL, PLY (3D Meshes) | vamsExecuteRapidPipeline  |
 
 # Testing API
 

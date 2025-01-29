@@ -12,7 +12,7 @@ export function SignInHeader() {
     return (
         <Heading level={3} padding={`${tokens.space.xl} ${tokens.space.xl} 0`}>
             <img
-                style={{ width: "100%", paddingTop: 0}}
+                style={{ width: "100%", paddingTop: 0 }}
                 src={logoDarkImageSrc}
                 alt="Visual Asset Management System Logo"
             />

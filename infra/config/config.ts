@@ -279,14 +279,12 @@ export function getConfig(app: cdk.App): Config {
     }
 
     if (
-        ((config.app.useAlb.enabled &&
-        config.app.useAlb.usePublicSubnet) ||
-        config.app.pipelines.useRapidPipeline.enabled) &&
+        ((config.app.useAlb.enabled && config.app.useAlb.usePublicSubnet) ||
+            config.app.pipelines.useRapidPipeline.enabled) &&
         config.app.useGlobalVpc.enabled &&
         config.app.useGlobalVpc.optionalExternalVpcId &&
         config.app.useGlobalVpc.optionalExternalVpcId != "UNDEFINED" &&
         config.app.useGlobalVpc.optionalExternalVpcId != ""
-
     ) {
         if (
             !config.app.useGlobalVpc.optionalExternalPublicSubnetIds ||
@@ -435,8 +433,8 @@ export interface ConfigPublic {
             useForAllLambdas: boolean;
             addVpcEndpoints: boolean;
             optionalExternalVpcId: string;
-            optionalExternalIsolatedSubnetIds: string,
-            optionalExternalPrivateSubnetIds: string,
+            optionalExternalIsolatedSubnetIds: string;
+            optionalExternalPrivateSubnetIds: string;
             optionalExternalPublicSubnetIds: string;
             vpcCidrRange: string;
         };

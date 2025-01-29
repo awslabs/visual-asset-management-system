@@ -27,7 +27,6 @@ import { SignInHeader } from "./../authenticator/SignInHeader";
 import { SignInFooter } from "./../authenticator/SignInFooter";
 import { isAxiosError } from "../common/typeUtils";
 
-
 /**
  * Additional configuration needed to use federated identities
  */
@@ -348,17 +347,19 @@ const Auth: React.FC<AuthProps> = (props) => {
         if (config) {
             //Set global variables for cognito mode or external OAUTH.
             //If config.config.cognitoUserPoolId is undefined or empty, then disable cognito and setup external oauth
-            if (config.cognitoUserPoolId === undefined ||
+            if (
+                config.cognitoUserPoolId === undefined ||
                 config.cognitoUserPoolId === "undefined" ||
                 config.cognitoUserPoolId === ""
-                ) {
+            ) {
                 window.DISABLE_COGNITO = true;
                 configureOAuthClient(config);
             } else {
                 window.DISABLE_COGNITO = false;
             }
 
-            if (config.cognitoFederatedConfig === undefined ||
+            if (
+                config.cognitoFederatedConfig === undefined ||
                 config.cognitoFederatedConfig === "undefined" ||
                 config.cognitoFederatedConfig === ""
             ) {
@@ -510,19 +511,21 @@ const Auth: React.FC<AuthProps> = (props) => {
     useEffect(() => {
         //Secure Config Fetch
         if (config && (!config.bucket || !config.featuresEnabled) && isLoggedIn) {
-            getSecureConfig().then((value) => {
-                config.bucket = value.bucket;
-                config.featuresEnabled = value.featuresEnabled;
-                Cache.setItem("config", config);
-                setConfig(config);
-            }).catch((error: Error) => {
-                console.error("Error getting secure-config:", error.message)
+            getSecureConfig()
+                .then((value) => {
+                    config.bucket = value.bucket;
+                    config.featuresEnabled = value.featuresEnabled;
+                    Cache.setItem("config", config);
+                    setConfig(config);
+                })
+                .catch((error: Error) => {
+                    console.error("Error getting secure-config:", error.message);
 
-                // if response status code was 401 unauthorized, token may be invalid, so sign out
-                if(isAxiosError(error) && error.response?.status === 401) {
-                    signOutWithError()
-                }
-            });
+                    // if response status code was 401 unauthorized, token may be invalid, so sign out
+                    if (isAxiosError(error) && error.response?.status === 401) {
+                        signOutWithError();
+                    }
+                });
             console.log("Fetched secure config");
         }
 
@@ -531,19 +534,21 @@ const Auth: React.FC<AuthProps> = (props) => {
         let loginProfile = Cache.getItem("loginProfile");
         if (isLoggedIn && !loginProfile) {
             const user = JSON.parse(localStorage.getItem("user")!);
-            API.post("api", `auth/loginProfile/${user.username}`, {}).then((value) => {
-                loginProfile = {};
-                loginProfile.userId = value.message.Items[0].userId;
-                loginProfile.email = value.message.Items[0].email;
-                Cache.setItem("loginProfile", loginProfile);
-            }).catch((error: Error) => {
-                console.error("Error getting login-profile:", error.message)
+            API.post("api", `auth/loginProfile/${user.username}`, {})
+                .then((value) => {
+                    loginProfile = {};
+                    loginProfile.userId = value.message.Items[0].userId;
+                    loginProfile.email = value.message.Items[0].email;
+                    Cache.setItem("loginProfile", loginProfile);
+                })
+                .catch((error: Error) => {
+                    console.error("Error getting login-profile:", error.message);
 
-                // if response status code was 401 unauthorized, token may be invalid, so sign out
-                if(isAxiosError(error) && error.response?.status === 401) {
-                    signOutWithError()
-                }
-            });
+                    // if response status code was 401 unauthorized, token may be invalid, so sign out
+                    if (isAxiosError(error) && error.response?.status === 401) {
+                        signOutWithError();
+                    }
+                });
             console.log("Pinged LoginProfile API");
         }
     }, [config, isLoggedIn]);
@@ -735,7 +740,7 @@ const parseJwt = (
 } => {
     var jsonPayload = "{}";
     var base64Url = accessToken.split(".")[1];
-    if (base64Url){
+    if (base64Url) {
         var base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
         jsonPayload = decodeURIComponent(
             window
@@ -792,7 +797,7 @@ const startAccessTokenRefreshTimer = (startNewTimer: boolean = false) => {
             }
         }, refreshTimeLength);
     }
-}
+};
 
 const signOutWithError = (key: string = "auth_error", value: string = "Unauthorized") => {
     localStorage.clear();
@@ -813,11 +818,11 @@ const setOauth2Token = (oauth2Token: OAuth2Token) => {
 function getOAuth2Token() {
     let oauth2Token = {} as OAuth2Token;
     const oauth2TokenStr = localStorage.getItem("oauth2_token");
-    if (oauth2TokenStr){
+    if (oauth2TokenStr) {
         oauth2Token = JSON.parse(oauth2TokenStr);
     }
     return oauth2Token;
-};
+}
 
 function clearPreviousLoginErrors() {
     localStorage.removeItem("auth_error");

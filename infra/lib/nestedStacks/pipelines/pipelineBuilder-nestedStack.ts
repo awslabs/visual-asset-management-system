@@ -44,33 +44,31 @@ export class PipelineBuilderNestedStack extends NestedStack {
 
         props = { ...defaultProps, ...props };
 
-        const pipelineNetwork = new SecurityGroupGatewayPipelineConstruct(
-            this,
-            "PipelineNetwork",
-            {
-                ...props,
-                config: props.config,
-                vpc: props.vpc,
-                vpceSecurityGroup: props.vpceSecurityGroup,
-                privateSubnets: props.privateSubnets,
-                isolatedSubnets: props.isolatedSubnets,
-            }
-        );
+        const pipelineNetwork = new SecurityGroupGatewayPipelineConstruct(this, "PipelineNetwork", {
+            ...props,
+            config: props.config,
+            vpc: props.vpc,
+            vpceSecurityGroup: props.vpceSecurityGroup,
+            privateSubnets: props.privateSubnets,
+            isolatedSubnets: props.isolatedSubnets,
+        });
 
         ////Non-VPC Required Pipelines
         //Note: May still use VPC if config set to put lambdas into VPC
-        if(props.config.app.pipelines.useConversion3dBasic.enabled) {
-
-            const conversion3dBasicPipelineNestedStack =
-            new Conversion3dBasicNestedStack(this, "Conversion3dBasicNestedStack", {
-                ...props,
-                config: props.config,
-                storageResources: props.storageResources,
-                vpc: props.vpc,
-                pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
-                pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
-                lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-            });
+        if (props.config.app.pipelines.useConversion3dBasic.enabled) {
+            const conversion3dBasicPipelineNestedStack = new Conversion3dBasicNestedStack(
+                this,
+                "Conversion3dBasicNestedStack",
+                {
+                    ...props,
+                    config: props.config,
+                    storageResources: props.storageResources,
+                    vpc: props.vpc,
+                    pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
+                    pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                }
+            );
 
             //Add function name to array for stack output
             this.pipelineVamsLambdaFunctionNames.push(
@@ -81,7 +79,7 @@ export class PipelineBuilderNestedStack extends NestedStack {
         ////VPC-Required Pipelines
         if (
             props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
-            props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled||
+            props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
             props.config.app.pipelines.useRapidPipeline.enabled
         ) {
             //Create nested stack for each turned on pipeline
@@ -140,12 +138,14 @@ export class PipelineBuilderNestedStack extends NestedStack {
                     }
                 );
                 //Add function name to array for stack output
-                this.pipelineVamsLambdaFunctionNames.push(rapidPipelineNestedStack.pipelineVamsLambdaFunctionName)
+                this.pipelineVamsLambdaFunctionNames.push(
+                    rapidPipelineNestedStack.pipelineVamsLambdaFunctionName
+                );
             }
         }
 
         ////////////////////////////////////////////////////////////////////////////////////
-        ///Create empty lambda with no permissions in case the nested stack has no 
+        ///Create empty lambda with no permissions in case the nested stack has no
         // other components or pipelines enables (otherwise synth will error)
         const lambdaFn = new lambda.Function(this, "PipelineNestedStackEmptyLambda", {
             runtime: LAMBDA_NODE_RUNTIME,
@@ -164,17 +164,20 @@ export class PipelineBuilderNestedStack extends NestedStack {
             `
             ),
             vpc:
-            props.config.app.useGlobalVpc.enabled && props.config.app.useGlobalVpc.useForAllLambdas
-                ? props.vpc
-                : undefined, //Use VPC when flagged to use for all lambdas
+                props.config.app.useGlobalVpc.enabled &&
+                props.config.app.useGlobalVpc.useForAllLambdas
+                    ? props.vpc
+                    : undefined, //Use VPC when flagged to use for all lambdas
             vpcSubnets:
-            props.config.app.useGlobalVpc.enabled && props.config.app.useGlobalVpc.useForAllLambdas
-                ? { subnets: props.isolatedSubnets }
-                : undefined,
+                props.config.app.useGlobalVpc.enabled &&
+                props.config.app.useGlobalVpc.useForAllLambdas
+                    ? { subnets: props.isolatedSubnets }
+                    : undefined,
             securityGroups:
-            props.config.app.useGlobalVpc.enabled && props.config.app.useGlobalVpc.useForAllLambdas
-                ? [pipelineNetwork.securityGroups.pipeline]
-                : undefined,
+                props.config.app.useGlobalVpc.enabled &&
+                props.config.app.useGlobalVpc.useForAllLambdas
+                    ? [pipelineNetwork.securityGroups.pipeline]
+                    : undefined,
             timeout: cdk.Duration.seconds(1),
         });
     }
