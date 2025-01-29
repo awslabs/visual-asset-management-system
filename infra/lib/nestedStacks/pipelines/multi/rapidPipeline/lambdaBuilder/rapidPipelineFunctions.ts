@@ -32,10 +32,7 @@ export function buildVamsExecuteRapidPipelineFunction(
     const name = "vamsExecuteRapidPipeline";
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
-            path.join(
-                __dirname,
-                `../../../../../../../backendPipelines/multi/rapidPipeline/lambda`
-            )
+            path.join(__dirname, `../../../../../../../backendPipelines/multi/rapidPipeline/lambda`)
         ),
         handler: `${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -82,10 +79,7 @@ export function buildOpenPipelineFunction(
 
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
-            path.join(
-                __dirname,
-                `../../../../../../../backendPipelines/multi/rapidPipeline/lambda`
-            )
+            path.join(__dirname, `../../../../../../../backendPipelines/multi/rapidPipeline/lambda`)
         ),
         handler: `${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -122,7 +116,7 @@ export function buildConstructPipelineFunction(
     subnets: ec2.ISubnet[],
     pipelineSecurityGroups: ec2.ISecurityGroup[],
     assetAuxiliaryBucket: s3.Bucket,
-    kmsKey?: kms.IKey,
+    kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "constructPipeline";
     const vpcSubnets = vpc.selectSubnets({
@@ -131,10 +125,7 @@ export function buildConstructPipelineFunction(
 
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
-            path.join(
-                __dirname,
-                `../../../../../../../backendPipelines/multi/rapidPipeline/lambda`
-            )
+            path.join(__dirname, `../../../../../../../backendPipelines/multi/rapidPipeline/lambda`)
         ),
         handler: `${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -158,10 +149,10 @@ export function buildConstructPipelineFunction(
     // Giving Lambda function permission to upload RapidPipeline config file to auxiliary bucket
     fun.addToRolePolicy(
         new iam.PolicyStatement({
-            actions: ['s3:PutObject'],
+            actions: ["s3:PutObject"],
             effect: iam.Effect.ALLOW,
-            resources: [assetAuxiliaryBucket.bucketArn + "/*"]
-        }),
+            resources: [assetAuxiliaryBucket.bucketArn + "/*"],
+        })
     );
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
@@ -187,10 +178,7 @@ export function buildPipelineEndFunction(
 
     const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(
-            path.join(
-                __dirname,
-                `../../../../../../../backendPipelines/multi/rapidPipeline/lambda`
-            )
+            path.join(__dirname, `../../../../../../../backendPipelines/multi/rapidPipeline/lambda`)
         ),
         handler: `${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,

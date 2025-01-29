@@ -8,7 +8,7 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
 
 ### ⚠ BREAKING CHANGES
 
-Due to VPC subnet breakout changes, this may break existing deployments. It is recommended to use an A/B deployment if you run into subnet configuration issues. 
+Due to VPC subnet breakout changes, this may break existing deployments. It is recommended to use an A/B deployment if you run into subnet configuration issues.
 
 **Recommended Upgrade Path:** A/B Stack Deployment with data migration using staging bucket configuration and upgrade migration scripts for DynamoDB tables in `./infra/upgradeMigrationScripts`
 

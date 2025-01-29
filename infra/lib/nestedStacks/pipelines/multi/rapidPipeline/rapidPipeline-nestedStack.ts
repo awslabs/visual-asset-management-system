@@ -30,27 +30,24 @@ export interface RapidPipelineNestedStackProps extends cdk.StackProps {
 const defaultProps: Partial<RapidPipelineNestedStackProps> = {};
 
 export class RapidPipelineNestedStack extends NestedStack {
-    public pipelineVamsLambdaFunctionName: string
+    public pipelineVamsLambdaFunctionName: string;
     constructor(parent: Construct, name: string, props: RapidPipelineNestedStackProps) {
         super(parent, name);
 
         props = { ...defaultProps, ...props };
 
-        const rapidPipelineConstructPipeline = new RapidPipelineConstruct(
-            this,
-            "RapidPipeline",
-            {
-                ...props,
-                config: props.config,
-                storageResources: props.storageResources,
-                vpc: props.vpc,
-                pipelineSubnetsPrivate: props.pipelineSubnetsPrivate,
-                pipelineSubnetsIsolated: props.pipelineSubnetsIsolated,
-                pipelineSecurityGroups: props.pipelineSecurityGroups,
-                lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-            }
-        );
+        const rapidPipelineConstructPipeline = new RapidPipelineConstruct(this, "RapidPipeline", {
+            ...props,
+            config: props.config,
+            storageResources: props.storageResources,
+            vpc: props.vpc,
+            pipelineSubnetsPrivate: props.pipelineSubnetsPrivate,
+            pipelineSubnetsIsolated: props.pipelineSubnetsIsolated,
+            pipelineSecurityGroups: props.pipelineSecurityGroups,
+            lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+        });
 
-        this.pipelineVamsLambdaFunctionName = rapidPipelineConstructPipeline.pipelineVamsLambdaFunctionName
+        this.pipelineVamsLambdaFunctionName =
+            rapidPipelineConstructPipeline.pipelineVamsLambdaFunctionName;
     }
 }

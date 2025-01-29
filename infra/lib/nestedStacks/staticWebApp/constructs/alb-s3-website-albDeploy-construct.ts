@@ -353,4 +353,3 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
         });
     }
 }
-

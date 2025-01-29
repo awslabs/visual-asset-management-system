@@ -872,43 +872,43 @@ const AssetLinkingInfo = ({ setValid, showErrors }: AssetLinkingProps) => {
                                             ]);
                                             break;
                                         case "child":
-                                                const parentHasDuplicates = selectedItems.some(
-                                                    (selectedItem) =>
-                                                        parentLinks.find(
-                                                            (link) =>
-                                                                link.assetId === selectedItem.assetId
-                                                        ) !== undefined
-                                                );
-                                                if (parentHasDuplicates) {
-                                                    setNameError("This is already a parent");
-                                                    return;
-                                                }
-                                                setSelectedAssets((prevSelectedAssets) => ({
-                                                    parents: [
-                                                        ...prevSelectedAssets.parents,
-                                                        {
-                                                            assetName: selectedItems[0].assetName,
-                                                            assetId: selectedItems[0].assetId,
-                                                            databaseId: selectedItems[0].databaseName,
-                                                        },
-                                                    ],
-                                                    child: prevSelectedAssets.child,
-                                                    related: prevSelectedAssets.related,
-                                                }));
-                                                setSelectedAsset((prevSelectedAssets) => ({
-                                                    parents: [
-                                                        ...prevSelectedAssets.parents,
-                                                        selectedItems[0].assetId,
-                                                    ],
-                                                    child: prevSelectedAssets.child,
-                                                    related: prevSelectedAssets.related,
-                                                }));
+                                            const parentHasDuplicates = selectedItems.some(
+                                                (selectedItem) =>
+                                                    parentLinks.find(
+                                                        (link) =>
+                                                            link.assetId === selectedItem.assetId
+                                                    ) !== undefined
+                                            );
+                                            if (parentHasDuplicates) {
+                                                setNameError("This is already a parent");
+                                                return;
+                                            }
+                                            setSelectedAssets((prevSelectedAssets) => ({
+                                                parents: [
+                                                    ...prevSelectedAssets.parents,
+                                                    {
+                                                        assetName: selectedItems[0].assetName,
+                                                        assetId: selectedItems[0].assetId,
+                                                        databaseId: selectedItems[0].databaseName,
+                                                    },
+                                                ],
+                                                child: prevSelectedAssets.child,
+                                                related: prevSelectedAssets.related,
+                                            }));
+                                            setSelectedAsset((prevSelectedAssets) => ({
+                                                parents: [
+                                                    ...prevSelectedAssets.parents,
+                                                    selectedItems[0].assetId,
+                                                ],
+                                                child: prevSelectedAssets.child,
+                                                related: prevSelectedAssets.related,
+                                            }));
 
-                                                setParentLinks((prevLinks) => [
-                                                    ...prevLinks,
-                                                    ...selectedItems,
-                                                ]);
-                                                break;
+                                            setParentLinks((prevLinks) => [
+                                                ...prevLinks,
+                                                ...selectedItems,
+                                            ]);
+                                            break;
                                         case "related":
                                             const relatedHasDuplicates = selectedItems.some(
                                                 (selectedItem) =>
