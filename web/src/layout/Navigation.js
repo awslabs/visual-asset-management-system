@@ -6,7 +6,7 @@
 import React, { useEffect } from "react";
 import { useState } from "react";
 import { SideNavigation, Spinner } from "@cloudscape-design/components";
-import { API } from "aws-amplify";
+import { webRoutes } from "../services/APIService";
 import config from "../config";
 import Synonyms from "../synonyms";
 
@@ -134,11 +134,7 @@ export function Navigation({
             }
         }
         try {
-            API.post("api", `auth/routes`, {
-                body: {
-                    routes: allRoutes,
-                },
-            }).then((value) => {
+            webRoutes({ routes: allRoutes }).then((value) => {
                 for (let allowedRoute of value.allowedRoutes) {
                     allowedRoutes.push("#" + allowedRoute.route__path);
                 }

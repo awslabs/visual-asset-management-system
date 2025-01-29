@@ -41,18 +41,21 @@ const ruleBody = {
     subscribers: [""],
 };
 
-function validateEmails(emails: string) {
-    if (typeof emails !== "string" || emails.trim().length === 0) {
-        return "Required. Please enter at least one User ID (email).";
+function validateUsers(users: string) {
+    if (typeof users !== "string" || users.trim().length === 0) {
+        return "Required. Please enter at least one User ID or resource account email.";
     }
 
-    const emailArray = emails.split(",").map((email) => email.trim());
+    const userArray = users.split(",").map((user) => user.trim());
 
-    const isValidEmail = emailArray.every((email) => {
-        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    //Valid user regex to see if at least 3 characters alphanumeric
+    const isValidUser = userArray.every((user) => {
+        return /^[\w\-\.\+\@]{3,256}$/.test(user);
     });
 
-    return isValidEmail ? null : "Enter valid comma-separated emails.";
+    return isValidUser
+        ? null
+        : "User IDs (comma seperated) should be at least 3 characters alphanumeric with support for special characters (. + - @). Direct email addresses are allowed too if it's non-user email like a resource account.";
 }
 
 export default function CreateSubscription({
@@ -227,8 +230,8 @@ export default function CreateSubscription({
 
         ruleBody.subscribers = formState.subscribers
             ? (typeof formState.subscribers === "string" ? formState.subscribers.split(",") : [])
-                  .map((email) => email.trim())
-                  .filter((email) => email !== "")
+                  .map((subscriber) => subscriber.trim())
+                  .filter((subscriber) => subscriber !== "")
             : [];
     };
     useEffect(() => {
@@ -349,8 +352,8 @@ export default function CreateSubscription({
                                         });
                                 }
                             }}
-                            disabled={inProgress || validateEmails(formState.subscribers) !== null}
-                            data-testid={`${createOrUpdate}-authcriteria-button`}
+                            disabled={inProgress || validateUsers(formState.subscribers) !== null}
+                            data-testid={`${createOrUpdate}-subscriptions-button`}
                         >
                             {createOrUpdate} Subscription
                         </Button>
@@ -471,17 +474,17 @@ export default function CreateSubscription({
 
                     <FormField
                         label="Subscribers"
-                        constraintText="Required. Please enter all the User ID (emails) of the subscribers comma separated."
+                        constraintText="Required. Please enter all the User IDs of the subscribers comma separated (or resource account emails)."
                         errorText={nameError}
                     >
                         <Input
                             value={formState.subscribers}
                             onChange={({ detail }) => {
                                 setFormState({ ...formState, subscribers: detail.value });
-                                setNameError(validateEmails(detail.value));
+                                setNameError(validateUsers(detail.value));
                             }}
                             placeholder="Enter all the subscribers"
-                            data-testid="email"
+                            data-testid="subscribers"
                         />
                     </FormField>
                 </SpaceBetween>

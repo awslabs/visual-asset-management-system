@@ -4,17 +4,93 @@
 
 ### Requirements
 
--   Python 3.10
+-   Python 3.12
 -   Poetry (for managing python dependencies in the VAMS backend)
 -   Docker
 -   Node >=18.7
 -   Yarn >=1.22.19
 -   Node Version Manager (nvm)
+-   Conda-forge [only for optional local development]
 -   AWS cli
 -   AWS CDK cli
 -   Programatic access to AWS account at minimum access levels outlined above.
 
 ### Deploy VAMS for the First Time
+
+#### Local Development
+
+For local development, there are 2 options in regards to the backend: pointing to a local mocked backend or a remote backend that has already been deployed.
+
+##### Local Backend
+
+Some local development is possible when using a local backend, but not all APIs are available locally.
+
+Pre-reqs for local development:
+
+-   Conda installed and on PATH
+-   In `web/src/config.ts`, update the following values:
+    -   Set `DEV_API_ENDPOINT='http://localhost:8002/'`
+
+Terminal 1 (Running mocked API server):
+Before running the mockup API server, make sure to update amplifyConfig and secureConfig values accordingly in `backend/backend/localDev_api_server.py`
+Note: You may get errors due to other environment variables not set, you can ignore these as they do not hold up the mock API server
+
+```bash
+source ~/.bash_profile # for conda
+cd ./backend
+conda env create --name vams --file=vams-local.conda.yaml -y
+conda activate vams
+USE_LOCAL_MOCKS=true python3 backend/localDev_api_server.py # port 8002 # powershell: $env:USE_LOCAL_MOCKS = "true"
+```
+
+Terminal 2 (Running mocked auth server):
+
+```bash
+source ~/.bash_profile # for conda
+cd ./backend
+conda env create --name vams --file=vams-local.conda.yaml -y
+conda activate vams
+python3 localDev_oauth2_server.py # port 9031
+```
+
+Terminal 3 (Running web server):
+
+```bash
+cd ./web && yarn install && npm run build && python3 -m http.server 8001 -d build
+```
+
+The `yarn install` only need to be run once if dependencies haven't been modified, local frontend can be started with only:
+
+`npm run build && python3 -m http.server 8001 -d build`
+
+or `npm run start` to have **live reload** on code changes.
+
+_Note_: `npm run start` will need the port set via an environment variable `PORT=8001`.
+
+Now load [http://localhost:8001](http://localhost:8001) in a browser. (Don't need to provide any credentials on login)
+
+##### Remote Backend
+
+Pointing local frontend to a remote backend assumes the backend has already been deployed and functioning.
+
+-   In `web/src/config.ts`, update the following values:
+    -   Update `DEV_API_ENDPOINT` to point to the remote API endpoint
+
+Terminal 1 (Running web server):
+
+```bash
+cd ./web && yarn install && npm run build && cd ./build
+```
+
+The `yarn install` only need to be run once if dependencies haven't been modified, local frontend can be started with only:
+
+`npm run build && python3 -m http.server 8001 -d build`
+
+or `npm run start` to have **live reload** on code changes.
+
+_Note_: `npm run start` will need the port set via an environment variable `PORT=8001`.
+
+Now load [http://localhost:8001](http://localhost:8001) in a browser.
 
 #### Build & Deploy Steps (Linux/Mac)
 
@@ -62,7 +138,21 @@ Please note, depending on what changes are in flight, VAMS may not be available 
 
 Deployment data migration documentation and scripts between major VAMS version deployments are located in `/infra/deploymentDataMigration`
 
-### SAML Authentication
+### Deployment Troubleshooting
+
+#### CDK Error: failed commit on ref "manifest-sha256:...": unexpected status from PUT request to https://....dkr.ecr.REGION.amazonaws.com/v2/foo/manifests/bar: 400 Bad Request
+#### CDK Error: Lambda function XXX reached terminal FAILED state due to InvalidImage(ImageLayerFailure: UnsupportedImageLayerDetected - Layer Digest sha256:XXX) and failed to stabilize
+
+If you receive these errors, it may be related to a defect in the latest CDK version working with Docker documented here: https://github.com/aws/aws-cdk/issues/31549
+
+As a possible workaround if you are using the docker buildx platform, set the following terminal or operating system environment variable to stop the error:
+`BUILDX_NO_DEFAULT_ATTESTATIONS=1`
+
+Additionally, you may need to clear docker cache and set docker to handle cross-platform emulation when deploying from ARM64 deployment machines (i.e., Mac M3):
+* Clear your Docker cache: `docker system prune -a`
+* Set cross-platform emulation: `docker run --rm --privileged multiarch/qemu-user-static --reset -p yes`
+
+### SAML Authentication - Cognito
 
 SAML authentication enables you to provision access to your VAMS instance using your organization's federated identity provider such as Auth0, Active Directory, or Google Workspace.
 
@@ -84,7 +174,7 @@ The following stack outputs are required by your identity provider to establish 
 -   SP urn / Audience URI / SP entity ID
 -   CloudFrontDistributionUrl for the list of callback urls. Include this url with and without a single trailing slack (e.g., <https://example.com> and <https://example.com/>)
 
-### JWT Token Authentication
+### JWT Token Authentication - Cognito
 
 VAMS API requires a valid authorization token that will be validated on each call against the configured authentication system (eg. Cognito).
 
@@ -103,6 +193,28 @@ The critical component right now is that the authenticated VAMS username be incl
 ```
 
 NOTE: GovCloud deployments when the GovCloud configuration setting is true only support v1 of the Cognito lambdas. This means that ONLY Access tokens produced by Cognito can be used with VAMS API Calls for authentication/authorization. Otherwise both ID and Access tokens can be used for Non-govcloud deployments.
+
+### LoginProfile Custom Organizational Updates
+
+VAMS supports adding custom logic to how VAMS user profile information is updated and with what information.
+
+This logic should be overriden by each oranization as needed within `/backend/backend/customConfigCommon/customAuthLoginProfile.py`
+
+The default logic is to fill in and override login profile information like email from the JWT token returned by the IDP.
+
+LoginProfile is updated via a authenticated API call by the user from the webUI (on login) via a POST call to `/api/auth/loginProfile/{userId}`.
+
+Email field of the loginProfile is used by systems that need to send emails to the user. It will revert to the userId of email is blank or not in an email format as a backup.
+
+### MFACheck Custom Organizational Updates
+
+VAMS supports adding custom logic to how to check if Multi-Factor Authentication (MFA) is enabled for a logged in user when using an external OAUTH IDP configuration
+
+This logic should be overriden by each oranization as needed within `/backend/backend/customConfigCommon/customMFATokenScopeCheck.py`
+
+The default logic is for external OAUTH IDP is to just set the MFA enabled flag hard-coded to false. As each IDP is different, this must be a custom call.
+
+NOTE: Be mindful of the logic used as this can have great performance impacts for VAMS. Try to use caches in this method or reduce the amount of external API calls as this method is called very frequently during VAMS API authorization checks.
 
 ### Local Docker Builds - Custom Build Settings
 
@@ -128,7 +240,7 @@ RUN pip config set global.cert /var/task/Combined.crt
 
 4. You may need to add additional environment variables to allow using the ceritificate to be used for for `apk install` or `apt-get` system actions.
 
-#### Web Development
+### Web Development
 
 The web front-end runs on NodeJS React with a supporting library of amplify-js SDK. The React web page is setup as a single page app using React routes with a hash (#) router.
 
@@ -138,7 +250,7 @@ Infrastructure Note (Hash Router): The hash router was chosen in order so suppor
 
 The front end when loading the page receives a configuration from the AWS backend to include amplify storage bucket, API Gateway/Cloudfront endpoints, authentication endpoints, and features enabled. Some of these are retrieved on load pre-authentication while others are received post-authentication. Features enabled is a comma-deliminated list of infrastructure features that were enabled/disabled on CDK deployment through the `config.json` file and toggle different front-end features to view.
 
-#### Implementing pipelines outside of Lambda
+### Implementing pipelines outside of Lambda
 
 To process an asset through VAMS using an external system or when a job can take longer than the Lambda timeout of 15 minutes, it is recommended that you use the _Wait for a Callback with the Task Token_ feature so that the Pipeline Lambda can initiate your job and then exit instead of waiting for the work to complete before it also finishes. This reduces your Lambda costs and helps you avoid failed jobs that fail simply because they take longer than the timeout to complete.
 
@@ -167,7 +279,23 @@ Two additional settings enable your job to end with a timeout error by defining 
 
 If you would like your job check in to show that it is still running and fail the step if it does not check in within some amount of time less than the task timeout, define the Task Heartbeat Timeout on the create pipeline screen also. If more time than the specified seconds elapses between heartbeats from the task, this state fails with a States.Timeout error name.
 
-#### Uninstalling
+### Special Configurations
+
+### Static WebApp - ALB w/ Manual VPC Interface Endpoint Creation
+
+During deployment of the ALB configuration for the static web contents, some organizations require that all VPC endpoints be created outside of a CDK stack.
+
+Turn the `app.useAlb.addAlbS3SpecialVpcEndpoint` infrastructure configuration to `false` in this scenario. The following VPC Interface Endpoint will need to be created as well as the other required steps to link it to the ALB target groups and S3 (after the stack has been deployed):
+
+1. Deploy the stack first with the configuration setting to `false`
+2. Create a VPC Interface Endpoint on the VPC on the same subnets used on the ALB deployment and using/linked to the newly created VPCe security group already setup as part of the stack for the VPC endpoint.
+3. Add a new IAM resource policy on the VPC endpoint to allow all `["s3:Get*", "s3:List*"]` actions for the S3 webAppBucket (bucket name will be the domain name used for the ALB) and its objects
+4. Update the IAM resource policy on the webAppBucket S3 bucket (bucket name will be the domain name used for the ALB) to add a condition to only allow connections from the created VPC Interface Endpoint
+5. Lookup all the Private IP Addresses for each ALB subnet that are assigned to the VPC Interface endpoint
+6. Add to the stack-created ALB target group all the VPCe IP addresses looked up in the previous step.
+7. Update the resource policy of the S3 ALB domainname bucket (which contains the webapp files) to update the condition of `aws:SourceVpce` to point to the new VPCe endpoint ID
+
+### Uninstalling
 
 1. Run `cdk destroy` from infra folder
 2. Some resources may not be deleted by CDK (e.g S3 buckets and DynamoDB table) and you will have to delete them via aws cli or using aws console
@@ -176,7 +304,7 @@ Note:
 
 After running CDK destroy there might still some resources be running in AWS that will have to be cleaned up manually as CDK does not delete some resources.
 
-#### Deployment Overview
+### Deployment Overview
 
 The CDK deployment deploys the VAMS stack into your account. The components that are created by this app are:
 
@@ -269,6 +397,13 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 | ----------- | --------- | -------------------------------------------- |
 | asset_id    | String    | Asset identifier for this workflow execution |
 | database_id | String    | Database to which the asset belongs          |
+
+## UserStorageTable
+
+| Field  | Data Type | Description                               |
+| ------ | --------- | ----------------------------------------- |
+| userId | String    | (PK) Main user ID associated with profile |
+| email  | String    | Email belonging to the user               |
 
 Attributes are driven by user input. No predetermined fields aside from the partition and sort key.
 From rel 1.4 onwards, when you add metadata on a file / folder, the s3 key prefix of the file/folder is used as the asset key in the metadata table

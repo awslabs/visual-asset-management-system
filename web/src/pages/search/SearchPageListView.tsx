@@ -52,8 +52,15 @@ function columnRender(e: any, name: string, value: any) {
         const tagsWithType = value.map((tag) => {
             if (tagTypes)
                 for (const tagType of tagTypes) {
+                    var tagTypeName = tagType.tagTypeName;
+
+                    //If tagType has required field add [R] to tag type name
+                    if (tagType && tagType.required === "True") {
+                        tagTypeName += " [R]";
+                    }
+
                     if (tagType.tags.includes(tag)) {
-                        return `${tag} (${tagType.tagTypeName})`;
+                        return `${tag} (${tagTypeName})`;
                     }
                 }
             return tag;

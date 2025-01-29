@@ -53,7 +53,7 @@ class TestComment:
         asset_id="test-id",
         asset_version_id_and_comment_id="test-version-id:test-comment-id",
         comment_body="test comment body",
-        comment_owner_id="test_sub",
+        comment_owner_id="test_email@amazon.com",
         comment_owner_username="test_email@amazon.com",
         date_created="2023-07-06T21:32:15.066148Z",
     ) -> None:

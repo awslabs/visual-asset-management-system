@@ -20,6 +20,7 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as kms from "aws-cdk-lib/aws-kms";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
     kmsKeyPolicyStatementGenerator,
     generateUniqueNameHash,
 } from "../helper/security";
@@ -63,6 +64,7 @@ export function buildWorkflowService(
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(workflowService);
     storageResources.dynamo.userRolesStorageTable.grantReadData(workflowService);
     kmsKeyLambdaPermissionAddToResourcePolicy(workflowService, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(workflowService, config);
     workflowService.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -126,6 +128,7 @@ export function buildListWorkflowExecutionsFunction(
         listAllWorkflowsFunction,
         storageResources.encryption.kmsKey
     );
+    globalLambdaEnvironmentsAndPermissions(listAllWorkflowsFunction, config);
 
     return listAllWorkflowsFunction;
 }
@@ -218,6 +221,7 @@ export function buildCreateWorkflowFunction(
         createWorkflowFunction,
         storageResources.encryption.kmsKey
     );
+    globalLambdaEnvironmentsAndPermissions(createWorkflowFunction, config);
     suppressCdkNagErrorsByGrantReadWrite(createWorkflowFunction);
     return createWorkflowFunction;
 }
@@ -273,6 +277,7 @@ export function buildRunWorkflowFunction(
         runWorkflowFunction,
         storageResources.encryption.kmsKey
     );
+    globalLambdaEnvironmentsAndPermissions(runWorkflowFunction, config);
     suppressCdkNagErrorsByGrantReadWrite(runWorkflowFunction);
 
     runWorkflowFunction.addToRolePolicy(
@@ -350,6 +355,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
         processWorkflowExecutionOutputFunction,
         storageResources.encryption.kmsKey
     );
+    globalLambdaEnvironmentsAndPermissions(processWorkflowExecutionOutputFunction, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return processWorkflowExecutionOutputFunction;
 }

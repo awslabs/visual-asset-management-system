@@ -15,7 +15,10 @@ import * as Service from "../../lib/helper/service-helper";
 import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as kms from "aws-cdk-lib/aws-kms";
-import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../helper/security";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
+} from "../helper/security";
 
 export function buildSearchFunction(
     scope: Construct,
@@ -74,6 +77,7 @@ export function buildSearchFunction(
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
 
     return fun;
 }
@@ -134,6 +138,7 @@ export function buildIndexingFunction(
     storageResources.dynamo.assetStorageTable.grantStreamRead(fun);
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
 
     return fun;
 }

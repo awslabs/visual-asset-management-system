@@ -17,7 +17,6 @@ export interface GatewayAlbDeployConstructProps extends cdk.StackProps {
     config: Config.Config;
     vpc: ec2.IVpc;
     subnetsIsolated: ec2.ISubnet[];
-    subnetsPrivate: ec2.ISubnet[];
     subnetsPublic: ec2.ISubnet[];
 }
 
@@ -39,8 +38,6 @@ export class GatewayAlbDeployConstruct extends Construct {
         webAppALB: ec2.SecurityGroup;
         webAppVPCE: ec2.SecurityGroup;
     };
-
-    readonly s3VpcEndpoint: ec2.InterfaceVpcEndpoint;
 
     constructor(parent: Construct, name: string, props: GatewayAlbDeployConstructProps) {
         super(parent, name);
@@ -82,18 +79,6 @@ export class GatewayAlbDeployConstruct extends Construct {
             webAppALB: webAppALBSecurityGroup,
             webAppVPCE: webAppVPCESecurityGroup,
         };
-
-        // Create VPC interface endpoint for S3 (Needed for ALB<->S3)
-        //Note: This endpoint should be created despite the GlobalVPC flag of create endpoint or not in order to setup ALB listeners properly
-        const s3VPCEndpoint = new ec2.InterfaceVpcEndpoint(this, "S3InterfaceVPCEndpoint", {
-            vpc: props.vpc,
-            privateDnsEnabled: false,
-            service: ec2.InterfaceVpcEndpointAwsService.S3,
-            subnets: { subnets: this.subnets.webApp },
-            securityGroups: [webAppVPCESecurityGroup],
-        });
-
-        this.s3VpcEndpoint = s3VPCEndpoint;
 
         //Nag Supressions
         NagSuppressions.addResourceSuppressions(webAppVPCESecurityGroup, [

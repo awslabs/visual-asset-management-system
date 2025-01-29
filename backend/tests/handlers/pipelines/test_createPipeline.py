@@ -58,7 +58,7 @@ def test_create_pipeline():
             'S3Key': 'lambda-pipeline-sample-function-key',
         },
         Handler='lambda_function.lambda_handler',
-        Runtime='python3.10')
+        Runtime='python3.12')
 
 
 def test_upload_pipeline():

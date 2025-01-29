@@ -62,7 +62,14 @@ function validateTagType(selectedOption: string | undefined): string | null {
     return selectedOption === undefined ? "Please select a Tag Type" : null;
 }
 
-export default function CraeteTag({
+function removeStringFromEnd(str: string | undefined, strToRemove: string) {
+    if (str?.endsWith(strToRemove)) {
+        return str.slice(0, -strToRemove.length);
+    }
+    return str;
+}
+
+export default function CreateTag({
     open,
     setOpen,
     setReload,
@@ -83,7 +90,7 @@ export default function CraeteTag({
     const tagBody = {
         tagName: formState.tagName,
         description: formState.description,
-        tagTypeName: formState.tagTypeName,
+        tagTypeName: removeStringFromEnd(formState.tagTypeName, " [R]"), // Remove the " [R]" from the end of the tagTypeName we are getting from tagService.py on the backend to pass validation when updating
     };
     const handleModalClose = () => {
         setShowModal(false);

@@ -18,7 +18,7 @@ jobs:
             - name: Setup Python Version
               uses: actions/setup-python@v2
               with:
-                  python-version: 3.12.0
+                  python-version: 3.12.7
 
             - name: Setup node for the whole package
               uses: actions/setup-node@v3

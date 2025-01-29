@@ -1,7 +1,7 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 import json
-from handlers.authn import request_to_claims
+from handlers.auth import request_to_claims
 import boto3
 import os
 from customLogging.logger import safeLogger

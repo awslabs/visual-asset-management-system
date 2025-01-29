@@ -16,6 +16,7 @@ asset_path_pattern = r'^[a-z]([-_a-z0-9]){3,63}(\/[a-zA-Z0-9_\-.\s]+){1,63}$'
 asset_auxiliarypreview_path_pattern = r'^[a-z]([-_a-z0-9]){3,63}(\/[a-zA-Z0-9_\-.\s]+){1,63}\/preview(\/[a-zA-Z0-9_\-.\s]+){1,63}(\/?)$'
 asset_path_pipeline_pattern = r'^pipelines\/([a-zA-Z0-9_\-.\s]){1,63}\/([a-zA-Z0-9_\-.\s]){1,63}\/output(\/[a-zA-Z0-9_\-.\s]+){1,63}(\/)$'
 object_name_pattern = r'^[a-zA-Z0-9\-._\s]{1,256}$'
+userid_pattern = r'^[\w\-\.\+\@]{3,256}$'
 
 #Define local regexes that use the patterns
 id_regex = re.compile(id_pattern)
@@ -29,6 +30,7 @@ asset_path_regex = re.compile(asset_path_pattern)
 asset_auxiliarypreview_path_regex = re.compile(asset_auxiliarypreview_path_pattern)
 asset_path_pipeline_regex = re.compile(asset_path_pipeline_pattern)
 object_name_regex = re.compile(object_name_pattern)
+userid_regex = re.compile(userid_pattern)
 
 def validate_id(name, value):
     if not id_regex.fullmatch(value):
@@ -79,6 +81,8 @@ def validate_sagemaker_notebook_id(name, value):
     return (True, '')
 
 def validate_id_array(name, values):
+    if not isinstance(values, list):
+        return (False, name + " must be an array.")
     for val in values:
         (valid, message) = validate_id(name, val)
         if not valid:
@@ -86,6 +90,8 @@ def validate_id_array(name, values):
     return (True, '')
 
 def validate_uuid_array(name, values):
+    if not isinstance(values, list):
+        return (False, name + " must be an array.")
     for val in values:
         (valid, message) = validate_uuid(name, val)
         if not valid:
@@ -98,6 +104,8 @@ def validate_objectName(name, value):
     return (True, '')
 
 def validate_objectName_array(name, values):
+    if not isinstance(values, list):
+        return (False, name + " must be an array.")
     for val in values:
         (valid, message) = validate_objectName(name, val)
         if not valid:
@@ -105,8 +113,19 @@ def validate_objectName_array(name, values):
     return (True, '')
 
 def validate_email_array(name, values):
+    if not isinstance(values, list):
+        return (False, name + " must be an array.")
     for val in values:
         (valid, message) = validate_email(name, val)
+        if not valid:
+            return (valid, message)
+    return (True, '')
+
+def validate_userid_array(name, values):
+    if not isinstance(values, list):
+        return (False, name + " must be an array.")
+    for val in values:
+        (valid, message) = validate_userid(name, val)
         if not valid:
             return (valid, message)
     return (True, '')
@@ -124,6 +143,8 @@ def validate_string_json(name, value):
         return (False, name + " is invalid. Must be a valid json string.")
 
 def validate_string_max_length_array(name, values, max_length):
+    if not isinstance(values, list):
+        return (False, name + " must be an array.")
     for val in values:
         (valid, message) = validate_string_max_length(name, val, max_length)
         if not valid:
@@ -140,6 +161,11 @@ def validate_email(name, value):
         return (False, name + " is invalid. Must follow the regexp "+email_pattern)
     return (True, '')
 
+def validate_userid(name, value):
+    if not bool(re.match(userid_regex, value)):
+        return (False, name + " is invalid. Must follow the regexp "+userid_pattern)
+    return (True, '')
+
 def validate_regex(name, value):
     try:
         re.compile(value)
@@ -153,6 +179,13 @@ def validate_number(name, value):
         return (True, '')
     except ValueError:
         return (False, name + " is invalid. Must be a number.")
+    
+def validate_bool(name, value):
+    try:
+        bool(value)
+        return (True, '')
+    except ValueError:
+        return (False, name + " is invalid. Must be a boolean string of 'true'/'false'.")
 
 
 def validate(values):
@@ -171,16 +204,24 @@ def validate(values):
                 return (True, "")
             else:
                 return (False, k + " is a required field.")
-        if isinstance(v['value'], str) and v['value'] == '':
+        if not "_ARRAY" in v['validator'] and isinstance(v['value'], str) and v['value'] == '':
             if optional:
                 return (True, "")
             else:
                 return (False, k + " is a required field.")
-        if isinstance(v['value'], (list, dict)) and len(v['value']) == 0:
+        if "_ARRAY" in v['validator'] and isinstance(v['value'], (list)) and len(v['value']) == 0:
             if optional:
                 return (True, "")
             else:
                 return (False, k + " is a required field.")
+            
+        #Check input types first. If not string or array for respective validator, error.
+        if isinstance(v['value'], dict):
+            return (False, k + " is invalid. Must be a string or an array of strings for validator, not a dict.")
+        elif "_ARRAY" in v['validator'] and not isinstance(v['value'], list):
+            return (False, k + " is invalid. Must be a list for array validators, not a " + str(type(v['value'])))
+        elif not isinstance(v['value'], str):
+            return (False, k + " is invalid. Must be a string for non-array validators, not a " + str(type(v['value'])))
 
         #Type checks after we check for empties.
         if v['validator'] == 'ID':
@@ -205,6 +246,10 @@ def validate(values):
                 return (valid, message)
         if v['validator'] == 'EMAIL_ARRAY':
             (valid, message) = validate_email_array(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'USERID_ARRAY':
+            (valid, message) = validate_userid_array(k, v['value'])
             if not valid:
                 return (valid, message)
         if v['validator'] == 'STRING_256':
@@ -255,12 +300,20 @@ def validate(values):
             (valid, message) = validate_email(k, v['value'])
             if not valid:
                 return (valid, message)
+        if v['validator'] == 'USERID':
+            (valid, message) = validate_userid(k, v['value'])
+            if not valid:
+                return (valid, message)
         if v['validator'] == 'REGEX':
             (valid, message) = validate_regex(k, v['value'])
             if not valid:
                 return (valid, message)
         if v['validator'] == 'NUMBER':
             (valid, message) = validate_number(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'BOOL':
+            (valid, message) = validate_bool(k, v['value'])
             if not valid:
                 return (valid, message)
 

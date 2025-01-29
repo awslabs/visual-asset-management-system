@@ -399,7 +399,7 @@ def lambda_handler(event, context):
                 },
                 'userId': {
                     'value': event['body']['userId'],
-                    'validator': 'EMAIL'
+                    'validator': 'USERID'
                 }
             })
             if not valid:
@@ -421,7 +421,7 @@ def lambda_handler(event, context):
                 },
                 'userId': {
                     'value': event['body']['userId'],
-                    'validator': 'EMAIL'
+                    'validator': 'USERID'
                 }
             })
             if not valid:
@@ -439,7 +439,7 @@ def lambda_handler(event, context):
             (valid, message) = validate({
                 'userId': {
                     'value': event['body']['userId'],
-                    'validator': 'EMAIL'
+                    'validator': 'USERID'
                 }
             })
             if not valid:

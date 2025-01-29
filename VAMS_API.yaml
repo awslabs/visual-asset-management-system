@@ -360,9 +360,72 @@ paths:
                     $ref: '#/components/schemas/object_name_pattern_regex'
             security:
             -   DefaultCognitoAuthorizer: []
+    /auth/loginProfile/{userId}/:
+        get:
+            summary: "Get loginProfile for the specified user"
+            responses:
+                "200":
+                    description: OK
+                "403":
+                    description: Unauthorized user.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "userId"
+                in: "path"
+                description: "Unique identifier for user."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/userid_regex'
+            security:
+            -   DefaultCognitoAuthorizer: []
+        post:
+            summary: "Update login profile for particular user. Primary API call to trigger updating profiles from JWT or organizational logic. Body contents (optional) may get overriden internally by organizational specific profile. "
+            requestBody:
+                required: false
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/constraint'
+            parameters:
+            - $ref: '#/components/parameters/maxItemsParam'
+            - $ref: '#/components/parameters/pageSizeParam'
+            - $ref: '#/components/parameters/startingTokenParam'            
+            - name: "userId"
+              in: "path"
+              description: "Unique identifier for user."
+              required: true
+              schema:
+                $ref: '#/components/schemas/userid_regex'
+            responses:
+                "200":
+                    description: OK
+                "403":
+                    description: Unauthorized user.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+            -   DefaultCognitoAuthorizer: []
+
     /auth/routes:
         post:
-            summary: "Authorize routes."
+            summary: "Authorized routes."
             requestBody:
                 required: true
                 content:
@@ -2757,6 +2820,9 @@ components:
                 - assetName
                 - description
                 - assetPathKey
+        userid_regex:
+            type: string
+            pattern: ^[\w\-\.\+\@]{3,256}$
         userRole:
             type: object
             properties: 

@@ -56,6 +56,7 @@ def generate_upload_asset_payload(event):
     event_asset_id = event["body"].get("assetId")
     key = event['body']['key']
     description = event['body']['description']
+    tags = event['body'].get('tags', [] )
 
     payload = {
         "body": {
@@ -64,7 +65,7 @@ def generate_upload_asset_payload(event):
             "assetName": assetName,
             "pipelineId": None,
             "executionId": None,
-            "tags": [],
+            "tags": tags,
             "key": key,
             "assetType": f".{key.split('.')[-1]}",
             "description": description,
@@ -128,6 +129,13 @@ def lambda_handler(event, context):
         response['statusCode'] = 400
         response['body'] = json.dumps({"message": message})
         return response
+    
+    if 'tags' in event['body'] and not isinstance(event['body']['tags'], list):
+        message = "Tags must passed as a list in API Call"
+        logger.error(message)
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": message})
+        return response
 
     logger.info("Validating parameters")
     (valid, message) = validate({
@@ -150,6 +158,12 @@ def lambda_handler(event, context):
         'description': {
             'value': event['body']['description'],
             'validator': 'STRING_256'
+        },
+        'tags': {
+            'value': event['body'].get('tags', []),
+            'validator': 'OBJECT_NAME_ARRAY',
+            'optional': True
+
         }
     })
     if not valid:
@@ -176,6 +190,7 @@ def lambda_handler(event, context):
         "databaseId": event['body']['databaseId'],
         "assetId": event['body']['assetId'],
         "assetName": event['body']['assetName'],
+        "tags": event['body'].get('tags', [])
     }
 
     logger.info(asset)
@@ -200,7 +215,7 @@ def lambda_handler(event, context):
                         ],
                     "upload_id": "upload_id",
                     "key": "assetId/file_name",
-                    ..... Other Asset upload related attribute like databaseId, assetName, description
+                    ..... Other Asset upload related attribute like databaseId, assetName, description, tags
                     }
                     """
                     resp = s3.complete_multipart_upload(
@@ -212,7 +227,7 @@ def lambda_handler(event, context):
                     logger.info(resp)
 
                     if resp['ResponseMetadata']['HTTPStatusCode'] // 100 == 2:
-                        logger.info("Multipart upload completed successfully.")
+                        logger.info("S3 Multipart upload completed successfully.")
 
                         try:
                             if 'databaseId' in event['body'] and 'description' in event['body']:
@@ -239,6 +254,28 @@ def lambda_handler(event, context):
                                                                     Payload=json.dumps(payload).encode('utf-8'))
                                 logger.info("lambda response")
                                 logger.info(lambda_response)
+
+                                stream = lambda_response['Payload']
+                                response_payload = json.loads(stream.read().decode("utf-8"))
+                                logger.info("lambda payload")
+                                logger.info(response_payload)
+
+                                response_payload_body = json.loads(response_payload.get("body", ""))
+                                logger.info("lambda response payload body")
+                                logger.info(response_payload_body)
+
+                                #if lambda response is anything but status code 200, throw exception with error message coming back
+                                if response_payload['statusCode'] != 200 and response_payload['statusCode'] != 500:
+                                    logger.exception("Error inserting asset record: "+response_payload_body.get('message', "Unknown"))
+                                    response['statusCode'] = response_payload['statusCode']
+                                    response['body'] = json.dumps({"message": "Error inserting asset record: "+response_payload_body.get('message', "Unknown")})
+                                    return response
+                                elif response_payload['statusCode'] == 500:
+                                    logger.exception("Error invoking upload Asset Lambda function:")
+                                    response['statusCode'] = 500
+                                    response['body'] = json.dumps({"message": "Internal Server Error"})
+                                    return
+
                                 logger.info("Invoke Asset Lambda Successfully.")
 
                                 dynamodb = boto3.resource('dynamodb')
@@ -258,7 +295,7 @@ def lambda_handler(event, context):
                                 logger.info("Created metadata successfully")
 
                                 response['statusCode'] = 200
-                                response['body'] = json.dumps({"message": "Multipart upload completed successfully."})
+                                response['body'] = json.dumps({"message": "Multipart upload and asset ingestion completed successfully."})
                             else:
                                 response['statusCode'] = 400
                                 response['body'] = json.dumps({"message": "DatabaseId, Description are required."})
@@ -268,7 +305,7 @@ def lambda_handler(event, context):
                             response['body'] = json.dumps({"message": "Error invoking upload Asset Lambda function. "})
                     else:
                         response['statusCode'] = 400
-                        response['body'] = json.dumps({"message": "Multipart upload completion failed."})
+                        response['body'] = json.dumps({"message": "Multipart upload and asset ingestion completion failed."})
                 else:
                     logger.info("Stage 1 - initiatlize upload")
                     file_size = int(event['body']['file_size'])

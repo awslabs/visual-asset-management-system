@@ -200,7 +200,7 @@ export default function CreateTagType({
                                 setNameError("");
                             }}
                             placeholder="Enter Name"
-                            data-testid="email"
+                            data-testid="role"
                             disabled={createOrUpdate === "Update"}
                         />
                     </FormField>
@@ -238,7 +238,7 @@ export default function CreateTagType({
                                 setFormState({ ...formState, sourceIdentifier: detail.value });
                             }}
                             placeholder="Enter Source Indentifier"
-                            data-testid="email"
+                            data-testid="source"
                         />
                     </FormField>
                     <FormField
@@ -252,7 +252,7 @@ export default function CreateTagType({
                                 setFormState({ ...formState, description: detail.value });
                             }}
                             placeholder="Enter description"
-                            data-testid="email"
+                            data-testid="description"
                         />
                     </FormField>
                 </SpaceBetween>

@@ -33,7 +33,6 @@ export interface StaticWebBuilderNestedStackProps extends cdk.StackProps {
     authResources: authResources;
     vpc: ec2.IVpc;
     subnetsIsolated: ec2.ISubnet[];
-    subnetsPrivate: ec2.ISubnet[];
     subnetsPublic: ec2.ISubnet[];
 }
 
@@ -74,6 +73,9 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
         const webAppAccessLogsBucket = new s3.Bucket(this, "WebAppAccessLogsBucket", {
             ...s3DefaultProps,
+            bucketName: props.config.app.useAlb.enabled
+                ? props.config.app.useAlb.domainHost + "-webappaccesslogs"
+                : undefined,
             encryption:
                 props.config.app.useKmsCmkEncryption.enabled && !props.config.app.useAlb.enabled //ALB doesn't support encryption logs bucket encrypted with KMS
                     ? s3.BucketEncryption.KMS
@@ -242,7 +244,6 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 apiUrl: props.apiUrl,
                 vpc: webAppDistroNetwork.vpc,
                 albSubnets: webAppDistroNetwork.subnets.webApp,
-                s3VPCEndpoint: webAppDistroNetwork.s3VpcEndpoint,
                 albSecurityGroup: webAppDistroNetwork.securityGroups.webAppALB,
                 vpceSecurityGroup: webAppDistroNetwork.securityGroups.webAppVPCE,
             });
@@ -254,8 +255,14 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 resources: [webAppBucket.arnForObjects("*"), webAppBucket.bucketArn],
             });
 
+            //Restrict to just the VPCe (if enabled)
+            //Note: If not adding VPCe at deployment, add condition restriction to blank VPCe (that get's filled in afterwards as part of manual steps)
+            let vpcEndpointId = "";
+            if (props.config.app.useAlb.addAlbS3SpecialVpcEndpoint) {
+                vpcEndpointId = website.s3VpcEndpoint.vpcEndpointId;
+            }
             webAppBucketPolicy.addCondition("StringEquals", {
-                "aws:SourceVpce": webAppDistroNetwork.s3VpcEndpoint.vpcEndpointId,
+                "aws:SourceVpce": vpcEndpointId,
             });
 
             webAppBucket.addToResourcePolicy(webAppBucketPolicy);

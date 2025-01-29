@@ -35,7 +35,7 @@ def check_subscriptions(body):
     result = subscription_table.query(
         IndexName='eventName-entityName_entityId-index',
         KeyConditionExpression='#entityNameId = :entityNameId AND #eventName = :eventName',
-        FilterExpression='contains(#subscribers, :emailId)',
+        FilterExpression='contains(#subscribers, :userId)',
         ExpressionAttributeNames={
             '#entityNameId': 'entityName_entityId',
             '#eventName': 'eventName',
@@ -44,7 +44,7 @@ def check_subscriptions(body):
         ExpressionAttributeValues={
             ':entityNameId': f'{entity_name}#{body["assetId"]}',
             ':eventName': event_name,
-            ':emailId': body["userId"],
+            ':userId': body["userId"],
         }
     )
 
@@ -75,7 +75,7 @@ def lambda_handler(event, context):
         (valid, message) = validate({
             'userId': {
                 'value': event['body']['userId'],
-                'validator': 'EMAIL'
+                'validator': 'USERID'
             },
             'assetId': {
                 'value': event['body']['assetId'],

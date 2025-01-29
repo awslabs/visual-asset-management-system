@@ -10,7 +10,7 @@ date_format = "%m/%d/%Y %I:%M:%S %p"
 
 def mask_sensitive_data(event):
     # remove sensitive data from request object before logging
-    keys_to_redact = ["authorization"]
+    keys_to_redact = ["authorization", "idJwtToken"]
     result = {}
     for k, v in event.items():
         if isinstance(v, dict):
