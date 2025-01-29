@@ -18,10 +18,12 @@ Some configuration options can be overriden at time of deployment with either en
 
 -   `app.baseStackName` | default: prod | #Base stack stage environment name to use when creating full CDK stack name.
 -   `app.bucketMigrationStaging.assetBucketName` | default: NULL | #Staging bucket for transfering assets between deployment. If null, no staging bucket will be configured for use.
--   `app.adminEmailAddress` | default: <adminEmail@example.com> | #Administrator email address to use for the initial super admin account.
+-   `app.adminUserId` | default: < administrator > | #Administrator username to use for the initial super admin account. This can also be in the form of an email address.
+-   `app.adminEmailAddress` | default: < adminEmail@example.com > | #Administrator email address to use for the initial super admin account. A temporary password will be sent here for an initial solution standup.
 
 -   `app.useWaf` | default: true | #Feature to turn use of Amazon Web Application Firewall on/off for VAMS deployment. This is used for Cloudfront or ALB + API Gateway attachment points. Warning: We reccomend you keep this on unless your organization has other firewalls in-use.
 -   `app.useFips` | default: false | #Feature to use FIPS compliant AWS partition endpoints. Must combine with AWS CLI FIPS Environment variable `AWS_USE_FIPS_ENDPOINT`.
+-   `app.addStackCloudTrailLogs` | default: true | #Feature to turn the creating of a new CloudWatch logs group and associated CloudTrail trail for this stack deployment.
 -   `app.useKmsCmkEncryption.enabled` | default: false | #Feature to use a custom customer managed encryption key (KMS). Key and associated VAMS permissions will be auto-generated for the deployment without providing an external key. KMS key (generated or imported) will be used for S3*, DynamoDB, SQS/SNS, and OpenSearch data at rest. If false, use default or AWS-managed (as-available) encryption settings for all data-at-rest services.*The WebAppBucket S3 bucket will not use the KMS CMK key as the the ALB has no way to provide SigV4 signature to S3 without authentication and CloudFront OAC KMS encryption hasn't been implemented yet with native CDK.
 -   `app.useKmsCmkEncryption.optionalExternalCmkArn` | default: NULL | #Ability to import an optional external custom customer managed encryption key (KMS) if KMS encryption is true. ARN must be provided of key imported to KMS in the same region as the VAMS deployment. See additional configuration notes on the permission policy to have on the key.
 -   `app.govCloud.enabled` | default: false | #Feature to deploy to the AWS GovCloud partition. Will automatically turn VAMS features on/off based on service support (see below on additional configuration notes).
@@ -44,6 +46,7 @@ Some configuration options can be overriden at time of deployment with either en
 
 -   `app.useAlb.enabled` | default: false | #Feature to swap in a Application Load Balancer instead of a CloudFront Deployment. This will 1) disable static webpage caching, 2) require a fixed web domain to be specified, 3) require a SSL/TLS certicate to be registered in AWS Certifcate Manager, 4) have a S3 bucket name available in the partition that matches the domain name for the static website contents, 5) prevent some cross-site-scripting security preventions / secure HTTPOnly cookies from taking full affect and 6) cause a modified A/B stack deployment scenario on VAMS upgrades due to the common S3 bucket name used by the ALB.
 -   `app.useAlb.usePublicSubnet` | default: false | #Specifies if the ALB should use a public subnet. If creating a new VPC, will create seperate public subnets for ALB. If importing an existing VPC, will require `app.useGlobalVpc.optionalExternalPublicSubnetIds` to be filled out.
+-   `app.useAlb.addAlbS3SpecialVpcEndpoint` | default: true | #Creates the special S3 VPC endpoint needed by the ALB to serve S3 static web files. If turned false, this will need to be manualyl created afterwards. See the DeveloperGuide for more information.
 -   `app.useAlb.domainHost` | default: vams1.example.com | #Specifies the domain to use for the ALB and static webpage S3 bucket. Required to be filled out to use ALB.
 -   `app.useAlb.certificateARN` | default: arn:aws-us-gov:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID> | #Specifies the existing ACM certificate to use for the ALB for HTTPS connections. ACM certificate must be for the `domainHost` specified and reside in the same region being deployed to. Required to be filled out to use ALB.
 -   `app.useAlb.optionalHostedZoneID` | default: NULL | #Optional route53 zone host ID to automatically create an alias for the `domainHost` specified to the created ALB.
@@ -57,8 +60,16 @@ Some configuration options can be overriden at time of deployment with either en
 -   `app.authProvider.useCognito.enabled` | default: true | #Feature to use Cognito Use Pools should be used for VAMS user management and authentication. At least 1 authProvider must be enabled in the configuration.
 -   `app.authProvider.useCognito.useSaml` | default: false | #Specifies if Cognito User Pools use a federated SAML from an external IDP integration.
 -   `app.authProvider.useCognito.useUserPasswordAuthFlow` | default: false | #Specifies if Cognito User Pools enable `USER_PASSWORD_AUTH` authentication flow that allow USERNAME/PASSWORD to be sent directly for authentication verses using only SRP caluclated authentication. Some organizations may use this when cognito SRP calculation libraries are not available for system-to-system integrations or user interfaces.
--   `app.authProvider.useExternalOathIdp.enabled` | default: false | #UNUSED. Reserved for future use
--   `app.authProvider.useExternalOathIdp.idpAuthProviderUrl` | default: NULL | #UNUSED. Reserved for future use
+-   `app.authProvider.useExternalOathIdp.enabled` | default: false | Feature to use an external OAUTH IDP. Switches front-end web to use new IDP from Cognito. Cannot currently use location services with this option. Switches API gateway authorizers to an external JWT authorizer hook. At least 1 authProvider must be enabled in the configuration.
+-   `app.authProvider.useExternalOathIdp.idpAuthProviderUrl` | default: NULL | URL for external OAUTH IDP authentication endpoint such as https://ping-federate.com
+-   `app.authProvider.useExternalOathIdp.idpAuthClientId` | default: NULL | The clientId provided by the external IDP system to recognize this application deployment
+-   `app.authProvider.useExternalOathIdp.idpAuthProviderScope` | default: NULL | The external OAuth IDP scope this application is requesting
+-   `app.authProvider.useExternalOathIdp.idpAuthPrincipalDomain` | default: NULL | Principal domain for the IDP endpoint for use in role authorization permissions ping-federate.com
+-   `app.authProvider.useExternalOathIdp.idpAuthProviderTokenEndpoint` | default: NULL | The external OAuth IDP Token Endpoint path, such as /as/token.oauth2
+-   `app.authProvider.useExternalOathIdp.idpAuthProviderAuthorizationEndpoint` | default: NULL | The external OAuth IDP Authorization Endpoint path, such as /as/authorization.oauth2
+-   `app.authProvider.useExternalOathIdp.idpAuthProviderDiscoveryEndpoint` | default: NULL | The external OAuth IDP Discovery Endpoint path, such as /.well-known/openid-configuration
+-   `app.authProvider.useExternalOathIdp.lambdaAuthorizorJWTIssuerUrl` | default: NULL | URL for external OAUTH IDP authentication endpoint for authorizer verification
+-   `app.authProvider.useExternalOathIdp.lambdaAuthorizorJWTAudience` | default: NULL | The audience provided by the external IDP system to recognize this application deployment for JWT token verification
 
 ### Additional configuration notes
 
@@ -88,7 +99,7 @@ Some configuration options can be overriden at time of deployment with either en
 -   -   (Interface) STS - Deployed/used with "Use with All Lambda" Feature
 -   -   (Interface) Batch - Deployed/used with Use-case Pipeline Feature
 -   -   (Interface) OpenSearch Serverless - Deployed/used with OpenSearch Serverless Feature
--   -   (Interface) S3 (ALB-Special) - Always created on VPC when using ALB as it's specially setup with the ALB IPs and targets
+-   -   (Interface) S3 (ALB-Special) - Created on VPC when using ALB as it's specially setup with the ALB IPs and targets. Separate configuration option to create this under the ALB setting.
 -   -   (Gateway) S3 - Due to no pricing implications, deployed/used across all features that require VPC
 -   -   (Gateway) DynamoDB - Due to no pricing implications, deployed/used across all features that require VPC
 
@@ -192,3 +203,9 @@ Example: Restrict access outside of a source IP (Fill in IP addresses and/or CID
 ## Additional Configuration Docker Options
 
 See [CDK SSL Deploy in the developer guide](./DeveloperGuide.md#CDK-Deploy-with-Custom-SSL-Cert-Proxy) for information on customized docker settings for CDK deployment builds
+
+## Additional Configuration LoginProfile Updatng
+
+See [LoginProfile in the developer guide](./DeveloperGuide.md#loginprofile-custom-organizational-updates) for information on customized user loginprofile override code for lambdas when login profile information needs to be fetched externally or overwritten otherwise
+
+See [External IDP MFA Check in the developer guide](./DeveloperGuide.md#mfacheck-custom-organizational-updates) for information on how to setup a customized Multi-Factor Authentication (MFA) check when using the external OAUTH IDP settings.

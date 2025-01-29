@@ -299,6 +299,22 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                     S: "route__path",
                                 },
                                 id: {
+                                    S: `2a_${roleNameIDClean}_api_paths`,
+                                },
+                                operator: {
+                                    S: "starts_with",
+                                },
+                                value: {
+                                    S: "/auth/loginProfile", //Technically not needed as no authorization currently but including anyway (auth is based on authenticated user)
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
                                     S: `3_${roleNameIDClean}_api_paths`,
                                 },
                                 operator: {

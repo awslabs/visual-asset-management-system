@@ -277,6 +277,9 @@ export function apiBuilder(
         storageResources.dynamo.rolesStorageTable,
         storageResources.dynamo.authEntitiesStorageTable,
         storageResources.dynamo.userRolesStorageTable,
+        config,
+        vpc,
+        subnets,
         storageResources.encryption.kmsKey
     );
     attachFunctionToApi(scope, roleService, {
@@ -296,6 +299,9 @@ export function apiBuilder(
         storageResources.dynamo.rolesStorageTable,
         storageResources.dynamo.authEntitiesStorageTable,
         storageResources.dynamo.userRolesStorageTable,
+        config,
+        vpc,
+        subnets,
         storageResources.encryption.kmsKey
     );
     attachFunctionToApi(scope, createRoleFunction, {
@@ -316,6 +322,9 @@ export function apiBuilder(
         storageResources.dynamo.rolesStorageTable,
         storageResources.dynamo.userRolesStorageTable,
         storageResources.dynamo.authEntitiesStorageTable,
+        config,
+        vpc,
+        subnets,
         storageResources.encryption.kmsKey
     );
     attachFunctionToApi(scope, userRolesService, {
@@ -340,7 +349,14 @@ export function apiBuilder(
     });
 
     //Tags Resources
-    const tagService = buildTagService(scope, lambdaCommonBaseLayer, storageResources);
+    const tagService = buildTagService(
+        scope,
+        lambdaCommonBaseLayer,
+        storageResources,
+        config,
+        vpc,
+        subnets
+    );
     attachFunctionToApi(scope, tagService, {
         routePath: "/tags",
         method: apigwv2.HttpMethod.GET,
@@ -355,7 +371,10 @@ export function apiBuilder(
     const createTagFunction = buildCreateTagFunction(
         scope,
         lambdaCommonBaseLayer,
-        storageResources
+        storageResources,
+        config,
+        vpc,
+        subnets
     );
     attachFunctionToApi(scope, createTagFunction, {
         routePath: "/tags",
@@ -369,7 +388,14 @@ export function apiBuilder(
     });
 
     //Tag Types Resources
-    const tagTypeService = buildTagTypeService(scope, lambdaCommonBaseLayer, storageResources);
+    const tagTypeService = buildTagTypeService(
+        scope,
+        lambdaCommonBaseLayer,
+        storageResources,
+        config,
+        vpc,
+        subnets
+    );
     attachFunctionToApi(scope, tagTypeService, {
         routePath: "/tag-types",
         method: apigwv2.HttpMethod.GET,
@@ -384,7 +410,10 @@ export function apiBuilder(
     const createTagTypeFunction = buildCreateTagTypeFunction(
         scope,
         lambdaCommonBaseLayer,
-        storageResources
+        storageResources,
+        config,
+        vpc,
+        subnets
     );
     attachFunctionToApi(scope, createTagTypeFunction, {
         routePath: "/tag-types",
@@ -405,6 +434,10 @@ export function apiBuilder(
         storageResources.dynamo.assetStorageTable,
         storageResources.dynamo.userRolesStorageTable,
         storageResources.dynamo.authEntitiesStorageTable,
+        storageResources.dynamo.userStorageTable,
+        config,
+        vpc,
+        subnets,
         storageResources.encryption.kmsKey
     );
     attachFunctionToApi(scope, subscriptionService, {
@@ -435,6 +468,9 @@ export function apiBuilder(
         storageResources.dynamo.assetStorageTable,
         storageResources.dynamo.userRolesStorageTable,
         storageResources.dynamo.authEntitiesStorageTable,
+        config,
+        vpc,
+        subnets,
         storageResources.encryption.kmsKey
     );
     attachFunctionToApi(scope, unSubscribeService, {
@@ -450,6 +486,9 @@ export function apiBuilder(
         storageResources.dynamo.assetStorageTable,
         storageResources.dynamo.userRolesStorageTable,
         storageResources.dynamo.authEntitiesStorageTable,
+        config,
+        vpc,
+        subnets,
         storageResources.encryption.kmsKey
     );
     attachFunctionToApi(scope, checkSubscriptionService, {
@@ -462,10 +501,13 @@ export function apiBuilder(
     const linkAssetService = buildAssetLinkService(
         scope,
         lambdaCommonBaseLayer,
+        config,
         storageResources.dynamo.assetLinksStorageTable,
         storageResources.dynamo.assetStorageTable,
         storageResources.dynamo.userRolesStorageTable,
         storageResources.dynamo.authEntitiesStorageTable,
+        vpc,
+        subnets,
         storageResources.encryption.kmsKey
     );
     attachFunctionToApi(scope, linkAssetService, {
@@ -477,10 +519,13 @@ export function apiBuilder(
     const getAssetLinksService = buildGetAssetLinksFunction(
         scope,
         lambdaCommonBaseLayer,
+        config,
         storageResources.dynamo.assetLinksStorageTable,
         storageResources.dynamo.assetStorageTable,
         storageResources.dynamo.userRolesStorageTable,
         storageResources.dynamo.authEntitiesStorageTable,
+        vpc,
+        subnets,
         storageResources.encryption.kmsKey
     );
     attachFunctionToApi(scope, getAssetLinksService, {
@@ -492,10 +537,13 @@ export function apiBuilder(
     const deleteAssetLinksService = buildDeleteAssetLinksFunction(
         scope,
         lambdaCommonBaseLayer,
+        config,
         storageResources.dynamo.assetLinksStorageTable,
         storageResources.dynamo.assetStorageTable,
         storageResources.dynamo.userRolesStorageTable,
         storageResources.dynamo.authEntitiesStorageTable,
+        vpc,
+        subnets,
         storageResources.encryption.kmsKey
     );
     attachFunctionToApi(scope, deleteAssetLinksService, {
@@ -891,21 +939,33 @@ export function apiBuilder(
         api: api,
     });
 
-    attachFunctionToApi(scope, authFunctions.constraints, {
+    attachFunctionToApi(scope, authFunctions.authConstraintsService, {
         routePath: "/auth/constraints",
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
     for (let i = 0; i < methods.length; i++) {
-        attachFunctionToApi(scope, authFunctions.constraints, {
+        attachFunctionToApi(scope, authFunctions.authConstraintsService, {
             routePath: "/auth/constraints/{constraintId}",
             method: methods[i],
             api: api,
         });
     }
 
-    attachFunctionToApi(scope, authFunctions.authService, {
+    attachFunctionToApi(scope, authFunctions.routes, {
         routePath: "/auth/routes",
+        method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+
+    attachFunctionToApi(scope, authFunctions.authLoginProfile, {
+        routePath: "/auth/loginProfile/{userId}",
+        method: apigwv2.HttpMethod.GET,
+        api: api,
+    });
+
+    attachFunctionToApi(scope, authFunctions.authLoginProfile, {
+        routePath: "/auth/loginProfile/{userId}",
         method: apigwv2.HttpMethod.POST,
         api: api,
     });

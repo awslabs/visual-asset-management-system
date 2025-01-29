@@ -10,7 +10,6 @@ import PopulateComments from "./PopulateComments";
 import { API } from "aws-amplify";
 import { generateUUID } from "../../common/utils/utils";
 import { fetchAllComments } from "../../services/APIService";
-import { Auth } from "aws-amplify";
 import JoditEditor from "jodit-react";
 
 export default function CommentsList(props: any) {
@@ -111,8 +110,8 @@ export default function CommentsList(props: any) {
         }
         const getUserId = async () => {
             try {
-                let user = await Auth.currentUserInfo();
-                setUserId(user.attributes.sub);
+                let userName = JSON.parse(localStorage.getItem("user")!).username;
+                setUserId(userName);
             } catch {
                 setUserId("");
             }

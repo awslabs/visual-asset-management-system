@@ -43,3 +43,9 @@ Likely because of some failure while `make all`.
 Try running github actions locally with [act](https://github.com/nektos/act/)
 
 `act` should pickup the current ci.yml and run it locally inside a docker container
+
+-------------
+
+### Local Development
+
+See DeveloperGuide.md in the project root for instructions on how to deploy local developments for external OAUTH authenitcation and a basic API. 

@@ -10,9 +10,11 @@
         "bucketMigrationStaging": {
             "assetBucketName": null
         },
+        "adminUserId": "administrator",
         "adminEmailAddress": "adminEmail@example.com",
         "useFips": true,
         "useWaf": true,
+        "addStackCloudTrailLogs": true,
         "useKmsCmkEncryption": {
             "enabled": true,
             "optionalExternalCmkArn": null
@@ -47,6 +49,7 @@
         "useAlb": {
             "enabled": true,
             "usePublicSubnet": false,
+            "addAlbS3SpecialVpcEndpoint": true,
             "domainHost": "vams1.example.com",
             "certificateArn": "arn:aws-us-gov:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>",
             "optionalHostedZoneId": null
@@ -73,10 +76,21 @@
                 "useSaml": false,
                 "useUserPasswordAuthFlow": false
             },
-            "useExternalOathIdp": {
+            "useExternalOAuthIdp": {
                 "enabled": false,
-                "idpAuthProviderUrl": null
+                "idpAuthProviderUrl": null,
+                "idpAuthClientId": null,
+                "idpAuthProviderScope": null,
+                "idpAuthPrincipalDomain": null,
+                "idpAuthProviderTokenEndpoint": null,
+                "idpAuthProviderAuthorizationEndpoint": null,
+                "idpAuthProviderDiscoveryEndpoint": null,
+                "lambdaAuthorizorJWTIssuerUrl": null,
+                "lambdaAuthorizorJWTAudience": null
             }
+        },
+        "webUi": {
+            "optionalBannerHtmlMessage": ""
         }
     }
 }

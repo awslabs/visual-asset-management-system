@@ -85,7 +85,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                 TableName: props.storageResources.dynamo.userRolesStorageTable.tableName,
                 Item: {
                     userId: {
-                        S: props.config.app.adminEmailAddress,
+                        S: props.config.app.adminUserId,
                     },
                     roleName: {
                         S: roleName,

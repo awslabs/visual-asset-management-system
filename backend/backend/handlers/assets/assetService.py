@@ -213,7 +213,7 @@ def archive_multi_file(location, databaseId, assetId):
     prefix = ""
     if "Key" in location:
         prefix = location['Key']
-    if len(prefix) == 0:
+    if prefix is None or len(prefix) == 0:
         return
     logger.info('Archiving folder with multiple files')
 
@@ -245,7 +245,7 @@ def archive_file(location, databaseId, assetId):
     if "Key" in location:
         key = location['Key']
 
-    if len(key) == 0:
+    if key is None or len(key) == 0:
         return
     logger.info("Archiving item: " + bucket_name +":" + key)
 
@@ -286,7 +286,7 @@ def delete_assetAuxiliary_files(assetLocation):
     if "Key" in assetLocation:
         key = assetLocation['Key']
 
-    if len(key) == 0:
+    if key is None or len(key) == 0:
         return
 
     # Add the folder deliminiator to the end of the key

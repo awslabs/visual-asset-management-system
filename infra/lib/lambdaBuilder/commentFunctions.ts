@@ -9,7 +9,10 @@ import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as kms from "aws-cdk-lib/aws-kms";
-import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../helper/security";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
+} from "../helper/security";
 
 export function buildAddCommentLambdaFunction(
     scope: Construct,
@@ -51,6 +54,7 @@ export function buildAddCommentLambdaFunction(
     authEntitiesStorageTable.grantReadWriteData(addCommentFunction);
     userRolesStorageTable.grantReadWriteData(addCommentFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(addCommentFunction, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(addCommentFunction, config);
     return addCommentFunction;
 }
 
@@ -94,6 +98,7 @@ export function buildEditCommentLambdaFunction(
     authEntitiesStorageTable.grantReadWriteData(editCommentFunction);
     userRolesStorageTable.grantReadWriteData(editCommentFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(editCommentFunction, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(editCommentFunction, config);
     return editCommentFunction;
 }
 
@@ -137,6 +142,7 @@ export function buildCommentService(
     userRolesStorageTable.grantReadWriteData(commentService);
     commentStorageTable.grantReadWriteData(commentService);
     kmsKeyLambdaPermissionAddToResourcePolicy(commentService, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(commentService, config);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
 

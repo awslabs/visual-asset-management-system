@@ -20,6 +20,7 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as kms from "aws-cdk-lib/aws-kms";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
     kmsKeyPolicyStatementGenerator,
 } from "../helper/security";
 
@@ -83,6 +84,7 @@ export function buildCreatePipelineFunction(
         createPipelineFunction,
         storageResources.encryption.kmsKey
     );
+    globalLambdaEnvironmentsAndPermissions(createPipelineFunction, config);
     createPipelineFunction.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -185,6 +187,7 @@ export function buildPipelineService(
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(pipelineService);
     storageResources.dynamo.userRolesStorageTable.grantReadData(pipelineService);
     kmsKeyLambdaPermissionAddToResourcePolicy(pipelineService, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(pipelineService, config);
 
     const deletePipelineResources = [IAMArn("*vams*").lambda];
 
@@ -235,6 +238,7 @@ export function buildEnablePipelineFunction(
         enablePipelineFunction,
         storageResources.encryption.kmsKey
     );
+    globalLambdaEnvironmentsAndPermissions(enablePipelineFunction, config);
     return enablePipelineFunction;
 }
 

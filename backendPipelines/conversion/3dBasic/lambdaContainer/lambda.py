@@ -2,18 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import logging
 import boto3
-import numpy
-import math
-import csv
-import pathlib
 import os
 import threading
 import os
 import trimesh
-from pathlib import Path
-from urllib.parse import urlparse
 from common.logger import safeLogger
 from botocore.exceptions import ClientError
 from boto3.s3.transfer import TransferConfig

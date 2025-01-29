@@ -10,12 +10,16 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as snsSubscriptions from "aws-cdk-lib/aws-sns-subscriptions";
 import * as path from "path";
 import * as cdk from "aws-cdk-lib";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import * as kms from "aws-cdk-lib/aws-kms";
-import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../helper/security";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
+} from "../helper/security";
 import * as Service from "../../lib/helper/service-helper";
 import * as Config from "../../config/config";
 
@@ -26,6 +30,10 @@ export function buildSubscriptionService(
     assetStorageTable: dynamodb.Table,
     userRolesStorageTable: dynamodb.Table,
     authEntitiesStorageTable: dynamodb.Table,
+    userStorageTable: dynamodb.Table,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "subscriptionService";
@@ -37,11 +45,20 @@ export function buildSubscriptionService(
         layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
             SUBSCRIPTIONS_STORAGE_TABLE_NAME: subscriptionsStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
             AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
+            USER_STORAGE_TABLE_NAME: userStorageTable.tableName,
         },
     });
 
@@ -64,8 +81,10 @@ export function buildSubscriptionService(
     subscriptionsStorageTable.grantReadWriteData(subscriptionServiceFunction);
     assetStorageTable.grantReadWriteData(subscriptionServiceFunction);
     authEntitiesStorageTable.grantReadWriteData(subscriptionServiceFunction);
-    userRolesStorageTable.grantReadWriteData(subscriptionServiceFunction);
+    userRolesStorageTable.grantReadData(subscriptionServiceFunction);
+    userStorageTable.grantReadWriteData(subscriptionServiceFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(subscriptionServiceFunction, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(subscriptionServiceFunction, config);
     return subscriptionServiceFunction;
 }
 
@@ -76,6 +95,9 @@ export function buildCheckSubscriptionFunction(
     assetStorageTable: dynamodb.Table,
     userRolesStorageTable: dynamodb.Table,
     authEntitiesStorageTable: dynamodb.Table,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "checkSubscriptionService";
@@ -86,6 +108,14 @@ export function buildCheckSubscriptionFunction(
         layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
             SUBSCRIPTIONS_STORAGE_TABLE_NAME: subscriptionsStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
@@ -96,8 +126,9 @@ export function buildCheckSubscriptionFunction(
     subscriptionsStorageTable.grantReadWriteData(checkSubscriptionService);
     assetStorageTable.grantReadWriteData(checkSubscriptionService);
     authEntitiesStorageTable.grantReadWriteData(checkSubscriptionService);
-    userRolesStorageTable.grantReadWriteData(checkSubscriptionService);
+    userRolesStorageTable.grantReadData(checkSubscriptionService);
     kmsKeyLambdaPermissionAddToResourcePolicy(checkSubscriptionService, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(checkSubscriptionService, config);
     return checkSubscriptionService;
 }
 
@@ -108,6 +139,9 @@ export function buildUnSubscribeFunction(
     assetStorageTable: dynamodb.Table,
     userRolesStorageTable: dynamodb.Table,
     authEntitiesStorageTable: dynamodb.Table,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "unsubscribeService";
@@ -119,6 +153,14 @@ export function buildUnSubscribeFunction(
         layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
         environment: {
             SUBSCRIPTIONS_STORAGE_TABLE_NAME: subscriptionsStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
@@ -145,7 +187,8 @@ export function buildUnSubscribeFunction(
     subscriptionsStorageTable.grantReadWriteData(unsubscribeServiceFunction);
     assetStorageTable.grantReadWriteData(unsubscribeServiceFunction);
     authEntitiesStorageTable.grantReadWriteData(unsubscribeServiceFunction);
-    userRolesStorageTable.grantReadWriteData(unsubscribeServiceFunction);
+    userRolesStorageTable.grantReadData(unsubscribeServiceFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(unsubscribeServiceFunction, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(unsubscribeServiceFunction, config);
     return unsubscribeServiceFunction;
 }

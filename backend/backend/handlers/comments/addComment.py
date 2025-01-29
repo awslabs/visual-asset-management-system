@@ -32,7 +32,7 @@ except:
     main_rest_response["body"] = json.dumps({"message": "Failed Loading Environment Variables"})
 
 
-def add_comment(assetId: str, assetVersionIdAndCommentId: str, event: dict) -> dict:
+def add_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, event: dict) -> dict:
     """
     Creates the JSON for a comment based on the parameters and adds the comment to the database
     :param assetId: string containing the assetId that the comment will be attached to
@@ -51,8 +51,8 @@ def add_comment(assetId: str, assetVersionIdAndCommentId: str, event: dict) -> d
         "assetId": assetId,
         "assetVersionId:commentId": assetVersionIdAndCommentId,
         "commentBody": event["body"]["commentBody"],
-        "commentOwnerID": event["requestContext"]["authorizer"]["jwt"]["claims"]["sub"],
-        "commentOwnerUsername": event["requestContext"]["authorizer"]["jwt"]["claims"]["email"],
+        "commentOwnerID": userId,
+        "commentOwnerUsername": userId,
         "dateCreated": dtNow,
     }
     try:
@@ -111,12 +111,14 @@ def lambda_handler(event: dict, context: dict) -> dict:
 
         httpMethod = event['requestContext']['http']['method']
         method_allowed_on_api = False
+        userId = None
 
         asset_object = get_asset_object_from_id(pathParameters["assetId"])
         asset_object.update({"object__type": "asset"})
 
         # Add Casbin Enforcer to check if the current user has permissions to POST the Comment
         for user_name in claims_and_roles["tokens"]:
+            userId = user_name
             casbin_enforcer = CasbinEnforcer(user_name)
             if casbin_enforcer.enforce(f"user::{user_name}", asset_object, httpMethod) and casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
@@ -165,7 +167,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
                 return response
 
             # call the add_comment function if everything is valid
-            returned = add_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], event)
+            returned = add_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], userId, event)
             response["statusCode"] = returned["statusCode"]
             response["body"] = json.dumps({"message": returned["message"]})
             logger.info(response)

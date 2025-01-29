@@ -16,6 +16,8 @@ import { RapidPipelineNestedStack } from "./multi/rapidPipeline/rapidPipeline-ne
 import { Conversion3dBasicNestedStack } from "./conversion/3dBasic/conversion3dBasicBuilder-nestedStack";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as Config from "../../../config/config";
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import { LAMBDA_NODE_RUNTIME } from "../../../config/config";
 import * as kms from "aws-cdk-lib/aws-kms";
 import { NagSuppressions } from "cdk-nag";
 
@@ -141,5 +143,39 @@ export class PipelineBuilderNestedStack extends NestedStack {
                 this.pipelineVamsLambdaFunctionNames.push(rapidPipelineNestedStack.pipelineVamsLambdaFunctionName)
             }
         }
+
+        ////////////////////////////////////////////////////////////////////////////////////
+        ///Create empty lambda with no permissions in case the nested stack has no 
+        // other components or pipelines enables (otherwise synth will error)
+        const lambdaFn = new lambda.Function(this, "PipelineNestedStackEmptyLambda", {
+            runtime: LAMBDA_NODE_RUNTIME,
+            handler: "index.handler",
+            code: lambda.Code.fromInline(
+                `
+                exports.handler = async function(event, context) {
+                    return {
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        statusCode: 400,
+                        body: '',
+                    };
+                };
+            `
+            ),
+            vpc:
+            props.config.app.useGlobalVpc.enabled && props.config.app.useGlobalVpc.useForAllLambdas
+                ? props.vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+            vpcSubnets:
+            props.config.app.useGlobalVpc.enabled && props.config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: props.isolatedSubnets }
+                : undefined,
+            securityGroups:
+            props.config.app.useGlobalVpc.enabled && props.config.app.useGlobalVpc.useForAllLambdas
+                ? [pipelineNetwork.securityGroups.pipeline]
+                : undefined,
+            timeout: cdk.Duration.seconds(1),
+        });
     }
 }

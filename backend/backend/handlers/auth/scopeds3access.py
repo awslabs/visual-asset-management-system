@@ -35,14 +35,20 @@ ROLE_ARN = os.environ['ROLE_ARN']
 AWS_PARTITION = os.environ['AWS_PARTITION']
 KMS_KEY_ARN = os.environ['KMS_KEY_ARN']
 
+use_external_oauth = os.environ["USE_EXTERNAL_OAUTH"]
 cognito_auth = os.environ["COGNITO_AUTH"]
 identity_pool_id = os.environ["IDENTITY_POOL_ID"]
 cred_timeout = int(os.environ['CRED_TOKEN_TIMEOUT_SECONDS'])
 
+
+
+sts_client = boto3.client('sts')
+cognito_client = boto3.client('cognito-identity')
+
 def lambda_handler(event, context):
     global claims_and_roles
     response = STANDARD_JSON_RESPONSE
-    logger.info(event)
+    #logger.info(event)
 
     try:
 
@@ -56,6 +62,7 @@ def lambda_handler(event, context):
         body = json.loads(event["body"])
         assetId = body.get("assetId", None)
         databaseId = body.get("databaseId", None)
+        idJwtToken = body.get("idJwtToken", None)
 
         if assetId is None:
             response['body'] = json.dumps({
@@ -67,6 +74,13 @@ def lambda_handler(event, context):
         if databaseId is None:
             response['body'] = json.dumps({
                 "message": "No Database Id",
+            })
+            response['statusCode'] = 400
+            return response
+        
+        if (idJwtToken is None or idJwtToken == "") and use_external_oauth == "false":
+            response['body'] = json.dumps({
+                "message": "No JWT ID Token",
             })
             response['statusCode'] = 400
             return response
@@ -117,7 +131,8 @@ def lambda_handler(event, context):
 
                 # generate a policy scoped to the assetId as the s3 key prefix
                 # to be passed to assume_role
-                #Note: Shortened actions due to bumping up against PackedPolicySize limit when enabling KMS
+                #Note: Shortened actions due to bumping up against PackedPolicySize limit (2,048 characters) when enabling KMS
+                # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
                 policy = {
                     "Version": "2012-10-17",
                     "Statement": [{
@@ -159,34 +174,38 @@ def lambda_handler(event, context):
                         "Resource": [KMS_KEY_ARN]
                     })
 
-                # Use Cognito client to create a session to extend the timeout seconds
-                sts_client = boto3.client('sts')
-                cognito_client = boto3.client('cognito-identity')
+                if use_external_oauth == "true":
+                    #If using a non-cognito IDP, switch back to old assume role method (has tighter restrictions on session timeouts)
+                    assumed_role_object = sts_client.assume_role(
+                        RoleArn=ROLE_ARN,
+                        RoleSessionName="presign",
+                        DurationSeconds=timeout,
+                        Policy=json.dumps(policy),
+                    )
 
-                cognito_token=event["headers"]["authorization"].split(" ")[1]
+                else:
+                    # Use Cognito client to create a session to extend the timeout seconds
+                    account_id = sts_client.get_caller_identity()['Account']
+                    authorizer_jwt_token = idJwtToken #event["headers"]["authorization"].split(" ")[1] -- Need ID token and not access token
 
-                login={cognito_auth:cognito_token}
-                
-                account_id = sts_client.get_caller_identity()['Account']
+                    login={cognito_auth:authorizer_jwt_token}
+                    cognito_id = cognito_client.get_id(
+                        AccountId=account_id,
+                        IdentityPoolId=identity_pool_id,
+                        Logins=login,
+                    )
+                    open_id_token = cognito_client.get_open_id_token(
+                        IdentityId=cognito_id["IdentityId"],
+                        Logins=login
+                    )
 
-                cognito_id = cognito_client.get_id(
-                    AccountId=account_id,
-                    IdentityPoolId=identity_pool_id,
-                    Logins=login,
-                )
-
-                cognito_open_id = cognito_client.get_open_id_token(
-                    IdentityId=cognito_id["IdentityId"],
-                    Logins=login
-                )
-
-                assumed_role_object = sts_client.assume_role_with_web_identity(
-                    RoleArn=ROLE_ARN,
-                    RoleSessionName="presign",
-                    WebIdentityToken=cognito_open_id["Token"],
-                    DurationSeconds=timeout,
-                    Policy=json.dumps(policy),
-                )
+                    assumed_role_object = sts_client.assume_role_with_web_identity(
+                        RoleArn=ROLE_ARN,
+                        RoleSessionName="presign",
+                        WebIdentityToken=open_id_token["Token"],
+                        DurationSeconds=timeout,
+                        Policy=json.dumps(policy),
+                    )
 
                 logger.info("assumed role object")
                 logger.info(assumed_role_object)

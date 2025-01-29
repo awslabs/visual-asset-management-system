@@ -139,7 +139,7 @@ def lambda_handler(event, context):
             },
             'subscribers': {
                 'value': event['body']['subscribers'],
-                'validator': 'EMAIL_ARRAY'
+                'validator': 'USERID_ARRAY'
             }
         })
 
