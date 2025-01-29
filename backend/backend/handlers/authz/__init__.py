@@ -434,14 +434,18 @@ class CasbinEnforcerService:
         # Check if the Casbin policy cache is older than CASBIN_REFRESH_POLICY_SECONDS seconds; if so update cache.
         # Note: global variables update user roles if they changed in a timely fashion
         #
-        if (datetime.now() - timedelta(seconds=CASBIN_REFRESH_POLICY_SECONDS)) < self._dateTime_Cached:
-            # logger.info("Casbin Policy Cache Expiration - Refreshing Policy")
+        if (datetime.now() - timedelta(seconds=CASBIN_REFRESH_POLICY_SECONDS)) > self._dateTime_Cached:
+            logger.info("Casbin Policy Cache Expiration - Refreshing Policy")
             # Refresh cache. Alternatively, it's possible to use DynamoDB Streams to detect changes in DB against
             # a cache flag.
             #
             if self._user_id in casbin_user_policy_map:
                 del casbin_user_policy_map[self._user_id]
-            if POLICY_TEXT_DENY_ALL == self._create_policy_text():
+
+            policy_text = self._create_policy_text()
+            self._create_casbin_enforcer(policy_text)
+ 
+            if POLICY_TEXT_DENY_ALL == policy_text:
                 # Upon policy_text failure, have future calls re-instate the cache entry and enforcer
                 # Avoid relying on stale cache as long-term fallback option
                 #

@@ -32,6 +32,7 @@ Due to VPC subnet breakout changes, this may break existing deployments. It is r
 
 ### Bug Fixes
 
+-   Fixed permission caching in lambdas to actually reset caches after 30 seconds per lambda per user. Currently since v2.0 caches have been invalidating inconsistently.
 -   Fixed opensearch lambda event source mapping for regions that don't support event source tagging yet (i.e., GovCloud) [bug introduced in v2.1.0 with CDK version upgrade]
 -   Additional checks are made for valid parameter data in the asset deletion/archiving service
 -   Fixed local web local development support, updated documentation for new local development processes
