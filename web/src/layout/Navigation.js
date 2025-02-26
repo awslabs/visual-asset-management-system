@@ -134,24 +134,34 @@ export function Navigation({
             }
         }
         try {
-            webRoutes({ routes: allRoutes }).then((value) => {
-                for (let allowedRoute of value.allowedRoutes) {
-                    allowedRoutes.push("#" + allowedRoute.route__path);
-                }
-
-                for (let navigationItem of filteredNavItems) {
-                    if (navigationItem.items) {
-                        navigationItem.items = navigationItem.items.filter((item) => {
-                            return allowedRoutes.includes(item.href);
-                        });
+            webRoutes({ routes: allRoutes })
+                .then((value) => {
+                    if (value[0] === false) {
+                        throw new Error("webRoutes - " + value[1]);
                     }
-                }
-                filteredNavItems = filteredNavItems.filter((navigationItem) => {
-                    return navigationItem.items?.length > 0;
+
+                    for (let allowedRoute of value.allowedRoutes) {
+                        allowedRoutes.push("#" + allowedRoute.route__path);
+                    }
+
+                    for (let navigationItem of filteredNavItems) {
+                        if (navigationItem.items) {
+                            navigationItem.items = navigationItem.items.filter((item) => {
+                                return allowedRoutes.includes(item.href);
+                            });
+                        }
+                    }
+                    filteredNavItems = filteredNavItems.filter((navigationItem) => {
+                        return navigationItem.items?.length > 0;
+                    });
+                    setNavigationItems(filteredNavItems);
+                    setLoading(false);
+                })
+                .catch((error) => {
+                    console.error(error);
+                    setNavigationItems([]);
+                    setLoading(false);
                 });
-                setNavigationItems(filteredNavItems);
-                setLoading(false);
-            });
         } catch (e) {}
     }, []);
 

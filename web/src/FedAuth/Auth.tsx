@@ -339,7 +339,7 @@ const Auth: React.FC<AuthProps> = (props) => {
 
     // TODO: Refactor how/when handleExternalOauthSignIn() & External OAuth Effects are called without needing to do this
     // This line in combination with the useEffect dependency allows for the useEffects to execute in the right order
-    const triggerExternalOAuth = "";
+    const [triggerExternalOAuth, setTriggerExternalOAuth] = useState(false);
 
     //Both Affect
     //Fetch && Setup Initial global configurations
@@ -405,27 +405,40 @@ const Auth: React.FC<AuthProps> = (props) => {
     //Set user session once oauth access key login confirmed, start refresh interval
     useEffect(() => {
         if (window.DISABLE_COGNITO === true) {
-            // Try set logged in
-            const accessToken = getOAuth2Token().accessToken;
-            if (accessToken && accessToken.length !== 0) {
-                // Have access token, decoding...
-                const jwt = parseJwt(accessToken);
-                setisLoggedIn(true);
-
-                localStorage.setItem("user", JSON.stringify({ username: jwt.sub }));
-
-                // @ts-expect-error
-                AmplifyAuth.setUserSession({ username: jwt.sub }, accessToken);
-                Hub.dispatch("auth", {
-                    event: "signIn",
-                    data: { username: jwt.sub },
-                    message: "User was signed in",
-                });
-
-                clearPreviousLoginErrors(); // On successful login, remove old error keys stored in local storage
-                startAccessTokenRefreshTimer();
+            // Check if access token or refresh token still valid
+            // ( This check is needed on initial login or if a user refreshes the page )
+            const [accessTokenValid, refreshTokenValid] = tokenValidation();
+            if (accessTokenValid) {
+                setisLoggedIn(true); // Since access token has been validated, can deem as logged in
+                startAccessTokenRefreshTimer(); // Restart refresh timer
+            } else if (refreshTokenValid) {
+                // If access token not valid but refresh token exists, attempt to refresh the token
+                setIsLoading(true); // show loading page while it's still refreshing the token
+                oauth2Client
+                    .refreshToken(getOAuth2Token())
+                    .then((oauth2Token) => {
+                        // Successful token refresh. Update token & user session accordingly
+                        setOauth2Token(oauth2Token);
+                        setisLoggedIn(true); // Since access token has been validated, can deem as logged in
+                    })
+                    .catch((error) => {
+                        // Failed to refresh the token
+                        console.error(error);
+                        // Reset amplify info
+                        AmplifyAuth.signOut()
+                            .then(() => {
+                                console.log("User signed out - Unable to refresh token");
+                            })
+                            .catch((error) => {
+                                console.log("User sign out error - Unable to refresh token", error);
+                            });
+                        setisLoggedIn(false);
+                        setIsLoading(false); // hide loading page so it will show login page instead
+                        resetSession();
+                    });
+                return; // since cant do an await in here, need to ensure everything is executed within the then/catch statements so don't execute anything after this
             } else {
-                // no access token, setisLoggedIn, false)
+                // neither token valid, setisLoggedIn to false
                 setisLoggedIn(false);
                 resetSession();
             }
@@ -498,6 +511,9 @@ const Auth: React.FC<AuthProps> = (props) => {
                 .then((oauth2Token) => {
                     setOauth2Token(oauth2Token);
                     document.location = localStorage.getItem("auth_state")!;
+                    // Cleanup localstorage items after they have been used & no longer needed
+                    localStorage.removeItem("auth_state");
+                    localStorage.removeItem("code_verifier");
                 })
                 .catch((error) => {
                     console.error(error);
@@ -551,6 +567,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                 });
             console.log("Pinged LoginProfile API");
         }
+        if (isLoggedIn) setIsLoading(false); // if logged in, can deem that the loading is complete
     }, [config, isLoggedIn]);
 
     //External OAUTH Function for handling sign-in
@@ -558,40 +575,63 @@ const Auth: React.FC<AuthProps> = (props) => {
         // Sign in
         setIsLoading(true);
 
-        const accessToken = getOAuth2Token().accessToken;
+        // Check if access token or refresh token still valid
+        // ( This check is needed in case the oauth2_token wasnt cleaned up properly / still exists when clicking login button )
+        const [accessTokenValid, refreshTokenValid] = tokenValidation();
+        if (accessTokenValid) {
+            // Access token still valid, continue login process
+            setTriggerExternalOAuth(true);
+            return;
+        }
 
-        if (!accessToken) {
-            // No access token, will start oauth2 flow'
-
-            // Use the URL as the oauth state.
-            localStorage.setItem("auth_state", document.location.href);
-
-            // This generates a security code that must be passed to the various steps.
-            // This is used for 'PKCE' which is an advanced security feature.
-            const codeVerifier = await generateCodeVerifier();
-            localStorage.setItem("code_verifier", codeVerifier);
-
+        // If access token not valid but refresh token exists, attempt to refresh the token
+        if (refreshTokenValid) {
             try {
-                if (config && config.externalOAuthIdpScope) {
-                    const authorizeUri = await oauth2Client.authorizationCode.getAuthorizeUri({
-                        redirectUri: window.location.href,
-                        state: document.location.href,
-                        codeVerifier,
-                        scope: [config.externalOAuthIdpScope],
-                    });
-
-                    document.location = authorizeUri;
-                } else {
-                    localStorage.setItem(
-                        "auth_error",
-                        "Failed to initialize authorization flow. Missing scope in config."
-                    );
-                    setauthError(localStorage.getItem("auth_error"));
-                }
+                const oauth2TokenResponse = await oauth2Client.refreshToken(getOAuth2Token());
+                setOauth2Token(oauth2TokenResponse); // Set when previous line is successful
+                setTriggerExternalOAuth(true); // Access token is now valid, continue login process
+                return;
             } catch (error) {
-                localStorage.setItem("auth_error", "Failed to initialize authorization flow.");
+                // Failed to refresh the token (possibly invalid tokens or refresh token expired), continue on
+                console.error("refreshtoken error: ", error);
+            }
+        }
+
+        // Start oauth2 flow from the beginning if attempts above failed or access token doesnt exist
+
+        // Clear existing auth related items in localstorage
+        // This is needed in case previous user session wasnt cleaned up properly / still exists when clicking login button
+        resetSession();
+
+        // Use the URL as the oauth state.
+        localStorage.setItem("auth_state", document.location.href);
+
+        // This generates a security code that must be passed to the various steps.
+        // This is used for 'PKCE' which is an advanced security feature.
+        const codeVerifier = await generateCodeVerifier();
+        localStorage.setItem("code_verifier", codeVerifier);
+
+        try {
+            if (config && config.externalOAuthIdpScope) {
+                // Start oauth2 flow
+                const authorizeUri = await oauth2Client.authorizationCode.getAuthorizeUri({
+                    redirectUri: window.location.href,
+                    state: document.location.href,
+                    codeVerifier,
+                    scope: [config.externalOAuthIdpScope],
+                });
+
+                document.location = authorizeUri;
+            } else {
+                localStorage.setItem(
+                    "auth_error",
+                    "Failed to initialize authorization flow. Missing scope in config."
+                );
                 setauthError(localStorage.getItem("auth_error"));
             }
+        } catch (error) {
+            localStorage.setItem("auth_error", "Failed to initialize authorization flow.");
+            setauthError(localStorage.getItem("auth_error"));
         }
     };
 
@@ -800,6 +840,14 @@ const startAccessTokenRefreshTimer = (startNewTimer: boolean = false) => {
 };
 
 const signOutWithError = (key: string = "auth_error", value: string = "Unauthorized") => {
+    // Reset amplify info
+    AmplifyAuth.signOut()
+        .then(() => {
+            console.log("User signed out");
+        })
+        .catch((error) => {
+            console.log("User sign out error", error);
+        });
     localStorage.clear();
     localStorage.setItem(key, value);
     window.location.href = "/";
@@ -808,10 +856,20 @@ const signOutWithError = (key: string = "auth_error", value: string = "Unauthori
 const resetSession = () => {
     localStorage.removeItem("oauth2_token");
     localStorage.removeItem("user");
+    localStorage.removeItem("email");
+    Cache.removeItem("loginProfile");
 };
 
 const setOauth2Token = (oauth2Token: OAuth2Token) => {
-    localStorage.setItem("oauth2_token", JSON.stringify(oauth2Token));
+    localStorage.setItem("oauth2_token", JSON.stringify(oauth2Token)); // Update token in local storage
+
+    const jwt = parseJwt(oauth2Token.accessToken); // Decoding access token to get user id
+    localStorage.setItem("user", JSON.stringify({ username: jwt.sub })); // Update user in local storage
+
+    // @ts-expect-error
+    AmplifyAuth.setUserSession({ username: jwt.sub }, oauth2Token.accessToken); // Update Amplify User Session with latest access token
+
+    clearPreviousLoginErrors(); // Can remove old login errors since have token
     startAccessTokenRefreshTimer(true); // Restart timer upon successfully setting the new oauth token
 };
 
@@ -819,13 +877,39 @@ function getOAuth2Token() {
     let oauth2Token = {} as OAuth2Token;
     const oauth2TokenStr = localStorage.getItem("oauth2_token");
     if (oauth2TokenStr) {
-        oauth2Token = JSON.parse(oauth2TokenStr);
+        try {
+            oauth2Token = JSON.parse(oauth2TokenStr);
+        } catch (error) {
+            // Catch if token not valid json
+            console.error("error: ", error);
+        }
     }
     return oauth2Token;
 }
 
 function clearPreviousLoginErrors() {
     localStorage.removeItem("auth_error");
+}
+
+// Centralize logic for access & refresh token validation
+function tokenValidation() {
+    let accessTokenValid: boolean = false;
+    let refreshTokenValid: boolean = false;
+    const oauth2Token = getOAuth2Token();
+    // If access token exists and not expired, deem it as still valid
+    if (
+        oauth2Token.accessToken &&
+        oauth2Token.accessToken.length > 0 &&
+        oauth2Token.expiresAt &&
+        Date.now() < oauth2Token.expiresAt
+    ) {
+        accessTokenValid = true;
+    }
+    // If access token expired and refresh token exists, deem it as still valid
+    else if (oauth2Token.refreshToken) {
+        refreshTokenValid = true;
+    }
+    return [accessTokenValid, refreshTokenValid];
 }
 
 export default Auth;

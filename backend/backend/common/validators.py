@@ -220,7 +220,7 @@ def validate(values):
             return (False, k + " is invalid. Must be a string or an array of strings for validator, not a dict.")
         elif "_ARRAY" in v['validator'] and not isinstance(v['value'], list):
             return (False, k + " is invalid. Must be a list for array validators, not a " + str(type(v['value'])))
-        elif not isinstance(v['value'], str):
+        elif not "_ARRAY" in v['validator'] and not isinstance(v['value'], str):
             return (False, k + " is invalid. Must be a string for non-array validators, not a " + str(type(v['value'])))
 
         #Type checks after we check for empties.

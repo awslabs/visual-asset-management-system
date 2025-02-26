@@ -424,7 +424,7 @@ def upload_Asset(event, body, queryParameters, returnAsset=False, uploadTempLoca
             if operation_allowed_on_asset:
 
                 #Do check / lookup on which tagTypes are required to be set on an asset and compare to tags set in body
-                #Will throw error if it does nto validate
+                #Will throw error if it does not validate
                 verifyAllRequiredTagsSatisfied(event['body'].get("tags", []))
 
                 #If true, asset was uploaded to a temporary location within the S3 bucket and we need to move it now to the correct asset location

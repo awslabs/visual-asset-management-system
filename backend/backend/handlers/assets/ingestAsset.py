@@ -17,6 +17,7 @@ s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'})
 s3 = boto3.client('s3', region_name=region, config=s3_config)
 
 lambda_client = boto3.client('lambda')
+dynamodb = boto3.resource('dynamodb')
 dynamodb_client = boto3.client('dynamodb')
 logger = safeLogger(service_name="IngestAsset")
 
@@ -25,6 +26,7 @@ main_rest_response = STANDARD_JSON_RESPONSE
 
 try:
     bucket_name = os.environ["S3_ASSET_STORAGE_BUCKET"]
+    db_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
     asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
     upload_asset_lambda = os.environ["UPLOAD_LAMBDA_FUNCTION_NAME"]
 except:
@@ -75,13 +77,25 @@ def generate_upload_asset_payload(event):
             "assetLocation": {
                 "Key": key
             },
-            "previewLocation": {
-                "Key": None
-            }
+            "previewLocation": None
         },
         "returnAsset": True
     }
     return payload
+
+
+#Function to check a provided databaseId against the dynamoDB of databases to see whether or not it exists
+def verifyDatabaseExists(databaseId):
+    table = dynamodb.Table(db_table_name)
+    try:
+        response = table.get_item(Key={'databaseId': databaseId})
+        asset = response.get('Item', {})
+        if asset:
+            return (True, "")
+        else:
+            return (False, f"DatabaseId {databaseId} does not exist")
+    except Exception as e:
+        return (False, f"Error verifying databaseId: {e}")
 
 
 def lambda_handler(event, context):
@@ -129,14 +143,6 @@ def lambda_handler(event, context):
         response['statusCode'] = 400
         response['body'] = json.dumps({"message": message})
         return response
-    
-    if 'tags' in event['body'] and not isinstance(event['body']['tags'], list):
-        message = "Tags must passed as a list in API Call"
-        logger.error(message)
-        response['statusCode'] = 400
-        response['body'] = json.dumps({"message": message})
-        return response
-
     logger.info("Validating parameters")
     (valid, message) = validate({
         'assetPathKey': {
@@ -170,6 +176,15 @@ def lambda_handler(event, context):
         logger.error(message)
         response['body'] = json.dumps({"message": message})
         response['statusCode'] = 400
+        return response
+    
+    #Do check / lookup on what databases exist already and compare to databaseId set in body
+    #Will throw error if it does not exist
+    (db_verified, db_err_message) = verifyDatabaseExists(event['body']['databaseId'])
+    if not db_verified:
+        logger.error(db_err_message)
+        response['body'] = json.dumps({"message": db_err_message})
+        response['statusCode'] = 404
         return response
     
     #Split object key by path and return the first value (the asset ID)
@@ -278,7 +293,6 @@ def lambda_handler(event, context):
 
                                 logger.info("Invoke Asset Lambda Successfully.")
 
-                                dynamodb = boto3.resource('dynamodb')
                                 table = dynamodb.Table(os.environ['METADATA_STORAGE_TABLE_NAME'])
 
                                 metadata = {'_metadata_last_updated': datetime.now().isoformat()}

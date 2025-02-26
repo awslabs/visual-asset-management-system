@@ -193,7 +193,7 @@ class MetadataSchema:
                     if casbin_enforcer.enforce(f"user::{user_name}", deserialized_document, "GET"):
                         result["Items"].append(deserialized_document)
                         break
-            
+
             if "NextToken" in pageIterator:
                 result["NextToken"] = pageIterator["NextToken"]
 
@@ -241,7 +241,7 @@ def lambda_handler(event: APIGatewayProxyEvent, context: LambdaContext,
             response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
             return response
-        
+
         queryParameters = event.get('queryStringParameters', {})
         validate_pagination_info(queryParameters)
 
@@ -260,6 +260,7 @@ def lambda_handler(event: APIGatewayProxyEvent, context: LambdaContext,
             resp = schema.get_all_schemas(databaseId, queryParameters)
             logger.info(resp)
             response['body'] = json.dumps({"message": resp}, cls=DecimalEncoder)
+            response['statusCode'] = 200
             return response
 
         # create/update
@@ -288,6 +289,7 @@ def lambda_handler(event: APIGatewayProxyEvent, context: LambdaContext,
             return response
 
         response['body'] = json.dumps(response['body'], cls=DecimalEncoder)
+        response['statusCode'] = 200
         return response
     except ValidationError as e:
         response['statusCode'] = e.code

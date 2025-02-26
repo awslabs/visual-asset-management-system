@@ -72,7 +72,7 @@ class CasbinEnforcer:
 
     def enforce(self, sub, obj, act):
         return self.service_object.enforce(sub, obj, act)
-    
+
     def enforceAPI(self, lambdaEvent, apiMethodOverrideValue = ''):
         claims_and_roles = request_to_claims(lambdaEvent)
 
@@ -92,10 +92,10 @@ class CasbinEnforcer:
             #Exits out after the first user (what we want!)
             for user_name in claims_and_roles["tokens"]:
                 return self.service_object.enforce(f"user::{user_name}", request_object, http_method)
-                
+
             #If nothing found, exit with false
             return False
-            
+
         # elif 'lambdaCrossCall' in lambdaEvent:
         #     # This is a cross-call from another approved lambda.
         #     # Credentials logic in claims_and_roles should already account for this
@@ -109,7 +109,7 @@ class CasbinEnforcer:
         else:
             #This is not a normal structered call so automatiacally fail
             return False
-        
+
 class CasbinEnforcerService:
     def __init__(self, user_id):
         # Handle user policy-specific caching and updates (globally)
@@ -174,7 +174,7 @@ class CasbinEnforcerService:
             }
         ).build_full_result()
 
-        pageIteratorItems = []   
+        pageIteratorItems = []
         pageIteratorItems.extend(page_iterator['Items'])
 
         while 'NextToken' in page_iterator:
@@ -203,7 +203,7 @@ class CasbinEnforcerService:
                 }
             ).build_full_result()
             pageIteratorItems.extend(page_iterator['Items'])
-        
+
         items = []
         for item in pageIteratorItems:
             deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
@@ -226,7 +226,7 @@ class CasbinEnforcerService:
             }
         ).build_full_result()
 
-        pageIteratorItems = []   
+        pageIteratorItems = []
         pageIteratorItems.extend(page_iterator['Items'])
 
         while 'NextToken' in page_iterator:
@@ -435,7 +435,7 @@ class CasbinEnforcerService:
         # Note: global variables update user roles if they changed in a timely fashion
         #
         if (datetime.now() - timedelta(seconds=CASBIN_REFRESH_POLICY_SECONDS)) > self._dateTime_Cached:
-            logger.info("Casbin Policy Cache Expiration - Refreshing Policy")
+            # logger.info("Casbin Policy Cache Expiration - Refreshing Policy")
             # Refresh cache. Alternatively, it's possible to use DynamoDB Streams to detect changes in DB against
             # a cache flag.
             #
@@ -444,7 +444,7 @@ class CasbinEnforcerService:
 
             policy_text = self._create_policy_text()
             self._create_casbin_enforcer(policy_text)
- 
+
             if POLICY_TEXT_DENY_ALL == policy_text:
                 # Upon policy_text failure, have future calls re-instate the cache entry and enforcer
                 # Avoid relying on stale cache as long-term fallback option

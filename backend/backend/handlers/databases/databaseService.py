@@ -69,6 +69,7 @@ def check_assets(database_id):
 def get_handler(event, response, path_parameters, query_parameters, show_deleted):
     if 'databaseId' not in path_parameters:
         response['body'] = json.dumps({"message": get_databases(query_parameters, show_deleted)})
+        response['statusCode'] = 200
         logger.info(response)
         return response
     else:
@@ -87,6 +88,7 @@ def get_handler(event, response, path_parameters, query_parameters, show_deleted
             return response
 
         response['body'] = json.dumps({"message": get_database(path_parameters['databaseId'], show_deleted)})
+        response['statusCode'] = 200
         logger.info(response)
         return response
 
@@ -263,7 +265,7 @@ def lambda_handler(event, context):
 
     path_parameters = event.get('pathParameters', {})
     query_parameters = event.get('queryStringParameters', {})
-    
+
     validate_pagination_info(query_parameters)
 
     show_deleted = False

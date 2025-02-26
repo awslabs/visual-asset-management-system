@@ -240,18 +240,28 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
         }
 
         try {
-            webRoutes({ routes: allRoutes }).then((value) => {
-                for (let allowedRoute of value.allowedRoutes) {
-                    allAllowedRoutes.push(allowedRoute.route__path);
-                }
+            webRoutes({ routes: allRoutes })
+                .then((value) => {
+                    if (value[0] === false) {
+                        throw new Error("webRoutes - " + value[1]);
+                    }
 
-                //If allowed routes doesn't contain * or / for the landing page, add that back so all users can get to the landing information page
-                if (!allAllowedRoutes.includes("/")) allAllowedRoutes.push("/");
-                if (!allAllowedRoutes.includes("*")) allAllowedRoutes.push("*");
+                    for (let allowedRoute of value.allowedRoutes) {
+                        allAllowedRoutes.push(allowedRoute.route__path);
+                    }
 
-                setAllowedRoutes(allAllowedRoutes);
-                setLoading(false);
-            });
+                    //If allowed routes doesn't contain * or / for the landing page, add that back so all users can get to the landing information page
+                    if (!allAllowedRoutes.includes("/")) allAllowedRoutes.push("/");
+                    if (!allAllowedRoutes.includes("*")) allAllowedRoutes.push("*");
+
+                    setAllowedRoutes(allAllowedRoutes);
+                    setLoading(false);
+                })
+                .catch((error) => {
+                    console.error(error);
+                    setAllowedRoutes([]);
+                    setLoading(false);
+                });
         } catch (e) {}
     }, []);
 
