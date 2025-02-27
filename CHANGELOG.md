@@ -29,7 +29,10 @@ Due to VPC subnet breakout changes, this may break existing deployments. It is r
 -   Changed UserId to no longer need to be an email, added a new LoginProfile table to track user emails for notification service which gets updated from JWT tokens or organization custom logic for retrieving user emails. New API for updating LoginProfile added to web login.
 -   Enabled Cognito user pool optional Multi-Factor Authentication (MFA) for created accounts across TOTP or SMS. **Note:** SMS sending requires additional AWS Cognito / SNS setup to a SNS production account and origination identity (if sending to US phone #'s).
 -   -   Added backend broken out custom logic and flag to know if a user is logged in with MFA or not. For external OAuth IDP implementations, this logic must be tailored to the IDP system.
--   Added new feature that gives user ability to edit pipelines after initial creation. User also has the option to update all workflows that contain the edited pipeline. EDIT feature can be found as a button on the Pipelines page.  
+-   Enabled ability for a VAMS external IDP authentication system to report back if a user is logged in via MFA through an additional MFA IDP scope request. This can be configured via infrastructure configuration script by specifying a specific scope for MFA. Leaving this configuration null turns off external IDP MFA support.
+-   -   **Web** The external IDP login will show a MFA login button if a mfa scope configuration request is defined
+-   **Web** Added capability to set on a role if it requires the the logged in user to have authenticated via MFA in order for any constraints against that role to take effect. If MFA is not turned on in the selected authentication system, this would effectively disable the role as no user would satisfy the criteria.
+-   Added new feature that gives user ability to edit pipelines after initial creation. User also has the option to update all workflows that contain the edited pipeline. EDIT feature can be found as a button on the Pipelines page.
 
 ### Bug Fixes
 
@@ -67,7 +70,6 @@ This release may require a installation of the latest aws-cdk library to either 
 -   Fixed 3D Metadata Labeling pipeline use-case to use the latest Blender version due to Alpine APK support deprecation for earlier specified versions.
 -   Fixed 3D Metadata Labeling pipeline use-case state machine Lambda to not hard-code the `us-east-1` region for IAM role resource permission and use the stack-deployed region instead.
 -   Updated aws-cdk dependency versions to the latest and updated GitHub CI/CD pipeline build checks
-
 
 ## [2.1.0] (2024-11-15)
 

@@ -15,7 +15,7 @@ const LoadingScreen = () => {
             }}
         >
             <Spinner size="large" />
-            <p>Loading, Please Wait...</p>
+            <p>One moment please ...</p>
         </div>
     );
 };

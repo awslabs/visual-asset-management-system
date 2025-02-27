@@ -267,12 +267,12 @@ export function getConfig(app: cdk.App): Config {
     ) {
         if (config.app.pipelines.useRapidPipeline.enabled) {
             if (
-                !config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds ||
-                config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds == "UNDEFINED" ||
-                config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds == ""
+                !config.app.useGlobalVpc.optionalExternalPrivateSubnetIds ||
+                config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == "UNDEFINED" ||
+                config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == ""
             ) {
                 throw new Error(
-                    "Configuration Error: Must define at least one isolated subnet ID when using RapidPipeline."
+                    "Configuration Error: Must define at least one private subnet ID when using RapidPipeline."
                 );
             }
         }
@@ -373,6 +373,8 @@ export function getConfig(app: cdk.App): Config {
             config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "UNDEFINED" ||
             config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "" ||
             config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScopeMfa == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScopeMfa == "UNDEFINED" ||
             config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint == "" ||
             config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint ==
                 "UNDEFINED" ||
@@ -487,6 +489,7 @@ export interface ConfigPublic {
                 idpAuthProviderUrl: string;
                 idpAuthClientId: string;
                 idpAuthProviderScope: string;
+                idpAuthProviderScopeMfa: string;
                 idpAuthPrincipalDomain: string;
                 idpAuthProviderTokenEndpoint: string;
                 idpAuthProviderAuthorizationEndpoint: string;

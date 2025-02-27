@@ -154,10 +154,10 @@ def lambda_handler(event, context):
 
         asset_object = get_asset_object_from_id(event['body']["entityId"])
         asset_object.update({"object__type": "asset"})
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if (casbin_enforcer.enforceAPI(event) and
-                    casbin_enforcer.enforce(f"user::{user_name}", asset_object, "POST")):
+                    casbin_enforcer.enforce(asset_object, "POST")):
                 method_allowed_on_api = True
 
         if method_allowed_on_api and httpMethod == 'DELETE':

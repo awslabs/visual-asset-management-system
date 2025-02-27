@@ -82,9 +82,9 @@ def get_subscriptions(query_params):
         # Add Casbin Enforcer to check if the user has access to GET subscription of specific Assets
         asset_object = get_asset_object_from_id(entity_id)
         asset_object.update({"object__type": "asset"})
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", asset_object, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(asset_object, "GET"):
                 output_objects.append(output_obj)
                 if entity_name == "Asset":
                     unique_asset_entity_ids.add(entity_id)
@@ -161,7 +161,7 @@ def delete_sns_subscriptions(asset_id, subscribers, delete_sns=False):
     if not asset_obj.get("snsTopic"):
         logger.error(f"No topic found for asset {asset_id}")
         return
-    
+
     if delete_sns:
         sns_client.delete_topic(TopicArn=asset_obj.get("snsTopic"))
         asset_table.update_item(
@@ -216,7 +216,7 @@ def get_userProfile_Email(userId):
         }
     )
 
-    #Lookup user profile email and use that. 
+    #Lookup user profile email and use that.
     #If not available or blank, set to userID and validate it's in email format
     email = None
     if 'Item' in response:
@@ -232,8 +232,8 @@ def get_userProfile_Email(userId):
 
         if not valid:
             email = "INVALID_FORMAT"
-        
-    return email 
+
+    return email
 
 
 def create_subscription(body):
@@ -365,7 +365,7 @@ def delete_subscription(body):
             response['statusCode'] = 500
             response['body'] = json.dumps({"message": "An unexpected error occurred while executing the request"})
         return response
-    
+
 
     if body["entityName"] == "Asset":
         delete_sns_subscriptions(body["entityId"], None, delete_sns=True)
@@ -387,8 +387,8 @@ def lambda_handler(event, context):
         validate_pagination_info(queryParameters)
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
 
@@ -440,10 +440,10 @@ def lambda_handler(event, context):
             asset_object = get_asset_object_from_id(event['body']["entityId"])
             asset_object.update({"object__type": "asset"})
 
-            for user_name in claims_and_roles["tokens"]:
+            if len(claims_and_roles["tokens"]) > 0:
                 #This is a POST on asset as we are technically only modifying the asset for subscriptions (even a delete subscription)
-                casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", asset_object, "POST"):
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if casbin_enforcer.enforce(asset_object, "POST"):
                     allowed = True
 
             if allowed and httpMethod == 'POST':

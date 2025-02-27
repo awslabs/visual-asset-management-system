@@ -214,11 +214,10 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
     asset_object.update({"object__type": "asset"})
 
     # Add Casbin Enforcer to check if the current user has permissions to GET the Comment
-    for user_name in claims_and_roles["tokens"]:
-        casbin_enforcer = CasbinEnforcer(user_name)
-        if casbin_enforcer.enforce(f"user::{user_name}", asset_object, "GET"):
+    if len(claims_and_roles["tokens"]) > 0:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if casbin_enforcer.enforce(asset_object, "GET"):
             method_allowed_on_api = True
-            break
 
     if method_allowed_on_api:
         if "assetVersionId:commentId" not in pathParameters:
@@ -349,11 +348,10 @@ def delete_handler(response: dict, pathParameters: dict, event: dict) -> dict:
     asset_object.update({"object__type": "asset"})
 
     # Add Casbin Enforcer to check if the current user has permissions to DELETE the Comment
-    for user_name in claims_and_roles["tokens"]:
-        casbin_enforcer = CasbinEnforcer(user_name)
-        if casbin_enforcer.enforce(f"user::{user_name}", asset_object, "DELETE"):
+    if len(claims_and_roles["tokens"]) > 0:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if casbin_enforcer.enforce(asset_object, "DELETE"):
             method_allowed_on_api = True
-            break
 
     if method_allowed_on_api:
         logger.info(
@@ -394,11 +392,10 @@ def lambda_handler(event: dict, context: dict) -> dict:
         method_allowed_on_api = False
 
         # Add Casbin Enforcer to check if the current user has permissions to GET the Comment
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if httpMethod == "GET" and method_allowed_on_api:
             return get_handler(response, pathParameters, queryParameters)

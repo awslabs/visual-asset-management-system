@@ -59,6 +59,7 @@ export function buildAssetService(
             S3_ASSET_AUXILIARY_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
     storageResources.dynamo.assetStorageTable.grantReadWriteData(assetService);
@@ -67,6 +68,7 @@ export function buildAssetService(
     storageResources.s3.assetBucket.grantReadWrite(assetService);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(assetService);
     storageResources.dynamo.userRolesStorageTable.grantReadData(assetService);
+    storageResources.dynamo.rolesStorageTable.grantReadData(assetService);
     kmsKeyLambdaPermissionAddToResourcePolicy(assetService, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(assetService, config);
 
@@ -105,6 +107,7 @@ export function buildAssetFiles(
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
     storageResources.dynamo.assetStorageTable.grantReadWriteData(assetService);
@@ -112,6 +115,7 @@ export function buildAssetFiles(
     storageResources.s3.assetBucket.grantRead(assetService);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(assetService);
     storageResources.dynamo.userRolesStorageTable.grantReadData(assetService);
+    storageResources.dynamo.rolesStorageTable.grantReadData(assetService);
     kmsKeyLambdaPermissionAddToResourcePolicy(assetService, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(assetService, config);
 
@@ -166,6 +170,7 @@ export function buildUploadAssetFunction(
             TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName,
             TAG_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName,
             S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
     uploadAssetFunction.addToRolePolicy(
@@ -184,6 +189,7 @@ export function buildUploadAssetFunction(
     storageResources.dynamo.userRolesStorageTable.grantReadData(uploadAssetFunction);
     storageResources.dynamo.tagTypeStorageTable.grantReadData(uploadAssetFunction);
     storageResources.dynamo.tagStorageTable.grantReadData(uploadAssetFunction);
+    storageResources.dynamo.rolesStorageTable.grantReadData(uploadAssetFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(
         uploadAssetFunction,
         storageResources.encryption.kmsKey
@@ -224,12 +230,14 @@ export function buildAssetMetadataFunction(
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
     storageResources.s3.assetBucket.grantRead(assetMetadataFunction);
     storageResources.dynamo.assetStorageTable.grantReadData(assetMetadataFunction);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(assetMetadataFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(assetMetadataFunction);
+    storageResources.dynamo.rolesStorageTable.grantReadData(assetMetadataFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(
         assetMetadataFunction,
         storageResources.encryption.kmsKey
@@ -269,12 +277,14 @@ export function buildAssetColumnsFunction(
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
     storageResources.s3.assetBucket.grantRead(assetColumnsFunction);
     storageResources.dynamo.assetStorageTable.grantReadData(assetColumnsFunction);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(assetColumnsFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(assetColumnsFunction);
+    storageResources.dynamo.rolesStorageTable.grantReadData(assetColumnsFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(
         assetColumnsFunction,
         storageResources.encryption.kmsKey
@@ -314,6 +324,7 @@ export function buildStreamAuxiliaryPreviewAssetFunction(
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
     storageResources.s3.assetAuxiliaryBucket.grantRead(streamAuxiliaryPreviewAssetFunction);
@@ -324,6 +335,7 @@ export function buildStreamAuxiliaryPreviewAssetFunction(
     storageResources.dynamo.userRolesStorageTable.grantReadData(
         streamAuxiliaryPreviewAssetFunction
     );
+    storageResources.dynamo.rolesStorageTable.grantReadData(streamAuxiliaryPreviewAssetFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(
         streamAuxiliaryPreviewAssetFunction,
         storageResources.encryption.kmsKey
@@ -365,12 +377,14 @@ export function buildDownloadAssetFunction(
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
             CRED_TOKEN_TIMEOUT_SECONDS: config.app.authProvider.credTokenTimeoutSeconds.toString(),
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
     storageResources.s3.assetBucket.grantRead(downloadAssetFunction);
     storageResources.dynamo.assetStorageTable.grantReadData(downloadAssetFunction);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(downloadAssetFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(downloadAssetFunction);
+    storageResources.dynamo.rolesStorageTable.grantReadData(downloadAssetFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(
         downloadAssetFunction,
         storageResources.encryption.kmsKey
@@ -412,6 +426,7 @@ export function buildRevertAssetFunction(
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
     storageResources.s3.assetBucket.grantReadWrite(revertAssetFunction);
@@ -419,6 +434,7 @@ export function buildRevertAssetFunction(
     storageResources.dynamo.assetStorageTable.grantReadWriteData(revertAssetFunction);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(revertAssetFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(revertAssetFunction);
+    storageResources.dynamo.rolesStorageTable.grantReadData(revertAssetFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(
         revertAssetFunction,
         storageResources.encryption.kmsKey
@@ -462,6 +478,7 @@ export function buildUploadAssetWorkflowFunction(
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName,
             TAG_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
@@ -470,6 +487,7 @@ export function buildUploadAssetWorkflowFunction(
     storageResources.dynamo.userRolesStorageTable.grantReadData(uploadAssetWorkflowFunction);
     storageResources.dynamo.tagTypeStorageTable.grantReadData(uploadAssetWorkflowFunction);
     storageResources.dynamo.tagStorageTable.grantReadData(uploadAssetWorkflowFunction);
+    storageResources.dynamo.rolesStorageTable.grantReadData(uploadAssetWorkflowFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(uploadAssetWorkflowFunction, kmsKey);
     globalLambdaEnvironmentsAndPermissions(uploadAssetWorkflowFunction, config);
 
@@ -513,6 +531,7 @@ export function buildIngestAssetFunction(
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             CRED_TOKEN_TIMEOUT_SECONDS: config.app.authProvider.credTokenTimeoutSeconds.toString(),
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
@@ -522,6 +541,7 @@ export function buildIngestAssetFunction(
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(ingestAssetService);
     storageResources.dynamo.userRolesStorageTable.grantReadData(ingestAssetService);
     storageResources.s3.assetBucket.grantReadWrite(ingestAssetService);
+    storageResources.dynamo.rolesStorageTable.grantReadData(ingestAssetService);
     uploadAssetLambdaFunction.grantInvoke(ingestAssetService);
     kmsKeyLambdaPermissionAddToResourcePolicy(ingestAssetService, kmsKey);
     globalLambdaEnvironmentsAndPermissions(ingestAssetService, config);

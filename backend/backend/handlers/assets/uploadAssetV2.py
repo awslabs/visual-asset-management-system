@@ -38,7 +38,7 @@ import uuid
     # - - Parts (Dict Array)
     # - - - UploadUrl
     # - - - PartNumber
-    # - filePreview 
+    # - filePreview
     # - - key
     # - - sizeInBytes
     # - - Parts (Dict Array)
@@ -47,7 +47,7 @@ import uuid
 
     #Input Overall Type - Entirely New Asset (asset data and files w/ optional preview) - POST
     #Input Stages - New Upload Asset Request - POST
-    #Inputs: 
+    #Inputs:
     # - databaseId
     # - assetName
     # - description
@@ -67,7 +67,7 @@ import uuid
     #Outputs:
     # - assetId (newly generated)
     # - uploadId (newly generated)
-    # - filesAsset (Dict Array) 
+    # - filesAsset (Dict Array)
     # - - key
     # - - Parts (Dict Array)
     # - - - UploadUrl
@@ -80,9 +80,9 @@ import uuid
     # - - - PartNumber
 
     #Input Stages - Finalize Upload Asset Request - POST
-    #Inputs: 
+    #Inputs:
     # - uploadId
-    # - filesAsset (Dict Array) 
+    # - filesAsset (Dict Array)
     # - - key
     # - - Parts (Dict Array)
     # - - - PartNumber
@@ -98,7 +98,7 @@ import uuid
 
     #Input Overall Type - Update Asset (files or preview) -- Asset Data updates need to come through asset service API - POST
     #Input Stages - New Upload Asset Request - PUT
-    #Inputs: 
+    #Inputs:
     # - assetId
     # - databaseId
     # - filesAsset (Dict Array) (optional)
@@ -127,7 +127,7 @@ import uuid
     # - - - PartNumber
 
     #Input Stages - Finalize Upload Asset Request - PUT
-    #Inputs: 
+    #Inputs:
     # - uploadRequestId
     # - filesAsset (Dict Array) (optional)
     # - - key
@@ -319,7 +319,7 @@ def createupdate_asset_stage1(requestDataCreate: UploadAssetStage1NewRequestMode
 
     if (requestDataCreate and requestDataUpdate) or (not requestDataCreate and not requestDataUpdate):
         raise Exception("Invalid request, only one type of request allowed")
-    
+
     #Generate new unique assetId UUID or reuse the existing assetId
     assetId = ('x'+str(uuid.uuid4())) if requestDataCreate else requestDataUpdate.assetId
 
@@ -348,7 +348,7 @@ def createupdate_asset_stage1(requestDataCreate: UploadAssetStage1NewRequestMode
             #Validate file extension to start (final check again on this for full MIME types on stage2)
             if not validateUnallowedFileExtensionAndContentType(file.get("key"), ""):
                 raise ValidationError("Asset file provided has an unsupported file extension")
-            
+
             #Calculate parts needed
             if file.get("sizeInBytes") and not file.get("partCount"):
                 file["partCount"] = calculate_num_parts(file.get("sizeInBytes"))
@@ -383,7 +383,7 @@ def createupdate_asset_stage1(requestDataCreate: UploadAssetStage1NewRequestMode
                     "StorageKey": uploadLocationAssetFiles+file.get("key")
                 }
                 file["Parts"].append(part)
-        
+
     #Process Preview File checks
     previewFileDict = None
     if filePreview :
@@ -391,7 +391,7 @@ def createupdate_asset_stage1(requestDataCreate: UploadAssetStage1NewRequestMode
         #Validate file extension to start
         if not validateUnallowedFileExtensionAndContentType(previewFileDict.get("key"), ""):
             raise ValidationError("Asset preview file provided has an unsupported file extension")
-        
+
         if previewFileDict.get("sizeInBytes") and not previewFileDict.get("partCount"):
             previewFileDict["partCount"] = calculate_num_parts(previewFileDict.get("sizeInBytes"))
 
@@ -459,8 +459,8 @@ def createupdate_asset_stage1(requestDataCreate: UploadAssetStage1NewRequestMode
 def complete_asset_stage2(requestData: UploadAssetStage2RequestModel, asset_uploaded_object: AssetUploadTableModel):
     logger.info("Initialing Stage 2 Processing")
 
-    #Check to make sure for each file that each Part (and corresponding Part information) provided on RequestData matches the data stored asset_uploaded_object record. 
-    #Note: Fewer parts are allowed though as users can choose how they want to upload with the parts provided. 
+    #Check to make sure for each file that each Part (and corresponding Part information) provided on RequestData matches the data stored asset_uploaded_object record.
+    #Note: Fewer parts are allowed though as users can choose how they want to upload with the parts provided.
     if not compare_asset_upload_model_files(requestData, asset_uploaded_object):
         raise VAMSGeneralErrorResponse("The provided request data file files and parts do not match the stage 1 provided response.")
 
@@ -591,7 +591,7 @@ def complete_asset_stage2(requestData: UploadAssetStage2RequestModel, asset_uplo
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
     response = STANDARD_JSON_RESPONSE
-    try: 
+    try:
         global claims_and_roles
         claims_and_roles = request_to_claims(event)
         http_method = event['requestContext']['http']['method']
@@ -613,11 +613,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     "assetName": requestData.assetDataDetails.assetName,
                     "tags": requestData.assetDataDetails.tags,
                 }
-                for user_name in claims_and_roles["tokens"]:
-                    casbin_enforcer = CasbinEnforcer(user_name)
-                    if casbin_enforcer.enforce(f"user::{user_name}", asset, http_method) and casbin_enforcer.enforceAPI(event):
+                if len(claims_and_roles["tokens"]) > 0:
+                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                    if casbin_enforcer.enforce(asset, http_method) and casbin_enforcer.enforceAPI(event):
                         operation_allowed_on_asset = True
-                        break
 
                 if operation_allowed_on_asset:
                     returnResponse = createupdate_asset_stage1(requestData, None)
@@ -636,11 +635,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     raise VAMSGeneralErrorResponse("Asset Record not found for AssetId provided")
 
                 #ABAC Checks
-                for user_name in claims_and_roles["tokens"]:
-                    casbin_enforcer = CasbinEnforcer(user_name)
-                    if casbin_enforcer.enforce(f"user::{user_name}", asset_object, http_method) and casbin_enforcer.enforceAPI(event):
+                if len(claims_and_roles["tokens"]) > 0:
+                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                    if casbin_enforcer.enforce(asset_object, http_method) and casbin_enforcer.enforceAPI(event):
                         operation_allowed_on_asset = True
-                        break
 
                 if operation_allowed_on_asset:
                     returnResponse = createupdate_asset_stage1(None, requestData)
@@ -667,14 +665,13 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 "object__type": "asset",
                 "assetName": asset_upload_object.assetDataDetails.assetName if asset_upload_object.assetDataDetails.assetName else asset_object.get("assetName"),
                 "databaseId": asset_upload_object.databaseId,
-                "assetType": asset_upload_object.assetDataDetails.assetType if asset_upload_object.assetDataDetails.assetName else asset_object.get("assetType"), 
+                "assetType": asset_upload_object.assetDataDetails.assetType if asset_upload_object.assetDataDetails.assetName else asset_object.get("assetType"),
                 "tags": asset_upload_object.assetDataDetails.tags if asset_upload_object.assetDataDetails.tags else asset_object.get("tags"),
             }
-            for user_name in claims_and_roles["tokens"]:
-                casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", asset_object, http_method) and casbin_enforcer.enforceAPI(event):
+            if len(claims_and_roles["tokens"]) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if casbin_enforcer.enforce(asset_object, http_method) and casbin_enforcer.enforceAPI(event):
                     operation_allowed_on_asset = True
-                    break
 
             if operation_allowed_on_asset:
                 returnResponse = complete_asset_stage2(requestData, asset_upload_object)
@@ -683,7 +680,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         #If we made it to this point, check auth flag
         if operation_allowed_on_asset == False:
             return authorization_error()
-        
+
         #Return a internal error if we made it to this point
         return internal_error()
 

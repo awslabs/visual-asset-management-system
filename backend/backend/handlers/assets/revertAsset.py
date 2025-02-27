@@ -174,11 +174,10 @@ def revert_Asset(databaseId, assetId, version):
             asset.update({
                 "object__type": "asset"
             })
-            for user_name in claims_and_roles["tokens"]:
-                casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", asset, "DELETE"):
+            if len(claims_and_roles["tokens"]) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if casbin_enforcer.enforce(asset, "DELETE"):
                     allowed = True
-                    break
             if allowed:
                 up = assetReversion(asset, version)
                 table.put_item(Item=up)
@@ -248,11 +247,10 @@ def lambda_handler(event, context):
 
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if method_allowed_on_api:
             logger.info("Trying to get Data")

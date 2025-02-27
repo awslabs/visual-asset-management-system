@@ -14,7 +14,7 @@ import {
     Textarea,
     MultiselectProps,
     Select,
-    RadioGroup
+    RadioGroup,
 } from "@cloudscape-design/components";
 import { useState, useEffect } from "react";
 import { API } from "aws-amplify";
@@ -137,28 +137,45 @@ export default function CreatePipeline({
     // if initState is detected, format initState and set form state
     useEffect(() => {
         // (initPipelineType, initPipelineExecutionType, etc.) = formatState(initState)
-        let initPipelineType: OptionDefinition = {label: pipelineTypeOptions[0].label, value: pipelineTypeOptions[0].value};
-        let initPipelineExecutionType: OptionDefinition = {label: pipelineExecutionTypeOptions[0].label, value: pipelineExecutionTypeOptions[0].value};
-        let initWaitForCallback: OptionDefinition = {label: waitForCallbackOptions[0].label, value: waitForCallbackOptions[0].value};
-        let initAssetType: OptionDefinition = {label: fileTypeOptions[0].label, value: fileTypeOptions[0].value};
-        let initOutputType: OptionDefinition = {label: fileTypeOptions[0].label, value: fileTypeOptions[0].value};
-        let initDatabase: OptionDefinition = {label: null, value: null};
-        let initLambdaName: string = '';
+        let initPipelineType: OptionDefinition = {
+            label: pipelineTypeOptions[0].label,
+            value: pipelineTypeOptions[0].value,
+        };
+        let initPipelineExecutionType: OptionDefinition = {
+            label: pipelineExecutionTypeOptions[0].label,
+            value: pipelineExecutionTypeOptions[0].value,
+        };
+        let initWaitForCallback: OptionDefinition = {
+            label: waitForCallbackOptions[0].label,
+            value: waitForCallbackOptions[0].value,
+        };
+        let initAssetType: OptionDefinition = {
+            label: fileTypeOptions[0].label,
+            value: fileTypeOptions[0].value,
+        };
+        let initOutputType: OptionDefinition = {
+            label: fileTypeOptions[0].label,
+            value: fileTypeOptions[0].value,
+        };
+        let initDatabase: OptionDefinition = { label: null, value: null };
+        let initLambdaName: string = "";
 
         if (initState) {
-            let type = pipelineTypeOptions.find(item => item.value ===  initState.pipelineType)
-            initPipelineType = {label: type?.label, value: type?.value}
-            type = pipelineExecutionTypeOptions.find(item => item.value === initState.pipelineExecutionType)
-            initPipelineExecutionType = {label: type?.label, value: type?.value}
-            type = waitForCallbackOptions.find(item => item.value === initState.waitForCallback)
-            initWaitForCallback = {label: type?.label, value: type?.value}
-            type = fileTypeOptions.find(item => item.value === initState.assetType)
-            initAssetType = {label: type?.label, value: type?.value}
-            type = fileTypeOptions.find(item => item.value === initState.outputType)
-            initOutputType = {label: type?.label, value: type?.value}
-            initDatabase = {label: initState.databaseId, value: initState.databaseId}
-            let obj = JSON.parse(initState.userProvidedResource)
-            initLambdaName = obj.resourceId
+            let type = pipelineTypeOptions.find((item) => item.value === initState.pipelineType);
+            initPipelineType = { label: type?.label, value: type?.value };
+            type = pipelineExecutionTypeOptions.find(
+                (item) => item.value === initState.pipelineExecutionType
+            );
+            initPipelineExecutionType = { label: type?.label, value: type?.value };
+            type = waitForCallbackOptions.find((item) => item.value === initState.waitForCallback);
+            initWaitForCallback = { label: type?.label, value: type?.value };
+            type = fileTypeOptions.find((item) => item.value === initState.assetType);
+            initAssetType = { label: type?.label, value: type?.value };
+            type = fileTypeOptions.find((item) => item.value === initState.outputType);
+            initOutputType = { label: type?.label, value: type?.value };
+            initDatabase = { label: initState.databaseId, value: initState.databaseId };
+            let obj = JSON.parse(initState.userProvidedResource);
+            initLambdaName = obj.resourceId;
         }
         setFormState((prev) => ({
             ...prev,
@@ -168,10 +185,9 @@ export default function CreatePipeline({
             assetType: initAssetType,
             outputType: initOutputType,
             databaseId: initDatabase,
-            lambdaName: initLambdaName
+            lambdaName: initLambdaName,
         }));
     }, [initState]);
-    
 
     // TODO: need to refactor this approach, either move handlers to separate file (utils.js) or combine into one handleChange function
     const handlePipelineTypeChange = (e: any) => {
@@ -215,7 +231,7 @@ export default function CreatePipeline({
             databaseId: e.detail.selectedOption,
         }));
     };
-    
+
     // eslint-disable-next-line no-mixed-operators
     const createOrUpdate = (initState && initState.pipelineId && "Update") || "Create";
     const [selectedOptions, setSelectedOptions] = useState<MultiselectProps.Option[]>([]);
@@ -302,10 +318,12 @@ export default function CreatePipeline({
                                                 pipelineId: formState.pipelineId,
                                                 databaseId: formState.databaseId.value,
                                                 pipelineType: formState.pipelineTypeSelected.value,
-                                                pipelineExecutionType: formState.pipelineExecutionType.value,
+                                                pipelineExecutionType:
+                                                    formState.pipelineExecutionType.value,
                                                 waitForCallback: formState.waitForCallback.value,
                                                 taskTimeout: formState.taskTimeout,
-                                                taskHeartbeatTimeout: formState.taskHeartbeatTimeout,
+                                                taskHeartbeatTimeout:
+                                                    formState.taskHeartbeatTimeout,
                                                 lambdaName: formState.lambdaName,
                                                 description: formState.description,
                                                 assetType: formState.assetType.value,
@@ -314,21 +332,20 @@ export default function CreatePipeline({
                                                 updateAssociatedWorkflows: false,
                                             },
                                         })
-                                        .then((res) => {
-                                            console.log("Create/Update pipeline: ", res);
-                                            setReload(true);
-                                            setOpen(false);
-                                        })
-                                        .catch((err) => {
-                                            console.log("create pipeline error", err);
-                                            let msg = `Unable to ${createOrUpdate} pipeline. Error: Request failed with status code ${err.response.status}`;
-                                            setFormError(msg);
-                                        })
-                                        .finally(() => {
-                                            setInProgress(false);
-                                        });   
-                                    }
-                                    else {
+                                            .then((res) => {
+                                                console.log("Create/Update pipeline: ", res);
+                                                setReload(true);
+                                                setOpen(false);
+                                            })
+                                            .catch((err) => {
+                                                console.log("create pipeline error", err);
+                                                let msg = `Unable to ${createOrUpdate} pipeline. Error: Request failed with status code ${err.response.status}`;
+                                                setFormError(msg);
+                                            })
+                                            .finally(() => {
+                                                setInProgress(false);
+                                            });
+                                    } else {
                                         setPipeline(formState);
                                         setOpenWorkflowModal(true);
                                         setOpen(false);
@@ -524,7 +541,10 @@ export default function CreatePipeline({
                                     value={formState.inputParameters}
                                     disabled={inProgress}
                                     onChange={({ detail }) =>
-                                        setFormState({ ...formState, inputParameters: detail.value })
+                                        setFormState({
+                                            ...formState,
+                                            inputParameters: detail.value,
+                                        })
                                     }
                                     rows={4}
                                     placeholder="Input Parameters (Optional)"
@@ -541,7 +561,7 @@ export default function CreatePipeline({
                     setReload(true);
                 }}
                 visible={openWorkflowModal}
-                closeAriaLabel="Close modal"    
+                closeAriaLabel="Close modal"
                 footer={
                     <Box float="right">
                         <SpaceBetween direction="horizontal" size="xs">
@@ -555,7 +575,8 @@ export default function CreatePipeline({
                                                 pipelineId: pipeline.pipelineId,
                                                 databaseId: pipeline.databaseId.value,
                                                 pipelineType: pipeline.pipelineTypeSelected.value,
-                                                pipelineExecutionType: pipeline.pipelineExecutionType.value,
+                                                pipelineExecutionType:
+                                                    pipeline.pipelineExecutionType.value,
                                                 waitForCallback: pipeline.waitForCallback.value,
                                                 taskTimeout: pipeline.taskTimeout,
                                                 taskHeartbeatTimeout: pipeline.taskHeartbeatTimeout,
@@ -567,19 +588,22 @@ export default function CreatePipeline({
                                                 updateAssociatedWorkflows: true,
                                             },
                                         })
-                                        .then((res) => {
-                                            console.log("Update pipeline and associated workflows: ", res);
-                                            setOpenWorkflowModal(false);
-                                            setReload(true);
-                                        })
-                                        .catch((err) => {
-                                            console.log("update workflow error", err);
-                                            let msg = `Unable to update workflow. Error: Request failed with status code ${err.response.status}`;
-                                            setFormError(msg);
-                                        })
-                                        .finally(() => {
-                                            setInProgress(false);
-                                        });
+                                            .then((res) => {
+                                                console.log(
+                                                    "Update pipeline and associated workflows: ",
+                                                    res
+                                                );
+                                                setOpenWorkflowModal(false);
+                                                setReload(true);
+                                            })
+                                            .catch((err) => {
+                                                console.log("update workflow error", err);
+                                                let msg = `Unable to update workflow. Error: Request failed with status code ${err.response.status}`;
+                                                setFormError(msg);
+                                            })
+                                            .finally(() => {
+                                                setInProgress(false);
+                                            });
                                     } else {
                                         setInProgress(true);
                                         API.put("api", `pipelines`, {
@@ -587,7 +611,8 @@ export default function CreatePipeline({
                                                 pipelineId: pipeline.pipelineId,
                                                 databaseId: pipeline.databaseId.value,
                                                 pipelineType: pipeline.pipelineTypeSelected.value,
-                                                pipelineExecutionType: pipeline.pipelineExecutionType.value,
+                                                pipelineExecutionType:
+                                                    pipeline.pipelineExecutionType.value,
                                                 waitForCallback: pipeline.waitForCallback.value,
                                                 taskTimeout: pipeline.taskTimeout,
                                                 taskHeartbeatTimeout: pipeline.taskHeartbeatTimeout,
@@ -599,19 +624,19 @@ export default function CreatePipeline({
                                                 updateAssociatedWorkflows: false,
                                             },
                                         })
-                                        .then((res) => {
-                                            console.log("Update pipeline: ", res);
-                                            setReload(true);
-                                            setOpenWorkflowModal(false);
-                                        })
-                                        .catch((err) => {
-                                            console.log("create pipeline error", err);
-                                            let msg = `Unable to ${createOrUpdate} pipeline. Error: Request failed with status code ${err.response.status}`;
-                                            setFormError(msg);
-                                        })
-                                        .finally(() => {
-                                            setInProgress(false);
-                                        });
+                                            .then((res) => {
+                                                console.log("Update pipeline: ", res);
+                                                setReload(true);
+                                                setOpenWorkflowModal(false);
+                                            })
+                                            .catch((err) => {
+                                                console.log("create pipeline error", err);
+                                                let msg = `Unable to ${createOrUpdate} pipeline. Error: Request failed with status code ${err.response.status}`;
+                                                setFormError(msg);
+                                            })
+                                            .finally(() => {
+                                                setInProgress(false);
+                                            });
                                     }
                                 }}
                                 data-testid={`update-workflow-button`}
@@ -626,9 +651,7 @@ export default function CreatePipeline({
                 <form onSubmit={(e) => e.preventDefault()}>
                     <Form errorText={formError}>
                         <SpaceBetween direction="vertical" size="s">
-                            <FormField
-                                label="Would you like to update all workflows associated with this pipeline?"
-                            >
+                            <FormField label="Would you like to update all workflows associated with this pipeline?">
                                 <RadioGroup
                                     onChange={({ detail }) => setRadioValue(detail.value)}
                                     value={radioValue}

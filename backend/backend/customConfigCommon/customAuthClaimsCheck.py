@@ -3,7 +3,7 @@ import boto3
 import os
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="CustomConfigMFATokenScopeCheck")
+logger = safeLogger(service_name="CustomConfigAuthClaimsCheck")
 
 #Possible environment variables used and passed in for various purposes
 try:
@@ -44,13 +44,14 @@ def customMFATokenScopeCheckOverride(user, lambdaRequest):
                     usersMFACache[user] = {'MFAEnabled': False, 'auth_time': authorizerJwt['claims']['auth_time']}
         else:
 
-    ############################################################################################################################  
+    ############################################################################################################################
     ###################ADD CUSTOM EXTERNAL OAUTH IDP LOGIC TO CHECK IF LOGGED IN USER HAS MFA ENABLED###########################
     ############################################################################################################################
 
             #External OAUTH IDP MFA check
             mfaLoginEnabled = False
- 
+
+
     ############################################################################################################################
     ############################################################################################################################
 
@@ -60,3 +61,22 @@ def customMFATokenScopeCheckOverride(user, lambdaRequest):
         mfaLoginEnabled = False
     #Return true/false
     return mfaLoginEnabled
+
+def customAuthClaimsCheckOverride(claims_and_roles, lambdaRequest):
+
+    #Conduct MFA sign-in check using custom scope check
+    try:
+        mfaEnabled = customMFATokenScopeCheckOverride(claims_and_roles["tokens"][0], lambdaRequest)
+        claims_and_roles["mfaEnabled"] = mfaEnabled
+    except:
+        pass
+
+    ###########################################################################################################################
+    ###################ADD CUSTOM LOGIC TO CHECK CLAIMS###########################
+    ############################################################################################################################
+
+
+    ############################################################################################################################
+    ############################################################################################################################
+
+    return claims_and_roles

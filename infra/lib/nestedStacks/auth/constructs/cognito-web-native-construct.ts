@@ -68,12 +68,14 @@ export class CognitoWebNativeConstructStack extends Construct {
                 ASSET_STORAGE_TABLE_NAME: props.storageResources.dynamo.assetStorageTable.tableName,
                 DATABASE_STORAGE_TABLE_NAME:
                     props.storageResources.dynamo.databaseStorageTable.tableName,
+                ROLES_TABLE_NAME: props.storageResources.dynamo.rolesStorageTable.tableName,
             },
         });
         props.storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(
             preTokenGeneration
         );
         props.storageResources.dynamo.userRolesStorageTable.grantReadData(preTokenGeneration);
+        props.storageResources.dynamo.rolesStorageTable.grantReadData(preTokenGeneration);
 
         const message =
             "Hello, Thank you for registering with your instance of Visual Asset Management System! Your verification code is:  {####}  ";

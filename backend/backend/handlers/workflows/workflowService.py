@@ -18,6 +18,7 @@ claims_and_roles = {}
 logger = safeLogger(service="WorkflowService")
 
 dynamodb = boto3.resource('dynamodb')
+dynamodb_client = boto3.client('dynamodb')
 sf_client = boto3.client('stepfunctions')
 main_rest_response = STANDARD_JSON_RESPONSE
 workflow_database = None
@@ -36,10 +37,8 @@ except:
 
 
 def get_all_workflows(queryParams, showDeleted=False):
-    dynamodb = boto3.client('dynamodb')
     deserializer = TypeDeserializer()
-
-    paginator = dynamodb.get_paginator('scan')
+    paginator = dynamodb_client.get_paginator('scan')
     operator = "NOT_CONTAINS"
     if showDeleted:
         operator = "CONTAINS"
@@ -69,11 +68,10 @@ def get_all_workflows(queryParams, showDeleted=False):
         deserialized_document.update({
             "object__type": "workflow"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", deserialized_document, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(deserialized_document, "GET"):
                 items.append(deserialized_document)
-                break
 
     result['Items'] = items
 
@@ -112,11 +110,10 @@ def get_workflows(databaseId, query_params, showDeleted=False):
         item.update({
             "object__type": "workflow"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", item, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(item, "GET"):
                 result['Items'].append(item)
-                break
 
     if "NextToken" in page_iterator:
         result["NextToken"] = page_iterator["NextToken"]
@@ -140,11 +137,10 @@ def get_workflow(databaseId, workflowId, showDeleted=False):
         workflow.update({
             "object__type": "workflow"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", workflow, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(workflow, "GET"):
                 allowed = True
-                break
 
     return {
         "statusCode": 200 if workflow and allowed else 404,
@@ -169,11 +165,10 @@ def delete_workflow(databaseId, workflowId):
         workflow.update({
             "object__type": "workflow"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", workflow, "DELETE"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(workflow, "DELETE"):
                 allowed = True
-                break
 
         if allowed:
             logger.info("Deleting workflow: ")
@@ -194,7 +189,6 @@ def delete_workflow(databaseId, workflowId):
 
 
 def delete_stepfunction(workflowArn):
-    sf_client = boto3.client('stepfunctions')
 
     logger.info("Deleting StepFunctions: "+workflowArn)
     response = sf_client.delete_state_machine(
@@ -327,11 +321,10 @@ def lambda_handler(event, context):
         logger.info(httpMethod)
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if httpMethod == 'GET' and method_allowed_on_api:
             return get_handler(event, response, pathParameters, queryParameters, showDeleted)
@@ -342,7 +335,7 @@ def lambda_handler(event, context):
             response['body'] = json.dumps({"message": "Not Authorized"})
             return response
     except botocore.exceptions.ClientError as err:
-        if err.response['Error']['Code'] == 'LimitExceededException' or err.response['Error']['Code'] == 'ThrottlingException': 
+        if err.response['Error']['Code'] == 'LimitExceededException' or err.response['Error']['Code'] == 'ThrottlingException':
             logger.exception("Throttling Error")
             response['statusCode'] = err.response['ResponseMetadata']['HTTPStatusCode']
             response['body'] = json.dumps({"message": "ThrottlingException: Too many requests within a given period."})

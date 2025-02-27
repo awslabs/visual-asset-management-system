@@ -130,8 +130,8 @@ def property_token_filter_to_opensearch_query(token_filter, uniqueMappingFieldsF
             should_criteria = [
                 token_to_criteria(tok) for tok in token_filter['tokens']
                 if tok['operator'] in must_operators]
-            
-            
+
+
     #If we have a general search query from the textbar, add that.
     if token_filter.get("query"):
         logger.info("Text field search provided... adding filter")
@@ -145,7 +145,7 @@ def property_token_filter_to_opensearch_query(token_filter, uniqueMappingFieldsF
                 }
             })
 
-        
+
     #Add the filters criteria
     filter_criteria.extend(token_filter.get("filters", []))
 
@@ -239,7 +239,7 @@ class SearchAOS():
             host = get_ssm_parameter_value('AOS_ENDPOINT_PARAM', region, env)
             indexName = get_ssm_parameter_value(
                 'AOS_INDEX_NAME_PARAM', region, env)
-            
+
             logger.info("AOS endpoint:" + host)
             logger.info("Index endpoint:" + indexName)
 
@@ -260,7 +260,7 @@ class SearchAOS():
     def mapping(self):
         return self.client.indices.get_mapping(
             self.indexName).get(self.indexName)
-    
+
 
 
 def lambda_handler(
@@ -283,11 +283,10 @@ def lambda_handler(
         claims_and_roles = request_to_claims(event)
 
         operation_allowed_on_asset = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if  casbin_enforcer.enforceAPI(event):
                 operation_allowed_on_asset = True
-                break
 
         if operation_allowed_on_asset:
 
@@ -296,15 +295,15 @@ def lambda_handler(
 
                 search_ao = search_fn()
                 #Get's return a mapping for the search index (no actual asset data returned so no ABAC check)
-                if event['requestContext']['http']['method'] == "GET":  
+                if event['requestContext']['http']['method'] == "GET":
                     return {
                         "statusCode": 200,
                         "body": json.dumps(search_ao.mapping()),
                     }
-                
+
                 #Load body for POST after taking care of GET
                 body = json.loads(event['body'])
-                
+
                 #Get unique mapping fields for general query
                 uniqueMappingFieldsForGeneralQuery = []
                 if body.get("query"):
@@ -316,7 +315,7 @@ def lambda_handler(
                 result = search_ao.search(query)
                 filtered_hits = []
                 for hit in result["hits"]["hits"]:
-                    
+
                     #Exclude if deleted (this is a catch-all and should already be filtered through the input query)
                     if hit["_source"]["str_databaseid"].endswith("#deleted"):
                         continue
@@ -330,11 +329,10 @@ def lambda_handler(
                         "object__type": "asset" #for the purposes of checking ABAC, this should always be type "asset" until ABAC is implemented with asset files object types
                     }
 
-                    for user_name in claims_and_roles["tokens"]:
-                        casbin_enforcer = CasbinEnforcer(user_name)
-                        if casbin_enforcer.enforce(f"user::{user_name}", hit_document, "GET"):
+                    if len(claims_and_roles["tokens"]) > 0:
+                        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                        if casbin_enforcer.enforce(hit_document, "GET"):
                             filtered_hits.append(hit)
-                            break
 
                 result["hits"]["hits"] = filtered_hits
                 result["hits"]["total"]["value"] = len(filtered_hits)

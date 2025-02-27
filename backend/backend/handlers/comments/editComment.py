@@ -134,11 +134,10 @@ def lambda_handler(event: dict, context: dict) -> dict:
         asset_object.update({"object__type": "asset"})
 
         # Add Casbin Enforcer to check if the current user has permissions to POST the Comment
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", asset_object, "POST") and casbin_enforcer.enforceAPI(event):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(asset_object, "POST") and casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if method_allowed_on_api:
             logger.info("Trying to get edit comment")
