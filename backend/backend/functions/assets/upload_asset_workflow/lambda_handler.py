@@ -40,7 +40,7 @@ def getSetTagTypes(tags):
     #If no tags provided, return no tag types
     if tags is None or len(tags) == 0:
         return uniqueSetTagTypes
-    
+
     #Loop to get all tag results (to know their tag types)
     rawTagItems = []
     page_iteratorTags = paginator.paginate(
@@ -72,7 +72,7 @@ def getSetTagTypes(tags):
         if deserialized_document["tagName"] in tags:
             if deserialized_document["tagTypeName"] not in uniqueSetTagTypes:
                 uniqueSetTagTypes.append(deserialized_document["tagTypeName"])
-    
+
     return uniqueSetTagTypes
 
 #Function to lookup and scan tagTypes from dynamoDB that are set to required
@@ -166,7 +166,7 @@ def verifyAllRequiredTagsSatisfied(assetTags):
 
     if len(missingTagTypesForError) == 0:
         return True
-    
+
     #Raise error with list of required tag types missing from assets
     if len(missingTagTypesForError) > 0:
         raise ValueError(f"Asset Details are missing tags of required tag types: {missingTagTypesForError}")
@@ -230,7 +230,7 @@ def lambda_handler(event: Dict[Any, Any], context: LambdaContext) -> APIGatewayP
             response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
             return response
-        
+
         #optional field
         if 'previewLocation' in event['body']['uploadAssetBody'] and event['body']['uploadAssetBody']['previewLocation'] is not None:
             (valid, message) = validate({
@@ -255,11 +255,10 @@ def lambda_handler(event: Dict[Any, Any], context: LambdaContext) -> APIGatewayP
             "assetName": event['body']['uploadAssetBody'].get('assetName', event['body']['uploadAssetBody']['assetId']),
             "tags": event['body']['uploadAssetBody'].get('tags', [])
         }
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", asset, http_method) and casbin_enforcer.enforceAPI(event):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(asset, http_method) and casbin_enforcer.enforceAPI(event):
                 operation_allowed_on_asset = True
-                break
 
         # upload a new asset workflow
         if operation_allowed_on_asset:

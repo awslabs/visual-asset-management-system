@@ -21,6 +21,7 @@ export function buildAddCommentLambdaFunction(
     assetStorageTable: dynamodb.Table,
     userRolesStorageTable: dynamodb.Table,
     authEntitiesStorageTable: dynamodb.Table,
+    rolesStorageTable: dynamodb.Table,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
@@ -47,12 +48,14 @@ export function buildAddCommentLambdaFunction(
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
             AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: rolesStorageTable.tableName,
         },
     });
     commentStorageTable.grantReadWriteData(addCommentFunction);
     assetStorageTable.grantReadWriteData(addCommentFunction);
     authEntitiesStorageTable.grantReadWriteData(addCommentFunction);
     userRolesStorageTable.grantReadWriteData(addCommentFunction);
+    rolesStorageTable.grantReadData(addCommentFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(addCommentFunction, kmsKey);
     globalLambdaEnvironmentsAndPermissions(addCommentFunction, config);
     return addCommentFunction;
@@ -65,6 +68,7 @@ export function buildEditCommentLambdaFunction(
     assetStorageTable: dynamodb.Table,
     userRolesStorageTable: dynamodb.Table,
     authEntitiesStorageTable: dynamodb.Table,
+    rolesStorageTable: dynamodb.Table,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
@@ -91,12 +95,14 @@ export function buildEditCommentLambdaFunction(
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
             AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: rolesStorageTable.tableName,
         },
     });
     commentStorageTable.grantReadWriteData(editCommentFunction);
     assetStorageTable.grantReadWriteData(editCommentFunction);
     authEntitiesStorageTable.grantReadWriteData(editCommentFunction);
     userRolesStorageTable.grantReadWriteData(editCommentFunction);
+    rolesStorageTable.grantReadData(editCommentFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(editCommentFunction, kmsKey);
     globalLambdaEnvironmentsAndPermissions(editCommentFunction, config);
     return editCommentFunction;
@@ -109,6 +115,7 @@ export function buildCommentService(
     assetStorageTable: dynamodb.Table,
     userRolesStorageTable: dynamodb.Table,
     authEntitiesStorageTable: dynamodb.Table,
+    rolesStorageTable: dynamodb.Table,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
@@ -135,12 +142,14 @@ export function buildCommentService(
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
             AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: rolesStorageTable.tableName,
         },
     });
     assetStorageTable.grantReadWriteData(commentService);
     authEntitiesStorageTable.grantReadWriteData(commentService);
     userRolesStorageTable.grantReadWriteData(commentService);
     commentStorageTable.grantReadWriteData(commentService);
+    rolesStorageTable.grantReadData(commentService);
     kmsKeyLambdaPermissionAddToResourcePolicy(commentService, kmsKey);
     globalLambdaEnvironmentsAndPermissions(commentService, config);
 

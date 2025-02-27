@@ -48,6 +48,7 @@ export function buildTagService(
             TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
@@ -55,6 +56,7 @@ export function buildTagService(
     storageResources.dynamo.tagTypeStorageTable.grantReadWriteData(tagService);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(tagService);
     storageResources.dynamo.userRolesStorageTable.grantReadData(tagService);
+    storageResources.dynamo.rolesStorageTable.grantReadData(tagService);
     kmsKeyLambdaPermissionAddToResourcePolicy(tagService, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(tagService, config);
     return tagService;
@@ -89,6 +91,7 @@ export function buildCreateTagFunction(
             TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
@@ -96,6 +99,7 @@ export function buildCreateTagFunction(
     storageResources.dynamo.tagTypeStorageTable.grantReadWriteData(createTagFunction);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(createTagFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(createTagFunction);
+    storageResources.dynamo.rolesStorageTable.grantReadData(createTagFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(
         createTagFunction,
         storageResources.encryption.kmsKey

@@ -88,16 +88,14 @@ def create_asset_links(body):
 
             from_asset_link_allowed = to_asset_link_allowed = False
 
-            for user_name in claims_and_roles["tokens"]:
-                casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", asset_link_from_object, "POST"):
+            if len(claims_and_roles["tokens"]) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if casbin_enforcer.enforce(asset_link_from_object, "POST"):
                     from_asset_link_allowed = True
-                    break
-            for user_name in claims_and_roles["tokens"]:
-                casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", asset_link_to_object, "POST"):
+            if len(claims_and_roles["tokens"]) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if casbin_enforcer.enforce(asset_link_to_object, "POST"):
                     to_asset_link_allowed = True
-                    break
 
             if from_asset_link_allowed and to_asset_link_allowed:
                 asset_links_table.put_item(Item=item)
@@ -169,8 +167,8 @@ def lambda_handler(event, context):
             return response
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
 

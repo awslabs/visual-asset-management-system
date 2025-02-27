@@ -47,12 +47,14 @@ export function buildCreateDatabaseLambdaFunction(
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(createDatabaseFunction);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(createDatabaseFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(createDatabaseFunction);
+    storageResources.dynamo.rolesStorageTable.grantReadData(createDatabaseFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(createDatabaseFunction, kmsKey);
     globalLambdaEnvironmentsAndPermissions(createDatabaseFunction, config);
     return createDatabaseFunction;
@@ -90,6 +92,7 @@ export function buildDatabaseService(
             WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
@@ -99,6 +102,7 @@ export function buildDatabaseService(
     storageResources.dynamo.assetStorageTable.grantReadData(databaseService);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(databaseService);
     storageResources.dynamo.userRolesStorageTable.grantReadData(databaseService);
+    storageResources.dynamo.rolesStorageTable.grantReadData(databaseService);
     kmsKeyLambdaPermissionAddToResourcePolicy(databaseService, kmsKey);
     globalLambdaEnvironmentsAndPermissions(databaseService, config);
 

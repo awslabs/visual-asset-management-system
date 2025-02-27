@@ -30,7 +30,7 @@ except:
     logger.exception("Failed Loading Environment Variables")
     main_rest_response['body'] = json.dumps(
         {"message": "Failed Loading Environment Variables"})
-    
+
 
 asset_table = dynamodb.Table(asset_database)
 
@@ -43,7 +43,7 @@ def get_all_files_in_path(path, primaryKeyPath, query_params):
     }
 
     for page_iterator in paginator.paginate(
-        Bucket=bucket_name, 
+        Bucket=bucket_name,
         Prefix=path,
         PaginationConfig={
             'MaxItems': int(query_params['maxItems']),
@@ -72,7 +72,7 @@ def get_all_files_in_path(path, primaryKeyPath, query_params):
     # Log the length of files with a description
     logger.info("Files in the path: ")
     logger.info(len(result["Items"]))
-    return result 
+    return result
 
 # Check if the assetId is present in the database using asset_table resource
 # If it exists return the assetLocation key
@@ -92,11 +92,10 @@ def get_asset(database_id, asset_id):
         asset.update({
             "object__type": "asset"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", asset, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(asset, "GET"):
                 allowed = True
-                break
 
     return asset if allowed else {}
 
@@ -113,11 +112,10 @@ def lambda_handler(event, context):
 
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if method_allowed_on_api:
             pathParams = event.get('pathParameters', {})
@@ -127,7 +125,7 @@ def lambda_handler(event, context):
                 response['statusCode'] = 400
                 logger.error(response)
                 return response
-            
+
             if 'assetId' not in pathParams:
                 message = "No asset ID in API Call"
                 response['body'] = json.dumps({"message": message})
@@ -152,7 +150,7 @@ def lambda_handler(event, context):
                 response['body'] = json.dumps({"message": message})
                 response['statusCode'] = 400
                 return response
-            
+
 
             # get assetId, databaseId from event
             asset_id = event['pathParameters']['assetId']

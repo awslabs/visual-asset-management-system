@@ -35,11 +35,13 @@ def update_pipeline_workflows(self, pipelineData, event):
             workflow.update({
                 "object__type": "workflow"
             })
-            for user_name in claims_and_roles["tokens"]:
-                casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", workflow, "PUT"):
+
+        #Permission check
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(workflow, "PUT"):
                     allowed = True
-                    break
+
         if allowed and "deleted" not in workflow['databaseId']:
             pipelines = workflow['specifiedPipelines']['functions']
             workflowId = workflow['workflowId']
@@ -108,6 +110,8 @@ def update_pipeline_workflows(self, pipelineData, event):
                         }
                     )
                     logger.info("Workflow StepFunction state machine updated successfully")
+        else:
+            logger.info("No permission on workflow to delete or re-create, or workflow already deleted...")
 
     return {
         "statusCode": 200 if allowed else 404,

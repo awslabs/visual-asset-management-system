@@ -73,11 +73,10 @@ class MetadataSchema:
 
         if "Item" in resp:
             metadataSchema.update({"object__type": "metadataSchema"})
-            for user_name in claims_and_roles["tokens"]:
-                casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", metadataSchema, "GET"):
+            if len(claims_and_roles["tokens"]) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if casbin_enforcer.enforce(metadataSchema, "GET"):
                     allowed = True
-                    break
             return resp["Item"] if allowed else None
         else:
             return None
@@ -87,9 +86,9 @@ class MetadataSchema:
         schema_object.update({"object__type": "metadataSchema"})
         allowed = False
 
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", schema_object, "POST"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(schema_object, "POST"):
                 allowed = True
 
         if allowed:
@@ -119,9 +118,9 @@ class MetadataSchema:
             'object__type': 'metadataSchema'
         }
         allowed = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", schema_object, "DELETE"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(schema_object, "DELETE"):
                 allowed = True
 
         if allowed:
@@ -158,11 +157,10 @@ class MetadataSchema:
                 metadataSchema.update({
                     "object__type": "metadataSchema"
                 })
-                for user_name in claims_and_roles["tokens"]:
-                    casbin_enforcer = CasbinEnforcer(user_name)
-                    if casbin_enforcer.enforce(f"user::{user_name}", metadataSchema, "GET"):
+                if len(claims_and_roles["tokens"]) > 0:
+                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                    if casbin_enforcer.enforce(metadataSchema, "GET"):
                         result["Items"].append(metadataSchema)
-                        break
 
             if "NextToken" in pageIterator:
                 result["NextToken"] = pageIterator["NextToken"]
@@ -188,12 +186,11 @@ class MetadataSchema:
                 metadataSchema.update({
                     "object__type": "metadataSchema"
                 })
-                for user_name in claims_and_roles["tokens"]:
-                    casbin_enforcer = CasbinEnforcer(user_name)
-                    if casbin_enforcer.enforce(f"user::{user_name}", deserialized_document, "GET"):
+                if len(claims_and_roles["tokens"]) > 0:
+                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                    if casbin_enforcer.enforce(deserialized_document, "GET"):
                         result["Items"].append(deserialized_document)
-                        break
-            
+
             if "NextToken" in pageIterator:
                 result["NextToken"] = pageIterator["NextToken"]
 
@@ -241,7 +238,7 @@ def lambda_handler(event: APIGatewayProxyEvent, context: LambdaContext,
             response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
             return response
-        
+
         queryParameters = event.get('queryStringParameters', {})
         validate_pagination_info(queryParameters)
 
@@ -250,8 +247,8 @@ def lambda_handler(event: APIGatewayProxyEvent, context: LambdaContext,
         method = event['requestContext']['http']['method']
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
 
@@ -260,6 +257,7 @@ def lambda_handler(event: APIGatewayProxyEvent, context: LambdaContext,
             resp = schema.get_all_schemas(databaseId, queryParameters)
             logger.info(resp)
             response['body'] = json.dumps({"message": resp}, cls=DecimalEncoder)
+            response['statusCode'] = 200
             return response
 
         # create/update
@@ -288,6 +286,7 @@ def lambda_handler(event: APIGatewayProxyEvent, context: LambdaContext,
             return response
 
         response['body'] = json.dumps(response['body'], cls=DecimalEncoder)
+        response['statusCode'] = 200
         return response
     except ValidationError as e:
         response['statusCode'] = e.code

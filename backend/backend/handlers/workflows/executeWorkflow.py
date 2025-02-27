@@ -84,7 +84,7 @@ def get_asset_metadata(databaseId, assetId, keyPrefix, event):
             logger.info("uploadAsset payload:", json_response)
             if "body" in json_response:
                 response_body = json.loads(json_response['body'])
-                
+
                 # if "asset" in response_body:
                 #     assets.append(response_body['asset'])
         return response_body
@@ -159,11 +159,10 @@ def validate_pipelines(databaseId, workflow):
             pipeline.update({
                 "object__type": "pipeline"
             })
-            for user_name in claims_and_roles["tokens"]:
-                casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", pipeline_state, "POST"):
+            if len(claims_and_roles["tokens"]) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if casbin_enforcer.enforce(pipeline_state, "POST"):
                     allowed = True
-                    break
 
         if not allowed:
             return (False, pipeline["name"])
@@ -242,7 +241,7 @@ def get_workflow_executions(assetId, workflowId):
             except Exception as e:
                 logger.exception(e)
                 logger.info("Continuing with trying to fetch exceutions...")
-        
+
         return result
 
 
@@ -287,11 +286,10 @@ def lambda_handler(event, context):
             return response
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if method_allowed_on_api:
             assetResponse = get_asset(pathParams['databaseId'], pathParams['assetId'])
@@ -306,27 +304,25 @@ def lambda_handler(event, context):
 
                 executingUserName = ''
                 executingRequestContext = event['requestContext']
-                for user_name in claims_and_roles["tokens"]:
-                    casbin_enforcer = CasbinEnforcer(user_name)
-                    if casbin_enforcer.enforce(f"user::{user_name}", asset, "POST"):
+                if len(claims_and_roles["tokens"]) > 0:
+                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                    if casbin_enforcer.enforce(asset, "POST"):
                         asset_allowed = True
-                        executingUserName = user_name
-                        break
+                        executingUserName = claims_and_roles["tokens"][0]
                 if asset_allowed:
                     workflowResponse = get_workflow(pathParams['databaseId'], pathParams['workflowId'])
                     logger.info(workflowResponse)
                     if bool(workflowResponse):
-                        workflow = workflowResponse[0] 
+                        workflow = workflowResponse[0]
                         workflow_allowed = False
                         # Add Casbin Enforcer to check if the current user has permissions to POST the workflow:
                         workflow.update({
                             "object__type": "workflow"
                         })
-                        for user_name in claims_and_roles["tokens"]:
-                            casbin_enforcer = CasbinEnforcer(user_name)
-                            if casbin_enforcer.enforce(f"user::{user_name}", workflow, "POST"):
+                        if len(claims_and_roles["tokens"]) > 0:
+                            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                            if casbin_enforcer.enforce(workflow, "POST"):
                                 workflow_allowed = True
-                                break
 
                         if workflow_allowed:
                             (status, pipelineName) = validate_pipelines(pathParams['databaseId'], workflow)
@@ -369,8 +365,8 @@ def lambda_handler(event, context):
 
                             logger.info("Launching Workflow:"
                                         )
-                            executionId = launchWorkflow(asset['assetLocation']['Key'], workflow['workflow_arn'], 
-                                                         pathParams['assetId'], workflow['workflowId'], 
+                            executionId = launchWorkflow(asset['assetLocation']['Key'], workflow['workflow_arn'],
+                                                         pathParams['assetId'], workflow['workflowId'],
                                                          pathParams['databaseId'], executingUserName, executingRequestContext, inputMetadata)
                             response["statusCode"] = 200
                             response['body'] = json.dumps({'message': executionId})
@@ -396,7 +392,7 @@ def lambda_handler(event, context):
             response['body'] = json.dumps({"message": "Not Authorized"})
             return response
     except botocore.exceptions.ClientError as err:
-        if err.response['Error']['Code'] == 'LimitExceededException' or err.response['Error']['Code'] == 'ThrottlingException': 
+        if err.response['Error']['Code'] == 'LimitExceededException' or err.response['Error']['Code'] == 'ThrottlingException':
             logger.exception("Throttling Error")
             response['statusCode'] = err.response['ResponseMetadata']['HTTPStatusCode']
             response['body'] = json.dumps({"message": "ThrottlingException: Too many requests within a given period."})

@@ -20,7 +20,7 @@ dynamodb_client = boto3.client('dynamodb')
 main_rest_response = STANDARD_JSON_RESPONSE
 
 try:
-    roles_db_table_name = os.environ["ROLES_STORAGE_TABLE_NAME"]
+    roles_db_table_name = os.environ["ROLES_TABLE_NAME"]
 except:
     logger.exception("Failed loading environment variables")
     main_rest_response['body']['message'] = "Failed Loading Environment Variables"
@@ -35,7 +35,7 @@ def delete_handler(response, pathParameters, queryParameters):
         response['statusCode'] = 400
         response['body'] = json.dumps({"message": message})
         return response
-    
+
     #Check param validation
     (valid, message) = validate({
         'roleName': {
@@ -56,11 +56,10 @@ def delete_handler(response, pathParameters, queryParameters):
         role_object.update({
             "object__type": "role"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", role_object, "DELETE"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(role_object, "DELETE"):
                 allowed = True
-                break
         if allowed:
             role_table.delete_item(
                 Key={
@@ -98,9 +97,9 @@ def get_roles(query_params):
         deserialized_document.update({
             "object__type": "role"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", deserialized_document, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(deserialized_document, "GET"):
                 authorized_roles.append(deserialized_document)
 
     result["Items"] = authorized_roles
@@ -131,11 +130,10 @@ def lambda_handler(event, context):
         validate_pagination_info(queryParameters)
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if httpMethod == 'GET' and method_allowed_on_api:
             return get_handler(response, pathParameters, queryParameters)

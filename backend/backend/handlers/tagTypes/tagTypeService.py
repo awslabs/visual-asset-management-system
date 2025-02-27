@@ -33,7 +33,7 @@ def get_tag_types(response, query_params):
     deserializer = TypeDeserializer()
     paginator = dynamodbClient.get_paginator('scan')
 
-    
+
     page_iteratorTagTypes = paginator.paginate(
         TableName=tag_type_db_table_name,
         PaginationConfig={
@@ -76,10 +76,10 @@ def get_tag_types(response, query_params):
         # deserialized_document.update({
         #     "object__type": "tag"
         # })
-        # for user_name in claims_and_roles["tokens"]:
-        #     casbin_enforcer = CasbinEnforcer(user_name)
-        #     if casbin_enforcer.enforce(f"user::{user_name}", deserialized_document, "GET"):
-        
+        # if len(claims_and_roles["tokens"]) > 0:
+        #     casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        #     if casbin_enforcer.enforce(deserialized_document, "GET"):
+
         authorized_tags.append(deserialized_document)
 
     formatted_tag_results = {}
@@ -112,9 +112,9 @@ def get_tag_types(response, query_params):
         tagType.update({
             "object__type": "tagType"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", tagType, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(tagType, "GET"):
                 formattedTagTypeResults["Items"].append(tagType)
 
     if 'NextToken' in page_iteratorTagTypes:
@@ -150,7 +150,7 @@ def delete_tag_type(response, pathParameters):
     tag_type = tag_type_response.get("Item", {})
 
     if tag_type:
-        
+
         #Scan tag table to see if we have any tags that currently use the type, if so error
         tag_table = dynamodb.Table(tag_db_table_name)
         tagResults = tag_table.scan().get('Items', [])
@@ -161,17 +161,16 @@ def delete_tag_type(response, pathParameters):
                 response['statusCode'] = 400
                 response['body'] = json.dumps({"message": "Cannot delete tag type that is currently in use by a tag"})
                 return response
-        
+
         # Add Casbin Enforcer to check if the current user has permissions to DELETE the Tag
         allowed = False
         tag_type.update({
             "object__type": "tagType"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", tag_type, "DELETE"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(tag_type, "DELETE"):
                 allowed = True
-                break
 
         if allowed:
             logger.info("Deleting Tag Type: "+tag_type_name)
@@ -208,11 +207,10 @@ def lambda_handler(event, context):
         claims_and_roles = request_to_claims(event)
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
         if httpMethod == 'GET' and method_allowed_on_api:
             return get_tag_types(response, queryParameters)
         elif httpMethod == 'DELETE' and method_allowed_on_api:

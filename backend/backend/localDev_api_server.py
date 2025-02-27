@@ -1,7 +1,9 @@
-from flask import Flask, Blueprint, request
+from flask import Flask, Blueprint, request, redirect, url_for
 import jwt as pyjwt
 
 from handlers.auth import routes as routes_api
+
+from localMockData.mockRoles import mockRoles
 
 vams = Blueprint('vams', __name__)
 
@@ -24,6 +26,7 @@ def amplifyConfig():
     'externalOAuthIdpURL': 'https://localhost:9031',
     'externalOAuthIdpClientId': 'clientId',
     'externalOAuthIdpScope': 'openid',
+    'externalOAuthIdpScopeMfa': 'test_mfa_scope',
     'externalOAuthIdpTokenEndpoint': '/as/token.oauth2',
     'externalOAuthIdpAuthorizationEndpoint': '/as/authorization.oauth2',
     'externalOAuthIdpDiscoveryEndpoint': '/.well-known/openid-configuration',
@@ -104,6 +107,27 @@ def databases():
       }]
     }
   }
+
+@vams.route('/roles', methods=['GET', 'POST', 'PUT', 'OPTIONS'], provide_automatic_options=True)
+def roles():
+  # POST used for create role.
+  # PUT used for update role, if mock updating role just refresh the page after you press the update button.
+  # Restart API server to clear changes to the mock data for the roles. Session specific.
+
+  global mockRoles
+
+  if request.method == 'GET':
+    return mockRoles
+  elif request.method == 'POST':
+    new_role = request.get_json()
+    mockRoles['message']['Items'].append(new_role)
+    return redirect(url_for('vams.roles'))
+  elif request.method == 'PUT':
+    updated_role = request.get_json()
+    for index, role in enumerate(mockRoles['message']['Items']):
+      if role["roleName"] == updated_role["roleName"]:
+        mockRoles['message']['Items'][index] = updated_role
+    return redirect(url_for('vams.roles'))
 
 if __name__ == '__main__':
   app = Flask(__name__)

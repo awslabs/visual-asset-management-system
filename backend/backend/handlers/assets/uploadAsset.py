@@ -139,7 +139,7 @@ def getSetTagTypes(tags):
     #If no tags provided, return no tag types
     if tags is None or len(tags) == 0:
         return uniqueSetTagTypes
-    
+
     #Loop to get all tag results (to know their tag types)
     rawTagItems = []
     page_iteratorTags = paginator.paginate(
@@ -171,7 +171,7 @@ def getSetTagTypes(tags):
         if deserialized_document["tagName"] in tags:
             if deserialized_document["tagTypeName"] not in uniqueSetTagTypes:
                 uniqueSetTagTypes.append(deserialized_document["tagTypeName"])
-    
+
     return uniqueSetTagTypes
 
 #Function to lookup and scan tagTypes from dynamoDB that are set to required
@@ -265,7 +265,7 @@ def verifyAllRequiredTagsSatisfied(assetTags):
 
     if len(missingTagTypesForError) == 0:
         return True
-    
+
     #Raise error with list of required tag types missing from assets
     if len(missingTagTypesForError) > 0:
         raise ValueError(f"Asset Details are missing tags of required tag types: {missingTagTypesForError}")
@@ -414,17 +414,16 @@ def upload_Asset(event, body, queryParameters, returnAsset=False, uploadTempLoca
                 "tags": body.get('tags', [])
             }
 
-            for user_name in claims_and_roles["tokens"]:
-                casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", asset, http_method) and casbin_enforcer.enforceAPI(
+            if len(claims_and_roles["tokens"]) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if casbin_enforcer.enforce(asset, http_method) and casbin_enforcer.enforceAPI(
                             event):
                     operation_allowed_on_asset = True
-                    break
 
             if operation_allowed_on_asset:
 
                 #Do check / lookup on which tagTypes are required to be set on an asset and compare to tags set in body
-                #Will throw error if it does nto validate
+                #Will throw error if it does not validate
                 verifyAllRequiredTagsSatisfied(event['body'].get("tags", []))
 
                 #If true, asset was uploaded to a temporary location within the S3 bucket and we need to move it now to the correct asset location
@@ -474,12 +473,11 @@ def upload_Asset(event, body, queryParameters, returnAsset=False, uploadTempLoca
                 asset.update({
                     "object__type": "asset"
                 })
-                for user_name in claims_and_roles["tokens"]:
-                    casbin_enforcer = CasbinEnforcer(user_name)
-                    if casbin_enforcer.enforce(f"user::{user_name}", asset, http_method) and casbin_enforcer.enforceAPI(
+                if len(claims_and_roles["tokens"]) > 0:
+                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                    if casbin_enforcer.enforce(asset, http_method) and casbin_enforcer.enforceAPI(
                             event):
                         operation_allowed_on_asset = True
-                        break
 
                 if operation_allowed_on_asset:
 
@@ -585,14 +583,14 @@ def lambda_handler(event, context):
             'assetPathKey': {
                 'value': event['body']['key'],
                 'validator': 'ASSET_PATH'
-            }    
+            }
         })
         if not valid:
             logger.error(message)
             response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
             return response
-        
+
         #optional params
         if 'previewLocation' in event['body'] and event['body']['previewLocation'] is not None:
             (valid, message) = validate({

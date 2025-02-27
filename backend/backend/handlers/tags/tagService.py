@@ -40,7 +40,7 @@ def delete_handler(response, pathParameters):
         response['statusCode'] = 400
         response['body'] = json.dumps({"message": message})
         return response
-    
+
     (valid, message) = validate({
         'tagName': {
             'value': tag_name,
@@ -62,11 +62,10 @@ def delete_handler(response, pathParameters):
         tag.update({
             "object__type": "tag"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", tag, "DELETE"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(tag, "DELETE"):
                 allowed = True
-                break
 
         if allowed:
             logger.info("Deleting Tag:", tag_name)
@@ -141,7 +140,7 @@ def get_tags(query_params):
     authorized_tags = {
         "Items":[]
         }
-    
+
     for tag in page_iteratorTags["Items"]:
         deserialized_document = {k: deserializer.deserialize(v) for k, v in tag.items()}
 
@@ -157,9 +156,9 @@ def get_tags(query_params):
             "object__type": "tag"
         })
 
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", deserialized_document, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(deserialized_document, "GET"):
                 authorized_tags["Items"].append(deserialized_document)
 
     if 'NextToken' in page_iteratorTags:
@@ -189,8 +188,8 @@ def lambda_handler(event, context):
         claims_and_roles = request_to_claims(event)
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
 

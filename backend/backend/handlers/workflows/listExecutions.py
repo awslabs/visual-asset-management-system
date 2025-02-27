@@ -38,11 +38,10 @@ def get_executions(asset_id, workflow_id, query_params):
 
     asset_of_workflow_allowed = False
 
-    for user_name in claims_and_roles["tokens"]:
-        casbin_enforcer = CasbinEnforcer(user_name)
-        if casbin_enforcer.enforce(f"user::{user_name}", asset_of_workflow, "GET"):
+    if len(claims_and_roles["tokens"]) > 0:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if casbin_enforcer.enforce(asset_of_workflow, "GET"):
             asset_of_workflow_allowed = True
-            break
 
     if asset_of_workflow_allowed:
         logger.info("Listing executions")
@@ -72,9 +71,9 @@ def get_executions(asset_id, workflow_id, query_params):
                 item.update({
                     "object__type": "workflow"
                 })
-                for user_name in claims_and_roles["tokens"]:
-                    casbin_enforcer = CasbinEnforcer(user_name)
-                    if casbin_enforcer.enforce(f"user::{user_name}", item, "GET"):
+                if len(claims_and_roles["tokens"]) > 0:
+                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                    if casbin_enforcer.enforce(item, "GET"):
                         assets = item.get('assets', [])
                         workflow_arn = item['workflow_arn']
                         execution_arn = workflow_arn.replace("stateMachine", "execution")
@@ -86,7 +85,7 @@ def get_executions(asset_id, workflow_id, query_params):
                         executionStatus = item.get('executionStatus', "")
                         executionId = item['execution_id']
 
-                        #If we don't have start/stop information, this means we could still have a running process (or now stopped). 
+                        #If we don't have start/stop information, this means we could still have a running process (or now stopped).
                         # Fetch it from step functions.
                         if not stopDate:
                             execution = sfn.describe_execution(
@@ -130,17 +129,13 @@ def get_executions(asset_id, workflow_id, query_params):
                             'stopDate': stopDate,
                             'Items': assets
                         })
-
-
-                        #Only do the top user in tokens, so break
-                        break
             except Exception as e:
                 logger.exception(e)
                 logger.info("Continuing with trying to fetch exceutions...")
 
         if "NextToken" in page_iterator:
             result["NextToken"] = page_iterator["NextToken"]
-                
+
         return {
             "statusCode": 200,
             "message": result
@@ -185,11 +180,10 @@ def lambda_handler(event, context):
 
         claims_and_roles = request_to_claims(event)
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if method_allowed_on_api:
             logger.info("Listing Workflow Executions")
@@ -203,7 +197,7 @@ def lambda_handler(event, context):
             response['body'] = json.dumps({"message": "Not Authorized"})
             return response
     except botocore.exceptions.ClientError as err:
-        if err.response['Error']['Code'] == 'LimitExceededException' or err.response['Error']['Code'] == 'ThrottlingException': 
+        if err.response['Error']['Code'] == 'LimitExceededException' or err.response['Error']['Code'] == 'ThrottlingException':
             logger.exception("Throttling Error")
             response['statusCode'] = err.response['ResponseMetadata']['HTTPStatusCode']
             response['body'] = json.dumps({"message": "ThrottlingException: Too many requests within a given period."})

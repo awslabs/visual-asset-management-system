@@ -69,6 +69,7 @@ def check_assets(database_id):
 def get_handler(event, response, path_parameters, query_parameters, show_deleted):
     if 'databaseId' not in path_parameters:
         response['body'] = json.dumps({"message": get_databases(query_parameters, show_deleted)})
+        response['statusCode'] = 200
         logger.info(response)
         return response
     else:
@@ -87,6 +88,7 @@ def get_handler(event, response, path_parameters, query_parameters, show_deleted
             return response
 
         response['body'] = json.dumps({"message": get_database(path_parameters['databaseId'], show_deleted)})
+        response['statusCode'] = 200
         logger.info(response)
         return response
 
@@ -110,11 +112,10 @@ def get_database(database_id, show_deleted=False):
         database.update({
             "object__type": "database"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", database, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(database, "GET"):
                 allowed = True
-                break
 
     return database if allowed else {}
 
@@ -151,11 +152,10 @@ def get_databases(query_params, show_deleted=False):
         deserialized_document.update({
             "object__type": "database"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", deserialized_document, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(deserialized_document, "GET"):
                 items.append(deserialized_document)
-                break
 
     result['Items'] = items
 
@@ -230,11 +230,10 @@ def delete_database(database_id):
         database.update({
             "object__type": "database"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", database, "DELETE"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(database, "DELETE"):
                 allowed = True
-                break
 
         if allowed:
             logger.info("Deleting database: ")
@@ -263,7 +262,7 @@ def lambda_handler(event, context):
 
     path_parameters = event.get('pathParameters', {})
     query_parameters = event.get('queryStringParameters', {})
-    
+
     validate_pagination_info(query_parameters)
 
     show_deleted = False
@@ -276,11 +275,10 @@ def lambda_handler(event, context):
         claims_and_roles = request_to_claims(event)
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if http_method == 'GET' and method_allowed_on_api:
             return get_handler(event, response, path_parameters, query_parameters, show_deleted)

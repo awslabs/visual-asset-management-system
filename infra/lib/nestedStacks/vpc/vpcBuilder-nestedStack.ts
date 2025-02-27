@@ -149,7 +149,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                                 //console.log(element.subnetId, vpcSubnet.subnetId, "Pu")
                                 if (vpcSubnet.subnetId == element && !foundVPCSubnet) {
                                     foundVPCSubnet = true;
-                                    this.privateSubnets.push(vpcSubnet); 
+                                    this.privateSubnets.push(vpcSubnet);
                                 }
                             });
                         }
@@ -315,7 +315,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                 subnetType: ec2.SubnetType.PUBLIC,
                 cidrMask: 26, // 62 usable IPs
             };
-            
+
             /**
              * VPC
              */
@@ -445,7 +445,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                     subnets: { subnets: this.isolatedSubnets },
                     securityGroups: [vpceSecurityGroup],
                 });
-                
+
                 //Add KMS FIPS endpoints if we are using FIPS
                 if (props.config.app.useFips) {
                     // Create VPC endpoint for KMS FIPS

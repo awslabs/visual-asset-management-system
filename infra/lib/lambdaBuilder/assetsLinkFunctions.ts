@@ -26,6 +26,7 @@ export function buildAssetLinkService(
     assetStorageTable: dynamodb.Table,
     userRolesStorageTable: dynamodb.Table,
     authEntitiesStorageTable: dynamodb.Table,
+    rolesStorageTable: dynamodb.Table,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
@@ -51,12 +52,14 @@ export function buildAssetLinkService(
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
             AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: rolesStorageTable.tableName,
         },
     });
     assetLinksStorageTable.grantReadWriteData(assetLinksService);
     assetStorageTable.grantReadWriteData(assetLinksService);
     authEntitiesStorageTable.grantReadWriteData(assetLinksService);
     userRolesStorageTable.grantReadWriteData(assetLinksService);
+    rolesStorageTable.grantReadData(assetLinksService);
     kmsKeyLambdaPermissionAddToResourcePolicy(assetLinksService, kmsKey);
     globalLambdaEnvironmentsAndPermissions(assetLinksService, config);
     return assetLinksService;
@@ -70,6 +73,7 @@ export function buildGetAssetLinksFunction(
     assetStorageTable: dynamodb.Table,
     userRolesStorageTable: dynamodb.Table,
     authEntitiesStorageTable: dynamodb.Table,
+    rolesStorageTable: dynamodb.Table,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
@@ -95,12 +99,14 @@ export function buildGetAssetLinksFunction(
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
             AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: rolesStorageTable.tableName,
         },
     });
     assetLinksStorageTable.grantReadWriteData(getAssetLinksService);
     assetStorageTable.grantReadWriteData(getAssetLinksService);
     authEntitiesStorageTable.grantReadWriteData(getAssetLinksService);
     userRolesStorageTable.grantReadWriteData(getAssetLinksService);
+    rolesStorageTable.grantReadData(getAssetLinksService);
     kmsKeyLambdaPermissionAddToResourcePolicy(getAssetLinksService, kmsKey);
     globalLambdaEnvironmentsAndPermissions(getAssetLinksService, config);
     return getAssetLinksService;
@@ -114,6 +120,7 @@ export function buildDeleteAssetLinksFunction(
     assetStorageTable: dynamodb.Table,
     userRolesStorageTable: dynamodb.Table,
     authEntitiesStorageTable: dynamodb.Table,
+    rolesStorageTable: dynamodb.Table,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
@@ -139,12 +146,14 @@ export function buildDeleteAssetLinksFunction(
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
             AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: rolesStorageTable.tableName,
         },
     });
     assetLinksStorageTable.grantReadWriteData(deleteAssetLinksService);
     assetStorageTable.grantReadWriteData(deleteAssetLinksService);
     authEntitiesStorageTable.grantReadWriteData(deleteAssetLinksService);
     userRolesStorageTable.grantReadWriteData(deleteAssetLinksService);
+    rolesStorageTable.grantReadData(deleteAssetLinksService);
     kmsKeyLambdaPermissionAddToResourcePolicy(deleteAssetLinksService, kmsKey);
     globalLambdaEnvironmentsAndPermissions(deleteAssetLinksService, config);
     return deleteAssetLinksService;

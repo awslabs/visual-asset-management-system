@@ -81,6 +81,7 @@
                 "idpAuthProviderUrl": null,
                 "idpAuthClientId": null,
                 "idpAuthProviderScope": null,
+                "idpAuthProviderScopeMfa": null,
                 "idpAuthPrincipalDomain": null,
                 "idpAuthProviderTokenEndpoint": null,
                 "idpAuthProviderAuthorizationEndpoint": null,

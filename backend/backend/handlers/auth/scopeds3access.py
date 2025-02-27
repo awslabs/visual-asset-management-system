@@ -77,14 +77,14 @@ def lambda_handler(event, context):
             })
             response['statusCode'] = 400
             return response
-        
+
         if (idJwtToken is None or idJwtToken == "") and use_external_oauth == "false":
             response['body'] = json.dumps({
                 "message": "No JWT ID Token",
             })
             response['statusCode'] = 400
             return response
-        
+
         logger.info("Validating parameters")
         (valid, message) = validate({
             'databaseId': {
@@ -120,11 +120,10 @@ def lambda_handler(event, context):
                 asset.update({
                     "object__type": "asset"
                 })
-            for user_name in claims_and_roles["tokens"]:
-                casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", asset, "POST") or casbin_enforcer.enforce(f"user::{user_name}", asset, "PUT"):
+            if len(claims_and_roles["tokens"]) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if casbin_enforcer.enforce(asset, "POST") or casbin_enforcer.enforce(asset, "PUT"):
                     allowed = True
-                    break
 
             if allowed:
                 timeout = cred_timeout

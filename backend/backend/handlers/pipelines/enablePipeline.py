@@ -34,11 +34,10 @@ def enablePipeline(databaseId, pipelineId):
         pipeline.update({
             "object__type": "pipeline"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", pipeline, "POST"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(pipeline, "POST"):
                 allowed = True
-                break
 
         if allowed:
             status_code = 200
@@ -66,7 +65,7 @@ def enablePipeline(databaseId, pipelineId):
     else:
         status_code = 404
         message = "Pipeline not found"
-    
+
     logger.info(message)
     return {
         "statusCode": status_code,
@@ -109,11 +108,10 @@ def lambda_handler(event, context):
             claims_and_roles = request_to_claims(event)
 
             method_allowed_on_api = False
-            for user_name in claims_and_roles["tokens"]:
-                casbin_enforcer = CasbinEnforcer(user_name)
+            if len(claims_and_roles["tokens"]) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
                 if casbin_enforcer.enforceAPI(event):
                     method_allowed_on_api = True
-                    break
             if method_allowed_on_api:
                 try:
                     response.update(enablePipeline(event['databaseId'], event['pipelineId']))

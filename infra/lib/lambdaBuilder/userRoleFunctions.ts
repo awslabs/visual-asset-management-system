@@ -41,7 +41,7 @@ export function buildUserRolesService(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            ROLES_STORAGE_TABLE_NAME: rolesStorageTable.tableName,
+            ROLES_TABLE_NAME: rolesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
             AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
         },

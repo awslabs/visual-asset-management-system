@@ -128,15 +128,14 @@ def lambda_handler(event, context):
             "object__type": "database",
             "databaseId": event['body']['databaseId']
         }
-        for user_name in claims_and_roles["tokens"]:
+        if len(claims_and_roles["tokens"]) > 0:
             # There should be a constraint which allows PUT on this (or all)
             # databases (can use contains .* in the constraint to allow for all)
             # AND also allow PUT method on this API
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if (casbin_enforcer.enforce(f"user::{user_name}", database, "PUT")
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if (casbin_enforcer.enforce(database, "PUT")
                     and casbin_enforcer.enforceAPI(event)):
                 allowed = True
-                break
 
         if allowed:
             response['body'] = upload_Asset(event['body'])
