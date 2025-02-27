@@ -32,6 +32,7 @@ Due to VPC subnet breakout changes, this may break existing deployments. It is r
 -   Enabled ability for a VAMS external IDP authentication system to report back if a user is logged in via MFA through an additional MFA IDP scope request. This can be configured via infrastructure configuration script by specifying a specific scope for MFA. Leaving this configuration null turns off external IDP MFA support.
 -   -   **Web** The external IDP login will show a MFA login button if a mfa scope configuration request is defined
 -   **Web** Added capability to set on a role if it requires the the logged in user to have authenticated via MFA in order for any constraints against that role to take effect. If MFA is not turned on in the selected authentication system, this would effectively disable the role as no user would satisfy the criteria.
+-   Added new feature that gives user ability to edit pipelines after initial creation. User also has the option to update all workflows that contain the edited pipeline. EDIT feature can be found as a button on the Pipelines page.
 
 ### Bug Fixes
 

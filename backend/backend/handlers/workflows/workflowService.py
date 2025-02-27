@@ -18,6 +18,8 @@ claims_and_roles = {}
 logger = safeLogger(service="WorkflowService")
 
 dynamodb = boto3.resource('dynamodb')
+dynamodb_client = boto3.client('dynamodb')
+sf_client = boto3.client('stepfunctions')
 main_rest_response = STANDARD_JSON_RESPONSE
 workflow_database = None
 unitTest = {
@@ -35,10 +37,8 @@ except:
 
 
 def get_all_workflows(queryParams, showDeleted=False):
-    dynamodb = boto3.client('dynamodb')
     deserializer = TypeDeserializer()
-
-    paginator = dynamodb.get_paginator('scan')
+    paginator = dynamodb_client.get_paginator('scan')
     operator = "NOT_CONTAINS"
     if showDeleted:
         operator = "CONTAINS"
@@ -189,7 +189,6 @@ def delete_workflow(databaseId, workflowId):
 
 
 def delete_stepfunction(workflowArn):
-    sf_client = boto3.client('stepfunctions')
 
     logger.info("Deleting StepFunctions: "+workflowArn)
     response = sf_client.delete_state_machine(
@@ -199,7 +198,6 @@ def delete_stepfunction(workflowArn):
     logger.info(response)
 
     return response
-
 
 def get_handler(event, response, pathParameters, queryParameters, showDeleted):
     if 'workflowId' not in pathParameters:
@@ -305,7 +303,6 @@ def delete_handler(event, response, pathParameters):
     logger.info(response)
     return response
 
-
 def lambda_handler(event, context):
     global claims_and_roles
     response = STANDARD_JSON_RESPONSE
@@ -317,7 +314,7 @@ def lambda_handler(event, context):
     if 'showDeleted' in queryParameters:
         showDeleted = queryParameters['showDeleted']
 
-    validate_pagination_info(queryParameters)
+    validate_pagination_info(queryParameters) 
 
     try:
         httpMethod = event['requestContext']['http']['method']

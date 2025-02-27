@@ -58,6 +58,7 @@ export function buildCreatePipelineFunction(
                 : undefined,
         environment: {
             PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
+            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
             S3_BUCKET: storageResources.s3.artefactsBucket.bucketName,
             ASSET_BUCKET_ARN: storageResources.s3.assetBucket.bucketArn,
             ENABLE_PIPELINE_FUNCTION_NAME: enablePipelineFunction.functionName,
@@ -82,6 +83,7 @@ export function buildCreatePipelineFunction(
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(createPipelineFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(createPipelineFunction);
     storageResources.dynamo.rolesStorageTable.grantReadData(createPipelineFunction);
+    storageResources.dynamo.workflowStorageTable.grantReadWriteData(createPipelineFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(
         createPipelineFunction,
         storageResources.encryption.kmsKey
@@ -109,6 +111,26 @@ export function buildCreatePipelineFunction(
             actions: ["ec2:DescribeSecurityGroups", "ec2:DescribeSubnets", "ec2:DescribeVpcs"],
             //Note: needs to be * resource as ec2:Describe* actions do not support resource-level permissions - https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-policies-ec2-console.html
             resources: ["*"],
+        })
+    );
+
+    createPipelineFunction.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: [
+                "states:CreateStateMachine",
+                "states:DescribeStateMachine",
+                "states:UpdateStateMachine",
+            ],
+            resources: [IAMArn("*vams*").statemachine],
+        })
+    );
+
+    createPipelineFunction.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["iam:PassRole"],
+            resources: [IAMArn("*vams*").role],
         })
     );
 
