@@ -267,12 +267,12 @@ export function getConfig(app: cdk.App): Config {
     ) {
         if (config.app.pipelines.useRapidPipeline.enabled) {
             if (
-                !config.app.useGlobalVpc.optionalExternalPrivateSubnetIds ||
-                config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == "UNDEFINED" ||
-                config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == ""
+                !config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds ||
+                config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds == "UNDEFINED" ||
+                config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds == ""
             ) {
                 throw new Error(
-                    "Configuration Error: Must define at least one private subnet ID when using RapidPipeline."
+                    "Configuration Error: Must define at least one isolated subnet ID when using RapidPipeline."
                 );
             }
         }
