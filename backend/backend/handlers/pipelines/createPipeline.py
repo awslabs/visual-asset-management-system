@@ -12,9 +12,32 @@ from common.validators import validate
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from botocore.exceptions import ClientError
+
+from common.dynamodb import to_update_expr
+
+from handlers.workflows.workflowCommon import update_pipeline_workflows
 
 claims_and_roles = {}
 logger = safeLogger(service="CreatePipeline")
+            
+def format_pipeline(item, body):
+    item['pipelineId'] = body['pipelineId']
+    item['databaseId'] = body['databaseId']
+    item['name'] = body['pipelineId']
+    if "description" in item:
+        del item['description']
+    if "dateCreated" in item:
+        del item['dateCreated']
+    if "enabled" in item:
+        del item['enabled']
+    if "assetType" in item:
+        del item['assetType']
+    array = []
+    array.append(item)
+    response = {}
+    response['functions'] = array
+    return response
 
 def generate_random_string(length=8):
     """Generates a random character alphanumeric string with a set input length."""
@@ -28,6 +51,7 @@ class CreatePipeline():
         self.lambda_client = lambda_client
 
         self.db_table_name = env["PIPELINE_STORAGE_TABLE_NAME"]
+        self.workflow_db_table_name = env["WORKFLOW_STORAGE_TABLE_NAME"]
         self.enable_pipeline_function_name = env["ENABLE_PIPELINE_FUNCTION_NAME"]
         self.enable_pipeline_function_arn = env["ENABLE_PIPELINE_FUNCTION_ARN"]
         self.s3_bucket = env['S3_BUCKET']
@@ -37,7 +61,7 @@ class CreatePipeline():
         self.lambda_pipeline_sample_function_key = env['LAMBDA_PIPELINE_SAMPLE_FUNCTION_KEY']
         self.subNetIdsString = env['SUBNET_IDS']
         self.securityGroupIdsString = env['SECURITYGROUP_IDS']
-        self.lambdaPythonVersion = env['LAMBDA_PYTHON_VERSION']
+        self.lambdaPythonVersion = env['LAMBDA_PYTHON_VERSION']  
 
         #Create SubnetIds & SecurityGroupIds lists from string
         #Set to empty array if string is empty 
@@ -68,7 +92,7 @@ class CreatePipeline():
     def _now(self):
         return datetime.datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
 
-    def upload_Pipeline(self, body):
+    def upload_Pipeline(self, body, event):
         allowed = False
         # Add Casbin Enforcer to check if the current user has permissions to PUT the pipeline:
         pipeline = {
@@ -126,8 +150,8 @@ class CreatePipeline():
         if body['pipelineExecutionType'] == 'Lambda':
 
             item = {
-                'databaseId': body['databaseId'],
-                'pipelineId': body['pipelineId'],
+                # 'databaseId': body['databaseId'],
+                # 'pipelineId': body['pipelineId'],
                 'assetType': body['assetType'],
                 'outputType': body['outputType'],
                 'description': body['description'],
@@ -145,19 +169,34 @@ class CreatePipeline():
             if body['waitForCallback'] == "Enabled":
                 item['taskTimeout'] = body.get("taskTimeout", "86400") #default to 24 hours
                 item['taskHeartbeatTimeout'] = body.get("taskHeartbeatTimeout", "3600") #default to 1 hour
+                
+                
+            keys_map, values_map, expr = to_update_expr(item)
 
-            self.table.put_item(
-                Item=item,
-                ConditionExpression='attribute_not_exists(databaseId) and attribute_not_exists(pipelineId)'
-                )
+            # self.table.put_item(
+            #     Item=item,
+            #     ConditionExpression='attribute_not_exists(databaseId) and attribute_not_exists(pipelineId)'
+            #     )
+            self.table.update_item(
+                Key={
+                    'databaseId': body['databaseId'],
+                    'pipelineId': body['pipelineId'],
+                },
+                UpdateExpression=expr,
+                ExpressionAttributeNames=keys_map,
+                ExpressionAttributeValues=values_map,
+            )
+
+            if body['updateAssociatedWorkflows'] == True:
+                response = format_pipeline(item, body)
+                update_pipeline_workflows(self, response, event)
 
         else:
             raise ValueError("Unknown Pipeline ExecutionType")
 
-
         return {
             "statusCode": 200,
-            "body": json.dumps({"message": 'Succeeded'})
+            "body": json.dumps({"message": "Succeeded"})
         }
 
     def createLambdaPipeline(self, lambdaName):
@@ -202,6 +241,7 @@ def lambda_handler(event, context, create_pipeline_fn=CreatePipeline.from_env):
     create_pipeline = create_pipeline_fn()
     response = STANDARD_JSON_RESPONSE
     logger.info(event['body'])
+    
     if isinstance(event['body'], str):
         event['body'] = json.loads(event['body'])
     try:
@@ -275,7 +315,7 @@ def lambda_handler(event, context, create_pipeline_fn=CreatePipeline.from_env):
             if 'starting' in event['body'] and event['body']['starting'] == 'enabling':
                 create_pipeline.enablePipeline()
             else:
-                response.update(create_pipeline.upload_Pipeline(event['body']))
+                response.update(create_pipeline.upload_Pipeline(event['body'], event))
             return response
         else:
             response['statusCode'] = 403

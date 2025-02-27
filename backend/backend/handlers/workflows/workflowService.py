@@ -18,6 +18,7 @@ claims_and_roles = {}
 logger = safeLogger(service="WorkflowService")
 
 dynamodb = boto3.resource('dynamodb')
+sf_client = boto3.client('stepfunctions')
 main_rest_response = STANDARD_JSON_RESPONSE
 workflow_database = None
 unitTest = {
@@ -204,7 +205,6 @@ def delete_stepfunction(workflowArn):
 
     return response
 
-
 def get_handler(event, response, pathParameters, queryParameters, showDeleted):
     if 'workflowId' not in pathParameters:
         if 'databaseId' in pathParameters:
@@ -309,7 +309,6 @@ def delete_handler(event, response, pathParameters):
     logger.info(response)
     return response
 
-
 def lambda_handler(event, context):
     global claims_and_roles
     response = STANDARD_JSON_RESPONSE
@@ -321,7 +320,7 @@ def lambda_handler(event, context):
     if 'showDeleted' in queryParameters:
         showDeleted = queryParameters['showDeleted']
 
-    validate_pagination_info(queryParameters)
+    validate_pagination_info(queryParameters) 
 
     try:
         httpMethod = event['requestContext']['http']['method']
