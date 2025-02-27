@@ -18,7 +18,7 @@ logger = safeLogger(service="CreateRole")
 main_rest_response = STANDARD_JSON_RESPONSE
 
 try:
-    roles_db_table_name = os.environ["ROLES_STORAGE_TABLE_NAME"]
+    roles_db_table_name = os.environ["ROLES_TABLE_NAME"]
 except:
     logger.exception("Failed loading environment variables")
     main_rest_response['body']['message'] = "Failed Loading Environment Variables"
@@ -27,33 +27,43 @@ except:
 def create_role(body):
     response = STANDARD_JSON_RESPONSE
     role_table = dynamodb.Table(roles_db_table_name)
-    item = {
-        "id": str(uuid.uuid4()),
-        'roleName': body["roleName"],
-        'description': body["description"],
-        'createdOn': str(datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")),
-        'source': body.get("source"),
-        'sourceIdentifier': body.get("sourceIdentifier")
-    }
-    role_table.put_item(Item=item, ConditionExpression='attribute_not_exists(roleName)')
 
-    response['statusCode'] = 200
-    response['body'] = json.dumps({"message": "success"})
-    return response
+    try:
+        item = {
+            "id": str(uuid.uuid4()),
+            'roleName': body["roleName"],
+            'description': body["description"],
+            'createdOn': str(datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")),
+            'source': body.get("source"),
+            'sourceIdentifier': body.get("sourceIdentifier"),
+            'mfaRequired': body.get("mfaRequired", False)
+        }
+        role_table.put_item(Item=item, ConditionExpression='attribute_not_exists(roleName)')
+
+        response['statusCode'] = 200
+        response['body'] = json.dumps({"message": "success"})
+        return response
+    except Exception as e:
+        logger.exception(e)
+        response['statusCode'] = 500
+        response['body'] = json.dumps({"message": "Internal Server Error"})
+        return response
 
 
 def update_role(body):
     response = STANDARD_JSON_RESPONSE
     role_table = dynamodb.Table(roles_db_table_name)
+
     try:
         role_table.update_item(
             Key={
                 'roleName': body["roleName"]
             },
-            UpdateExpression='SET description = :desc, sourceIdentifier = :sourceIdentifier',
+            UpdateExpression='SET description = :desc, sourceIdentifier = :sourceIdentifier, mfaRequired = :mfaRequired',
             ExpressionAttributeValues={
                 ':desc': body["description"],
-                ':sourceIdentifier': body.get("sourceIdentifier")
+                ':sourceIdentifier': body.get("sourceIdentifier"),
+                ':mfaRequired': body.get("mfaRequired", False)
             },
             ConditionExpression='attribute_exists(roleName)'
         )
@@ -62,6 +72,7 @@ def update_role(body):
             response['statusCode'] = 400
             response['body'] = json.dumps({"message": "RoleName "+ body["roleName"] +" doesn't exists."})
         else:
+            logger.exception(e)
             response['statusCode'] = 500
             response['body'] = json.dumps({"message": "Internal Server Error"})
         return response
@@ -91,6 +102,10 @@ def lambda_handler(event, context):
             'description': {
                 'value': event['body']['description'],
                 'validator': 'STRING_256'
+            },
+            'mfaRequired': {
+                'value': str(event['body'].get("mfaRequired", "False")),
+                'validator': 'BOOL'
             }
         })
 
@@ -110,11 +125,10 @@ def lambda_handler(event, context):
             "object__type": "role",
             "roleName": event['body']['roleName']
         }
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", role_object, httpMethod) and casbin_enforcer.enforceAPI(event):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(role_object, httpMethod) and casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if httpMethod == 'POST' and method_allowed_on_api:
             return create_role(event['body'])

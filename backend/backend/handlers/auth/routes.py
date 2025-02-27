@@ -34,12 +34,11 @@ def lambda_handler(event, _):
             if 'USE_LOCAL_MOCKS' in os.environ:
                 allowed_routes.append(route_obj)
             else:
-                for user_name in claims_and_roles["tokens"]:
-                    print("casbin enforce", user_name)
-                    casbin_enforcer = CasbinEnforcer(user_name)
-                    if casbin_enforcer.enforce(f"user::{user_name}", route_obj, route_obj["method"]):
+                if len(claims_and_roles["tokens"]) > 0:
+                    print("casbin enforce", claims_and_roles["tokens"][0])
+                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                    if casbin_enforcer.enforce(route_obj, route_obj["method"]):
                         allowed_routes.append(route_obj)
-                        break
 
         response["body"] = json.dumps({"allowedRoutes": allowed_routes, "email": claims_and_roles["tokens"][0]})
         return response

@@ -94,16 +94,15 @@ def get_asset_links(asset_id, query_params):
                     'assetType': asset_names.get(item['assetIdFrom'], {}).get("assetType"),
                     'tags': asset_names.get(item['assetIdFrom'], {}).get("tags"),
                 })
-                for user_name in claims_and_roles["tokens"]:
-                    casbin_enforcer = CasbinEnforcer(user_name)
-                    if casbin_enforcer.enforce(f"user::{user_name}", asset_object, "GET"):
+                if len(claims_and_roles["tokens"]) > 0:
+                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                    if casbin_enforcer.enforce(asset_object, "GET"):
                         relationships['relatedTo'].append({
                             'relationId': item['relationId'],
                              'assetId': item['assetIdFrom'],
                              'assetName': asset_names.get(item['assetIdFrom'], {}).get("assetName"),
                              'databaseId': asset_names.get(item['assetIdFrom'], {}).get("databaseId")
                         })
-                        break
             else:
                 asset_object = asset_names.get(item['assetIdTo'], {})
                 asset_object.update({
@@ -111,16 +110,15 @@ def get_asset_links(asset_id, query_params):
                     'assetType': asset_names.get(item['assetIdTo'], {}).get("assetType"),
                     'tags': asset_names.get(item['assetIdTo'], {}).get("tags"),
                 })
-                for user_name in claims_and_roles["tokens"]:
-                    casbin_enforcer = CasbinEnforcer(user_name)
-                    if casbin_enforcer.enforce(f"user::{user_name}", asset_object, "GET"):
+                if len(claims_and_roles["tokens"]) > 0:
+                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                    if casbin_enforcer.enforce(asset_object, "GET"):
                         relationships['relatedTo'].append({
                             'relationId': item['relationId'],
                             'assetId': item['assetIdTo'],
                             'assetName': asset_names.get(item['assetIdTo'], {}).get("assetName"),
                             'databaseId': asset_names.get(item['assetIdTo'], {}).get("databaseId")
                         })
-                        break
         elif item['assetIdTo'] == asset_id:
             asset_object = asset_names.get(item['assetIdFrom'], {})
             asset_object.update({
@@ -128,16 +126,15 @@ def get_asset_links(asset_id, query_params):
                 'assetType': asset_names.get(item['assetIdFrom'], {}).get("assetType"),
                 'tags': asset_names.get(item['assetIdFrom'], {}).get("tags"),
             })
-            for user_name in claims_and_roles["tokens"]:
-                casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", asset_object, "GET"):
+            if len(claims_and_roles["tokens"]) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if casbin_enforcer.enforce(asset_object, "GET"):
                     relationships['parent'].append({
                         'relationId': item['relationId'],
                         'assetId': item['assetIdFrom'],
                         'assetName': asset_names.get(item['assetIdFrom'], {}).get("assetName"),
                         'databaseId': asset_names.get(item['assetIdFrom'], {}).get("databaseId")
                     })
-                    break
         elif item['assetIdFrom'] == asset_id:
             asset_object = asset_names.get(item['assetIdTo'], {})
             asset_object.update({
@@ -145,16 +142,15 @@ def get_asset_links(asset_id, query_params):
                 'assetType': asset_names.get(item['assetIdTo'], {}).get("assetType"),
                 'tags': asset_names.get(item['assetIdTo'], {}).get("tags"),
             })
-            for user_name in claims_and_roles["tokens"]:
-                casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", asset_object, "GET"):
+            if len(claims_and_roles["tokens"]) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if casbin_enforcer.enforce(asset_object, "GET"):
                     relationships['child'].append({
                         'relationId': item['relationId'],
                         'assetId': item['assetIdTo'],
                         'assetName': asset_names.get(item['assetIdTo'], {}).get("assetName"),
                         'databaseId': asset_names.get(item['assetIdTo'], {}).get("databaseId")
                     })
-                    break
 
     response['body'] = json.dumps({"message": relationships})
     return response
@@ -179,7 +175,7 @@ def lambda_handler(event, context):
             response['statusCode'] = 400
             response['body'] = json.dumps({"message": "AssetId is not valid."})
             return response
-        
+
         (valid, message) = validate({
             'assetId': {
                 'value': asset_id,
@@ -193,8 +189,8 @@ def lambda_handler(event, context):
             return response
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
 

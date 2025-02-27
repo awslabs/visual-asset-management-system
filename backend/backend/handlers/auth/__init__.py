@@ -1,11 +1,11 @@
 #  Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 import json
-from customConfigCommon.customMFATokenScopeCheck import customMFATokenScopeCheckOverride
+from customConfigCommon.customAuthClaimsCheck import customAuthClaimsCheckOverride
 
 def request_to_claims(request):
     if 'requestContext' not in request:
-        # #Lambda cross-calling input. Only checked when requestContext is not present through API Gateway call. 
+        # #Lambda cross-calling input. Only checked when requestContext is not present through API Gateway call.
         # if 'lambdaCrossCall' in request:
         #     return {
         #         "tokens": [request["lambdaCrossCall"]["userName"]],
@@ -19,11 +19,12 @@ def request_to_claims(request):
             "externalAttributes": [],
             "mfaEnabled": False
         }
-    
+
     claims = request['requestContext']['authorizer']['jwt']['claims']
     tokens = []
     roles = []
     externalAttributes = []
+    mfaEnabled = False
 
     #For tokens, look at other fields if vams:tokens does not exist in claims
     if 'vams:tokens' in claims:
@@ -44,16 +45,17 @@ def request_to_claims(request):
     if 'vams:externalAttributes' in claims:
         externalAttributes = json.loads(claims['vams:externalAttributes'])
 
-    #Conduct MFA sign-in check using custom scope check
-    mfaEnabled = False
+    claims_and_roles = {
+            "tokens": tokens,
+            "roles": roles,
+            "externalAttributes": externalAttributes,
+            "mfaEnabled": mfaEnabled
+        }
+
+    #Conduct custom claims check, including MFA sign-in
     try:
-        mfaEnabled = customMFATokenScopeCheckOverride(tokens[0], request)
+        claims_and_roles = customAuthClaimsCheckOverride(claims_and_roles, request)
     except:
         pass
 
-    return {
-        "tokens": tokens,
-        "roles": roles,
-        "externalAttributes": externalAttributes,
-        "mfaEnabled": mfaEnabled
-    }
+    return claims_and_roles

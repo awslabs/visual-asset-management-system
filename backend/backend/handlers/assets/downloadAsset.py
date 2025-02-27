@@ -64,21 +64,19 @@ def get_Assets(databaseId, assetId):
         # deserialized_document.update({
         #     "object__type": "asset"
         # })
-        # for user_name in claims_and_roles["tokens"]:
-        #     casbin_enforcer = CasbinEnforcer(user_name)
-        #     if casbin_enforcer.enforce(f"user::{user_name}", deserialized_document, "GET"):
+        # if len(claims_and_roles["tokens"]) > 0:
+        #     casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        #     if casbin_enforcer.enforce(deserialized_document, "GET"):
         #         items.append(deserialized_document)
-        #         break
 
         # Add Casbin Enforcer to check if the current user has permissions to GET the asset:
         item.update({
             "object__type": "asset"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", item, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(item, "GET"):
                 items.append(item)
-                break
 
     return items
 
@@ -101,7 +99,7 @@ def get_File(databaseId, assetId, key, version):
         # invalid type of isDistributable is treated as asset not distributable
         logger.error("isDistributable invalid type")
         return "Error: Asset not distributable"
-    
+
     #Validate for malicious content type
     if not validateS3AssetExtensionsAndContentType(bucket_name, key):
         return "Error: Unallowed file extention or content type in asset file. Unable to download file."
@@ -158,7 +156,7 @@ def lambda_handler(event, context):
             response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
             return response
-        
+
         #optional params
         if 'key' in event['body'] and event['body']['key'] is not None:
             (valid, message) = validate({
@@ -187,11 +185,10 @@ def lambda_handler(event, context):
                 return response
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if method_allowed_on_api:
             logger.info("Getting Assets")

@@ -373,6 +373,8 @@ export function getConfig(app: cdk.App): Config {
             config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "UNDEFINED" ||
             config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "" ||
             config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScopeMfa == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScopeMfa == "UNDEFINED" ||
             config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint == "" ||
             config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint ==
                 "UNDEFINED" ||
@@ -487,6 +489,7 @@ export interface ConfigPublic {
                 idpAuthProviderUrl: string;
                 idpAuthClientId: string;
                 idpAuthProviderScope: string;
+                idpAuthProviderScopeMfa: string;
                 idpAuthPrincipalDomain: string;
                 idpAuthProviderTokenEndpoint: string;
                 idpAuthProviderAuthorizationEndpoint: string;

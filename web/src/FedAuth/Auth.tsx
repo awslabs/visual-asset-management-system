@@ -11,6 +11,7 @@ import { default as vamsConfig } from "../config";
 import { Authenticator } from "@aws-amplify/ui-react";
 
 import Button from "@cloudscape-design/components/button";
+import Box from "@cloudscape-design/components/box";
 import loginBgImageSrc from "../resources/img/login_bg.png";
 import logoDarkImageSrc from "../resources/img/logo_dark.svg";
 
@@ -571,7 +572,7 @@ const Auth: React.FC<AuthProps> = (props) => {
     }, [config, isLoggedIn]);
 
     //External OAUTH Function for handling sign-in
-    const handleExternalOauthSignIn = async () => {
+    const handleExternalOauthSignIn = async (require_mfa: boolean = false) => {
         // Sign in
         setIsLoading(true);
 
@@ -612,20 +613,24 @@ const Auth: React.FC<AuthProps> = (props) => {
         localStorage.setItem("code_verifier", codeVerifier);
 
         try {
-            if (config && config.externalOAuthIdpScope) {
+            if (config && config.externalOAuthIdpScope && config.externalOAuthIdpScopeMfa) {
                 // Start oauth2 flow
                 const authorizeUri = await oauth2Client.authorizationCode.getAuthorizeUri({
                     redirectUri: window.location.href,
                     state: document.location.href,
                     codeVerifier,
-                    scope: [config.externalOAuthIdpScope],
+                    scope: [
+                        require_mfa
+                            ? config.externalOAuthIdpScope + " " + config.externalOAuthIdpScopeMfa
+                            : config.externalOAuthIdpScope,
+                    ],
                 });
 
                 document.location = authorizeUri;
             } else {
                 localStorage.setItem(
                     "auth_error",
-                    "Failed to initialize authorization flow. Missing scope in config."
+                    "Failed to initialize authorization flow. Missing scope or mfa scope in config."
                 );
                 setauthError(localStorage.getItem("auth_error"));
             }
@@ -691,13 +696,27 @@ const Auth: React.FC<AuthProps> = (props) => {
                                     alt="Visual Asset Management System Logo"
                                 />
                             </Heading>
-                            <Button
-                                variant="primary"
-                                className={styles.button}
-                                onClick={handleExternalOauthSignIn}
-                            >
-                                Login
+                            <Button variant="primary" onClick={() => handleExternalOauthSignIn()}>
+                                Log in with SSO
                             </Button>
+                            {config.externalOAuthIdpScopeMfa != undefined &&
+                            config.externalOAuthIdpScopeMfa != "undefined" &&
+                            config.externalOAuthIdpScopeMfa != "" ? (
+                                <>
+                                    <Box
+                                        fontWeight="normal"
+                                        padding={{ top: "xxs", bottom: "xxs" }}
+                                    >
+                                        <span>or</span>
+                                    </Box>
+                                    <Button
+                                        variant="normal"
+                                        onClick={() => handleExternalOauthSignIn(true)}
+                                    >
+                                        Log in with MFA
+                                    </Button>
+                                </>
+                            ) : null}
                         </div>
                         {authError ? (
                             <div className={styles.alertError}>

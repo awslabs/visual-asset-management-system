@@ -196,6 +196,7 @@ export function buildAuthConstraintsFunction(
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             ...environment,
         },
     });
@@ -203,6 +204,7 @@ export function buildAuthConstraintsFunction(
     storageResources.dynamo.assetStorageTable.grantReadData(authServiceFun);
     storageResources.dynamo.databaseStorageTable.grantReadData(authServiceFun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(authServiceFun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(authServiceFun);
     kmsKeyLambdaPermissionAddToResourcePolicy(authServiceFun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(authServiceFun, config);
     return authServiceFun;
@@ -240,6 +242,7 @@ export function buildScopedS3Function(
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             ...environment,
         },
     });
@@ -247,6 +250,7 @@ export function buildScopedS3Function(
     storageResources.dynamo.assetStorageTable.grantReadData(authServiceFun);
     storageResources.dynamo.databaseStorageTable.grantReadData(authServiceFun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(authServiceFun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(authServiceFun);
     kmsKeyLambdaPermissionAddToResourcePolicy(authServiceFun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(authServiceFun, config);
     return authServiceFun;
@@ -330,12 +334,14 @@ export function buildRoutesService(
         environment: {
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             ...environment,
         },
     });
 
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(routesFunc);
     storageResources.dynamo.userRolesStorageTable.grantReadData(routesFunc);
+    storageResources.dynamo.rolesStorageTable.grantReadData(routesFunc);
     kmsKeyLambdaPermissionAddToResourcePolicy(routesFunc, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(routesFunc, config);
 

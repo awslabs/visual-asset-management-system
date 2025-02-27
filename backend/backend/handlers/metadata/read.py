@@ -58,7 +58,7 @@ def get_metadata(databaseId, assetId):
     )
     if "Item" not in resp:
         raise ValidationError(404, "Item Not Found")
-    
+
     # Convert values that are of type decimal to string (to prevent JSON parse errors on response return)
     for key, value in resp['Item'].items():
         if isinstance(value, Decimal):
@@ -79,17 +79,16 @@ def lambda_handler(event, context):
                 and 'prefix' in event['queryStringParameters']):
             prefix = (event['queryStringParameters']
                       and event['queryStringParameters']['prefix'])
-            
+
         queryParameters = event.get('queryStringParameters', {})
         validate_pagination_info(queryParameters)
 
         claims_and_roles = request_to_claims(event)
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if method_allowed_on_api:
             asset_of_metadata = get_asset_object_from_id(assetId)
@@ -99,11 +98,10 @@ def lambda_handler(event, context):
                 asset_of_metadata.update({
                     "object__type": "asset"
                 })
-                for user_name in claims_and_roles["tokens"]:
-                    casbin_enforcer = CasbinEnforcer(user_name)
-                    if casbin_enforcer.enforce(f"user::{user_name}", asset_of_metadata, "GET"):
+                if len(claims_and_roles["tokens"]) > 0:
+                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                    if casbin_enforcer.enforce(asset_of_metadata, "GET"):
                         allowed = True
-                        break
 
                 if allowed:
                     metadata = get_metadata_with_prefix(databaseId, assetId, prefix)

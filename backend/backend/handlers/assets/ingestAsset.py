@@ -143,6 +143,7 @@ def lambda_handler(event, context):
         response['statusCode'] = 400
         response['body'] = json.dumps({"message": message})
         return response
+
     logger.info("Validating parameters")
     (valid, message) = validate({
         'assetPathKey': {
@@ -210,11 +211,10 @@ def lambda_handler(event, context):
 
     logger.info(asset)
 
-    for user_name in claims_and_roles["tokens"]:
-        casbin_enforcer = CasbinEnforcer(user_name)
-        if casbin_enforcer.enforce(f"user::{user_name}", asset, "PUT") and casbin_enforcer.enforceAPI(event):
+    if len(claims_and_roles["tokens"]) > 0:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if casbin_enforcer.enforce(asset, "PUT") and casbin_enforcer.enforceAPI(event):
             operation_allowed_on_asset = True
-            break
 
     if operation_allowed_on_asset:
         try:

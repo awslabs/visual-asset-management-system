@@ -70,11 +70,10 @@ def get_all_pipelines(queryParams, showDeleted=False):
         deserialized_document.update({
             "object__type": "pipeline"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", deserialized_document, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(deserialized_document, "GET"):
                 items.append(deserialized_document)
-                break
 
     result['Items'] = items
 
@@ -113,11 +112,10 @@ def get_pipelines(databaseId, query_params, showDeleted=False):
         item.update({
             "object__type": "pipeline"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", item, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(item, "GET"):
                 result['Items'].append(item)
-                break
 
     if "NextToken" in page_iterator:
         result["NextToken"] = page_iterator["NextToken"]
@@ -141,11 +139,10 @@ def get_pipeline(databaseId, pipelineId, showDeleted=False):
         pipeline.update({
             "object__type": "pipeline"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", pipeline, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(pipeline, "GET"):
                 allowed = True
-                break
 
     return {
         "statusCode": 200 if pipeline and allowed else 404,
@@ -171,11 +168,10 @@ def delete_pipeline(databaseId, pipelineId):
         pipeline.update({
             "object__type": "pipeline"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", pipeline, "DELETE"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(pipeline, "DELETE"):
                 allowed = True
-                break
 
         if allowed:
             logger.info("Deleting pipeline: ")
@@ -320,11 +316,10 @@ def lambda_handler(event, context):
         logger.info(http_method)
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if http_method == 'GET' and method_allowed_on_api:
             return get_handler(event, response, pathParameters, queryParameters, showDeleted)

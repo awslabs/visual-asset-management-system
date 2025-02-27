@@ -31,14 +31,14 @@ def create_update_user(userId, email, lambdaRequestEvent):
             'userId': userId,
             'email': email,
         }
-    
+
     #Override with any custom organization profile information
     userProfileO = customAuthProfileLoginWriteOverride(userProfile, lambdaRequestEvent)
 
     #Do some sanity checks
     if userProfileO == None or userProfileO is not dict:
         userProfileO = userProfile
-    
+
     #Make sure userId wasn't messed with so reset just in case
     userProfileO['userId'] = userId
 
@@ -64,9 +64,8 @@ def lambda_handler(event, _):
     try:
         claims_and_roles = request_to_claims(event)
         authorizerUserId = None
-        for user_name in claims_and_roles["tokens"]:
-            authorizerUserId = user_name
-            break
+        if len(claims_and_roles["tokens"]) > 0:
+            authorizerUserId = claims_and_roles["tokens"][0]
 
         #Format body but body not required
         if 'body' in event:
@@ -86,7 +85,7 @@ def lambda_handler(event, _):
             emailBody = event["body"].get('email')
 
         method = event['requestContext']['http']['method']
-        
+
         #Validation Checks
         logger.info("Validating parameters")
         (valid, message) = validate({
@@ -94,12 +93,12 @@ def lambda_handler(event, _):
                 'value': pathUserId,
                 'validator': 'USERID',
                 #'optional': True
-            },   
+            },
             'email': {
                 'value': emailBody,
                 'validator': 'EMAIL',
                 'optional': True
-            },  
+            },
         })
         if not valid:
             logger.error(message)

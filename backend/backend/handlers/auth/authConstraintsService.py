@@ -50,7 +50,7 @@ def get_constraint(event, response):
 def get_constraints(event, response, query_params):
     paginator = dynamodb.meta.client.get_paginator('query')
 
-    #Change KeyCondition for paginiation due to bug: https://github.com/boto/boto3/issues/2300 
+    #Change KeyCondition for paginiation due to bug: https://github.com/boto/boto3/issues/2300
     page_iterator = paginator.paginate(
         TableName=constraintsTableName,
         ExpressionAttributeNames=keys_attrs,
@@ -123,7 +123,7 @@ def update_constraint(event, response):
 
     if ('criteriaOr' not in event['body'] and 'criteriaAnd' not in event['body']):
         raise ValidationError(404, "Constraint must include criteriaOr or criteriaAnd statements")
-    
+
     totalCriteria = 0
     if 'criteriaOr' in event['body']:
         totalCriteria += len(event['body']['criteriaOr'])
@@ -133,7 +133,7 @@ def update_constraint(event, response):
 
     if (totalCriteria == 0):
         raise ValidationError(404, "Constraint must include criteriaOr or criteriaAnd statements")
-    
+
     if 'criteriaAnd' in event['body']:
         for criteriaAnd in event['body']['criteriaAnd']:
             (valid, message) = validate({
@@ -145,7 +145,7 @@ def update_constraint(event, response):
 
             if not valid:
                 raise ValidationError(400, message)
-        
+
     if 'criteriaOr' in event['body']:
         for criteriaOr in event['body']['criteriaOr']:
             (valid, message) = validate({
@@ -157,7 +157,7 @@ def update_constraint(event, response):
 
             if not valid:
                 raise ValidationError(400, message)
-            
+
     if 'groupPermissions' in event['body']:
         for groupPermission in event['body']['groupPermissions']:
             (valid, message) = validate({
@@ -169,7 +169,7 @@ def update_constraint(event, response):
 
             if not valid:
                 raise ValidationError(400, message)
-            
+
     if 'userPermissions' in event['body']:
         for userPermission in event['body']['userPermissions']:
             (valid, message) = validate({
@@ -245,11 +245,10 @@ def lambda_handler(event, context):
 
         claims_and_roles = request_to_claims(event)
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if not method_allowed_on_api:
             raise ValidationError(403, "Not Authorized")

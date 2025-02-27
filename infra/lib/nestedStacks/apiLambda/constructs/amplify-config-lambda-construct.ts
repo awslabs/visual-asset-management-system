@@ -81,6 +81,11 @@ interface InlineLambdaProps {
     externalOAuthIdpScope?: string;
 
     /**
+     * External OAUTH IDP Scope attribute for MFA Configuration
+     */
+    externalOAuthIdpScopeMfa?: string;
+
+    /**
      * External OAUTH IDP Token Endpoint Configuration
      */
     externalOAuthIdpTokenEndpoint?: string;
@@ -180,6 +185,9 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                         "undefined",
                     externalOAuthIdpScope:
                         props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope ||
+                        "undefined",
+                    externalOAuthIdpScopeMfa:
+                        props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScopeMfa ||
                         "undefined",
                     externalOAuthIdpTokenEndpoint:
                         props.config.app.authProvider.useExternalOAuthIdp

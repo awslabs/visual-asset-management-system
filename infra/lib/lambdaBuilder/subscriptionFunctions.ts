@@ -31,6 +31,7 @@ export function buildSubscriptionService(
     userRolesStorageTable: dynamodb.Table,
     authEntitiesStorageTable: dynamodb.Table,
     userStorageTable: dynamodb.Table,
+    rolesStorageTable: dynamodb.Table,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
@@ -59,6 +60,7 @@ export function buildSubscriptionService(
             AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
             USER_STORAGE_TABLE_NAME: userStorageTable.tableName,
+            ROLES_TABLE_NAME: rolesStorageTable.tableName,
         },
     });
 
@@ -82,6 +84,7 @@ export function buildSubscriptionService(
     assetStorageTable.grantReadWriteData(subscriptionServiceFunction);
     authEntitiesStorageTable.grantReadWriteData(subscriptionServiceFunction);
     userRolesStorageTable.grantReadData(subscriptionServiceFunction);
+    rolesStorageTable.grantReadData(subscriptionServiceFunction);
     userStorageTable.grantReadWriteData(subscriptionServiceFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(subscriptionServiceFunction, kmsKey);
     globalLambdaEnvironmentsAndPermissions(subscriptionServiceFunction, config);
@@ -95,6 +98,7 @@ export function buildCheckSubscriptionFunction(
     assetStorageTable: dynamodb.Table,
     userRolesStorageTable: dynamodb.Table,
     authEntitiesStorageTable: dynamodb.Table,
+    rolesStorageTable: dynamodb.Table,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
@@ -121,12 +125,14 @@ export function buildCheckSubscriptionFunction(
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
             AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: rolesStorageTable.tableName,
         },
     });
     subscriptionsStorageTable.grantReadWriteData(checkSubscriptionService);
     assetStorageTable.grantReadWriteData(checkSubscriptionService);
     authEntitiesStorageTable.grantReadWriteData(checkSubscriptionService);
     userRolesStorageTable.grantReadData(checkSubscriptionService);
+    rolesStorageTable.grantReadData(checkSubscriptionService);
     kmsKeyLambdaPermissionAddToResourcePolicy(checkSubscriptionService, kmsKey);
     globalLambdaEnvironmentsAndPermissions(checkSubscriptionService, config);
     return checkSubscriptionService;
@@ -139,6 +145,7 @@ export function buildUnSubscribeFunction(
     assetStorageTable: dynamodb.Table,
     userRolesStorageTable: dynamodb.Table,
     authEntitiesStorageTable: dynamodb.Table,
+    rolesStorageTable: dynamodb.Table,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
@@ -166,6 +173,7 @@ export function buildUnSubscribeFunction(
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
             AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: rolesStorageTable.tableName,
         },
     });
 
@@ -188,6 +196,7 @@ export function buildUnSubscribeFunction(
     assetStorageTable.grantReadWriteData(unsubscribeServiceFunction);
     authEntitiesStorageTable.grantReadWriteData(unsubscribeServiceFunction);
     userRolesStorageTable.grantReadData(unsubscribeServiceFunction);
+    rolesStorageTable.grantReadData(unsubscribeServiceFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(unsubscribeServiceFunction, kmsKey);
     globalLambdaEnvironmentsAndPermissions(unsubscribeServiceFunction, config);
     return unsubscribeServiceFunction;

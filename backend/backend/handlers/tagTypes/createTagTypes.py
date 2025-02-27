@@ -96,11 +96,10 @@ def lambda_handler(event, context):
             "object__type": "tagType",
             "tagTypeName": event['body']['tagTypeName']
         }
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", tag_type, httpMethod) and casbin_enforcer.enforceAPI(event):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(tag_type, httpMethod) and casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if httpMethod == 'POST' and method_allowed_on_api:
             return create_tag_type(event['body'])

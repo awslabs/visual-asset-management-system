@@ -41,7 +41,7 @@ export function buildRoleService(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            ROLES_STORAGE_TABLE_NAME: rolesStorageTable.tableName,
+            ROLES_TABLE_NAME: rolesStorageTable.tableName,
             AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
         },
@@ -83,7 +83,7 @@ export function buildCreateRoleFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            ROLES_STORAGE_TABLE_NAME: rolesStorageTable.tableName,
+            ROLES_TABLE_NAME: rolesStorageTable.tableName,
             AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
         },

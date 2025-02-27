@@ -48,12 +48,14 @@ export function buildMetadataSchemaService(
                 storageResources.dynamo.metadataSchemaStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
     storageResources.dynamo.databaseStorageTable.grantReadData(fn);
     storageResources.dynamo.metadataSchemaStorageTable.grantReadWriteData(fn);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fn);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fn);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fn);
     kmsKeyLambdaPermissionAddToResourcePolicy(fn, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fn, config);
 
