@@ -213,7 +213,7 @@ export function buildCreateWorkflowFunction(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["iam:PassRole"],
-            resources: [IAMArn("*VAMS*").role],
+            resources: [IAMArn("*vams*").role],
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(

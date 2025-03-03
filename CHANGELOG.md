@@ -33,6 +33,8 @@ Due to VPC subnet breakout changes, this may break existing deployments. It is r
 -   -   **Web** The external IDP login will show a MFA login button if a mfa scope configuration request is defined
 -   **Web** Added capability to set on a role if it requires the the logged in user to have authenticated via MFA in order for any constraints against that role to take effect. If MFA is not turned on in the selected authentication system, this would effectively disable the role as no user would satisfy the criteria.
 -   Added new feature that gives user ability to edit pipelines after initial creation. User also has the option to update all workflows that contain the edited pipeline. EDIT feature can be found as a button on the Pipelines page.
+-   Added a new use-case pipeline and configuration option for `ModelOps` complex tasks such as file format conversions, optimizations for 3D assets, and generating image captures of 3D models.
+-   -   VAMS pipeline registration `inputParameters` will define for each pipeline registration what the output file extension type(s) will be. ModelOps can output multiple file types in one execution. Pipeline can be called by registering 'vamsExecuteModelOps' lambda function with VAMS pipelines / workflows.
 
 ### Bug Fixes
 
