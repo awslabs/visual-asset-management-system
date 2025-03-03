@@ -14,6 +14,7 @@ import { PcPotreeViewerBuilderNestedStack } from "./preview/pcPotreeViewer/pcPot
 import { Metadata3dLabelingNestedStack } from "./genAi/metadata3dLabeling/metadata3dLabelingBuilder-nestedStack";
 import { RapidPipelineNestedStack } from "./multi/rapidPipeline/rapidPipeline-nestedStack";
 import { Conversion3dBasicNestedStack } from "./conversion/3dBasic/conversion3dBasicBuilder-nestedStack";
+import { ModelOpsNestedStack } from "./multi/modelOps/modelOps-nestedStack";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as Config from "../../../config/config";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -80,7 +81,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
         if (
             props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
             props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
-            props.config.app.pipelines.useRapidPipeline.enabled
+            props.config.app.pipelines.useRapidPipeline.enabled ||
+            props.config.app.pipelines.useModelOps.enabled
         ) {
             //Create nested stack for each turned on pipeline
             if (props.config.app.pipelines.usePreviewPcPotreeViewer.enabled) {
@@ -119,6 +121,23 @@ export class PipelineBuilderNestedStack extends NestedStack {
                 //Add function name to array for stack output
                 this.pipelineVamsLambdaFunctionNames.push(
                     genAiMetadata3dLabelingNestedStack.pipelineVamsLambdaFunctionName
+                );
+            }
+
+            if (props.config.app.pipelines.useModelOps.enabled) {
+                const modelOpsNestedStack = new ModelOpsNestedStack(this, "ModelOpsNestedStack", {
+                    ...props,
+                    config: props.config,
+                    storageResources: props.storageResources,
+                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                    vpc: props.vpc,
+                    pipelineSubnetsPrivate: pipelineNetwork.privateSubnets.pipeline,
+                    pipelineSubnetsIsolated: pipelineNetwork.isolatedSubnets.pipeline,
+                    pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                });
+                //Add function name to array for stack output
+                this.pipelineVamsLambdaFunctionNames.push(
+                    modelOpsNestedStack.pipelineVamsLambdaFunctionName
                 );
             }
 
