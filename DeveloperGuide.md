@@ -236,8 +236,8 @@ If you need to deploy VAMS CDK using custom SSL certificates due to internal org
 3. Modify the Dockerbuild files specified and instructed in ![Local Docker BUilds](#Local-Docker-Builds---Custom-Build-Settings) and add the following lines (for Python PIP installs) below. Update `/local/OShost/path/Combined.pem` to the local host path relative to the Dockerfile location.
 
 ```
-COPY /local/OShost/path/Combined.pem /var/task/Combined.crt
-RUN pip config set global.cert /var/task/Combined.crt
+COPY /local/OShost/path/ssl_cert.pem /var/task/ssl_cert.crt
+RUN pip config set global.cert /var/task/ssl_cert.crt
 ```
 
 4. You may need to add additional environment variables to allow using the ceritificate to be used for for `apk install` or `apt-get` system actions.

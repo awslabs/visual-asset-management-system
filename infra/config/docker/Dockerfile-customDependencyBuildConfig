@@ -13,5 +13,5 @@ ARG IMAGE=public.ecr.aws/sam/build-python3.12
 FROM --platform=linux/amd64 $IMAGE
 
 # Add Custom Commands like importing specific SSL certificates below
-#COPY custom_cert.pem /var/task/custom_cert.crt
-#RUN pip config set global.cert /var/task/custom_cert.crt
+#COPY ssl_cert.pem /var/task/ssl_cert.crt
+#RUN pip config set global.cert /var/task/ssl_cert.crt
