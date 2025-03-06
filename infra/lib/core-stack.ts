@@ -39,6 +39,7 @@ export class CoreVAMSStack extends cdk.Stack {
     private webAppBuildPath = "../web/build";
 
     private vpc: ec2.IVpc;
+    private subnetsIsolated: ec2.ISubnet[];
     private subnetsPrivate: ec2.ISubnet[];
     private subnetsPublic: ec2.ISubnet[];
     private vpceSecurityGroup: ec2.ISecurityGroup;
@@ -46,10 +47,16 @@ export class CoreVAMSStack extends cdk.Stack {
     constructor(scope: Construct, id: string, props: EnvProps) {
         super(scope, id, { ...props, crossRegionReferences: true });
 
+        const adminUserId = new cdk.CfnParameter(this, "adminUserId", {
+            type: "String",
+            description: "Admin User ID for login",
+            default: props.config.app.adminUserId,
+        });
+
         const adminEmailAddress = new cdk.CfnParameter(this, "adminEmailAddress", {
             type: "String",
             description:
-                "Email address for login and where your password is sent to. You will be sent a temporary password to authenticate to Cognito.",
+                "Admin Email address for login and where your password is sent to. You will be sent a temporary password to authenticate to Cognito.",
             default: props.config.app.adminEmailAddress,
         });
 
@@ -88,8 +95,8 @@ export class CoreVAMSStack extends cdk.Stack {
         //Select auth provider
         if (props.config.app.authProvider.useCognito.enabled) {
             this.enabledFeatures.push(VAMS_APP_FEATURES.AUTHPROVIDER_COGNITO);
-        } else if (props.config.app.authProvider.useExternalOathIdp.enabled) {
-            this.enabledFeatures.push(VAMS_APP_FEATURES.AUTHPROVIDER_EXTERNALOATHIDP);
+        } else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
+            this.enabledFeatures.push(VAMS_APP_FEATURES.AUTHPROVIDER_EXTERNALOAUTHIDP);
         }
 
         //Deploy VPC (nested stack)
@@ -100,6 +107,7 @@ export class CoreVAMSStack extends cdk.Stack {
 
             this.vpc = vpcBuilderNestedStack.vpc;
             this.vpceSecurityGroup = vpcBuilderNestedStack.vpceSecurityGroup;
+            this.subnetsIsolated = vpcBuilderNestedStack.isolatedSubnets;
             this.subnetsPrivate = vpcBuilderNestedStack.privateSubnets;
             this.subnetsPublic = vpcBuilderNestedStack.publicSubnets;
 
@@ -116,29 +124,31 @@ export class CoreVAMSStack extends cdk.Stack {
             props.config
         );
 
-        //Setup cloud trail and log groups
-        const trailLogGroup = new logs.LogGroup(this, "CloudTrailLogGroup", {
-            logGroupName:
-                "/aws/vendedlogs/VAMSCloudTrailLogs" +
-                generateUniqueNameHash(
-                    props.config.env.coreStackName,
-                    props.config.env.account,
-                    "VAMSCloudTrailLogs",
-                    10
-                ),
-            retention: logs.RetentionDays.TEN_YEARS,
-            removalPolicy: cdk.RemovalPolicy.DESTROY,
-        });
+        //Setup cloud trail and log groups (if enabled)
+        if (props.config.app.addStackCloudTrailLogs) {
+            const trailLogGroup = new logs.LogGroup(this, "CloudTrailLogGroup", {
+                logGroupName:
+                    "/aws/vendedlogs/VAMSCloudTrailLogs" +
+                    generateUniqueNameHash(
+                        props.config.env.coreStackName,
+                        props.config.env.account,
+                        "VAMSCloudTrailLogs",
+                        10
+                    ),
+                retention: logs.RetentionDays.TEN_YEARS,
+                removalPolicy: cdk.RemovalPolicy.DESTROY,
+            });
 
-        const trail = new cloudTrail.Trail(this, "CloudTrail-VAMS", {
-            isMultiRegionTrail: false,
-            bucket: storageResourcesNestedStack.storageResources.s3.accessLogsBucket,
-            s3KeyPrefix: "cloudtrail-logs",
-            sendToCloudWatchLogs: true, //AppSec requirements
-            cloudWatchLogGroup: trailLogGroup, //AppSec requirements
-        });
-        trail.logAllLambdaDataEvents();
-        trail.logAllS3DataEvents();
+            const trail = new cloudTrail.Trail(this, "CloudTrail-VAMS", {
+                isMultiRegionTrail: false,
+                bucket: storageResourcesNestedStack.storageResources.s3.accessLogsBucket,
+                s3KeyPrefix: "cloudtrail-logs",
+                sendToCloudWatchLogs: true, //AppSec requirements
+                cloudWatchLogGroup: trailLogGroup, //AppSec requirements
+            });
+            trail.logAllLambdaDataEvents();
+            trail.logAllS3DataEvents();
+        }
 
         //Deploy Lambda Layers (nested stack)
         const lambdaLayers = new LambdaLayersBuilderNestedStack(this, "LambdaLayers", {});
@@ -154,7 +164,7 @@ export class CoreVAMSStack extends cdk.Stack {
             storageResources: storageResourcesNestedStack.storageResources,
             config: props.config,
             vpc: this.vpc,
-            subnets: this.subnetsPrivate,
+            subnets: this.subnetsIsolated,
         });
 
         //Ignore stacks if we are only loading context (mostly for Imported VPC)
@@ -171,7 +181,7 @@ export class CoreVAMSStack extends cdk.Stack {
             const staticWebBuilderNestedStack = new StaticWebBuilderNestedStack(this, "StaticWeb", {
                 config: props.config,
                 vpc: this.vpc,
-                subnetsPrivate: this.subnetsPrivate,
+                subnetsIsolated: this.subnetsIsolated,
                 subnetsPublic: this.subnetsPublic,
                 webAppBuildPath: this.webAppBuildPath,
                 apiUrl: apiNestedStack.apiEndpoint,
@@ -192,7 +202,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 lambdaLayers.lambdaCommonBaseLayer,
                 lambdaLayers.lambdaCommonServiceSDKLayer,
                 this.vpc,
-                this.subnetsPrivate
+                this.subnetsIsolated
             );
 
             //Deploy OpenSearch Serverless (nested stack)
@@ -205,7 +215,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 storageResourcesNestedStack.storageResources,
                 lambdaLayers.lambdaCommonBaseLayer,
                 this.vpc,
-                this.subnetsPrivate
+                this.subnetsIsolated
             );
 
             //Set feature for no opensearch in neither provisioned or serverless selected
@@ -227,7 +237,8 @@ export class CoreVAMSStack extends cdk.Stack {
                     lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
                     vpc: this.vpc,
                     vpceSecurityGroup: this.vpceSecurityGroup,
-                    subnets: this.subnetsPrivate,
+                    isolatedSubnets: this.subnetsIsolated,
+                    privateSubnets: this.subnetsPrivate,
                 }
             );
 
@@ -279,7 +290,7 @@ export class CoreVAMSStack extends cdk.Stack {
             ];
 
             for (const path of refactorPaths) {
-                const reason = `Intention is to refactor this model away moving forward 
+                const reason = `Intention is to refactor this model away moving forward
                 so that this type of access is not required within the stack.
                 Customers are advised to isolate VAMS to its own account in test and prod
                 as a substitute to tighter resource access.`;
@@ -302,7 +313,10 @@ export class CoreVAMSStack extends cdk.Stack {
         }
 
         //Deploy Location Services (Nested Stack) and setup feature enabled
-        if (props.config.app.useLocationService.enabled) {
+        if (
+            props.config.app.useLocationService.enabled &&
+            props.config.app.authProvider.useCognito.enabled
+        ) {
             const locationServiceNestedStack = new LocationServiceNestedStack(
                 this,
                 "LocationService",
@@ -339,27 +353,29 @@ export class CoreVAMSStack extends cdk.Stack {
             });
         }
 
-        const authCognitoUserPoolIdParamsOutput = new cdk.CfnOutput(
-            this,
-            "AuthCognito_UserPoolId",
-            {
-                value: authBuilderNestedStack.authResources.cognito.userPoolId,
-            }
-        );
-        const authCognitoIdentityPoolIdParamsOutput = new cdk.CfnOutput(
-            this,
-            "AuthCognito_IdentityPoolId",
-            {
-                value: authBuilderNestedStack.authResources.cognito.identityPoolId,
-            }
-        );
-        const authCognitoUserWebClientIdParamsOutput = new cdk.CfnOutput(
-            this,
-            "AuthCognito_WebClientId",
-            {
-                value: authBuilderNestedStack.authResources.cognito.webClientId,
-            }
-        );
+        if (props.config.app.authProvider.useCognito.enabled) {
+            const authCognitoUserPoolIdParamsOutput = new cdk.CfnOutput(
+                this,
+                "AuthCognito_UserPoolId",
+                {
+                    value: authBuilderNestedStack.authResources.cognito.userPoolId,
+                }
+            );
+            const authCognitoIdentityPoolIdParamsOutput = new cdk.CfnOutput(
+                this,
+                "AuthCognito_IdentityPoolId",
+                {
+                    value: authBuilderNestedStack.authResources.cognito.identityPoolId,
+                }
+            );
+            const authCognitoUserWebClientIdParamsOutput = new cdk.CfnOutput(
+                this,
+                "AuthCognito_WebClientId",
+                {
+                    value: authBuilderNestedStack.authResources.cognito.webClientId,
+                }
+            );
+        }
 
         const assetBucketOutput = new cdk.CfnOutput(this, "AssetS3BucketNameOutput", {
             value: storageResourcesNestedStack.storageResources.s3.assetBucket.bucketName,
@@ -395,15 +411,15 @@ export class CoreVAMSStack extends cdk.Stack {
         this.node.findAll().forEach((item) => {
             if (item instanceof cdk.aws_lambda.Function) {
                 const fn = item as cdk.aws_lambda.Function;
-                // python3.9 + 3.11 suppressed for CDK Bucket Deployment
-                // python3.10 + 3.12 suppressed for all lambdas due to restriction on file size when going over 3.10 currently (implement layer code reduction size functionality)
+                // python3.11 suppressed for CDK Bucket Deployment which is fixed to python 3.11 (https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.aws_s3_deployment/README.html)
+                // python3.12 suppressed for all other lambdas. Latest version for non-breaking changes as of 10/2024.
                 // nodejs18.x suppressed for use of custom resource to deploy saml in CustomCognitoConfigConstruct
+                // nodejs20.x suppressed for use of custom resource to deploy saml in CustomCognitoConfigConstruct
                 if (
-                    fn.runtime.name === "python3.9" ||
-                    fn.runtime.name === "python3.10" ||
                     fn.runtime.name === "python3.11" ||
                     fn.runtime.name === "python3.12" ||
-                    fn.runtime.name === "nodejs18.x"
+                    fn.runtime.name === "nodejs18.x" ||
+                    fn.runtime.name === "nodejs20.x"
                 ) {
                     //console.log(item.node.path,fn.runtime.name)
                     NagSuppressions.addResourceSuppressions(fn, [

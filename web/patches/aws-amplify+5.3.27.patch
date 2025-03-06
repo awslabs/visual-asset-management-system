@@ -1,0 +1,78 @@
+diff --git a/node_modules/@aws-amplify/auth/lib-esm/Auth.js b/node_modules/@aws-amplify/auth/lib-esm/Auth.js
+index 35e00d7..08e59ec 100644
+--- a/node_modules/@aws-amplify/auth/lib-esm/Auth.js
++++ b/node_modules/@aws-amplify/auth/lib-esm/Auth.js
+@@ -163,6 +163,9 @@ var AuthClass = /** @class */ (function () {
+                 if (usedResponseUrls_1[url]) {
+                     return;
+                 }
++
++                if (window.DISABLE_COGNITO) { return; }
++
+                 usedResponseUrls_1[url] = true;
+                 _this._handleAuthResponse(url);
+             });
+@@ -431,6 +434,26 @@ var AuthClass = /** @class */ (function () {
+             }, clientMetadata);
+         });
+     };
++    AuthClass.prototype.setUserSession = function (user, accessToken) {
++        console.log('setUserSession', user);
++
++        const session = new CognitoUserSession({
++            IdToken: new CognitoIdToken({ IdToken: accessToken }),
++            RefreshToken: new CognitoRefreshToken({
++                RefreshToken: accessToken,
++            }),
++            AccessToken: new CognitoAccessToken({
++                AccessToken: accessToken,
++            }),
++        });
++
++        this.Credentials.set(session, 'session');
++
++        this.user = user;
++
++        Hub.dispatch('auth', { event: 'signIn', data: this.user, message: 'User was signed in' }, 'Auth', AMPLIFY_SYMBOL);
++        //dispatchAuthEvent('signIn', user, "A user " + user.getUsername() + " has been signed in");
++    },
+     /**
+      * Sign in
+      * @param {String | SignInOpts} usernameOrSignInOpts - The username to be signed in or the sign in options
+@@ -1716,6 +1739,7 @@ var AuthClass = /** @class */ (function () {
+      * @return - A promise resolves to the session
+      */
+     AuthClass.prototype.userSession = function (user) {
++        console.log('userSession');
+         return this._userSession(user);
+     };
+     /**
+diff --git a/node_modules/@aws-amplify/core/lib-esm/Credentials.js b/node_modules/@aws-amplify/core/lib-esm/Credentials.js
+index 6f1a95b..dd740ac 100644
+--- a/node_modules/@aws-amplify/core/lib-esm/Credentials.js
++++ b/node_modules/@aws-amplify/core/lib-esm/Credentials.js
+@@ -437,6 +437,24 @@ var CredentialsClass = /** @class */ (function () {
+         return this._loadCredentials(credentials, 'federated', true, params);
+     };
+     CredentialsClass.prototype._setCredentialsFromSession = function (session) {
++        console.log('_setCredentialsFromSession', session);
++        if (window.DISABLE_COGNITO) {
++            console.log('will not _setCredentialsFromSession');
++
++            var idToken = session.getIdToken().getJwtToken()
++
++            this._storage.setItem('aws-amplify-federatedInfo', JSON.stringify({
++                provider: 'custom',
++                token: idToken,
++                user: {
++                    'username': 'me'
++                },
++                //expires_at: expires_at,
++                identity_id: 'identity_id',
++            }));
++                                
++            return;
++        }
+         var _this = this;
+         logger.debug('set credentials from session');
+         var idToken = session.getIdToken().getJwtToken();

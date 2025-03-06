@@ -2,6 +2,71 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.2.0] (2025-03-31)
+
+This minor version includes changes to VAMS infrastructure, authentication, web UI, pipelines, use-case pipeline implementations, and v2.0+ bug fixes.
+
+### ⚠ BREAKING CHANGES
+
+Due to VPC subnet breakout changes, this may break existing deployments. It is recommended to use an A/B deployment if you run into subnet configuration issues.
+
+**Recommended Upgrade Path:** A/B Stack Deployment with data migration using staging bucket configuration and upgrade migration scripts for DynamoDB tables in `./infra/upgradeMigrationScripts`
+
+### Features
+
+-   Changed VPC subnet to now break out subnets for isolated, private, and public. Previously, only private (which was actually isolated) and public existed.
+-   -   For those using external VPC and subnet import configuration, previously private subnet IDs should now be copied into isolated subnets configuration option.
+-   Added a new use-case pipeline and configuration option for `RapidPipeline` that optimizes 3D assets using mesh decimation & remeshing, texture baking, UV aggregation, and more.
+-   -   RapidPipeline can also convert assets between GLTF, GLB, USD, OBJ, FBX, VRM, STL, and PLY file types.
+-   -   Pipeline can be called by registering 'vamsExecuteRapidPipeline' lambda function with VAMS pipelines / workflows.
+-   Updated backend infrastructure configuration options and functionality to support External OAuth IDP systems besides AWS Cognito. Includes many additional infrastructure configuration settings.
+-   **Web** Added web support for External OAuth IDP configuration
+-   Added configuration option `addStackCloudTrailLogs` for creating AWS CloudTrail log groups and trails for the stack. This is defaulted to `true`.
+-   Added configuration option `useAlb.addAlbS3SpecialVpcEndpoint` for creating the special S3 VPC Interface Endpoint for ALB deployment configurations. This is defaulted to `true`. See documentation for this setting if turned off.
+-   **Web** Added infrastructure configuration option `webUi.optionalBannerHtmlMessage` for adding a persistent banner (HTML) message at the top of the WebUI
+-   **Web** Added capability to define which tag types are required to be added to an asset. If tag types are required, at least one of the defined tags on the tag type must always be included on the asset.
+-   The ingestAsset API now supports passing in tags (to support required tag types)
+-   Changed UserId to no longer need to be an email, added a new LoginProfile table to track user emails for notification service which gets updated from JWT tokens or organization custom logic for retrieving user emails. New API for updating LoginProfile added to web login.
+-   Enabled Cognito user pool optional Multi-Factor Authentication (MFA) for created accounts across TOTP or SMS. **Note:** SMS sending requires additional AWS Cognito / SNS setup to a SNS production account and origination identity (if sending to US phone #'s).
+-   -   Added backend broken out custom logic and flag to know if a user is logged in with MFA or not. For external OAuth IDP implementations, this logic must be tailored to the IDP system.
+
+### Bug Fixes
+
+-   Fixed permission caching in lambdas to actually reset caches after 30 seconds per lambda per user. Currently since v2.0 caches have been invalidating inconsistently.
+-   Fixed opensearch lambda event source mapping for regions that don't support event source tagging yet (i.e., GovCloud) [bug introduced in v2.1.0 with CDK version upgrade]
+-   Additional checks are made for valid parameter data in the asset deletion/archiving service
+-   Fixed local web local development support, updated documentation for new local development processes
+-   Fixed numerous lambda functions that were not adhering to the VPC/subnet configuration options for placing behind a VPC from v2.0 update
+-   Fixed more validation bugs to ensure API fields that take in arrays are actually arrays
+-   Miscellaneous minor bug fixes across web and backend components
+
+### Chores
+
+-   **Web** Cleaned up unused web files and consolidated functionalities for authentication and amplify configuration setting
+-   Upgraded lambda and all associated libraries (including use-case pipelines) to use Python 3.12 runtimes
+-   Upgraded infrastructure NPM package dependencies
+-   Optimized some backend lambda initialization code in various functions and globally in the casbin authorization functions for cold start performance improvement
+-   Updated S3 bucket name for WebAppAccessLogs for ALB deployment (to be based on the domain name used `<ALBDomainName>-webappaccesslogs`) to help with organization policy exceptions
+-   Added scripts and documentation for external oauth IDP and API local development servers
+-   **Web** Turned on amplify gen1 Secure Cookie storage option
+-   Updated docker file(s) environment variables to not use legacy format (old: ENV key value, new: ENV key=value)
+-   Updated GenAIMetadataLabeling pipeline container to use the latest blender version when deploying due to Alpine APK restrictions on holding earlier versions
+-   Switched web API calls to use Cognito user access token for all requests authorizations instead of Id token. Created separate parameter for scopedS3Access to pass in ID token for this specific API call that needs it.
+
+## [2.1.1] (2025-01-17)
+
+This hotfix version includes bug fixes related to dependency tools and library updates.
+
+This release may require a installation of the latest aws-cdk library to either your global npm or as part of your local VAMS infra folder. Please re-run "npm install" in VAMS infra to install the latest local dependencies for existing deployments.
+
+### Bug Fixes
+
+-   Fixed and added Poetry export plugin library used during Lambda layer building due to Poetry no longer including "export" as part of the core library.
+-   Fixed Dockerfile container environment variable formats to no longer use the deprecated Docker format. `ENV KEY VALUE` -> `ENV KEY=VALUE`
+-   Fixed 3D Metadata Labeling pipeline use-case to use the latest Blender version due to Alpine APK support deprecation for earlier specified versions.
+-   Fixed 3D Metadata Labeling pipeline use-case state machine Lambda to not hard-code the `us-east-1` region for IAM role resource permission and use the stack-deployed region instead.
+-   Updated aws-cdk dependency versions to the latest and updated GitHub CI/CD pipeline build checks
+
 ## [2.1.0] (2024-11-15)
 
 This minor version includes changes to VAMS pipelines, use-case pipeline implementations, and v2.0 bug fixes.

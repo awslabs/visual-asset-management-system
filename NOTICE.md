@@ -117,3 +117,9 @@ Other Libraries (Use-case Pipelines)
 | PDAL            | [pdal@master-latest] (https://github.com/PDAL/PDAL)                          | POTREE VIEWER                | BSD          |
 | PotreeConverter | [potreeconverter@develop-latest] (https://github.com/potree/PotreeConverter) | POTREE VIEWER                | BSD-2-Clause |
 | Blender         | [blender@master-latest] (https://github.com/blender)                         | GENAI 3D METADATA GENERATION | GNU GPLv3    |
+
+Third Party Products
+
+| Name                       | Version                                                                                                              | Related Pipeline | Licenses |
+| :------------------------- | :------------------------------------------------------------------------------------------------------------------- | :--------------- | :------- |
+| RapidPipeline 3D Processor | [0.0.4](https://aws.amazon.com/marketplace/pp/prodview-zdg4blxeviyyi?sr=0-1&ref_=beagle&applicationId=AWSMPContessa) | RAPID PIPELINE   | Custom   |

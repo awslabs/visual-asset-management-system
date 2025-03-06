@@ -3,6 +3,9 @@
 
 FROM --platform=linux/amd64 condaforge/mambaforge:latest as build
 
+#Create appuser for container runtime processes
+RUN adduser --system appuser 
+
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 
 RUN conda create -n pdal -y
@@ -54,7 +57,7 @@ RUN conda-pack -n pdal --dest-prefix=/opt/conda/envs/pdal -o  /tmp/env.tar && \
 
 FROM condaforge/miniforge3
 
-ENV CONDAENV "/opt/conda/envs/pdal"
+ENV CONDAENV="/opt/conda/envs/pdal"
 COPY --from=build /venv "/opt/conda/envs/pdal"
 
 ENV PROJ_NETWORK=TRUE
@@ -62,7 +65,7 @@ ENV PROJ_DATA="${CONDAENV}/share/proj"
 ENV GDAL_DATA="${CONDAENV}/share/gdal"
 ENV GEOTIFF_CSV="${CONDAENV}/share/epsg_csv"
 ENV GDAL_DRIVER_PATH="${CONDAENV}/lib/gdalplugins"
-ENV PATH $PATH:${CONDAENV}/bin
+ENV PATH=$PATH:${CONDAENV}/bin
 ENV GTIFF_REPORT_COMPD_CS=TRUE
 ENV REPORT_COMPD_CS=TRUE
 ENV OAMS_TRADITIONAL_GIS_ORDER=TRUE
@@ -73,6 +76,8 @@ COPY ./ ./pc_pipeline
 #Install requirements (boto3, etc.)
 RUN conda install -c conda-forge --file ./pc_pipeline/requirements.txt
 
-SHELL ["conda", "run", "--no-capture-output", "-n", "pdal", "/bin/sh", "-c"]
+#Switch suer to app user for runtime operations
+USER appuser
 
+SHELL ["conda", "run", "--no-capture-output", "-n", "pdal", "/bin/sh", "-c"]
 ENTRYPOINT ["python3", "-m", "pc_pipeline"]

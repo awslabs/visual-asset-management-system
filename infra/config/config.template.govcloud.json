@@ -10,9 +10,11 @@
         "bucketMigrationStaging": {
             "assetBucketName": null
         },
+        "adminUserId": "administrator",
         "adminEmailAddress": "adminEmail@example.com",
         "useFips": true,
         "useWaf": true,
+        "addStackCloudTrailLogs": true,
         "useKmsCmkEncryption": {
             "enabled": true,
             "optionalExternalCmkArn": null
@@ -25,6 +27,7 @@
             "useForAllLambdas": true,
             "addVpcEndpoints": true,
             "optionalExternalVpcId": null,
+            "optionalExternalIsolatedSubnetIds": null,
             "optionalExternalPrivateSubnetIds": null,
             "optionalExternalPublicSubnetIds": null,
             "vpcCidrRange": "10.1.0.0/16"
@@ -46,19 +49,24 @@
         "useAlb": {
             "enabled": true,
             "usePublicSubnet": false,
+            "addAlbS3SpecialVpcEndpoint": true,
             "domainHost": "vams1.example.com",
             "certificateArn": "arn:aws-us-gov:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>",
             "optionalHostedZoneId": null
         },
         "pipelines": {
             "useConversion3dBasic": {
-                "enabled": false
+                "enabled": true
             },
             "usePreviewPcPotreeViewer": {
                 "enabled": false
             },
             "useGenAiMetadata3dLabeling": {
                 "enabled": false
+            },
+            "useRapidPipeline": {
+                "enabled": false,
+                "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>:<IMAGE-TAG>"
             }
         },
         "authProvider": {
@@ -68,10 +76,22 @@
                 "useSaml": false,
                 "useUserPasswordAuthFlow": false
             },
-            "useExternalOathIdp": {
+            "useExternalOAuthIdp": {
                 "enabled": false,
-                "idpAuthProviderUrl": null
+                "idpAuthProviderUrl": null,
+                "idpAuthClientId": null,
+                "idpAuthProviderScope": null,
+                "idpAuthProviderScopeMfa": null,
+                "idpAuthPrincipalDomain": null,
+                "idpAuthProviderTokenEndpoint": null,
+                "idpAuthProviderAuthorizationEndpoint": null,
+                "idpAuthProviderDiscoveryEndpoint": null,
+                "lambdaAuthorizorJWTIssuerUrl": null,
+                "lambdaAuthorizorJWTAudience": null
             }
+        },
+        "webUi": {
+            "optionalBannerHtmlMessage": ""
         }
     }
 }

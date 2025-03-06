@@ -60,6 +60,9 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                     createdOn: {
                         S: new Date().toISOString(),
                     },
+                    mfaRequired: {
+                        BOOL: false
+                    }
                 },
                 //ConditionExpression: "attribute_not_exists(id)",
             },
@@ -290,6 +293,22 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                                 value: {
                                     S: "/auth/routes", //Technically not needed as no authorization but including anyway
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `2a_${roleNameIDClean}_api_paths`,
+                                },
+                                operator: {
+                                    S: "starts_with",
+                                },
+                                value: {
+                                    S: "/auth/loginProfile", //Technically not needed as no authorization currently but including anyway (auth is based on authenticated user)
                                 },
                             },
                         },

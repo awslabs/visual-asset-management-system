@@ -35,7 +35,7 @@ def check_subscriptions(body):
     result = subscription_table.query(
         IndexName='eventName-entityName_entityId-index',
         KeyConditionExpression='#entityNameId = :entityNameId AND #eventName = :eventName',
-        FilterExpression='contains(#subscribers, :emailId)',
+        FilterExpression='contains(#subscribers, :userId)',
         ExpressionAttributeNames={
             '#entityNameId': 'entityName_entityId',
             '#eventName': 'eventName',
@@ -44,7 +44,7 @@ def check_subscriptions(body):
         ExpressionAttributeValues={
             ':entityNameId': f'{entity_name}#{body["assetId"]}',
             ':eventName': event_name,
-            ':emailId': body["userId"],
+            ':userId': body["userId"],
         }
     )
 
@@ -75,7 +75,7 @@ def lambda_handler(event, context):
         (valid, message) = validate({
             'userId': {
                 'value': event['body']['userId'],
-                'validator': 'EMAIL'
+                'validator': 'USERID'
             },
             'assetId': {
                 'value': event['body']['assetId'],
@@ -94,10 +94,10 @@ def lambda_handler(event, context):
 
         asset_object = get_asset_object_from_id(event['body']["assetId"])
         asset_object.update({"object__type": "asset"})
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if (casbin_enforcer.enforceAPI(event) and
-                    casbin_enforcer.enforce(f"user::{user_name}", asset_object, "GET")):
+                    casbin_enforcer.enforce(asset_object, "GET")):
                 method_allowed_on_api = True
 
         if method_allowed_on_api and httpMethod == 'POST':

@@ -5,7 +5,7 @@
 
 import React, { Suspense, useEffect, useState } from "react";
 import { Route, Routes, useLocation } from "react-router-dom";
-import { API } from "aws-amplify";
+import { webRoutes } from "./services/APIService";
 import AppLayout from "@cloudscape-design/components/app-layout";
 import { Navigation } from "./layout/Navigation";
 import LandingPage from "./pages/LandingPage";
@@ -14,7 +14,7 @@ import { useNavigate } from "react-router";
 
 const Databases = React.lazy(() => import("./pages/Databases"));
 const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
-const Assets = React.lazy(() => import("./pages/Assets")); //Deprecated
+//const Assets = React.lazy(() => import("./pages/Assets")); //Deprecated
 const Comments = React.lazy(() => import("./pages/Comments/Comments"));
 const AssetUploadPage = React.lazy(() => import("./pages/AssetUpload"));
 const ViewAsset = React.lazy(() => import("./components/single/ViewAsset"));
@@ -41,7 +41,7 @@ interface RouteOption {
     active: string;
 }
 
-const routeTable: RouteOption[] = [
+export const routeTable: RouteOption[] = [
     { path: "/", Page: LandingPage, active: "/" },
     { path: "/search", Page: SearchPage, active: "/" },
     { path: "/search/:databaseId/assets", Page: SearchPage, active: "/" },
@@ -193,6 +193,7 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
     //Note: This will null out any state passing for the naviagation and may break a a state passing page if triggered
     useEffect(() => {
         console.log("Location changed: ", window.location.href);
+        console.log("user", user);
 
         const hashes = window.location.href.match(/#/g) || [];
         console.log("Hash Count in URL: ", hashes.length);
@@ -239,22 +240,28 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
         }
 
         try {
-            API.post("api", `auth/routes`, {
-                body: {
-                    routes: allRoutes,
-                },
-            }).then((value) => {
-                for (let allowedRoute of value.allowedRoutes) {
-                    allAllowedRoutes.push(allowedRoute.route__path);
-                }
+            webRoutes({ routes: allRoutes })
+                .then((value) => {
+                    if (value[0] === false) {
+                        throw new Error("webRoutes - " + value[1]);
+                    }
 
-                //If allowed routes doesn't contain * or / for the landing page, add that back so all users can get to the landing information page
-                if (!allAllowedRoutes.includes("/")) allAllowedRoutes.push("/");
-                if (!allAllowedRoutes.includes("*")) allAllowedRoutes.push("*");
+                    for (let allowedRoute of value.allowedRoutes) {
+                        allAllowedRoutes.push(allowedRoute.route__path);
+                    }
 
-                setAllowedRoutes(allAllowedRoutes);
-                setLoading(false);
-            });
+                    //If allowed routes doesn't contain * or / for the landing page, add that back so all users can get to the landing information page
+                    if (!allAllowedRoutes.includes("/")) allAllowedRoutes.push("/");
+                    if (!allAllowedRoutes.includes("*")) allAllowedRoutes.push("*");
+
+                    setAllowedRoutes(allAllowedRoutes);
+                    setLoading(false);
+                })
+                .catch((error) => {
+                    console.error(error);
+                    setAllowedRoutes([]);
+                    setLoading(false);
+                });
         } catch (e) {}
     }, []);
 

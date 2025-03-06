@@ -68,18 +68,27 @@ export class CognitoWebNativeConstructStack extends Construct {
                 ASSET_STORAGE_TABLE_NAME: props.storageResources.dynamo.assetStorageTable.tableName,
                 DATABASE_STORAGE_TABLE_NAME:
                     props.storageResources.dynamo.databaseStorageTable.tableName,
+                ROLES_TABLE_NAME: props.storageResources.dynamo.rolesStorageTable.tableName,
             },
         });
         props.storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(
             preTokenGeneration
         );
         props.storageResources.dynamo.userRolesStorageTable.grantReadData(preTokenGeneration);
+        props.storageResources.dynamo.rolesStorageTable.grantReadData(preTokenGeneration);
 
         const message =
             "Hello, Thank you for registering with your instance of Visual Asset Management System! Your verification code is:  {####}  ";
         const userPool = new cognito.UserPool(this, "UserPool", {
             selfSignUpEnabled: false,
             autoVerify: { email: true },
+            mfa: cognito.Mfa.OPTIONAL,
+            mfaSecondFactor: {
+                otp: true,
+                sms: true,
+                email: false,
+            },
+            accountRecovery: cognito.AccountRecovery.PHONE_WITHOUT_MFA_AND_EMAIL,
             userVerification: {
                 emailSubject: "Verify your email with Visual Asset Management System!",
                 emailBody: message,
@@ -229,7 +238,7 @@ export class CognitoWebNativeConstructStack extends Construct {
         );
 
         const cognitoUser = new cognito.CfnUserPoolUser(this, "AdminUser", {
-            username: props.config.app.adminEmailAddress,
+            username: props.config.app.adminUserId,
             userPoolId: userPool.userPoolId,
             desiredDeliveryMediums: ["EMAIL"],
             userAttributes: [
@@ -288,6 +297,18 @@ export class CognitoWebNativeConstructStack extends Construct {
         this.userPoolId = userPool.userPoolId;
         this.identityPoolId = identityPool.ref;
         this.webClientId = userPoolWebClient.userPoolClientId;
+
+        //Nag supressions
+        NagSuppressions.addResourceSuppressions(
+            userPool,
+            [
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason: "Intend to use Cognito SMS Role as-is.",
+                },
+            ],
+            true
+        );
     }
 
     private createAuthenticatedRole(

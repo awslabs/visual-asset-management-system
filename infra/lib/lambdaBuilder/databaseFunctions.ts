@@ -13,7 +13,10 @@ import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as kms from "aws-cdk-lib/aws-kms";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
-import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../helper/security";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
+} from "../helper/security";
 
 export function buildCreateDatabaseLambdaFunction(
     scope: Construct,
@@ -44,13 +47,16 @@ export function buildCreateDatabaseLambdaFunction(
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(createDatabaseFunction);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(createDatabaseFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(createDatabaseFunction);
+    storageResources.dynamo.rolesStorageTable.grantReadData(createDatabaseFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(createDatabaseFunction, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(createDatabaseFunction, config);
     return createDatabaseFunction;
 }
 
@@ -86,6 +92,7 @@ export function buildDatabaseService(
             WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
@@ -95,7 +102,9 @@ export function buildDatabaseService(
     storageResources.dynamo.assetStorageTable.grantReadData(databaseService);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(databaseService);
     storageResources.dynamo.userRolesStorageTable.grantReadData(databaseService);
+    storageResources.dynamo.rolesStorageTable.grantReadData(databaseService);
     kmsKeyLambdaPermissionAddToResourcePolicy(databaseService, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(databaseService, config);
 
     return databaseService;
 }

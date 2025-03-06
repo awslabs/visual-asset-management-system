@@ -30,6 +30,8 @@ export const modelFileFormats = [
     ".bim",
     ".ifc",
     ".amf",
+    ".usdz",
+    ".usd",
 ];
 export const columnarFileFormats = [".rds", ".fcs", ".csv"];
 export const imageFileFormats = [".png", ".jpg", ".svg", ".gif"];

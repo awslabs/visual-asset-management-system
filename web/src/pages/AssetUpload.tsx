@@ -34,7 +34,10 @@ import DatabaseSelector from "../components/selectors/DatabaseSelector";
 import { previewFileFormats } from "../common/constants/fileFormats";
 import { Metadata } from "../components/single/Metadata";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
-import { validateNonZeroLengthTextAsYouType } from "./AssetUpload/validations";
+import {
+    validateNonZeroLengthTextAsYouType,
+    validateRequiredTagTypeSelected,
+} from "./AssetUpload/validations";
 import { DisplayKV, FileUpload } from "./AssetUpload/components";
 import ProgressScreen from "./AssetUpload/ProgressScreen";
 import ControlledMetadata from "../components/metadata/ControlledMetadata";
@@ -43,12 +46,14 @@ import onSubmit, { onUploadRetry, UploadExecutionProps } from "./AssetUpload/onS
 import FolderUpload from "../components/form/FolderUpload";
 import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./AssetUpload/FileUploadTable";
 import localforage from "localforage";
-import { fetchTags, fetchAllAssets } from "../services/APIService";
+import { fetchTags, fetchAllAssets, fetchtagTypes } from "../services/APIService";
 import CustomTable from "../components/table/CustomTable";
 import { featuresEnabled } from "../common/constants/featuresEnabled";
+import { TagType } from "./Tag/TagType.interface";
 
 const previewFileFormatsStr = previewFileFormats.join(", ");
 var tags: any[] = [];
+var tagTypes: TagType[] = [];
 var assetOptions: { label: string; value: string }[] = [];
 var assetTags: string[] = [];
 
@@ -367,11 +372,15 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
         databaseId?: string;
         description?: string;
         Comment?: string;
-        tags?: string[];
+        tags?: string;
     }>({});
     const [selectedTags, setSelectedTags] = useState<OptionDefinition[]>(
         assetDetailState.frontendTags as OptionDefinition[]
     );
+    const [constraintText, setConstraintText] = useState<{
+        tags?: string;
+    }>({});
+    const [tagsValid, setTagsValid] = useState(true);
 
     // Default `Comment` to an empty string so that it's optional and passes API validation
     useEffect(() => {
@@ -396,14 +405,22 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
             databaseId: validateNonZeroLengthTextAsYouType(assetDetailState.databaseId),
             description: validateNonZeroLengthTextAsYouType(assetDetailState.description),
             Comment: "",
+            tags: validateRequiredTagTypeSelected(assetDetailState.tags, tagTypes),
         };
         setValidationText(validation);
+
+        // Handle displaying error when tag is selected
+        if (validation.tags && assetDetailState?.tags?.length) {
+            // If the validation.tags string contains text and there are selected tags, it is not valid
+            setTagsValid(false);
+        }
 
         const isValid = !(
             validation.assetId ||
             validation.databaseId ||
             validation.description ||
-            validation.Comment
+            validation.Comment ||
+            validation.tags
         );
         setValid(isValid);
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -412,7 +429,36 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
         assetDetailState.assetId,
         assetDetailState.databaseId,
         assetDetailState.description,
+        assetDetailState.tags,
     ]);
+
+    useEffect(() => {
+        // Get Tag Types to enforce when they are required
+        tagTypes = [];
+
+        fetchtagTypes().then((res) => {
+            tagTypes = res;
+
+            if (tagTypes.length) {
+                const requiredTagTypes = tagTypes.filter((tagType) => tagType.required === "True");
+
+                if (requiredTagTypes.length) {
+                    // Set constraint text if there are required tag types
+                    setConstraintText({
+                        tags:
+                            "The following tag types, listed in parentheses, require at least one selection: " +
+                            requiredTagTypes.map((tagType) => tagType.tagTypeName).join(", "),
+                    });
+
+                    // Set initial validation text
+                    setValidationText({
+                        ...validationText,
+                        tags: validateRequiredTagTypeSelected(assetDetailState.tags, tagTypes),
+                    });
+                }
+            }
+        });
+    }, []);
 
     return (
         <Container header={<Header variant="h2">{Synonyms.Asset} Details</Header>}>
@@ -493,7 +539,12 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
                         data-testid="asset-description-textarea"
                     />
                 </FormField>
-                <FormField label="Tags">
+
+                <FormField
+                    label="Tags"
+                    constraintText={constraintText.tags}
+                    errorText={showErrors || !tagsValid ? validationText.tags : null}
+                >
                     <Multiselect
                         selectedOptions={selectedTags}
                         onChange={({ detail }) => {
@@ -518,6 +569,7 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
                         options={tags}
                     />
                 </FormField>
+
                 <FormField label="Comment">
                     <Input
                         value={assetDetailState.Comment || ""}
@@ -748,9 +800,6 @@ const AssetLinkingInfo = ({ setValid, showErrors }: AssetLinkingProps) => {
                 payload: selectedAsset,
             });
         }
-        console.log(assetDetailState);
-
-        console.log(selectedAssets);
         setValid(true);
     }, [
         assetDetailState.assetLinks,
@@ -786,6 +835,43 @@ const AssetLinkingInfo = ({ setValid, showErrors }: AssetLinkingProps) => {
                                     setNameError("");
                                     switch (selectedLinkType?.value) {
                                         case "parent":
+                                            const childHasDuplicates = selectedItems.some(
+                                                (selectedItem) =>
+                                                    childLinks.find(
+                                                        (link) =>
+                                                            link.assetId === selectedItem.assetId
+                                                    ) !== undefined
+                                            );
+                                            if (childHasDuplicates) {
+                                                setNameError("This is already a child");
+                                                return;
+                                            }
+                                            setSelectedAssets((prevSelectedAssets) => ({
+                                                child: [
+                                                    ...prevSelectedAssets.child,
+                                                    {
+                                                        assetName: selectedItems[0].assetName,
+                                                        assetId: selectedItems[0].assetId,
+                                                        databaseId: selectedItems[0].databaseName,
+                                                    },
+                                                ],
+                                                parents: prevSelectedAssets.parents,
+                                                related: prevSelectedAssets.related,
+                                            }));
+                                            setSelectedAsset((prevSelectedAssets) => ({
+                                                child: [
+                                                    ...prevSelectedAssets.child,
+                                                    selectedItems[0].assetId,
+                                                ],
+                                                parents: prevSelectedAssets.parents,
+                                                related: prevSelectedAssets.related,
+                                            }));
+                                            setChildLinks((prevLinks) => [
+                                                ...prevLinks,
+                                                ...selectedItems,
+                                            ]);
+                                            break;
+                                        case "child":
                                             const parentHasDuplicates = selectedItems.some(
                                                 (selectedItem) =>
                                                     parentLinks.find(
@@ -819,44 +905,6 @@ const AssetLinkingInfo = ({ setValid, showErrors }: AssetLinkingProps) => {
                                             }));
 
                                             setParentLinks((prevLinks) => [
-                                                ...prevLinks,
-                                                ...selectedItems,
-                                            ]);
-                                            console.log(selectedItems);
-                                            break;
-                                        case "child":
-                                            const childHasDuplicates = selectedItems.some(
-                                                (selectedItem) =>
-                                                    childLinks.find(
-                                                        (link) =>
-                                                            link.assetId === selectedItem.assetId
-                                                    ) !== undefined
-                                            );
-                                            if (childHasDuplicates) {
-                                                setNameError("This is already a child");
-                                                return;
-                                            }
-                                            setSelectedAssets((prevSelectedAssets) => ({
-                                                child: [
-                                                    ...prevSelectedAssets.child,
-                                                    {
-                                                        assetName: selectedItems[0].assetName,
-                                                        assetId: selectedItems[0].assetId,
-                                                        databaseId: selectedItems[0].databaseName,
-                                                    },
-                                                ],
-                                                parents: prevSelectedAssets.parents,
-                                                related: prevSelectedAssets.related,
-                                            }));
-                                            setSelectedAsset((prevSelectedAssets) => ({
-                                                child: [
-                                                    ...prevSelectedAssets.child,
-                                                    selectedItems[0].assetId,
-                                                ],
-                                                parents: prevSelectedAssets.parents,
-                                                related: prevSelectedAssets.related,
-                                            }));
-                                            setChildLinks((prevLinks) => [
                                                 ...prevLinks,
                                                 ...selectedItems,
                                             ]);
@@ -1412,7 +1460,6 @@ const UploadForm = () => {
                     tags.push({ label: `${x.tagName} (${x.tagTypeName})`, value: x.tagName });
                 });
             }
-            return tags;
         });
         if (assetDetailState.assetId && fileUploadTableItems.length > 0) {
             assetDetailDispatch({ type: "UPDATE_ASSET_FILES", payload: fileUploadTableItems });

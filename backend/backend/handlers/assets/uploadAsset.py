@@ -16,13 +16,17 @@ from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from common.s3 import validateS3AssetExtensionsAndContentType
+from models.common import validation_error
 
 claims_and_roles = {}
 logger = safeLogger(service_name="UploadAsset")
 dynamodb = boto3.resource('dynamodb')
+dynamodbClient = boto3.client('dynamodb')
 s3c = boto3.client('s3')
 lambda_client = boto3.client('lambda')
 sns_client = boto3.client('sns')
+deserializer = TypeDeserializer()
+paginator = dynamodbClient.get_paginator('scan')
 
 main_response = STANDARD_JSON_RESPONSE
 asset_database = None
@@ -34,6 +38,8 @@ try:
     db_database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
     subscriptions_table_name = os.environ["SUBSCRIPTIONS_STORAGE_TABLE_NAME"]
     asset_link_database = os.environ["ASSET_LINKS_STORAGE_TABLE_NAME"]
+    tag_type_table_name = os.environ["TAG_TYPES_STORAGE_TABLE_NAME"]
+    tag_table_name = os.environ["TAG_STORAGE_TABLE_NAME"]
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
     bucket_name = os.environ["S3_ASSET_STORAGE_BUCKET"]
 except:
@@ -126,6 +132,143 @@ def add_asset_links(asset_links, asset_id):
     with table.batch_writer() as batch_writer:
         for item in all_links:
             batch_writer.put_item(Item=item)
+
+def getSetTagTypes(tags):
+    uniqueSetTagTypes = []
+
+    #If no tags provided, return no tag types
+    if tags is None or len(tags) == 0:
+        return uniqueSetTagTypes
+
+    #Loop to get all tag results (to know their tag types)
+    rawTagItems = []
+    page_iteratorTags = paginator.paginate(
+        TableName=tag_table_name,
+        PaginationConfig={
+            'MaxItems': 1000,
+            'PageSize': 1000,
+        }
+    ).build_full_result()
+    if(len(page_iteratorTags["Items"]) > 0):
+        rawTagItems.extend(page_iteratorTags["Items"])
+        while("NextToken" in page_iteratorTags):
+            page_iteratorTags = paginator.paginate(
+                TableName=tag_table_name,
+                PaginationConfig={
+                    'MaxItems': 1000,
+                    'PageSize': 1000,
+                    'StartingToken': page_iteratorTags["NextToken"]
+                }
+            ).build_full_result()
+            if(len(page_iteratorTags["Items"]) > 0):
+                rawTagItems.extend(page_iteratorTags["Items"])
+
+    #Loop through every tag in the database
+    for tag in rawTagItems:
+        deserialized_document = {k: deserializer.deserialize(v) for k, v in tag.items()}
+
+        #If the tags provided matches the tag looked up, add to uniqueSetTagTypes if it's not already part of the array
+        if deserialized_document["tagName"] in tags:
+            if deserialized_document["tagTypeName"] not in uniqueSetTagTypes:
+                uniqueSetTagTypes.append(deserialized_document["tagTypeName"])
+
+    return uniqueSetTagTypes
+
+#Function to lookup and scan tagTypes from dynamoDB that are set to required
+def getRequiredTagTypes():
+    #Loop to get all tag results for tag type
+    rawTagTypeItems = []
+    page_iteratorTags = paginator.paginate(
+        TableName=tag_type_table_name,
+        PaginationConfig={
+            'MaxItems': 1000,
+            'PageSize': 1000,
+        }
+    ).build_full_result()
+    if(len(page_iteratorTags["Items"]) > 0):
+        rawTagTypeItems.extend(page_iteratorTags["Items"])
+        while("NextToken" in page_iteratorTags):
+            page_iteratorTags = paginator.paginate(
+                TableName=tag_type_table_name,
+                PaginationConfig={
+                    'MaxItems': 1000,
+                    'PageSize': 1000,
+                    'StartingToken': page_iteratorTags["NextToken"]
+                }
+            ).build_full_result()
+            if(len(page_iteratorTags["Items"]) > 0):
+                rawTagTypeItems.extend(page_iteratorTags["Items"])
+
+    ##Get tags associated and then exclude tag types from required if no tags associated
+    #Loop to get all tag results for tag type
+    rawTagItems = []
+    page_iteratorTags = paginator.paginate(
+        TableName=tag_table_name,
+        PaginationConfig={
+            'MaxItems': 1000,
+            'PageSize': 1000,
+        }
+    ).build_full_result()
+    if(len(page_iteratorTags["Items"]) > 0):
+        rawTagItems.extend(page_iteratorTags["Items"])
+        while("NextToken" in page_iteratorTags):
+            page_iteratorTags = paginator.paginate(
+                TableName=tag_table_name,
+                PaginationConfig={
+                    'MaxItems': 1000,
+                    'PageSize': 1000,
+                    'StartingToken': page_iteratorTags["NextToken"]
+                }
+            ).build_full_result()
+            if(len(page_iteratorTags["Items"]) > 0):
+                rawTagItems.extend(page_iteratorTags["Items"])
+
+    tags = []
+    for tag in rawTagItems:
+        deserialized_document = {k: deserializer.deserialize(v) for k, v in tag.items()}
+        tags.append(deserialized_document)
+
+    formatted_tag_results = {}
+    for tagResult in tags:
+        tagName = tagResult["tagName"]
+        tagTypeName = tagResult["tagTypeName"]
+
+        if tagTypeName not in formatted_tag_results:
+            formatted_tag_results[tagTypeName] = [tagName]
+        else:
+            formatted_tag_results[tagTypeName].append(tagName)
+
+    #Final tag required loops
+    tagTypesRequired = []
+    for tagType in rawTagTypeItems:
+        deserialized_document = {k: deserializer.deserialize(v) for k, v in tagType.items()}
+
+        #if tagtype has "required" set to true and there are tags in formatted_tag_results for the type, add to list
+        if deserialized_document.get("required", "False") == "True":
+            if deserialized_document["tagTypeName"] in formatted_tag_results:
+                tagTypesRequired.append(deserialized_document["tagTypeName"])
+
+    return tagTypesRequired
+
+def verifyAllRequiredTagsSatisfied(assetTags):
+
+    assetTagTypes = getSetTagTypes(assetTags)
+    requiredTagTypes = getRequiredTagTypes()
+    missingTagTypesForError =[]
+
+    if requiredTagTypes is None or len(requiredTagTypes) == 0:
+        return True
+    else:
+        for requiredTagType in requiredTagTypes:
+            if requiredTagType not in assetTagTypes:
+                missingTagTypesForError.append(requiredTagType)
+
+    if len(missingTagTypesForError) == 0:
+        return True
+
+    #Raise error with list of required tag types missing from assets
+    if len(missingTagTypesForError) > 0:
+        raise ValueError(f"Asset Details are missing tags of required tag types: {missingTagTypesForError}")
 
 
 def create_sns_topic_for_asset(asset_id):
@@ -271,14 +414,17 @@ def upload_Asset(event, body, queryParameters, returnAsset=False, uploadTempLoca
                 "tags": body.get('tags', [])
             }
 
-            for user_name in claims_and_roles["tokens"]:
-                casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", asset, http_method) and casbin_enforcer.enforceAPI(
+            if len(claims_and_roles["tokens"]) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if casbin_enforcer.enforce(asset, http_method) and casbin_enforcer.enforceAPI(
                             event):
                     operation_allowed_on_asset = True
-                    break
 
             if operation_allowed_on_asset:
+
+                #Do check / lookup on which tagTypes are required to be set on an asset and compare to tags set in body
+                #Will throw error if it does not validate
+                verifyAllRequiredTagsSatisfied(event['body'].get("tags", []))
 
                 #If true, asset was uploaded to a temporary location within the S3 bucket and we need to move it now to the correct asset location
                 if uploadTempLocation:
@@ -327,14 +473,17 @@ def upload_Asset(event, body, queryParameters, returnAsset=False, uploadTempLoca
                 asset.update({
                     "object__type": "asset"
                 })
-                for user_name in claims_and_roles["tokens"]:
-                    casbin_enforcer = CasbinEnforcer(user_name)
-                    if casbin_enforcer.enforce(f"user::{user_name}", asset, http_method) and casbin_enforcer.enforceAPI(
+                if len(claims_and_roles["tokens"]) > 0:
+                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                    if casbin_enforcer.enforce(asset, http_method) and casbin_enforcer.enforceAPI(
                             event):
                         operation_allowed_on_asset = True
-                        break
 
                 if operation_allowed_on_asset:
+
+                    #Do check / lookup on which tagTypes are required to be set on an asset and compare to tags set in body
+                    #Will throw error if it does nto validate
+                    verifyAllRequiredTagsSatisfied(event['body'].get("tags", []))
 
                     #If true, asset was uploaded to a temporary location within the S3 bucket and we need to move it now to the correct asset location
                     if uploadTempLocation:
@@ -434,14 +583,14 @@ def lambda_handler(event, context):
             'assetPathKey': {
                 'value': event['body']['key'],
                 'validator': 'ASSET_PATH'
-            }    
+            }
         })
         if not valid:
             logger.error(message)
             response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
             return response
-        
+
         #optional params
         if 'previewLocation' in event['body'] and event['body']['previewLocation'] is not None:
             (valid, message) = validate({
@@ -478,6 +627,11 @@ def lambda_handler(event, context):
         response.update(upload_Asset(event, event['body'], queryParameters, returnAsset, uploadTempLocation))
         logger.info(response)
         return response
+    except ValueError as v:
+        logger.exception("ValueError")
+        return validation_error(body={
+            'message': str(v)
+        })
     except Exception as e:
         response['statusCode'] = 500
         logger.exception(e)

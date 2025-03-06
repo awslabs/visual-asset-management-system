@@ -52,6 +52,7 @@ export interface storageResources {
         tagStorageTable: dynamodb.Table;
         tagTypeStorageTable: dynamodb.Table;
         userRolesStorageTable: dynamodb.Table;
+        userStorageTable: dynamodb.Table;
         workflowExecutionStorageTable: dynamodb.Table;
         workflowStorageTable: dynamodb.Table;
     };
@@ -546,6 +547,14 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         },
     });
 
+    const userStorageTable = new dynamodb.Table(scope, "UserStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "userId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
     const authEntitiesTable = new dynamodb.Table(scope, "AuthEntitiesTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
@@ -621,6 +630,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
             assetLinksStorageTable: assetLinksStorageTable,
             rolesStorageTable: rolesStorageTable,
             userRolesStorageTable: userRolesStorageTable,
+            userStorageTable: userStorageTable,
         },
     };
 }

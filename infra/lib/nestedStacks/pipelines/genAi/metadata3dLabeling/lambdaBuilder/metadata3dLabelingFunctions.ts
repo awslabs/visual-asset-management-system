@@ -15,7 +15,10 @@ import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../config/config";
 import * as Config from "../../../../../../config/config";
 import * as kms from "aws-cdk-lib/aws-kms";
-import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../../../../../helper/security";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
+} from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
 
@@ -60,6 +63,7 @@ export function buildVamsExecuteMetadata3dLabelingPipelineFunction(
     assetAuxiliaryBucket.grantRead(fun);
     openPipelineLambdaFunction.grantInvoke(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
@@ -112,6 +116,7 @@ export function buildOpenPipelineFunction(
     assetAuxiliaryBucket.grantRead(fun);
     pipelineStateMachine.grantStartExecution(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
@@ -158,6 +163,7 @@ export function buildConstructPipelineFunction(
     });
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
 
     return fun;
 }
@@ -207,6 +213,7 @@ export function buildMetadataGenerationPipelineFunction(
     assetBucket.grantReadWrite(fun);
     assetAuxiliaryBucket.grantReadWrite(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     // Add permissions to Lambda function to access Bedrock
@@ -214,7 +221,9 @@ export function buildMetadataGenerationPipelineFunction(
         effect: iam.Effect.ALLOW,
         actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
         resources: [
-            "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0",
+            "arn:aws:bedrock:" +
+                config.env.region +
+                "::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0",
         ],
     });
     fun.addToRolePolicy(bedrockPolicy);
@@ -295,6 +304,7 @@ export function buildPipelineEndFunction(
     assetBucket.grantRead(fun);
     assetAuxiliaryBucket.grantRead(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     const stateTaskPolicy = new iam.PolicyStatement({

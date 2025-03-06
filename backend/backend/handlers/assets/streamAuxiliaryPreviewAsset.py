@@ -73,8 +73,8 @@ def lambda_handler(event, context):
             }
         }
         logger.error(error_response)
-        return error_response 
-    
+        return error_response
+
     logger.info("Validating parameters")
     (valid, message) = validate({
         'auxiliaryPreviewAssetPathKey': {
@@ -103,10 +103,10 @@ def lambda_handler(event, context):
     #     s3_params['ResponseContentType'] = content_type_header
 
     #logger.info(s3_params)
-        
+
     #Split object key by path and return the first value (the asset ID)
     asset_id = object_key.split("/")[0]
-        
+
     http_method = "GET"
     operation_allowed_on_asset = False
 
@@ -115,11 +115,10 @@ def lambda_handler(event, context):
 
     logger.info(asset_object)
 
-    for user_name in claims_and_roles["tokens"]:
-        casbin_enforcer = CasbinEnforcer(user_name)
-        if casbin_enforcer.enforce(f"user::{user_name}", asset_object, http_method) and casbin_enforcer.enforceAPI(event, http_method):
+    if len(claims_and_roles["tokens"]) > 0:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if casbin_enforcer.enforce(asset_object, http_method) and casbin_enforcer.enforceAPI(event, http_method):
             operation_allowed_on_asset = True
-            break
 
     if operation_allowed_on_asset:
         try:

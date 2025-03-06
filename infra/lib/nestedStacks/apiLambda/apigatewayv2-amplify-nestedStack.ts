@@ -55,15 +55,34 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
 
         props = { ...defaultProps, ...props };
 
-        // init cognito authorizer
-        const cognitoAuth = new apigwAuthorizers.HttpUserPoolAuthorizer(
-            "DefaultCognitoAuthorizer",
-            props.authResources.cognito.userPool,
-            {
-                userPoolClients: [props.authResources.cognito.webClientUserPool],
-                identitySource: ["$request.header.Authorization"],
-            }
-        );
+        let apiGatewayAuthorizer = undefined;
+
+        //Setup Gateway Authorizer
+        if (props.config.app.authProvider.useCognito.enabled) {
+            // init cognito authorizer
+            apiGatewayAuthorizer = new apigwAuthorizers.HttpUserPoolAuthorizer(
+                "DefaultCognitoAuthorizer",
+                props.authResources.cognito.userPool,
+                {
+                    userPoolClients: [props.authResources.cognito.webClientUserPool],
+                    identitySource: ["$request.header.Authorization"],
+                }
+            );
+        } else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
+            //init external OATH IDP JWT authorizer
+
+            apiGatewayAuthorizer = new apigwAuthorizers.HttpJwtAuthorizer(
+                "DefaultJwtAuthorizer",
+                props.config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl,
+                {
+                    jwtAudience: [
+                        props.config.app.authProvider.useExternalOAuthIdp
+                            .lambdaAuthorizorJWTAudience,
+                    ],
+                    identitySource: ["$request.header.Authorization"],
+                }
+            );
+        }
 
         // init api gateway
         const api = new apigw.HttpApi(this, "Api", {
@@ -95,7 +114,7 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
                 exposeHeaders: ["Access-Control-Allow-Origin"],
                 maxAge: cdk.Duration.hours(1),
             },
-            defaultAuthorizer: cognitoAuth,
+            defaultAuthorizer: apiGatewayAuthorizer,
         });
 
         //Always use non-FIPS URL in non-GovCloud. All endpoints in GovCloud are FIPS-compliant already
@@ -104,12 +123,17 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
         this.apiEndpoint = apiEndpoint;
 
         //Generate Global CSP policy
-        const cognitoDomain = props.config.app.authProvider.useCognito.useSaml
-            ? `https://${samlSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`
-            : "";
+        let authDomain = "";
+
+        if (props.config.app.authProvider.useCognito.useSaml) {
+            authDomain = `https://${samlSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`;
+        } else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
+            authDomain = props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl;
+        }
+
         const cspPolicy = generateContentSecurityPolicy(
             props.storageResources,
-            cognitoDomain,
+            authDomain,
             apiEndpoint,
             props.config
         );
@@ -126,13 +150,12 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
             apiUrl: `https://${this.apiEndpoint}/`,
             authResources: props.authResources,
             region: props.config.env.region,
-            externalOathIdpURL: props.config.app.authProvider.useExternalOathIdp.idpAuthProviderUrl,
             contentSecurityPolicy: amplifyCsp,
         };
 
         if (props.config.app.authProvider.useCognito.useSaml) {
-            amplifyConfigProps.federatedConfig = {
-                customCognitoAuthDomain: cognitoDomain,
+            amplifyConfigProps.cognitoFederatedConfig = {
+                customCognitoAuthDomain: authDomain,
                 customFederatedIdentityProviderName: samlSettings.name,
                 // if necessary, the callback urls can be determined here and passed to the UI through the config endpoint
                 // redirectSignIn: callbackUrls[0],

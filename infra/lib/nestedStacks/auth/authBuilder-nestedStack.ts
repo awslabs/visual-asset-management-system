@@ -25,6 +25,13 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import { samlSettings } from "../../../config/saml-config";
 import { Service } from "../../../lib/helper/service-helper";
+import {
+    AwsCustomResource,
+    AwsSdkCall,
+    AwsCustomResourcePolicy,
+    PhysicalResourceId,
+    PhysicalResourceIdReference,
+} from "aws-cdk-lib/custom-resources";
 
 export interface authResources {
     roles: {
@@ -57,7 +64,7 @@ export class AuthBuilderNestedStack extends NestedStack {
     constructor(parent: Construct, name: string, props: AuthBuilderNestedStackProps) {
         super(parent, name);
 
-        if (props.config.app.authProvider.useCognito) {
+        if (props.config.app.authProvider.useCognito.enabled) {
             //Use Cognito
             const cognitoProps: CognitoWebNativeConstructStackProps = {
                 ...props,
@@ -92,9 +99,6 @@ export class AuthBuilderNestedStack extends NestedStack {
             };
         } else {
             //TODO - Other Authentications Setup
-            throw new Error(
-                "Unsupported Configuration: An currently unsupported authentication method chosen"
-            );
         }
 
         //Setup Custom Resource Role Policy
@@ -109,6 +113,11 @@ export class AuthBuilderNestedStack extends NestedStack {
                     effect: iam.Effect.ALLOW,
                     actions: ["dynamodb:PutItem"],
                     resources: [props.storageResources.dynamo.userRolesStorageTable.tableArn],
+                }),
+                new iam.PolicyStatement({
+                    effect: iam.Effect.ALLOW,
+                    actions: ["dynamodb:PutItem"],
+                    resources: [props.storageResources.dynamo.userStorageTable.tableArn],
                 }),
                 new iam.PolicyStatement({
                     effect: iam.Effect.ALLOW,
@@ -140,7 +149,37 @@ export class AuthBuilderNestedStack extends NestedStack {
             );
         }
 
-        //Deploy DynamoDB defaults
+        //Deploy DynamoDB admin user login profile
+        const awsSdkCallUserAdmin: AwsSdkCall = {
+            service: "DynamoDB",
+            action: "putItem",
+            parameters: {
+                TableName: props.storageResources.dynamo.userStorageTable.tableName,
+                Item: {
+                    userId: {
+                        S: props.config.app.adminUserId,
+                    },
+                    email: {
+                        S: props.config.app.adminEmailAddress,
+                    },
+                    createdOn: {
+                        S: new Date().toISOString(),
+                    },
+                },
+                //ConditionExpression: "attribute_not_exists(userId)",
+            },
+            physicalResourceId: PhysicalResourceId.of(
+                props.storageResources.dynamo.userStorageTable.tableName + `_admin_initialization`
+            ),
+        };
+
+        new AwsCustomResource(this, `userStorageTable_admin_CustomResource`, {
+            onCreate: awsSdkCallUserAdmin,
+            onUpdate: awsSdkCallUserAdmin,
+            role: authDefaultCustomResourceRole,
+        });
+
+        //Deploy DynamoDB for roles/constraints defaults
         const dynamoDbAuthDefaultsAdmin = new DynamoDbAuthDefaultsAdminConstructStack(
             this,
             "DynamoDBAuthDefaultsAdmin",

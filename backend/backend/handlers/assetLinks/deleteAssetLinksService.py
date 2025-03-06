@@ -45,16 +45,14 @@ def delete_asset_link(relation_id):
 
             from_asset_link_allowed = to_asset_link_allowed = False
 
-            for user_name in claims_and_roles["tokens"]:
-                casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", asset_link_from_object, "DELETE"):
+            if len(claims_and_roles["tokens"]) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if casbin_enforcer.enforce(asset_link_from_object, "DELETE"):
                     from_asset_link_allowed = True
-                    break
-            for user_name in claims_and_roles["tokens"]:
-                casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", asset_link_to_object, "DELETE"):
+            if len(claims_and_roles["tokens"]) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if casbin_enforcer.enforce(asset_link_to_object, "DELETE"):
                     to_asset_link_allowed = True
-                    break
 
             if from_asset_link_allowed and to_asset_link_allowed:
                 asset_links_table.delete_item(
@@ -90,7 +88,7 @@ def lambda_handler(event, context):
             response['statusCode'] = 400
             response['body'] = json.dumps({"message": "RelationId is not valid."})
             return response
-        
+
         (valid, message) = validate({
             'relationshipId': {
                 'value': relation_id,
@@ -104,8 +102,8 @@ def lambda_handler(event, context):
             return response
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
 

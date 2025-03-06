@@ -15,8 +15,8 @@ import { region_info } from "aws-cdk-lib";
 dotenv.config();
 
 //Top level configurations
-export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_10;
-export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_18_X;
+export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
+export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_20_X;
 export const LAMBDA_MEMORY_SIZE = 3003;
 export const OPENSEARCH_VERSION = cdk.aws_opensearchservice.EngineVersion.OPENSEARCH_2_7;
 
@@ -69,6 +69,11 @@ export function getConfig(app: cdk.App): Config {
             config.app.adminEmailAddress ||
             process.env.ADMIN_EMAIL_ADDRESS)
     );
+    config.app.adminUserId = <string>(app.node.tryGetContext("adminUserId") ||
+        app.node.tryGetContext("adminEmailAddress") || //user email in this case for ENV backwards compatibility
+        config.app.adminUserId ||
+        process.env.ADMIN_EMAIL_ADDRESS || //user email in this case for ENV backwards compatibility
+        process.env.ADMIN_USER_ID);
     config.app.authProvider.credTokenTimeoutSeconds = <number>(
         (app.node.tryGetContext("credTokenTimeoutSeconds") ||
             config.app.authProvider.credTokenTimeoutSeconds ||
@@ -115,12 +120,28 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useGenAiMetadata3dLabeling.enabled = false;
     }
 
+    if (config.app.pipelines.useRapidPipeline.enabled == undefined) {
+        config.app.pipelines.useRapidPipeline.enabled = false;
+    }
+
     if (config.app.authProvider.useCognito.useUserPasswordAuthFlow == undefined) {
         config.app.authProvider.useCognito.useUserPasswordAuthFlow = false;
     }
 
     if (config.app.pipelines.useConversion3dBasic.enabled == undefined) {
         config.app.pipelines.useConversion3dBasic.enabled = true;
+    }
+
+    if (config.app.authProvider.useExternalOAuthIdp.enabled == undefined) {
+        config.app.authProvider.useExternalOAuthIdp.enabled = false;
+    }
+
+    if (config.app.addStackCloudTrailLogs == undefined) {
+        config.app.addStackCloudTrailLogs = true;
+    }
+
+    if (config.app.useAlb.addAlbS3SpecialVpcEndpoint == undefined) {
+        config.app.useAlb.addAlbS3SpecialVpcEndpoint = true;
     }
 
     //Load S3 Policy statements JSON
@@ -163,6 +184,7 @@ export function getConfig(app: cdk.App): Config {
         config.app.useAlb.enabled ||
         config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
         config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
+        config.app.pipelines.useRapidPipeline.enabled ||
         config.app.openSearch.useProvisioned.enabled
     ) {
         if (!config.app.useGlobalVpc.enabled) {
@@ -226,20 +248,40 @@ export function getConfig(app: cdk.App): Config {
         config.app.useGlobalVpc.optionalExternalVpcId != ""
     ) {
         if (
-            !config.app.useGlobalVpc.optionalExternalPrivateSubnetIds ||
-            config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == "UNDEFINED" ||
-            config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == ""
+            !config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds ||
+            config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds == "UNDEFINED" ||
+            config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds == ""
         ) {
             throw new Error(
-                "Configuration Error: Must define at least one private subnet ID when using an External VPC ID."
+                "Configuration Error: Must define at least one isolated subnet ID when using an External VPC ID."
             );
         }
     }
 
+    //If using RapidPipeline, make sure Imported VPC has at least one private subnet included
     if (
         config.app.useGlobalVpc.enabled &&
-        config.app.useAlb.enabled &&
-        config.app.useAlb.usePublicSubnet &&
+        config.app.useGlobalVpc.optionalExternalVpcId &&
+        config.app.useGlobalVpc.optionalExternalVpcId != "UNDEFINED" &&
+        config.app.useGlobalVpc.optionalExternalVpcId != ""
+    ) {
+        if (config.app.pipelines.useRapidPipeline.enabled) {
+            if (
+                !config.app.useGlobalVpc.optionalExternalPrivateSubnetIds ||
+                config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == "UNDEFINED" ||
+                config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == ""
+            ) {
+                throw new Error(
+                    "Configuration Error: Must define at least one private subnet ID when using RapidPipeline."
+                );
+            }
+        }
+    }
+
+    if (
+        ((config.app.useAlb.enabled && config.app.useAlb.usePublicSubnet) ||
+            config.app.pipelines.useRapidPipeline.enabled) &&
+        config.app.useGlobalVpc.enabled &&
         config.app.useGlobalVpc.optionalExternalVpcId &&
         config.app.useGlobalVpc.optionalExternalVpcId != "UNDEFINED" &&
         config.app.useGlobalVpc.optionalExternalVpcId != ""
@@ -250,7 +292,7 @@ export function getConfig(app: cdk.App): Config {
             config.app.useGlobalVpc.optionalExternalPublicSubnetIds == ""
         ) {
             throw new Error(
-                "Configuration Error: Must define at least one public subnet ID when using an External VPC ID and Public ALB configuration."
+                "Configuration Error: Must define at least one public subnet ID when using an External VPC ID and Public ALB or RapidPipeline configuration."
             );
         }
     }
@@ -279,6 +321,16 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
+    if (
+        !config.app.adminUserId ||
+        config.app.adminUserId == "" ||
+        config.app.adminUserId == "UNDEFINED"
+    ) {
+        throw new Error(
+            "Configuration Error: Must specify an initial admin user ID as part of this deployment configuration!"
+        );
+    }
+
     //Error check when implementing openSearch
     if (
         config.app.openSearch.useServerless.enabled &&
@@ -290,7 +342,7 @@ export function getConfig(app: cdk.App): Config {
     //Check when implementing auth providers
     if (
         config.app.authProvider.useCognito.enabled &&
-        config.app.authProvider.useExternalOathIdp.enabled
+        config.app.authProvider.useExternalOAuthIdp.enabled
     ) {
         throw new Error("Configuration Error: Must specify only one authentication method!");
     }
@@ -303,15 +355,46 @@ export function getConfig(app: cdk.App): Config {
             "Configuration Warning: UserPasswordAuth flow is enabled for Cognito which allows non-SRP authentication methods with username/passwords. This could be a security finding in some deployment environments!"
         );
     }
-    config.app.authProvider.useCognito.useUserPasswordAuthFlow;
 
     if (
-        config.app.authProvider.useExternalOathIdp.enabled &&
-        (config.app.authProvider.useExternalOathIdp.idpAuthProviderUrl == "UNDEFINED" ||
-            config.app.authProvider.useExternalOathIdp.idpAuthProviderUrl == "")
+        config.app.authProvider.useExternalOAuthIdp.enabled &&
+        (!config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl == "" ||
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl ==
+                "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl == "" ||
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience ==
+                "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScopeMfa == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScopeMfa == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint ==
+                "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint ==
+                "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint ==
+                "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderDiscoveryEndpoint == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderDiscoveryEndpoint ==
+                "UNDEFINED")
     ) {
         throw new Error(
-            "Configuration Error: Must specify a external IDP auth URL when using an external OATH provider!"
+            "Configuration Error: Must specify a external IDP auth URL, external IDP principal domain, external IDP client ID, external IDP client secret, Lambda Authorizer JWT Issuer URL, Lambda Authorizer JWT Identity Source, and Lambda Authorizer JWT Audience when using an external OAUTH provider!"
+        );
+    }
+
+    //If using Location services, for now must use cognito due to IDP authenticated role need
+    if (config.app.useLocationService.enabled && !config.app.authProvider.useCognito.enabled) {
+        throw new Error(
+            "Configuration Error: Cannot use location services without using the Cognito authentication method."
         );
     }
 
@@ -335,9 +418,11 @@ export interface ConfigPublic {
         bucketMigrationStaging: {
             assetBucketName: string;
         };
+        adminUserId: string;
         adminEmailAddress: string;
         useFips: boolean;
         useWaf: boolean;
+        addStackCloudTrailLogs: boolean;
         useKmsCmkEncryption: {
             enabled: boolean;
             optionalExternalCmkArn: string;
@@ -350,6 +435,7 @@ export interface ConfigPublic {
             useForAllLambdas: boolean;
             addVpcEndpoints: boolean;
             optionalExternalVpcId: string;
+            optionalExternalIsolatedSubnetIds: string;
             optionalExternalPrivateSubnetIds: string;
             optionalExternalPublicSubnetIds: string;
             vpcCidrRange: string;
@@ -371,6 +457,7 @@ export interface ConfigPublic {
         useAlb: {
             enabled: boolean;
             usePublicSubnet: boolean;
+            addAlbS3SpecialVpcEndpoint: boolean;
             domainHost: string;
             certificateArn: string;
             optionalHostedZoneId: string;
@@ -385,6 +472,10 @@ export interface ConfigPublic {
             useGenAiMetadata3dLabeling: {
                 enabled: boolean;
             };
+            useRapidPipeline: {
+                enabled: boolean;
+                ecrContainerImageURI: string;
+            };
         };
         authProvider: {
             credTokenTimeoutSeconds: number;
@@ -393,10 +484,22 @@ export interface ConfigPublic {
                 useSaml: boolean;
                 useUserPasswordAuthFlow: boolean;
             };
-            useExternalOathIdp: {
+            useExternalOAuthIdp: {
                 enabled: boolean;
                 idpAuthProviderUrl: string;
+                idpAuthClientId: string;
+                idpAuthProviderScope: string;
+                idpAuthProviderScopeMfa: string;
+                idpAuthPrincipalDomain: string;
+                idpAuthProviderTokenEndpoint: string;
+                idpAuthProviderAuthorizationEndpoint: string;
+                idpAuthProviderDiscoveryEndpoint: string;
+                lambdaAuthorizorJWTIssuerUrl: string;
+                lambdaAuthorizorJWTAudience: string;
             };
+        };
+        webUi: {
+            optionalBannerHtmlMessage: string;
         };
     };
 }

@@ -40,7 +40,7 @@ class CreatePipeline():
         self.lambdaPythonVersion = env['LAMBDA_PYTHON_VERSION']
 
         #Create SubnetIds & SecurityGroupIds lists from string
-        #Set to empty array if string is empty 
+        #Set to empty array if string is empty
         if self.subNetIdsString == '':
             self.subNetIds = []
         else:
@@ -78,11 +78,10 @@ class CreatePipeline():
             "pipelineType": body['pipelineType'],
             "pipelineExecutionType": body['pipelineExecutionType'],
         }
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", pipeline, "PUT"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(pipeline, "PUT"):
                 allowed = True
-                break
 
         if not allowed:
             return {
@@ -120,7 +119,7 @@ class CreatePipeline():
             userResource['resourceId'] = lambdaName
             self.createLambdaPipeline(lambdaName)
 
-        #TODO: Check if we have invoke permission on provided lambdaFunction. Otherwise error. 
+        #TODO: Check if we have invoke permission on provided lambdaFunction. Otherwise error.
 
         logger.info("Running CFT")
         if body['pipelineExecutionType'] == 'Lambda':
@@ -216,7 +215,7 @@ def lambda_handler(event, context, create_pipeline_fn=CreatePipeline.from_env):
             response['statusCode'] = 400
             logger.error(response)
             return response
-        
+
         if event['body']['pipelineType'] == 'standardFile' and 'outputType' not in event['body']:
             message = 'Missing body parameter(s) (outputType) in API call'
             response['body'] = json.dumps({"message": message})
@@ -264,11 +263,10 @@ def lambda_handler(event, context, create_pipeline_fn=CreatePipeline.from_env):
         global claims_and_roles
         claims_and_roles = request_to_claims(event)
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if method_allowed_on_api:
             logger.info("Trying to get Data")

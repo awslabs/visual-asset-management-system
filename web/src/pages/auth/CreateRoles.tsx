@@ -1,6 +1,7 @@
 import {
     Box,
     Button,
+    Checkbox,
     Form,
     FormField,
     Modal,
@@ -20,6 +21,7 @@ interface RoleFields {
     sourceIdentifier: string;
     createdOn: string;
     roleName: string;
+    mfaRequired: boolean;
 }
 
 interface CreateConsraintProps {
@@ -34,6 +36,7 @@ const roleBody = {
     id: "",
     roleName: "",
     sourceIdentifier: "",
+    mfaRequired: false,
 };
 
 function validateNameLength(name: string) {
@@ -115,6 +118,7 @@ export default function CreateTagType({
                                 roleBody.sourceIdentifier = formState.sourceIdentifier;
                                 roleBody.roleName = formState.roleName;
                                 roleBody.source = formState.source;
+                                roleBody.mfaRequired = formState.mfaRequired || false;
                                 setInProgress(true);
                                 console.log("sending", roleBody);
                                 if (createOrUpdate === "Create") {
@@ -200,7 +204,7 @@ export default function CreateTagType({
                                 setNameError("");
                             }}
                             placeholder="Enter Name"
-                            data-testid="email"
+                            data-testid="role"
                             disabled={createOrUpdate === "Update"}
                         />
                     </FormField>
@@ -229,7 +233,7 @@ export default function CreateTagType({
                         />
                     </FormField>
                     <FormField
-                        label="Source Indentifier"
+                        label="Source Identifier"
                         constraintText="Optional. Enter Source Identifier"
                     >
                         <Input
@@ -237,8 +241,8 @@ export default function CreateTagType({
                             onChange={({ detail }) => {
                                 setFormState({ ...formState, sourceIdentifier: detail.value });
                             }}
-                            placeholder="Enter Source Indentifier"
-                            data-testid="email"
+                            placeholder="Enter Source Identifier"
+                            data-testid="source"
                         />
                     </FormField>
                     <FormField
@@ -252,8 +256,22 @@ export default function CreateTagType({
                                 setFormState({ ...formState, description: detail.value });
                             }}
                             placeholder="Enter description"
-                            data-testid="email"
+                            data-testid="description"
                         />
+                    </FormField>
+                    <FormField
+                        label="Options"
+                    >
+                        <Checkbox
+                            onChange={({ detail }) => {
+                                setFormState({ ...formState, mfaRequired: detail.checked });
+                            }}
+                            checked = {formState.mfaRequired}
+                            data-testid="mfaRequired"
+                            description="To enable this role's access, users must log in using multi-factor authentication"
+                            >
+                            Require Multi-Factor Authentication
+                        </Checkbox>
                     </FormField>
                 </SpaceBetween>
             </Form>

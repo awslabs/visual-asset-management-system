@@ -36,7 +36,6 @@ export interface AlbS3WebsiteAlbDeployConstructProps extends cdk.StackProps {
     apiUrl: string;
     vpc: ec2.IVpc;
     albSubnets: ec2.ISubnet[];
-    s3VPCEndpoint: ec2.InterfaceVpcEndpoint;
     albSecurityGroup: ec2.SecurityGroup;
     vpceSecurityGroup: ec2.SecurityGroup;
 }
@@ -62,6 +61,8 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
      */
     public endPointURL: string;
     public albEndpoint: string;
+
+    readonly s3VpcEndpoint: ec2.InterfaceVpcEndpoint;
 
     constructor(parent: Construct, name: string, props: AlbS3WebsiteAlbDeployConstructProps) {
         super(parent, name);
@@ -96,7 +97,7 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
             certificates: [acmDomainCertificate], // The certificate to use for the listener
         });
 
-        //Setup target group to point to VPC Endpoint Interface
+        //Setup target group to point to Special S3 VPC Endpoint Interface
         const targetGroup1 = new elbv2.ApplicationTargetGroup(this, "WebAppALBTargetGroup", {
             port: 443,
             vpc: props.vpc,
@@ -111,66 +112,87 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
         props.vpceSecurityGroup.connections.allowFrom(alb, ec2.Port.tcp(443));
         props.vpceSecurityGroup.connections.allowFrom(alb, ec2.Port.tcp(80));
 
-        //TODO: Figure out why this policy is not working and still letting requests through for other bucket names (use ALB dns name to test)
-        //TODO?: Specifically add a deny policy for anything outside of bucket
-        //Add policy to VPC endpoint to only allow access to the specific S3 Bucket
-        props.s3VPCEndpoint.addToPolicy(
-            new iam.PolicyStatement({
-                resources: [props.webAppBucket.arnForObjects("*"), props.webAppBucket.bucketArn],
-                actions: ["s3:Get*", "s3:List*"],
-                principals: [new iam.AnyPrincipal()],
-            })
-        );
+        //Create the VPCe if enabled
+        //NOTE: Only time we should disable this is for stack deployments where the VPCe needs to be created outside of the stack manually
+        if (props.config.app.useAlb.addAlbS3SpecialVpcEndpoint) {
+            // Create VPC interface endpoint for S3 (Needed for ALB<->S3)
+            //Note: This endpoint should be created despite the GlobalVPC flag of create endpoint or not in order to setup ALB listeners properly
+            const s3VPCEndpoint = new ec2.InterfaceVpcEndpoint(this, "S3InterfaceVPCEndpoint", {
+                vpc: props.vpc,
+                privateDnsEnabled: false,
+                service: ec2.InterfaceVpcEndpointAwsService.S3,
+                subnets: { subnets: props.albSubnets },
+                securityGroups: [props.albSecurityGroup],
+            });
 
-        //Create custom resource to get IP of Interface Endpoint (CDK doesn't support getting the IP directly)
-        //https://repost.aws/questions/QUjISNyk6aTA6jZgZQwKWf4Q/how-to-connect-a-load-balancer-and-an-interface-vpc-endpoint-together-using-cdk
-        for (let index = 0; index < props.albSubnets.length; index++) {
-            const getEndpointIp = new customResources.AwsCustomResource(
-                this,
-                `WebAppGetEndpointIP${index}`,
-                {
-                    installLatestAwsSdk: false,
-                    onCreate: {
-                        service: "EC2",
-                        action: "describeNetworkInterfaces",
-                        outputPaths: [`NetworkInterfaces.${index}.PrivateIpAddress`],
-                        parameters: {
-                            NetworkInterfaceIds: props.s3VPCEndpoint.vpcEndpointNetworkInterfaceIds,
-                        },
-                        physicalResourceId: customResources.PhysicalResourceId.of(
-                            Date.now().toString()
-                        ),
-                    },
-                    onUpdate: {
-                        service: "EC2",
-                        action: "describeNetworkInterfaces",
-                        outputPaths: [`NetworkInterfaces.${index}.PrivateIpAddress`],
-                        parameters: {
-                            NetworkInterfaceIds: props.s3VPCEndpoint.vpcEndpointNetworkInterfaceIds,
-                        },
-                        physicalResourceId: customResources.PhysicalResourceId.of(
-                            Date.now().toString()
-                        ),
-                    },
-                    //DescribeNetworkInterfaces is a policy that requires '*' resource permissions as IAM has no resource-level permissions for this
-                    //https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-policy-structure.html#ec2-supported-iam-actions-resources
-                    //https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonec2.html#amazonec2-actions-as-permissions
-                    //https://stackoverflow.com/questions/67272918/specific-resource-aws-lambdathe-provided-execution-role-does-not-have-permiss
-                    policy: {
-                        statements: [
-                            new iam.PolicyStatement({
-                                actions: ["ec2:DescribeNetworkInterfaces"],
-                                resources: ["*"],
-                            }),
-                        ],
-                    },
-                }
+            this.s3VpcEndpoint = s3VPCEndpoint;
+
+            //TODO: Figure out why this policy is not working and still letting requests through for other bucket names (use ALB dns name to test)
+            //TODO?: Specifically add a deny policy for anything outside of bucket
+            //Add policy to VPC endpoint to only allow access to the specific S3 Bucket
+            s3VPCEndpoint.addToPolicy(
+                new iam.PolicyStatement({
+                    resources: [
+                        props.webAppBucket.arnForObjects("*"),
+                        props.webAppBucket.bucketArn,
+                    ],
+                    actions: ["s3:Get*", "s3:List*"],
+                    principals: [new iam.AnyPrincipal()],
+                })
             );
-            targetGroup1.addTarget(
-                new elbv2_targets.IpTarget(
-                    getEndpointIp.getResponseField(`NetworkInterfaces.${index}.PrivateIpAddress`)
-                )
-            );
+
+            //Create custom resource to get IP of Interface Endpoint (CDK doesn't support getting the IP directly)
+            //https://repost.aws/questions/QUjISNyk6aTA6jZgZQwKWf4Q/how-to-connect-a-load-balancer-and-an-interface-vpc-endpoint-together-using-cdk
+            for (let index = 0; index < props.albSubnets.length; index++) {
+                const getEndpointIp = new customResources.AwsCustomResource(
+                    this,
+                    `WebAppGetEndpointIP${index}`,
+                    {
+                        installLatestAwsSdk: false,
+                        onCreate: {
+                            service: "EC2",
+                            action: "describeNetworkInterfaces",
+                            outputPaths: [`NetworkInterfaces.${index}.PrivateIpAddress`],
+                            parameters: {
+                                NetworkInterfaceIds: s3VPCEndpoint.vpcEndpointNetworkInterfaceIds,
+                            },
+                            physicalResourceId: customResources.PhysicalResourceId.of(
+                                Date.now().toString()
+                            ),
+                        },
+                        onUpdate: {
+                            service: "EC2",
+                            action: "describeNetworkInterfaces",
+                            outputPaths: [`NetworkInterfaces.${index}.PrivateIpAddress`],
+                            parameters: {
+                                NetworkInterfaceIds: s3VPCEndpoint.vpcEndpointNetworkInterfaceIds,
+                            },
+                            physicalResourceId: customResources.PhysicalResourceId.of(
+                                Date.now().toString()
+                            ),
+                        },
+                        //DescribeNetworkInterfaces is a policy that requires '*' resource permissions as IAM has no resource-level permissions for this
+                        //https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-policy-structure.html#ec2-supported-iam-actions-resources
+                        //https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonec2.html#amazonec2-actions-as-permissions
+                        //https://stackoverflow.com/questions/67272918/specific-resource-aws-lambdathe-provided-execution-role-does-not-have-permiss
+                        policy: {
+                            statements: [
+                                new iam.PolicyStatement({
+                                    actions: ["ec2:DescribeNetworkInterfaces"],
+                                    resources: ["*"],
+                                }),
+                            ],
+                        },
+                    }
+                );
+                targetGroup1.addTarget(
+                    new elbv2_targets.IpTarget(
+                        getEndpointIp.getResponseField(
+                            `NetworkInterfaces.${index}.PrivateIpAddress`
+                        )
+                    )
+                );
+            }
         }
 
         listener.addTargetGroups("WebAppTargetGroup1", {

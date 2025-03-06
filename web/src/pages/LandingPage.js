@@ -103,7 +103,7 @@ const LandingPage = (props) => {
                                 </span>
                             </Box>
                         </div>
-                        <Container>
+                        {/* <Container>
                             <SpaceBetween size="xl">
                                 <Box variant="h2" padding="n">
                                     Upload {Synonyms.Assets}
@@ -115,7 +115,7 @@ const LandingPage = (props) => {
                                     Upload {Synonyms.Assets}
                                 </Button>
                             </SpaceBetween>
-                        </Container>
+                        </Container> */}
                     </Grid>
                 </Box>
             </div>

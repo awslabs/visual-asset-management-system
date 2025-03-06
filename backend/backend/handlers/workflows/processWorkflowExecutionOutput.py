@@ -21,7 +21,7 @@ logger = safeLogger(service_name="UploadAllAssets")
 
 try:
     bucket_name = os.environ["S3_ASSET_STORAGE_BUCKET"]
-    upload_function = os.environ['UPLOAD_LAMBDA_FUNCTION_NAME'] 
+    upload_function = os.environ['UPLOAD_LAMBDA_FUNCTION_NAME']
     read_metadata_function = os.environ['READ_METADATA_LAMBDA_FUNCTION_NAME']
     create_metadata_function = os.environ['CREATE_METADATA_LAMBDA_FUNCTION_NAME']
     asset_Database = os.environ["ASSET_STORAGE_TABLE_NAME"]
@@ -122,10 +122,13 @@ def lambda_handler(event, context):
         response['statusCode'] = 400
         response['body'] = json.dumps({"message": message})
         return response
-    
+
     try:
         #sub in body for event
         event = event["body"]
+
+        global claims_and_roles
+        claims_and_roles = request_to_claims(event)
 
         #Input validation
         if 'databaseId' not in event:
@@ -141,7 +144,7 @@ def lambda_handler(event, context):
             response['statusCode'] = 400
             response['body'] = json.dumps({"message": message})
             return response
-        
+
         if 'executingRequestContext' not in event:
             message = "No executingRequestContext in API Call"
             logger.error(message)
@@ -155,7 +158,7 @@ def lambda_handler(event, context):
             response['statusCode'] = 400
             response['body'] = json.dumps({"message": message})
             return response
-        
+
 
         logger.info("Validating parameters")
         #required fields
@@ -170,7 +173,7 @@ def lambda_handler(event, context):
             },
             'executingUserName': {
                 'value': event['executingUserName'],
-                'validator': 'EMAIL'
+                'validator': 'USERID'
             },
             'assetFilesPathPipelineKey': {
                 'value': event.get("filesPathKey", ""),
@@ -193,12 +196,12 @@ def lambda_handler(event, context):
             response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
             return response
-        
+
         userName = event['executingUserName']
         requestContext = event['executingRequestContext']
 
         #ABAC Checks for Asset
-        #ABAC Implementation Deviation - Not called through API. Username passed through Pipeline Execution Call. 
+        #ABAC Implementation Deviation - Not called through API. Username passed through Pipeline Execution Call.
         asset = {
             "object__type": "asset",
             "databaseId": event['databaseId'],
@@ -208,15 +211,16 @@ def lambda_handler(event, context):
         }
         logger.info(asset)
 
-        casbin_enforcer = CasbinEnforcer(userName)
-        if casbin_enforcer.enforce(f"user::{userName}", asset, "PUT"):
-            operation_allowed_on_asset = True
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(asset, "PUT"):
+                operation_allowed_on_asset = True
 
         if operation_allowed_on_asset:
             #Handle preview outputs
             if ('previewPathKey' in event):
                 previewPathKey = event['previewPathKey']
-                
+
                 objectsFound = {}
                 try:
                     objectsFound = verify_get_path_objects(bucket_name, previewPathKey)
@@ -232,7 +236,7 @@ def lambda_handler(event, context):
                     for file in files:
                         #Only process files that end in image extension for now
                         if file.endswith('.jpeg') or file.endswith('.jpg') or file.endswith('.png'):
-                            logger.info("PREVIEW UPLOAD TO BE IMPLEMENTED") 
+                            logger.info("PREVIEW UPLOAD TO BE IMPLEMENTED")
                             #TODO: Add preview file upload
 
                             break #only process 1 preview file for now
@@ -258,7 +262,7 @@ def lambda_handler(event, context):
                         "pathParameters": {
                             "databaseId": event['databaseId'],
                             "assetId": event['assetId']
-                        } 
+                        }
                     }
                     logger.info("Getting metadata")
                     logger.info(l_payload)

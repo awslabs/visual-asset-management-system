@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { API } from "aws-amplify";
+import { API, Auth as AmplifyAuth } from "aws-amplify";
 import { ICredentials, GetCredentials } from "./types";
 
 class UnableToRetrieveCredentialsError extends Error {
@@ -43,8 +43,19 @@ class AssetCredentials {
             return this.credentials;
         }
 
+        //If we are using cognito, also pass the sessions ID token as the access token can't be used in the current scoped S3 access STS role fetching
+        let cognitoIdJwtToken = "";
+        if (!window.DISABLE_COGNITO) {
+            cognitoIdJwtToken = (await AmplifyAuth.currentSession()).getIdToken().getJwtToken();
+        }
+
+        let bodyToSubmit = {
+            ...this.identifiers,
+            idJwtToken: cognitoIdJwtToken,
+        };
+
         const resp: ScopedS3Response = await API.post("api", "auth/scopeds3access", {
-            body: this.identifiers,
+            body: bodyToSubmit,
         });
 
         if (!resp.Credentials) {

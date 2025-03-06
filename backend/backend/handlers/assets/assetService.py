@@ -79,11 +79,10 @@ def get_all_assets(event, query_params, show_deleted=False):
         deserialized_document.update({
             "object__type": "asset"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", deserialized_document, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(deserialized_document, "GET"):
                 items.append(deserialized_document)
-                break
 
     result['Items'] = items
 
@@ -118,11 +117,10 @@ def get_assets(databaseId, query_params, showDeleted=False):
         item.update({
             "object__type": "asset"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", item, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(item, "GET"):
                 items.append(item)
-                break
 
     result["Items"] = items
 
@@ -145,11 +143,10 @@ def get_asset(databaseId, assetId, showDeleted=False):
         asset.update({
             "object__type": "asset"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", asset, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(asset, "GET"):
                 allowed = True
-                break
 
     return asset if allowed else {}
 
@@ -172,11 +169,10 @@ def delete_asset(databaseId, assetId, queryParameters):
         item.update({
             "object__type": "asset"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", item, "DELETE"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(item, "DELETE"):
                 allowed = True
-                break
 
         if allowed:
             logger.info("Deleting asset: ")
@@ -213,7 +209,7 @@ def archive_multi_file(location, databaseId, assetId):
     prefix = ""
     if "Key" in location:
         prefix = location['Key']
-    if len(prefix) == 0:
+    if prefix is None or len(prefix) == 0:
         return
     logger.info('Archiving folder with multiple files')
 
@@ -245,7 +241,7 @@ def archive_file(location, databaseId, assetId):
     if "Key" in location:
         key = location['Key']
 
-    if len(key) == 0:
+    if key is None or len(key) == 0:
         return
     logger.info("Archiving item: " + bucket_name +":" + key)
 
@@ -286,7 +282,7 @@ def delete_assetAuxiliary_files(assetLocation):
     if "Key" in assetLocation:
         key = assetLocation['Key']
 
-    if len(key) == 0:
+    if key is None or len(key) == 0:
         return
 
     # Add the folder deliminiator to the end of the key
@@ -427,11 +423,10 @@ def lambda_handler(event, context):
         claims_and_roles = request_to_claims(event)
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if httpMethod == 'GET' and method_allowed_on_api:
             return get_handler(event, response, pathParameters, queryParameters)

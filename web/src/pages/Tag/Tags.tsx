@@ -58,7 +58,7 @@ export const TagTypesListDefinition = new ListDefinition({
     pluralName: "tag types",
     pluralNameTitleCase: "Tag Types",
     singularNameTitleCase: "Tag Type",
-    visibleColumns: ["tagTypeName", "description", "tags"],
+    visibleColumns: ["tagTypeName", "description", "required", "tags"],
     filterColumns: [{ name: "name", placeholder: "Name" }],
     elementId: "name",
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
@@ -84,6 +84,12 @@ export const TagTypesListDefinition = new ListDefinition({
             header: "Description",
             cellWrapper: (props: any) => <>{props.children}</>,
             sortingField: "description",
+        }),
+        new ColumnDefinition({
+            id: "required",
+            header: "Required on Asset",
+            cellWrapper: (props: any) => <>{props.children}</>,
+            sortingField: "required",
         }),
         new ColumnDefinition({
             id: "tags",

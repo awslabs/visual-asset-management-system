@@ -48,28 +48,41 @@ casbin_user_enforcer_map = {} if CASBIN_NO_DICTIONARY_LOCKING else locked_dict.L
 
 logger = safeLogger(service="AuthzInit")
 
+deserializer = TypeDeserializer()
+_dynamodb_client = boto3.client("dynamodb")
+paginator = _dynamodb_client.get_paginator("scan")
+
+# Determine if MFA is enabled from claims
+def is_mfa_enabled(claims_and_roles):
+    mfaEnabled = False
+    if "mfaEnabled" in claims_and_roles:
+        mfaEnabled = claims_and_roles["mfaEnabled"]
+    return mfaEnabled
 
 # Wrap CasbinEnforcerService objects, caching them to corresponding users to improve performance
 # Policy updates within CasbinEnforcerProxy objects will occur separately.
 # CasbinEnforcer acts as the Proxy/intermediary to the Service object.
 #
 class CasbinEnforcer:
-    def __init__(self, user_id):
+    def __init__(self, claims_and_roles):
         global casbin_user_enforcer_map
         self.service_object = None
+        user_id = claims_and_roles["tokens"][0]
+        mfaEnabled = is_mfa_enabled(claims_and_roles)
         if user_id in casbin_user_enforcer_map:
             # Previously cached user-specific enforcers?
             #
             self.service_object = casbin_user_enforcer_map[user_id]
+            self.service_object._mfaEnabled = mfaEnabled
         else:
-            self.service_object = CasbinEnforcerService(user_id)
+            self.service_object = CasbinEnforcerService(user_id, mfaEnabled)
             # Cache the user-specific enforcer future calls
             #
             casbin_user_enforcer_map[user_id] = self.service_object
 
-    def enforce(self, sub, obj, act):
-        return self.service_object.enforce(sub, obj, act)
-    
+    def enforce(self, obj, act):
+        return self.service_object.enforce(obj, act)
+
     def enforceAPI(self, lambdaEvent, apiMethodOverrideValue = ''):
         claims_and_roles = request_to_claims(lambdaEvent)
 
@@ -86,13 +99,8 @@ class CasbinEnforcer:
                 "route__path": lambdaEvent['requestContext']['http']['path'] #"/" + event['requestContext']['http']['path'].split("/")[1]
             }
 
-            #Exits out after the first user (what we want!)
-            for user_name in claims_and_roles["tokens"]:
-                return self.service_object.enforce(f"user::{user_name}", request_object, http_method)
-                
-            #If nothing found, exit with false
-            return False
-            
+            return self.service_object.enforce(request_object, http_method)
+
         # elif 'lambdaCrossCall' in lambdaEvent:
         #     # This is a cross-call from another approved lambda.
         #     # Credentials logic in claims_and_roles should already account for this
@@ -106,23 +114,25 @@ class CasbinEnforcer:
         else:
             #This is not a normal structered call so automatiacally fail
             return False
-        
+
 class CasbinEnforcerService:
-    def __init__(self, user_id):
+    def __init__(self, user_id, mfa_enabled):
         # Handle user policy-specific caching and updates (globally)
         #
         global casbin_user_policy_map
 
         self._auth_table_name = ""
-        self._dynamodb_client = boto3.client("dynamodb")
         self._user_roles_table_name = ""
+        self._roles_table_name = ""
         self._user_id = user_id
+        self._mfaEnabled = mfa_enabled
         self._dateTime_Cached = datetime.now()
         self._enforcer = None
 
         try:
             self._user_roles_table_name = os.environ["USER_ROLES_TABLE_NAME"]
             self._auth_table_name = os.environ["AUTH_TABLE_NAME"]
+            self._roles_table_name = os.environ["ROLES_TABLE_NAME"]
         except KeyError as ex:
             logger.exception("Failed to find environment variables")
             raise Exception("Failed to initialize Casbin Enforcer as required environment variables are not defined")
@@ -140,8 +150,6 @@ class CasbinEnforcerService:
         self._create_casbin_enforcer(policy_text)
 
     def _read_policies_from_table(self, role_name):
-        deserializer = TypeDeserializer()
-        paginator = self._dynamodb_client.get_paginator("scan")
 
         # See: UserRolesStorageTable in: infra/lib/nestedStacks/auth/constructs/*.ts (for groupPermissions)
         # The ABAC system will eventually have three methods to tie a user to a constraint.
@@ -174,7 +182,7 @@ class CasbinEnforcerService:
             }
         ).build_full_result()
 
-        pageIteratorItems = []   
+        pageIteratorItems = []
         pageIteratorItems.extend(page_iterator['Items'])
 
         while 'NextToken' in page_iterator:
@@ -203,7 +211,7 @@ class CasbinEnforcerService:
                 }
             ).build_full_result()
             pageIteratorItems.extend(page_iterator['Items'])
-        
+
         items = []
         for item in pageIteratorItems:
             deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
@@ -212,8 +220,6 @@ class CasbinEnforcerService:
         return items
 
     def _read_current_user_roles_from_table(self):
-        deserializer = TypeDeserializer()
-        paginator = self._dynamodb_client.get_paginator("scan")
 
         # See: UserRolesStorageTable in: infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts
         #
@@ -228,7 +234,7 @@ class CasbinEnforcerService:
             }
         ).build_full_result()
 
-        pageIteratorItems = []   
+        pageIteratorItems = []
         pageIteratorItems.extend(page_iterator['Items'])
 
         while 'NextToken' in page_iterator:
@@ -241,6 +247,56 @@ class CasbinEnforcerService:
                     "MaxItems": 1000,
                     "PageSize": 1000,
                     "StartingToken": nextToken
+                }
+            ).build_full_result()
+            pageIteratorItems.extend(page_iterator['Items'])
+
+        items = []
+        for item in pageIteratorItems:
+            deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
+            items.append(deserialized_document)
+
+        return items
+
+    def _read_mfaNotRequired_roles_from_table(self):
+        # Returns roles that align to the users self._mfaEnabled value
+        # roleName is required for the relevant user roles check
+        #
+
+        filter_expression = (
+            'attribute_exists(roleName) AND '
+            '(attribute_not_exists(mfaRequired) OR mfaRequired = :mfa_value)'
+        )
+
+        # Expression attribute values
+        expression_attr_values = {
+            ':mfa_value': {"BOOL": False}
+        }
+
+        page_iterator = paginator.paginate(
+            TableName=self._roles_table_name,
+            FilterExpression=filter_expression,
+            ExpressionAttributeValues=expression_attr_values,
+            PaginationConfig={
+                "MaxItems": 1000,
+                "PageSize": 1000,
+                'StartingToken': None
+            }
+        ).build_full_result()
+
+        pageIteratorItems = []
+        pageIteratorItems.extend(page_iterator['Items'])
+
+        while 'NextToken' in page_iterator:
+            nextToken = page_iterator['NextToken']
+            page_iterator = paginator.paginate(
+                TableName=self._roles_table_name,
+                FilterExpression=filter_expression,
+                ExpressionAttributeValues=expression_attr_values,
+                PaginationConfig={
+                    "MaxItems": 1000,
+                    "PageSize": 1000,
+                    'StartingToken': nextToken
                 }
             ).build_full_result()
             pageIteratorItems.extend(page_iterator['Items'])
@@ -328,7 +384,17 @@ class CasbinEnforcerService:
             self._dateTime_Cached = datetime.now()
         return policy_text
     def _create_policy_text_helper(self):
-        user_roles_from_table = self._read_current_user_roles_from_table()
+        # If the user is signed in with MFA, read all roles with actions and generate policy text
+        # If not, get all related user roles with MFA attribute set to False and generate policy text
+        #
+        if self._mfaEnabled:
+            user_roles_from_table = self._read_current_user_roles_from_table()
+        else:
+            relevant_NonMFA_roles = self._read_mfaNotRequired_roles_from_table()
+            relevant_NonMFA_role_names = [role["roleName"] for role in relevant_NonMFA_roles]
+            all_user_roles_from_table = self._read_current_user_roles_from_table()
+            user_roles_from_table = [user_role for user_role in all_user_roles_from_table if user_role["roleName"] in relevant_NonMFA_role_names]
+
         policies_from_table_by_roles = []
 
         policy_text = ""
@@ -424,9 +490,11 @@ class CasbinEnforcerService:
         _enforcer = FastEnforcer(model=new_model, adapter=new_string_adapter, enable_log=True)
         return _enforcer
 
-    def enforce(self, sub, obj, act):
+    def enforce(self, obj, act):
         global CASBIN_REFRESH_POLICY_SECONDS
         global casbin_user_policy_map
+
+        sub = f"user::{self._user_id}"
 
         # If the internal Casbin module is not functioning, then immediately deny all access
         #
@@ -436,14 +504,18 @@ class CasbinEnforcerService:
         # Check if the Casbin policy cache is older than CASBIN_REFRESH_POLICY_SECONDS seconds; if so update cache.
         # Note: global variables update user roles if they changed in a timely fashion
         #
-        if (datetime.now() - timedelta(seconds=CASBIN_REFRESH_POLICY_SECONDS)) < self._dateTime_Cached:
-            # logger.info("Casbin Policy Cache Expiration - Refreshing Policy")
+        if (datetime.now() - timedelta(seconds=CASBIN_REFRESH_POLICY_SECONDS)) > self._dateTime_Cached:
+            logger.info("Casbin Policy Cache Expiration - Refreshing Policy")
             # Refresh cache. Alternatively, it's possible to use DynamoDB Streams to detect changes in DB against
             # a cache flag.
             #
             if self._user_id in casbin_user_policy_map:
                 del casbin_user_policy_map[self._user_id]
-            if POLICY_TEXT_DENY_ALL == self._create_policy_text():
+
+            policy_text = self._create_policy_text()
+            self._create_casbin_enforcer(policy_text)
+
+            if POLICY_TEXT_DENY_ALL == policy_text:
                 # Upon policy_text failure, have future calls re-instate the cache entry and enforcer
                 # Avoid relying on stale cache as long-term fallback option
                 #
