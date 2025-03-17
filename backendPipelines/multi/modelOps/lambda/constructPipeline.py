@@ -54,6 +54,7 @@ def construct_modelops_definition(event) -> dict:
         config["state"]["name"] = input_s3_asset_file_filename
         config["state"]["bucket"] = input_s3_asset_file_bucket
         config["state"]["prefix"] = input_s3_asset_file_key.split("/")[0]
+        config["state"]["extension"] = input_s3_asset_extension.replace(".", "")
 
         command_string = json.dumps(config)
         command = "printf '" + command_string + "' | /home/app/apps/handler/dist/index.js -i yaml --debug"
