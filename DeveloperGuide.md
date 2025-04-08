@@ -592,6 +592,24 @@ NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback 
 | :-------------------------------------------------- | :------------------------ |
 | GLTF, GLB, USD, OBJ, FBX, VRM, STL, PLY (3D Meshes) | vamsExecuteRapidPipeline  |
 
+### Standard Type - ModelOps Asset Optimization & Conversion Pipeline (Asynchronous)
+
+ModelOps 3D Task Handler is used to convert between various 3D mesh file types, optimize mesh files, and more.
+
+If you wish to trigger this pipelines additionally/manually through VAMS pipeline, you can setup a new VAMS pipeline using the table below. You will need to lookup the lambda function name in the AWS console based on the base deployment name listed.
+
+The pipeline uses a third-party tool from VNTANA, VNTANA Intelligent 3D Optimization Engine Container, and requires an active subscription to their [AWS Marketplace Listing](https://aws.amazon.com/marketplace/pp/prodview-ooio3bidshgy4?applicationId=AWSMPContessa&ref_=beagle&sr=0-1).
+
+The pipeline uses templated (JSON) files with distinct modules for each action the pipeline should perform. To set the pipeline template, copy/paste the template code in the registered pipeline `inputParameters`. The template must be used to determine the pipeline actions and final conversion type(s).
+
+NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback with the Task Token".
+
+| Input File Types Supported                          | Base Lambda Function Name |
+| :-------------------------------------------------- | :------------------------ |
+| GLTF, GLB, USDZ, OBJ, FBX, STL, various CAD formats | vamsExecuteModelOps       |
+
+See VNTANA [documentation](https://www.vntana.com/resource/platform-inputs/) for all supported input and output formats.
+
 # Testing API
 
 Please see the corresponding [Postman Collection](https://github.com/awslabs/visual-asset-management-system/blob/main/VAMS_API_Tests.postman_collection.json) provided.

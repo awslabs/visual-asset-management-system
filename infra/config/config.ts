@@ -124,6 +124,10 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useRapidPipeline.enabled = false;
     }
 
+    if (config.app.pipelines.useModelOps.enabled == undefined) {
+        config.app.pipelines.useModelOps.enabled = false;
+    }
+
     if (config.app.authProvider.useCognito.useUserPasswordAuthFlow == undefined) {
         config.app.authProvider.useCognito.useUserPasswordAuthFlow = false;
     }
@@ -185,6 +189,7 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
         config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
         config.app.pipelines.useRapidPipeline.enabled ||
+        config.app.pipelines.useModelOps.enabled ||
         config.app.openSearch.useProvisioned.enabled
     ) {
         if (!config.app.useGlobalVpc.enabled) {
@@ -258,14 +263,17 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
-    //If using RapidPipeline, make sure Imported VPC has at least one private subnet included
+    //If using RapidPipeline or ModelOps, make sure Imported VPC has at least one private subnet included
     if (
         config.app.useGlobalVpc.enabled &&
         config.app.useGlobalVpc.optionalExternalVpcId &&
         config.app.useGlobalVpc.optionalExternalVpcId != "UNDEFINED" &&
         config.app.useGlobalVpc.optionalExternalVpcId != ""
     ) {
-        if (config.app.pipelines.useRapidPipeline.enabled) {
+        if (
+            config.app.pipelines.useRapidPipeline.enabled ||
+            config.app.pipelines.useModelOps.enabled
+        ) {
             if (
                 !config.app.useGlobalVpc.optionalExternalPrivateSubnetIds ||
                 config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == "UNDEFINED" ||
@@ -280,7 +288,8 @@ export function getConfig(app: cdk.App): Config {
 
     if (
         ((config.app.useAlb.enabled && config.app.useAlb.usePublicSubnet) ||
-            config.app.pipelines.useRapidPipeline.enabled) &&
+            config.app.pipelines.useRapidPipeline.enabled ||
+            config.app.pipelines.useModelOps.enabled) &&
         config.app.useGlobalVpc.enabled &&
         config.app.useGlobalVpc.optionalExternalVpcId &&
         config.app.useGlobalVpc.optionalExternalVpcId != "UNDEFINED" &&
@@ -473,6 +482,10 @@ export interface ConfigPublic {
                 enabled: boolean;
             };
             useRapidPipeline: {
+                enabled: boolean;
+                ecrContainerImageURI: string;
+            };
+            useModelOps: {
                 enabled: boolean;
                 ecrContainerImageURI: string;
             };
