@@ -21,7 +21,6 @@ usersMFACache = {}
 def customMFATokenScopeCheckOverride(user, lambdaRequest):
 
     authorizerJwt = lambdaRequest['requestContext']['authorizer']['jwt']
-    authorizer_jwt_token=lambdaRequest["headers"]["authorization"].split(" ")[1]
     mfaLoginEnabled = False
     try:
         if cognito_auth_enabled == "TRUE":
@@ -31,6 +30,7 @@ def customMFATokenScopeCheckOverride(user, lambdaRequest):
                 mfaLoginEnabled = usersMFACache[user]['MFAEnabled']
             else:
                 #Make call to cognito for user in JWT token to see if MFA preference is enabled. If it is, the user has authenticated with MFA
+                authorizer_jwt_token=lambdaRequest["headers"]["authorization"].split(" ")[1]
                 response = cognitoClient.get_user(
                     AccessToken=authorizer_jwt_token
                 )

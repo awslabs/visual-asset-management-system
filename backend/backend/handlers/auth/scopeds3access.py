@@ -220,7 +220,7 @@ def lambda_handler(event, context):
                 # return the credentials
                 response['body'] = json.dumps(assumed_role_object,
                                               default=datetime_serializer)
-
+                response['statusCode'] = 200
                 return response
             else:
                 response['body'] = json.dumps({

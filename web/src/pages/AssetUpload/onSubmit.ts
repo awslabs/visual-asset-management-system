@@ -15,7 +15,7 @@ import { FileUploadTableItem } from "./FileUploadTable";
 import { GetCredentials } from "../../common/s3/types";
 export type ExecStatusType = Record<string, StatusIndicatorProps.Type>;
 
-function getUploadTaskPromiseLazy(
+export function getUploadTaskPromiseLazy(
     index: number,
     key: string,
     f: File,

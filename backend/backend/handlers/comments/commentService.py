@@ -52,26 +52,35 @@ def get_all_comments(queryParams: dict, showDeleted=False) -> dict:
         }
     }
 
-    pageIterator = paginator.paginate(
-        TableName=comment_database,
-        ScanFilter=filter,
-        PaginationConfig={
-            "MaxItems": int(queryParams["maxItems"]),
-            "PageSize": int(queryParams["pageSize"]),
-            "StartingToken": queryParams["startingToken"],
-        },
-    ).build_full_result()
+    # Handle empty string for startingToken
+    pagination_config = {
+        "MaxItems": int(queryParams["maxItems"]),
+        "PageSize": int(queryParams["pageSize"]),
+    }
+    if queryParams["startingToken"] and queryParams["startingToken"] != "":
+        pagination_config["StartingToken"] = queryParams["startingToken"]
 
-    logger.info("Fetching results")
-    result = {}
-    items = []
-    for item in pageIterator["Items"]:
-        deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
-        items.append(deserialized_document)
-    result["Items"] = items
-    if "NextToken" in pageIterator:
-        result["NextToken"] = pageIterator["NextToken"]
-    return result
+    try:
+        pageIterator = paginator.paginate(
+            TableName=comment_database,
+            ScanFilter=filter,
+            PaginationConfig=pagination_config,
+        ).build_full_result()
+
+        logger.info("Fetching results")
+        result = {}
+        items = []
+        for item in pageIterator["Items"]:
+            deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
+            items.append(deserialized_document)
+        result["Items"] = items
+        if "NextToken" in pageIterator:
+            result["NextToken"] = pageIterator["NextToken"]
+        return result
+    except Exception as e:
+        logger.exception(f"Error in get_all_comments: {str(e)}")
+        # Return empty result on error
+        return {"Items": []}
 
 
 def get_comments(assetId: str, queryParams: dict, showDeleted=False) -> dict:
@@ -84,18 +93,27 @@ def get_comments(assetId: str, queryParams: dict, showDeleted=False) -> dict:
     """
     paginator = dynamodb.meta.client.get_paginator('query')
 
-    response = paginator.paginate(
-        TableName=comment_database,
-        KeyConditionExpression=Key("assetId").eq(assetId),
-        ScanIndexForward=False,
-        PaginationConfig={
-            'MaxItems': int(queryParams['maxItems']),
-            'PageSize': int(queryParams['pageSize']),
-            'StartingToken': queryParams['startingToken']
-        }
-    ).build_full_result()
+    # Handle empty string for startingToken
+    pagination_config = {
+        'MaxItems': int(queryParams['maxItems']),
+        'PageSize': int(queryParams['pageSize']),
+    }
+    if queryParams['startingToken'] and queryParams['startingToken'] != "":
+        pagination_config['StartingToken'] = queryParams['startingToken']
 
-    return response["Items"]
+    try:
+        response = paginator.paginate(
+            TableName=comment_database,
+            KeyConditionExpression=Key("assetId").eq(assetId),
+            ScanIndexForward=False,
+            PaginationConfig=pagination_config
+        ).build_full_result()
+
+        return response["Items"]
+    except Exception as e:
+        logger.exception(f"Error in get_comments: {str(e)}")
+        # Return empty result on error
+        return []
 
 
 def get_comments_version(assetId: str, assetVersionId: str, queryParams: dict, showDeleted=False) -> dict:
@@ -109,19 +127,28 @@ def get_comments_version(assetId: str, assetVersionId: str, queryParams: dict, s
     """
     paginator = dynamodb.meta.client.get_paginator('query')
 
-    # Queries partition key (assetId) and queries sort keys that begin_with the desired asset version
-    response = paginator.paginate(
-        TableName=comment_database,
-        KeyConditionExpression=Key("assetId").eq(assetId) & Key("assetVersionId:commentId").begins_with(assetVersionId),
-        ScanIndexForward=False,
-        PaginationConfig={
-            'MaxItems': int(queryParams['maxItems']),
-            'PageSize': int(queryParams['pageSize']),
-            'StartingToken': queryParams['startingToken']
-        }
-    ).build_full_result()
+    # Handle empty string for startingToken
+    pagination_config = {
+        'MaxItems': int(queryParams['maxItems']),
+        'PageSize': int(queryParams['pageSize']),
+    }
+    if queryParams['startingToken'] and queryParams['startingToken'] != "":
+        pagination_config['StartingToken'] = queryParams['startingToken']
 
-    return response["Items"]
+    try:
+        # Queries partition key (assetId) and queries sort keys that begin_with the desired asset version
+        response = paginator.paginate(
+            TableName=comment_database,
+            KeyConditionExpression=Key("assetId").eq(assetId) & Key("assetVersionId:commentId").begins_with(assetVersionId),
+            ScanIndexForward=False,
+            PaginationConfig=pagination_config
+        ).build_full_result()
+
+        return response["Items"]
+    except Exception as e:
+        logger.exception(f"Error in get_comments_version: {str(e)}")
+        # Return empty result on error
+        return []
 
 
 def get_single_comment(assetId: str, assetVersionIdAndCommentId: str, showDeleted=False) -> dict:
@@ -244,6 +271,7 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
                         )
                     }
                 )
+                response["statusCode"] = 200
                 return response
 
             # if we just have assetId, call get_comments
@@ -258,11 +286,13 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
 
                 logger.info(f"Listing comments for asset: {pathParameters['assetId']}")
                 response["body"] = json.dumps({"message": get_comments(pathParameters["assetId"], queryParameters, showDeleted)})
+                response["statusCode"] = 200
                 return response
             else:
                 # if we have nothing, call get_all_comments
                 logger.info("Listing All Comments")
                 response["body"] = json.dumps({"message": get_all_comments(queryParameters, showDeleted)})
+                response["statusCode"] = 200
                 return response
         else:
             # error, no assetId in call
@@ -301,10 +331,12 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
                     )
                 }
             )
+            response["statusCode"] = 200
             return response
     else:
         response["statusCode"] = 403
         response["body"] = json.dumps({"message": "Action not allowed"})
+        return response
 
 
 def delete_handler(response: dict, pathParameters: dict, event: dict) -> dict:
@@ -396,11 +428,20 @@ def lambda_handler(event: dict, context: dict) -> dict:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
+        
 
         if httpMethod == "GET" and method_allowed_on_api:
-            return get_handler(response, pathParameters, queryParameters)
+            result = get_handler(response, pathParameters, queryParameters)
+            return result
         if httpMethod == "DELETE" and method_allowed_on_api:
-            return delete_handler(response, pathParameters, event)
+            result = delete_handler(response, pathParameters, event)
+            return result
+        
+        # If we get here, we didn't handle the request
+        logger.error("No handler matched")
+        response["statusCode"] = 405
+        response["body"] = json.dumps({"message": "Method not allowed"})
+        return response
 
     except Exception as e:
         response["statusCode"] = 500

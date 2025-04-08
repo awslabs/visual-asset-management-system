@@ -202,10 +202,18 @@ def lambda_handler(event, context):
             return response
 
     except Exception as e:
-        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
-            response['statusCode'] = 400
-            response['body'] = json.dumps({"message": "AssetId doesn't exists."})
-        else:
-            response['statusCode'] = 500
-            response['body'] = json.dumps({"message": "Internal Server Error"})
+        # Check if this is a boto3 ClientError with ConditionalCheckFailedException
+        try:
+            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                response['statusCode'] = 400
+                response['body'] = json.dumps({"message": "AssetId doesn't exists."})
+                return response
+        except (AttributeError, KeyError, TypeError):
+            # Not a ClientError or doesn't have the expected structure
+            pass
+        
+        # Handle as a general error
+        logger.exception("Error in lambda_handler")
+        response['statusCode'] = 500
+        response['body'] = json.dumps({"message": "Internal Server Error"})
         return response

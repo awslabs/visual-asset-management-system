@@ -14,10 +14,10 @@ import { useEffect, useState } from "react";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
 import { Storage, API } from "aws-amplify";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
-import { UploadAssetWorkflowApi } from "../../pages/AssetUpload/onSubmit";
+import { UploadAssetWorkflowApi, getUploadTaskPromiseLazy } from "../../pages/AssetUpload/onSubmit";
 import { fetchTags, fetchtagTypes } from "../../services/APIService";
 import { TagType } from "../../pages/Tag/TagType.interface";
-import { validateRequiredTagTypeSelected } from "../../pages/AssetUpload/validations";
+import { validateRequiredTagTypeSelected, validateNonZeroLengthTextAsYouType } from "../../pages/AssetUpload/validations";
 
 interface UpdateAssetProps {
     asset: any;
@@ -62,31 +62,38 @@ const update = async (
         uploadBody.previewLocation = {
             Key: newKey,
         };
-        await Storage.put(newKey, files[0], {
-            resumable: true,
-            customPrefix: {
-                public: "",
-            },
-            progressCallback(progress) {
-                setProgress(Math.floor((progress.loaded / progress.total) * 100));
-            },
-            errorCallback: (err) => {
-                setError({ isError: true, message: err });
-            },
-            completeCallback: (event) => {
-                const body: Partial<UploadAssetWorkflowApi> = { uploadAssetBody: uploadBody };
-                return API.post("api", "assets/uploadAssetWorkflow", {
-                    "Content-type": "application/json",
-                    body,
-                })
-                    .then((res) => {
-                        setComplete(true);
+        try {
+            await getUploadTaskPromiseLazy(
+                0,
+                newKey,
+                files[0],
+                {
+                    assetId: updatedAsset.assetId,
+                    databaseId: updatedAsset.databaseId,
+                },
+                (idx, progress) => {
+                    setProgress(Math.floor((progress.loaded / progress.total) * 100));
+                },
+                (idx, complete) => {
+                    const body: Partial<UploadAssetWorkflowApi> = { uploadAssetBody: uploadBody };
+                    return API.post("api", "assets/uploadAssetWorkflow", {
+                        "Content-type": "application/json",
+                        body,
                     })
-                    .catch((err) => {
-                        setError({ isError: true, message: err });
-                    });
-            },
-        });
+                        .then((res) => {
+                            setComplete(true);
+                        })
+                        .catch((err:any) => {
+                            setError({ isError: true, message: err.message });
+                        });
+                },
+                (idx, error) => {
+                    setError({ isError: true, message: error.message });
+                },
+            )
+        } catch (err:any) {
+            setError({ isError: true, message: err.message });
+        }
     } else {
         const body: Partial<UploadAssetWorkflowApi> = { uploadAssetBody: uploadBody };
         API.post("api", "assets/uploadAssetWorkflow", {
@@ -109,6 +116,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     const [complete, setComplete] = useState(false);
     const [isValid, setIsValid] = useState(true);
     const [isFormTouched, setIsFormTouched] = useState(false);
+    const [inProgress, setInProgress] = useState(false);
 
     const [value, setValue] = useState<File[]>([]);
     if (complete) {
@@ -118,6 +126,8 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
 
     const [validationText, setValidationText] = useState<{
         tags?: string;
+        assetName?: string;
+        description?: string;
     }>({});
 
     const [constraintText, setConstraintText] = useState<{
@@ -189,6 +199,8 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     useEffect(() => {
         // Form Validation Error Check
         const validation = {
+            assetName: validateNonZeroLengthTextAsYouType(assetDetail.assetName),
+            description: validateNonZeroLengthTextAsYouType(assetDetail.description),
             tags: validateRequiredTagTypeSelected(
                 selectedTags.map((tag) => tag.value!),
                 tagTypes
@@ -196,9 +208,13 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
         };
         setValidationText(validation);
 
-        const isValid = !validation.tags;
+        const isValid = !(
+            validation.assetName ||
+            validation.description ||
+            validation.tags
+        );
         setIsValid(isValid);
-    }, [selectedTags, isFormTouched]);
+    }, [selectedTags, assetDetail.assetName, assetDetail.description, isFormTouched]);
 
     return (
         <Modal
@@ -224,6 +240,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                         <Button
                             variant="primary"
                             onClick={() => {
+                                setInProgress(true);
                                 setIsFormTouched(true);
                                 update(
                                     assetDetail,
@@ -232,8 +249,11 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                                     setError,
                                     setComplete,
                                     isValid
-                                );
+                                )
                             }}
+                            disabled={
+                                (inProgress && !error.isError) || !isValid
+                            }
                         >
                             Update Asset
                         </Button>
@@ -243,7 +263,8 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
             header="Update Asset"
         >
             <SpaceBetween direction="vertical" size="l">
-                <FormField label={`${Synonyms.Asset} Name`}>
+                <FormField label={`${Synonyms.Asset} Name`}
+                    errorText={isFormTouched && validationText.assetName}>
                     <Input
                         value={assetDetail.assetName || ""}
                         data-testid="assetid-input"
@@ -256,7 +277,9 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                         }}
                     />
                 </FormField>
-                <FormField label={`${Synonyms.Asset} Description`}>
+                <FormField
+                    label={`${Synonyms.Asset} Description`}
+                    errorText={isFormTouched && validationText.description}>
                     <Input
                         value={assetDetail.description || ""}
                         data-testid="assetdescription-input"
@@ -341,7 +364,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                         constraintText="Image files only"
                     />
                 </FormField>
-                {progress > 0 && (
+                {(progress > 0 || error.isError) && (
                     <ProgressBar
                         value={complete ? 100 : progress}
                         label={"Preview upload progress"}

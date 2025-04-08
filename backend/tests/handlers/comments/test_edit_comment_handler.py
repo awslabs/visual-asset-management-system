@@ -1,6 +1,6 @@
 import pytest
 import datetime
-from tests.conftest import TestComment
+from backend.tests.conftest import TestComment
 
 
 @pytest.fixture(scope="function")
