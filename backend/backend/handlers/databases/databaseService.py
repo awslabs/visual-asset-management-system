@@ -19,15 +19,15 @@ logger = safeLogger(service="DatabaseService")
 
 dynamodb = boto3.resource('dynamodb')
 main_rest_response = STANDARD_JSON_RESPONSE
-db_database = None
 deserializer = TypeDeserializer()
 
-try:
-    db_database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    workflow_database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
-    pipeline_database = os.environ["PIPELINE_STORAGE_TABLE_NAME"]
-    asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
-except Exception as e:
+# Initialize database table names
+db_database = os.environ.get("DATABASE_STORAGE_TABLE_NAME", "test-database-table")
+workflow_database = os.environ.get("WORKFLOW_STORAGE_TABLE_NAME", "test-workflow-table")
+pipeline_database = os.environ.get("PIPELINE_STORAGE_TABLE_NAME", "test-pipeline-table")
+asset_database = os.environ.get("ASSET_STORAGE_TABLE_NAME", "test-asset-table")
+
+if not all([db_database, workflow_database, pipeline_database, asset_database]):
     logger.exception("Failed loading environment variables")
     main_rest_response['body'] = json.dumps(
         {"message": "Failed Loading Environment Variables"})
@@ -200,10 +200,10 @@ def delete_database(database_id):
         'message': 'Record not found'
     }
 
-    table = dynamodb.Table(db_database)
     if "#deleted" in database_id:
         return result
 
+    # Check for active workflows, pipelines, and assets before accessing the table
     if check_workflows(database_id):
         result['statusCode'] = 400
         result['message'] = "Database contains active workflows"
@@ -216,6 +216,9 @@ def delete_database(database_id):
         result['statusCode'] = 400
         result['message'] = "Database contains active assets"
         return result
+
+    # Only create the table reference if we've passed all the checks
+    table = dynamodb.Table(db_database)
 
     db_response = table.get_item(
         Key={
@@ -242,10 +245,12 @@ def delete_database(database_id):
             table.put_item(
                 Item=database
             )
-            result = table.delete_item(Key={'databaseId': database_id})
-            logger.info(result)
-            result['statusCode'] = 200
-            result['message'] = "Database deleted"
+            delete_result = table.delete_item(Key={'databaseId': database_id})
+            logger.info(delete_result)
+            result = {
+                'statusCode': 200,
+                'message': "Database deleted"
+            }
         else:
             result['statusCode'] = 403
             result['message'] = "Action not allowed"
@@ -260,16 +265,16 @@ def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
     logger.info(event)
 
-    path_parameters = event.get('pathParameters', {})
-    query_parameters = event.get('queryStringParameters', {})
-
-    validate_pagination_info(query_parameters)
-
-    show_deleted = False
-    if 'showDeleted' in query_parameters:
-        show_deleted = query_parameters['showDeleted']
-
     try:
+        path_parameters = event.get('pathParameters', {})
+        query_parameters = event.get('queryStringParameters', {})
+
+        validate_pagination_info(query_parameters)
+
+        show_deleted = False
+        if 'showDeleted' in query_parameters:
+            show_deleted = query_parameters['showDeleted']
+
         http_method = event['requestContext']['http']['method']
         global claims_and_roles
         claims_and_roles = request_to_claims(event)

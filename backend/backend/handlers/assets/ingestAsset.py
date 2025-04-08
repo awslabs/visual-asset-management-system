@@ -258,7 +258,8 @@ def lambda_handler(event, context):
 
                                 payload = generate_upload_asset_payload(event)
                                 payload.update({
-                                    "requestContext": event['requestContext']
+                                    "requestContext": event['requestContext'],
+                                    "headers": {"authorization": event["headers"]["authorization"] }
                                 })
                                 logger.info("Payload:")
                                 logger.info(payload)

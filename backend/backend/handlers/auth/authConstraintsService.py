@@ -92,7 +92,10 @@ def get_constraints(event, response, query_params):
 def get_constraint_from_event(event):
     constraint = None
     if 'body' in event:
-        constraint = json.loads(event['body'])
+        if isinstance(event['body'], str):
+            constraint = json.loads(event['body'])
+        else:
+            constraint = event['body']
 
     pathParameters = event.get('pathParameters', {})
     if 'constraintId' in pathParameters:
@@ -118,24 +121,23 @@ def update_constraint(event, response):
     })
 
     #Do validation checks on constraint inputs
-    if isinstance(event['body'], str):
-        event['body'] = json.loads(event['body'])
+    body = constraint  # Use the constraint object from get_constraint_from_event
 
-    if ('criteriaOr' not in event['body'] and 'criteriaAnd' not in event['body']):
+    if ('criteriaOr' not in body and 'criteriaAnd' not in body):
         raise ValidationError(404, "Constraint must include criteriaOr or criteriaAnd statements")
 
     totalCriteria = 0
-    if 'criteriaOr' in event['body']:
-        totalCriteria += len(event['body']['criteriaOr'])
+    if 'criteriaOr' in body:
+        totalCriteria += len(body['criteriaOr'])
 
-    if 'criteriaAnd' in event['body']:
-        totalCriteria += len(event['body']['criteriaAnd'])
+    if 'criteriaAnd' in body:
+        totalCriteria += len(body['criteriaAnd'])
 
     if (totalCriteria == 0):
         raise ValidationError(404, "Constraint must include criteriaOr or criteriaAnd statements")
 
-    if 'criteriaAnd' in event['body']:
-        for criteriaAnd in event['body']['criteriaAnd']:
+    if 'criteriaAnd' in body:
+        for criteriaAnd in body['criteriaAnd']:
             (valid, message) = validate({
                 'criteriaAnd': {
                     'value': criteriaAnd['value'],
@@ -146,8 +148,8 @@ def update_constraint(event, response):
             if not valid:
                 raise ValidationError(400, message)
 
-    if 'criteriaOr' in event['body']:
-        for criteriaOr in event['body']['criteriaOr']:
+    if 'criteriaOr' in body:
+        for criteriaOr in body['criteriaOr']:
             (valid, message) = validate({
                 'criteriaOrValue': {
                     'value': criteriaOr['value'],
@@ -158,8 +160,8 @@ def update_constraint(event, response):
             if not valid:
                 raise ValidationError(400, message)
 
-    if 'groupPermissions' in event['body']:
-        for groupPermission in event['body']['groupPermissions']:
+    if 'groupPermissions' in body:
+        for groupPermission in body['groupPermissions']:
             (valid, message) = validate({
                 'roleName': {
                     'value': groupPermission['groupId'],
@@ -170,8 +172,8 @@ def update_constraint(event, response):
             if not valid:
                 raise ValidationError(400, message)
 
-    if 'userPermissions' in event['body']:
-        for userPermission in event['body']['userPermissions']:
+    if 'userPermissions' in body:
+        for userPermission in body['userPermissions']:
             (valid, message) = validate({
                 'userId': {
                     'value': userPermission['userId'],
@@ -227,8 +229,12 @@ def lambda_handler(event, context):
                 return response
 
 
-        elif 'identifier' in event.get('body', {}):
-            constraintId = event.get('body').get('identifier')
+        elif 'body' in event and isinstance(event['body'], str):
+            body = json.loads(event['body'])
+            if 'identifier' in body:
+                constraintId = body['identifier']
+        elif 'body' in event and isinstance(event['body'], dict) and 'identifier' in event['body']:
+            constraintId = event['body']['identifier']
 
             (valid, message) = validate({
                 'constraintId': {
@@ -279,6 +285,8 @@ def lambda_handler(event, context):
     except ValidationError as ex:
         logger.error(ex)
         response['statusCode'] = ex.code
+        if isinstance(response['body'], str):
+            response['body'] = {}
         response['body']['error'] = ex.resp
         response['body'] = json.dumps(response['body'])
         return response
@@ -287,6 +295,8 @@ def lambda_handler(event, context):
         logger.error(event)
         logger.error(e)
         response['statusCode'] = 500
+        if isinstance(response['body'], str):
+            response['body'] = {}
         response['body']['error'] = "Internal Server Error"
         response['body'] = json.dumps(response['body'])
         return response

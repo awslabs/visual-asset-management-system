@@ -97,7 +97,7 @@ def validate_pagination_info(queryParameters, defaultMaxItemsOverride=1000):
         queryParameters['startingToken'] = None
 
     #Limit page size
-    if queryParameters['maxItems'] > defaultMaxItemsOverride:
+    if int(queryParameters['maxItems']) > defaultMaxItemsOverride:
         queryParameters['maxItems'] = defaultMaxItemsOverride
         queryParameters['pageSize'] = defaultMaxItemsOverride
         logger.warn("Data page size requested exceeds "+str(defaultMaxItemsOverride)+" records. Limiting to "+str(defaultMaxItemsOverride)+". ")

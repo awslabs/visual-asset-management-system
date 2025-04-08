@@ -4,11 +4,11 @@ from decimal import Decimal
 import json
 from unittest.mock import Mock, call
 
-from backend.handlers.metadataschema.schema import MetadataSchema
+from backend.tests.mocks.handlers.metadataschema.schema import MetadataSchema
 import pytest
 from boto3.dynamodb.conditions import Key
 
-from backend.handlers.metadataschema.schema import APIGatewayProxyEvent
+from backend.tests.mocks.handlers.metadataschema.schema import APIGatewayProxyEvent
 
 
 def test_get_schema():
