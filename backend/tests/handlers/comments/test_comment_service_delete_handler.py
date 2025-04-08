@@ -1,6 +1,18 @@
 import json
 import pytest
-from tests.conftest import TestComment
+import sys
+import os
+from unittest.mock import patch, MagicMock
+
+# Add the necessary paths to the Python path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
+from backend.tests.conftest import TestComment
+
+# Import boto3 for the tests
+import boto3
+
+# Import the actual implementation
+import backend.backend.handlers.comments.commentService as commentService
 
 
 @pytest.fixture(scope="function")
@@ -50,6 +62,67 @@ def invalid_delete_event():
     }
 
 
+# Mock the dependencies
+@pytest.fixture(autouse=True)
+def mock_dependencies(monkeypatch):
+    """
+    Mock the dependencies needed by the commentService module
+    """
+    # Set environment variables
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    monkeypatch.setenv("COMMENT_STORAGE_TABLE_NAME", "commentStorageTable")
+    
+    # Mock the comment_database
+    monkeypatch.setattr(commentService, "comment_database", "commentStorageTable")
+    
+    # Mock the request_to_claims function
+    def mock_request_to_claims(event):
+        return {"tokens": ["test_email@amazon.com"]}
+    
+    monkeypatch.setattr(commentService, "request_to_claims", mock_request_to_claims)
+    
+    # Mock the CasbinEnforcer class
+    class MockCasbinEnforcer:
+        def __init__(self, claims_and_roles):
+            pass
+        
+        def enforce(self, asset_object, action):
+            return True
+        
+        def enforceAPI(self, event):
+            return True
+    
+    monkeypatch.setattr(commentService, "CasbinEnforcer", MockCasbinEnforcer)
+    
+    # Mock the get_asset_object_from_id function
+    def mock_get_asset_object_from_id(asset_id):
+        return {"assetId": asset_id}
+    
+    monkeypatch.setattr(commentService, "get_asset_object_from_id", mock_get_asset_object_from_id)
+    
+    # Mock the validate function
+    def mock_validate(params):
+        return (True, "")
+    
+    monkeypatch.setattr(commentService, "validate", mock_validate)
+    
+    # Mock the logger
+    class MockLogger:
+        def info(self, message):
+            pass
+        
+        def warning(self, message):
+            pass
+        
+        def error(self, message):
+            pass
+        
+        def exception(self, message):
+            pass
+    
+    monkeypatch.setattr(commentService, "logger", MockLogger())
+
+
 def test_delete_comment(comments_table, delete_event, monkeypatch):
     """
     Testing the delete comment Lambda handler with  delete a comment from the database
@@ -58,11 +131,14 @@ def test_delete_comment(comments_table, delete_event, monkeypatch):
     :param monkeypatch: monkeypatch allows for setting environment variables before importing function
                         so we don't get an error
     """
-    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
-    import backend.handlers.comments.commentService as commentService
-
-    # Generate the testing comment
-    test_comment_instance = TestComment().get_comment()
+    # Set the dynamodb resource to use the mocked table
+    monkeypatch.setattr(commentService, "dynamodb", boto3.resource("dynamodb"))
+    
+    # Generate the testing comment with the same user ID as in the delete_event
+    test_comment_instance = TestComment(
+        comment_owner_id="test_sub"
+    ).get_comment()
+    
     # Add the testing comment to the table
     comments_table.put_item(Item=test_comment_instance)
     # Get the testing comment from the table
@@ -99,9 +175,9 @@ def test_delete_comment_not_exists(comments_table, delete_event, monkeypatch):
     :param monkeypatch: monkeypatch allows for setting environment variables before importing function
                         so we don't get an error
     """
-    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
-    import backend.handlers.comments.commentService as commentService
-
+    # Set the dynamodb resource to use the mocked table
+    monkeypatch.setattr(commentService, "dynamodb", boto3.resource("dynamodb"))
+    
     response = commentService.lambda_handler(delete_event, None)
     assert response["statusCode"] == 404
 
@@ -114,9 +190,9 @@ def test_delete_comment_wrong_owner(comments_table, delete_event, monkeypatch):
     :param monkeypatch: monkeypatch allows for setting environment variables before importing function
                         so we don't get an error
     """
-    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
-    import backend.handlers.comments.commentService as commentService
-
+    # Set the dynamodb resource to use the mocked table
+    monkeypatch.setattr(commentService, "dynamodb", boto3.resource("dynamodb"))
+    
     asset_id = "test-id"
     asset_version_id_and_comment_id = "test-version-id:test-comment-id"
 
@@ -143,9 +219,9 @@ def test_delete_comment_invalid_event(comments_table, invalid_delete_event, monk
     :param monkeypatch: monkeypatch allows for setting environment variables before importing function
                         so we don't get an error
     """
-    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
-    import backend.handlers.comments.commentService as commentService
-
+    # Set the dynamodb resource to use the mocked table
+    monkeypatch.setattr(commentService, "dynamodb", boto3.resource("dynamodb"))
+    
     response = commentService.lambda_handler(invalid_delete_event, None)
     print(response)
     assert response["statusCode"] == 400

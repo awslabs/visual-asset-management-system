@@ -52,7 +52,8 @@ deserializer = TypeDeserializer()
 _dynamodb_client = boto3.client("dynamodb")
 paginator = _dynamodb_client.get_paginator("scan")
 
-def set_mfa_enabled(claims_and_roles):
+# Determine if MFA is enabled from claims
+def is_mfa_enabled(claims_and_roles):
     mfaEnabled = False
     if "mfaEnabled" in claims_and_roles:
         mfaEnabled = claims_and_roles["mfaEnabled"]
@@ -67,15 +68,14 @@ class CasbinEnforcer:
         global casbin_user_enforcer_map
         self.service_object = None
         user_id = claims_and_roles["tokens"][0]
-        mfaEnabled = set_mfa_enabled(claims_and_roles)
+        mfaEnabled = is_mfa_enabled(claims_and_roles)
         if user_id in casbin_user_enforcer_map:
             # Previously cached user-specific enforcers?
             #
             self.service_object = casbin_user_enforcer_map[user_id]
             self.service_object._mfaEnabled = mfaEnabled
         else:
-            self.service_object = CasbinEnforcerService(user_id)
-            self.service_object._mfaEnabled = mfaEnabled
+            self.service_object = CasbinEnforcerService(user_id, mfaEnabled)
             # Cache the user-specific enforcer future calls
             #
             casbin_user_enforcer_map[user_id] = self.service_object
@@ -116,7 +116,7 @@ class CasbinEnforcer:
             return False
 
 class CasbinEnforcerService:
-    def __init__(self, user_id):
+    def __init__(self, user_id, mfa_enabled):
         # Handle user policy-specific caching and updates (globally)
         #
         global casbin_user_policy_map
@@ -125,7 +125,7 @@ class CasbinEnforcerService:
         self._user_roles_table_name = ""
         self._roles_table_name = ""
         self._user_id = user_id
-        self._mfaEnabled = False
+        self._mfaEnabled = mfa_enabled
         self._dateTime_Cached = datetime.now()
         self._enforcer = None
 
@@ -267,10 +267,10 @@ class CasbinEnforcerService:
             'attribute_exists(roleName) AND '
             '(attribute_not_exists(mfaRequired) OR mfaRequired = :mfa_value)'
         )
-        
+
         # Expression attribute values
         expression_attr_values = {
-            ':mfa_value': {"BOOL": False} 
+            ':mfa_value': {"BOOL": False}
         }
 
         page_iterator = paginator.paginate(

@@ -80,6 +80,7 @@ export class BatchFargatePipelineConstruct extends Construct {
                 },
                 jobRole: props.jobRole,
                 executionRole: props.executionRole,
+                user: "root"
             },
         });
 

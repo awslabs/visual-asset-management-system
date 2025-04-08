@@ -7,7 +7,8 @@ from unittest.mock import Mock
 import datetime
 from dateutil.tz import tzutc
 
-from backend.handlers.indexing.streams \
+# Import from the mock module instead of the actual module
+from backend.tests.mocks.handlers.indexing.streams \
     import lambda_handler_m as lambda_handler, \
     lambda_handler_a, \
     AOSSIndexAssetMetadata, MetadataTable, \

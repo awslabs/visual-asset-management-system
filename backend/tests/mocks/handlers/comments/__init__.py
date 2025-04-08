@@ -1,0 +1,1 @@
+# Mock handlers.comments module
