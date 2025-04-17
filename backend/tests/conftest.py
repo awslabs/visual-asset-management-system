@@ -7,12 +7,84 @@ This file contains fixtures and configuration for pytest tests.
 import boto3
 import json
 import os
+import sys
 import pytest
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, patch
 
 from moto import mock_aws
+
+# Mock the customLogging.logger.safeLogger function
+class MockSafeLogger:
+    def __init__(self, service=None, service_name=None):
+        self.service = service_name if service_name is not None else service
+        
+    def info(self, message):
+        pass
+        
+    def warning(self, message):
+        pass
+        
+    def error(self, message):
+        pass
+        
+    def exception(self, message):
+        pass
+
+# Create a mock safeLogger function that returns a MockSafeLogger instance
+def mock_safe_logger(service=None, service_name=None):
+    return MockSafeLogger(service, service_name)
+
+# Create mock modules
+sys.modules['handlers'] = MagicMock()
+sys.modules['handlers.auth'] = MagicMock()
+sys.modules['handlers.auth'].request_to_claims = lambda event: {"tokens": ["test_token"]}
+sys.modules['handlers.authz'] = MagicMock()
+sys.modules['handlers.authz'].CasbinEnforcer = MagicMock()
+sys.modules['common'] = MagicMock()
+sys.modules['common.validators'] = MagicMock()
+sys.modules['common.validators'].validate = lambda params: (True, "")
+sys.modules['common.dynamodb'] = MagicMock()
+sys.modules['common.dynamodb'].get_asset_object_from_id = lambda asset_id: {"assetId": asset_id}
+sys.modules['common.constants'] = MagicMock()
+sys.modules['common.constants'].STANDARD_JSON_RESPONSE = {
+    "statusCode": 200,
+    "headers": {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type,Authorization"
+    },
+    "body": ""
+}
+sys.modules['customLogging'] = MagicMock()
+sys.modules['customLogging.logger'] = MagicMock()
+sys.modules['customLogging.logger'].safeLogger = mock_safe_logger
+sys.modules['customConfigCommon'] = MagicMock()
+sys.modules['customConfigCommon.customAuthClaimsCheck'] = MagicMock()
+sys.modules['customConfigCommon.customAuthClaimsCheck'].customAuthClaimsCheckOverride = lambda claims_and_roles, request: claims_and_roles
+
+# Add missing mock modules
+sys.modules['customConfigCommon.customAuthLoginProfile'] = MagicMock()
+sys.modules['customConfigCommon.customAuthLoginProfile'].customAuthProfileLoginWriteOverride = lambda event, claims: event
+
+sys.modules['handlers.metadata'] = MagicMock()
+sys.modules['handlers.metadata'].build_response = lambda status_code, body: {"statusCode": status_code, "body": json.dumps(body)}
+sys.modules['handlers.metadata'].create_or_update = MagicMock()
+sys.modules['handlers.metadata'].validate_event = MagicMock(return_value=(True, None))
+sys.modules['handlers.metadata'].validate_body = MagicMock(return_value=(True, None))
+sys.modules['handlers.metadata'].ValidationError = type('ValidationError', (Exception,), {})
+
+sys.modules['handlers.workflows'] = MagicMock()
+sys.modules['handlers.workflows'].update_pipeline_workflows = MagicMock()
+
+# Add the necessary paths to the Python path
+sys.path.append(os.path.abspath('.'))
+sys.path.append(os.path.abspath('..'))
+sys.path.append(os.path.abspath('backend'))
+sys.path.append(os.path.abspath('backend/backend'))
+sys.path.append(os.path.abspath('tests/mocks'))
 
 # Import test utilities
 from backend.tests.utils.lambda_test_utils import (

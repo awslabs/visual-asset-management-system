@@ -103,7 +103,7 @@ Exclusion\* notes:
 -   Python 3.12
 -   Poetry (for managing python dependencies in the VAMS backend)
 -   Docker
--   Node >=18.7
+-   Node >=20.18.1
 -   Yarn >=1.22.19
 -   Node Version Manager (nvm)
 -   Conda-forge [only for optional local development]
