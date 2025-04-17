@@ -1,17 +1,25 @@
+# Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 def get_asset_object_from_id(asset_id):
     """
-    Mock implementation of the get_asset_object_from_id function.
+    Mock implementation of the get_asset_object_from_id function for testing purposes.
+    
+    Args:
+        asset_id: The ID of the asset to retrieve
+        
+    Returns:
+        Dictionary containing the asset object with the given ID
     """
-    return {"assetId": asset_id}
-
-def validate_pagination_info(query_parameters):
-    """
-    Mock implementation of the validate_pagination_info function.
-    """
-    if 'maxItems' not in query_parameters:
-        query_parameters['maxItems'] = '10'
-    if 'pageSize' not in query_parameters:
-        query_parameters['pageSize'] = '10'
-    if 'startingToken' not in query_parameters:
-        query_parameters['startingToken'] = ''
-    return query_parameters
+    # In the mock implementation, we return a simple asset object
+    return {
+        "assetId": asset_id,
+        "databaseId": "test-database-id",
+        "assetName": "Test Asset",
+        "assetType": "model/gltf-binary",
+        "assetSize": 1024,
+        "assetOwnerID": "test_email@amazon.com",
+        "assetOwnerUsername": "test_email@amazon.com",
+        "dateCreated": "2023-07-06T21:32:15.066148Z",
+        "dateModified": "2023-07-06T21:32:15.066148Z"
+    }
