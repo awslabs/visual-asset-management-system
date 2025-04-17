@@ -1,3 +1,7 @@
+# Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Standard JSON response for API Gateway Lambda functions
 STANDARD_JSON_RESPONSE = {
     "statusCode": 200,
     "headers": {
@@ -6,8 +10,10 @@ STANDARD_JSON_RESPONSE = {
         "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type,Authorization"
     },
-    "body": {}
+    "body": ""
 }
 
-PERMISSION_CONSTRAINT_FIELDS = ["object__type", "object__id", "object__owner"]
-PERMISSION_CONSTRAINT_POLICY = "p, {}, {}, {}"
+# Other constants used in the application
+DEFAULT_REGION = "us-east-1"
+DEFAULT_PAGE_SIZE = 20
+MAX_PAGE_SIZE = 100

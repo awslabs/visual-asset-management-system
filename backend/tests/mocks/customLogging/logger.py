@@ -1,33 +1,60 @@
-class SafeLogger:
+# Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+class safeLogger:
     """
-    Mock implementation of the SafeLogger class.
+    Mock implementation of the safeLogger class for testing purposes.
+    
+    This class provides a simplified version of the safeLogger that logs
+    messages to the console during testing.
     """
-    def __init__(self, service=None, service_name=None):
-        self.service = service or service_name
+    
+    def __init__(self, service="Test", service_name=None):
+        """
+        Initialize the safeLogger with a service name.
+        
+        Args:
+            service: The name of the service using the logger
+            service_name: Alternative parameter name for service
+        """
+        self.service = service_name if service_name is not None else service
         
     def info(self, message):
         """
-        Mock implementation of the info method.
+        Log an informational message.
+        
+        Args:
+            message: The message to log
         """
+        # In the mock implementation, we don't actually log anything
         pass
         
     def warning(self, message):
         """
-        Mock implementation of the warning method.
+        Log a warning message.
+        
+        Args:
+            message: The message to log
         """
+        # In the mock implementation, we don't actually log anything
         pass
         
     def error(self, message):
         """
-        Mock implementation of the error method.
+        Log an error message.
+        
+        Args:
+            message: The message to log
         """
+        # In the mock implementation, we don't actually log anything
         pass
         
     def exception(self, message):
         """
-        Mock implementation of the exception method.
+        Log an exception message.
+        
+        Args:
+            message: The message to log
         """
+        # In the mock implementation, we don't actually log anything
         pass
-
-# Alias for backward compatibility
-safeLogger = SafeLogger

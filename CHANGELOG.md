@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
-## [2.2.0] (2025-03-31)
+## [2.2.0] (2025-05-31)
 
 This minor version includes changes to VAMS infrastructure, authentication, web UI, pipelines, use-case pipeline implementations, and v2.0+ bug fixes.
 
@@ -16,48 +16,49 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
 ### Features
 
 -   Changed VPC subnet to now break out subnets for isolated, private, and public. Previously, only private (which was actually isolated) and public existed.
--   -   For those using external VPC and subnet import configuration, previously private subnet IDs should now be copied into isolated subnets configuration option.
+    -   For those using external VPC and subnet import configuration, previously private subnet IDs should now be copied into isolated subnets configuration option.
 -   Added a new use-case pipeline and configuration option for `RapidPipeline` that optimizes 3D assets using mesh decimation & remeshing, texture baking, UV aggregation, and more.
--   -   RapidPipeline can also convert assets between GLTF, GLB, USD, OBJ, FBX, VRM, STL, and PLY file types.
--   -   Pipeline can be called by registering 'vamsExecuteRapidPipeline' lambda function with VAMS pipelines / workflows.
+    -   RapidPipeline can also convert assets between GLTF, GLB, USD, OBJ, FBX, VRM, STL, and PLY file types.
+    -   Pipeline can be called by registering 'vamsExecuteRapidPipeline' lambda function with VAMS pipelines / workflows.
 -   Updated backend infrastructure configuration options and functionality to support External OAuth IDP systems besides AWS Cognito. Includes many additional infrastructure configuration settings.
--   **Web** Added web support for External OAuth IDP configuration
+-   **Web** Added web support for External OAuth IDP configuration.
 -   Added configuration option `addStackCloudTrailLogs` for creating AWS CloudTrail log groups and trails for the stack. This is defaulted to `true`.
 -   Added configuration option `useAlb.addAlbS3SpecialVpcEndpoint` for creating the special S3 VPC Interface Endpoint for ALB deployment configurations. This is defaulted to `true`. See documentation for this setting if turned off.
--   **Web** Added infrastructure configuration option `webUi.optionalBannerHtmlMessage` for adding a persistent banner (HTML) message at the top of the WebUI
+-   **Web** Added infrastructure configuration option `webUi.optionalBannerHtmlMessage` for adding a persistent banner (HTML) message at the top of the WebUI.
 -   **Web** Added capability to define which tag types are required to be added to an asset. If tag types are required, at least one of the defined tags on the tag type must always be included on the asset.
--   The ingestAsset API now supports passing in tags (to support required tag types)
+-   The ingestAsset API now supports passing in tags (to support required tag types).
 -   Changed UserId to no longer need to be an email, added a new LoginProfile table to track user emails for notification service which gets updated from JWT tokens or organization custom logic for retrieving user emails. New API for updating LoginProfile added to web login.
 -   Enabled Cognito user pool optional Multi-Factor Authentication (MFA) for created accounts across TOTP or SMS. **Note:** SMS sending requires additional AWS Cognito / SNS setup to a SNS production account and origination identity (if sending to US phone #'s).
--   -   Added backend broken out custom logic and flag to know if a user is logged in with MFA or not. For external OAuth IDP implementations, this logic must be tailored to the IDP system.
+    -   Added backend broken out custom logic and flag to know if a user is logged in with MFA or not. For external OAuth IDP implementations, this logic must be tailored to the IDP system.
 -   Enabled ability for a VAMS external IDP authentication system to report back if a user is logged in via MFA through an additional MFA IDP scope request. This can be configured via infrastructure configuration script by specifying a specific scope for MFA. Leaving this configuration null turns off external IDP MFA support.
--   -   **Web** The external IDP login will show a MFA login button if a mfa scope configuration request is defined
--   **Web** Added capability to set on a role if it requires the the logged in user to have authenticated via MFA in order for any constraints against that role to take effect. If MFA is not turned on in the selected authentication system, this would effectively disable the role as no user would satisfy the criteria.
--   Added new feature that gives user ability to edit pipelines after initial creation. User also has the option to update all workflows that contain the edited pipeline. EDIT feature can be found as a button on the Pipelines page.
+    -   **Web** The external IDP login will show a MFA login button if a mfa scope configuration request is defined.
+-   **Web** Added capability to set on a role if it requires the logged in user to have authenticated via MFA in order for any constraints against that role to take effect. If MFA is not turned on in the selected authentication system, this would effectively disable the role as no user would satisfy the criteria.
+-   Added new feature that gives users the ability to edit pipelines after initial creation. Users also have the option to update all workflows that contain the edited pipeline. The EDIT feature can be found as a button on the Pipelines page.
 -   Added a new use-case pipeline and configuration option for `ModelOps` complex tasks such as file format conversions, optimizations for 3D assets, and generating image captures of 3D models.
--   -   VAMS pipeline registration `inputParameters` will define for each pipeline registration what the output file extension type(s) will be. ModelOps can output multiple file types in one execution. Pipeline can be called by registering 'vamsExecuteModelOps' lambda function with VAMS pipelines / workflows.
+    -   VAMS pipeline registration `inputParameters` will define for each pipeline registration what the output file extension type(s) will be. ModelOps can output multiple file types in one execution. Pipeline can be called by registering 'vamsExecuteModelOps' lambda function with VAMS pipelines / workflows.
+-   (Draft Implementation) Started overhaul of lambda backend unit tests that were previously outdated and non-functioning. Unit tests as of 2.2 still have many non-functioning (skipped) tests that will need to be corrected. Passed tests will also need additional validation and coverage evaluation. 
 
 ### Bug Fixes
 
 -   Fixed permission caching in lambdas to actually reset caches after 30 seconds per lambda per user. Currently since v2.0 caches have been invalidating inconsistently.
--   Fixed opensearch lambda event source mapping for regions that don't support event source tagging yet (i.e., GovCloud) [bug introduced in v2.1.0 with CDK version upgrade]
--   Additional checks are made for valid parameter data in the asset deletion/archiving service
--   Fixed local web local development support, updated documentation for new local development processes
--   Fixed numerous lambda functions that were not adhering to the VPC/subnet configuration options for placing behind a VPC from v2.0 update
--   Fixed more validation bugs to ensure API fields that take in arrays are actually arrays
--   Miscellaneous minor bug fixes across web and backend components
+-   Fixed opensearch lambda event source mapping for regions that don't support event source tagging yet (i.e., GovCloud) [bug introduced in v2.1.0 with CDK version upgrade].
+-   Additional checks are made for valid parameter data in the asset deletion/archiving service.
+-   Fixed local web local development support, updated documentation for new local development processes.
+-   Fixed numerous lambda functions that were not adhering to the VPC/subnet configuration options for placing behind a VPC from v2.0 update.
+-   Fixed more validation bugs to ensure API fields that take in arrays are actually arrays.
+-   Miscellaneous minor bug fixes across web and backend components.
 
 ### Chores
 
--   **Web** Cleaned up unused web files and consolidated functionalities for authentication and amplify configuration setting
--   Upgraded lambda and all associated libraries (including use-case pipelines) to use Python 3.12 runtimes
--   Upgraded infrastructure NPM package dependencies
--   Optimized some backend lambda initialization code in various functions and globally in the casbin authorization functions for cold start performance improvement
--   Updated S3 bucket name for WebAppAccessLogs for ALB deployment (to be based on the domain name used `<ALBDomainName>-webappaccesslogs`) to help with organization policy exceptions
--   Added scripts and documentation for external oauth IDP and API local development servers
--   **Web** Turned on amplify gen1 Secure Cookie storage option
--   Updated docker file(s) environment variables to not use legacy format (old: ENV key value, new: ENV key=value)
--   Updated GenAIMetadataLabeling pipeline container to use the latest blender version when deploying due to Alpine APK restrictions on holding earlier versions
+-   **Web** Cleaned up unused web files and consolidated functionalities for authentication and amplify configuration setting.
+-   Upgraded lambda and all associated libraries (including use-case pipelines) to use Python 3.12 runtimes.
+-   Upgraded infrastructure NPM package dependencies.
+-   Optimized some backend lambda initialization code in various functions and globally in the casbin authorization functions for cold start performance improvement.
+-   Updated S3 bucket name for WebAppAccessLogs for ALB deployment (to be based on the domain name used `<ALBDomainName>-webappaccesslogs`) to help with organization policy exceptions.
+-   Added scripts and documentation for external oauth IDP and API local development servers.
+-   **Web** Turned on amplify gen1 Secure Cookie storage option.
+-   Updated docker file(s) environment variables to not use legacy format (old: ENV key value, new: ENV key=value).
+-   Updated GenAIMetadataLabeling pipeline container to use the latest blender version when deploying due to Alpine APK restrictions on holding earlier versions.
 -   Switched web API calls to use Cognito user access token for all requests authorizations instead of Id token. Created separate parameter for scopedS3Access to pass in ID token for this specific API call that needs it.
 
 ## [2.1.1] (2025-01-17)

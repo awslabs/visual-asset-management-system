@@ -15,8 +15,7 @@ from customLogging.logger import safeLogger
 from botocore.exceptions import ClientError
 
 from common.dynamodb import to_update_expr
-
-from handlers.workflows.workflowCommon import update_pipeline_workflows
+from handlers.workflows import update_pipeline_workflows
 
 claims_and_roles = {}
 logger = safeLogger(service="CreatePipeline")
