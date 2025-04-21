@@ -11,6 +11,8 @@ _Visual Asset Management System (VAMS) version 2.X+ is the official recognized a
 
 _All previous 1.X versions of VAMS, although still available, will no longer be supported or recommended for use._
 
+_VAMS is considered a sample project that is non-production-grade_
+
 ## Introduction
 
 _Visual Asset Management System (VAMS)_ is a purpose-built, AWS native solution for the management and distribution of specialized visual assets used in spatial computing. VAMS offers a simplified solution for organizations to ingest, store, and manage visual assets in the cloud, which empowers any user with a web browser to upload, manage, visualize, transform, and retrieve visual assets. Existing workflows that leverage both custom code and pre-built or third-party applications can also be migrated to VAMS and ran in the AWS cloud, as opposed to being limited by the on-premise capacity available. VAMS is customizable and expandable with option of being further tailored to specific use-cases by development teams.

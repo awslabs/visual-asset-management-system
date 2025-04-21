@@ -580,9 +580,25 @@ def lambda_handler(event, context):
                 'validator': 'OBJECT_NAME',
                 'optional': True
             },
+            'assetType': {
+                'value': event['body'].get('assetType', ""),
+                'validator': 'STRING_256',
+                'optional': True
+            },
+            'isDistributable': {
+                'value': str(event['body'].get('isDistributable', "")),
+                'validator': 'BOOL',
+                'optional': True
+            },
+            'isMultiFile': {
+                'value': str(event['body'].get('isMultiFile', "")),
+                'validator': 'BOOL',
+                'optional': True
+            },
             'assetPathKey': {
                 'value': event['body']['key'],
-                'validator': 'ASSET_PATH'
+                'validator': 'ASSET_PATH',
+                'isFolder': event['body'].get('isMultiFile', False)
             }
         })
         if not valid:

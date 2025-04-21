@@ -220,9 +220,23 @@ def lambda_handler(event: Dict[Any, Any], context: LambdaContext) -> APIGatewayP
                 'value': event['body']['uploadAssetBody']['assetName'],
                 'validator': 'OBJECT_NAME'
             },
+            'assetType': {
+                'value': event['body']['uploadAssetBody']['assetType'],
+                'validator': 'STRING_256'
+            },
+            'isDistributable': {
+                'value': str(event['body']['uploadAssetBody']['isDistributable']),
+                'validator': 'BOOL'
+            },
+            'isMultiFile': {
+                'value': str(event['body']['uploadAssetBody'].get('isMultiFile', "")),
+                'validator': 'BOOL',
+                'optional': True
+            },
             'assetPathKey': {
                 'value': event['body']['uploadAssetBody']['key'],
-                'validator': 'ASSET_PATH'
+                'validator': 'ASSET_PATH',
+                'isFolder': event['body']['uploadAssetBody'].get('isMultiFile', False)
             }
         })
         if not valid:

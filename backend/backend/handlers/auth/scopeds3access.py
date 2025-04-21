@@ -11,6 +11,14 @@ from common.constants import STANDARD_JSON_RESPONSE
 from common.dynamodb import get_asset_object_from_id
 from common.validators import validate
 from customLogging.logger import safeLogger
+from botocore.config import Config
+
+config = Config(
+   retries = {
+      'max_attempts': 15,
+      'mode': 'adaptive'
+   }
+)
 
 claims_and_roles = {}
 logger = safeLogger(service="ScopedS3Access")
@@ -40,10 +48,8 @@ cognito_auth = os.environ["COGNITO_AUTH"]
 identity_pool_id = os.environ["IDENTITY_POOL_ID"]
 cred_timeout = int(os.environ['CRED_TOKEN_TIMEOUT_SECONDS'])
 
-
-
-sts_client = boto3.client('sts')
-cognito_client = boto3.client('cognito-identity')
+sts_client = boto3.client('sts', config=config)
+cognito_client = boto3.client('cognito-identity', config=config)
 
 def lambda_handler(event, context):
     global claims_and_roles
@@ -193,6 +199,7 @@ def lambda_handler(event, context):
                         IdentityPoolId=identity_pool_id,
                         Logins=login,
                     )
+
                     open_id_token = cognito_client.get_open_id_token(
                         IdentityId=cognito_id["IdentityId"],
                         Logins=login

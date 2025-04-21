@@ -168,7 +168,7 @@ def lambda_handler(event, context):
 
             # if assetId exists in database
             if asset_location:
-                # Get Key from assetLocation dictionary (primary asset file)
+                # Get Key from assetLocation dictionary (primary asset file or folder)
                 primaryFileKey = asset_location['Key']
 
                 #For now grab all files from the top level asset location

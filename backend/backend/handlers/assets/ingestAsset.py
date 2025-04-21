@@ -73,6 +73,7 @@ def generate_upload_asset_payload(event):
             "description": description,
             "specifiedPipelines": [],
             "isDistributable": True,
+            "isMultiFile": False,
             "Comment": "",
             "assetLocation": {
                 "Key": key
