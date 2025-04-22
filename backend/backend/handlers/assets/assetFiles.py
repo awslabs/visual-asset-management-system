@@ -177,6 +177,7 @@ def lambda_handler(event, context):
                 # get all files in assetLocation
                 result = get_all_files_in_path(key, primaryFileKey, queryParameters)
                 response['body'] = json.dumps({"message": result})
+                response['statusCode'] = 200
                 logger.info(response)
                 return response
             else:
