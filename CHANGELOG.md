@@ -53,14 +53,14 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
 
 -   **Web** Cleaned up unused web files and consolidated functionalities for authentication and amplify configuration setting.
 -   Upgraded lambda and all associated libraries (including use-case pipelines) to use Python 3.12 runtimes.
--   Upgraded infrastructure NPM package dependencies.
+-   Upgraded infrastructure NPM package dependencies. Note: This switches CDK to use Node 20.x runtimes for Lambda's used for CustomResources or S3 Bucket deployments. 
 -   Optimized some backend lambda initialization code in various functions and globally in the casbin authorization functions for cold start performance improvement.
 -   Updated S3 bucket name for WebAppAccessLogs for ALB deployment (to be based on the domain name used `<ALBDomainName>-webappaccesslogs`) to help with organization policy exceptions.
 -   Added scripts and documentation for external oauth IDP and API local development servers.
 -   **Web** Turned on amplify gen1 Secure Cookie storage option.
--   Updated docker file(s) environment variables to not use legacy format (old: ENV key value, new: ENV key=value).
 -   Updated GenAIMetadataLabeling pipeline container to use the latest blender version when deploying due to Alpine APK restrictions on holding earlier versions.
 -   Switched web API calls to use Cognito user access token for all requests authorizations instead of Id token. Created separate parameter for scopedS3Access to pass in ID token for this specific API call that needs it.
+-   Updated documentation for developer deployment machines to use Node version 20.18.1
 
 ## [2.1.1] (2025-01-17)
 

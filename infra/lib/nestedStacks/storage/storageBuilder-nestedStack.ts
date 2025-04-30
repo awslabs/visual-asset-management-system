@@ -167,7 +167,9 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         // on tables (LimitExceededException) during regular deployments.
         //
         contributorInsightsEnabled: false,
-        pointInTimeRecovery: true,
+        pointInTimeRecoverySpecification: {
+            pointInTimeRecoveryEnabled: true,
+        },
         removalPolicy: RemovalPolicy.DESTROY,
         billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
         encryption: config.app.useKmsCmkEncryption.enabled

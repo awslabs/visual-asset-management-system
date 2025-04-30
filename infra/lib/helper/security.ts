@@ -196,7 +196,7 @@ export function generateContentSecurityPolicy(
     }
 
     const csp =
-        `default-src 'none'; style-src 'self' 'unsafe-inline'; ` +
+        `default-src 'none'; style-src 'self' 'unsafe-inline'; upgrade-insecure-requests;` +
         `connect-src ${connectSrc.join(" ")}; ` +
         `script-src ${scriptSrc.join(" ")}; ` +
         `img-src ${imgMediaSrc.join(" ")}; ` +
