@@ -93,7 +93,7 @@ def token_to_criteria(token):
         }
 
 
-def property_token_filter_to_opensearch_query(token_filter, uniqueMappingFieldsForGeneralQuery = [], start=0, size=100):
+def property_token_filter_to_opensearch_query(token_filter, uniqueMappingFieldsForGeneralQuery = [], start=0, size=2000):
     """
     Converts a property token filter to an OpenSearch query.
     """
@@ -150,8 +150,8 @@ def property_token_filter_to_opensearch_query(token_filter, uniqueMappingFieldsF
     filter_criteria.extend(token_filter.get("filters", []))
 
     query = {
-        "from": token_filter.get("from", start),
-        "size": token_filter.get("size", size),
+        "from": start,
+        "size": size,
         "sort": token_filter.get("sort", ["_score"]),
         "query": {
             "bool": {
@@ -275,9 +275,11 @@ def lambda_handler(
     logger.info(event)
 
     try:
+        #Initial Validation
         if "body" not in event and \
                 event['requestContext']['http']['method'] == "POST":
             raise ValidationError(400, {"error": "Missing request body for POST"})
+
 
         #ABAC Checks
         claims_and_roles = request_to_claims(event)
@@ -303,6 +305,24 @@ def lambda_handler(
 
                 #Load body for POST after taking care of GET
                 body = json.loads(event['body'])
+
+                #POST Parameters
+                logger.info("Validating POST parameters")
+                (valid, message) = validate({
+                    'from': {
+                        'value': str(body.get("from", 0)),
+                        'validator': 'NUMBER'
+                    },
+                    'size': {
+                        'value': str(body.get("size", 0)),
+                        'validator': 'NUMBER'
+                    },
+                })
+                if not valid:
+                    logger.error(message)
+                    response['body'] = json.dumps({"message": message})
+                    response['statusCode'] = 400
+                    return response
 
                 #Get unique mapping fields for general query
                 uniqueMappingFieldsForGeneralQuery = []
@@ -334,7 +354,23 @@ def lambda_handler(
                         if casbin_enforcer.enforce(hit_document, "GET"):
                             filtered_hits.append(hit)
 
-                result["hits"]["hits"] = filtered_hits
+                #If a body.from and body.size is specified for paginiation, reduce down the filtered_hits to that range
+                #Otherwise return full list
+                if (body.get("from") or body.get("size")) and len(filtered_hits) > 0:
+                    fromNum = int(body.get("from", -1))
+                    sizeNum = int(body.get("size", -1))
+
+                    if fromNum > 0 and sizeNum > 0:
+                        filtered_hits_page = filtered_hits[fromNum:fromNum+sizeNum]
+                    elif fromNum > 0:
+                        filtered_hits_page = filtered_hits[fromNum:]
+                    else: # sizeNum > 0:
+                        filtered_hits_page = filtered_hits[:sizeNum]
+                        
+                    result["hits"]["hits"] = filtered_hits_page
+                else:
+                    result["hits"]["hits"] = filtered_hits
+
                 result["hits"]["total"]["value"] = len(filtered_hits)
 
                 return {
@@ -343,7 +379,7 @@ def lambda_handler(
                 }
             else:
                 return {
-                    'statusCode': 400,
+                    'statusCode': 404,
                     'body': json.dumps({"message": 'Search is not available when OpenSearch feature is not enabled. '})
                 }
 

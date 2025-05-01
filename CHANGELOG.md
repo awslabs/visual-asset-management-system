@@ -48,6 +48,7 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
 -   Fixed more validation bugs to ensure API fields that take in arrays are actually arrays.
 -   Miscellaneous minor bug fixes across web and backend components.
 -   Fixed some multi-file/folder upload issues in UploadAssetWorkflow, Path Validation, and ScopedS3 retries
+-   Fixed bug where asset search results using OpenSearch were not paginiating correctly when total results went over 100
 
 ### Chores
 
