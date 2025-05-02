@@ -522,7 +522,7 @@ class CasbinEnforcerService:
                 self._enforcer = None
                 return False
 
-        enhanced_object = PERMISSION_CONSTRAINT_FIELDS
+        enhanced_object = PERMISSION_CONSTRAINT_FIELDS.copy()
         enhanced_object.update(obj)
 
         try:

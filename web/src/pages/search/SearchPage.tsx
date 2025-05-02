@@ -31,6 +31,7 @@ import { fetchTags } from "../../services/APIService";
 import ListPage from "../ListPage";
 import { fetchAllAssets, fetchDatabaseAssets } from "../../services/APIService";
 import { AssetListDefinition } from "../../components/list/list-definitions/AssetListDefinition";
+import { fetchAllDatabases } from "../../services/APIService";
 
 export interface SearchPageViewProps {
     state: any;
@@ -38,6 +39,8 @@ export interface SearchPageViewProps {
 }
 
 interface SearchPageProps {}
+
+let databases: any;
 
 const getMinMaxLatLongBounds = (result: any) => {
     let minLat = -90;
@@ -327,6 +330,13 @@ function SearchPage(props: SearchPageProps) {
     );
 
     const { databaseId } = useParams();
+
+    useEffect(() => {
+        fetchAllDatabases().then((res) => {
+            databases = res;
+        });
+    }, []);
+
     const [state, dispatch] = useReducer(searchReducer, { ...INITIAL_STATE, databaseId });
 
     useEffect(() => {
@@ -454,6 +464,43 @@ function SearchPage(props: SearchPageProps) {
                                                 placeholder="Asset Type"
                                             />
                                             <Select
+                                                selectedOption={state?.filters?.str_databaseid}
+                                                placeholder="Database"
+                                                options={[
+                                                    { label: "All", value: "all" },
+                                                    //List every database from "databases" variable and then map to result aggregation to display (doc_count) next to each
+                                                    //We do this because opensearch has a max items it will return in a query which may not be everything across aggregated databases
+                                                    //Without this, you wouldn't be able to search on other databases not listed due to trimmed results. 
+                                                    ...(databases?.map((b: any) => {
+                                                        var count = 0
+                                                        //Map through result aggregation to find doc_count for each database
+                                                        state?.result?.aggregations?.str_databaseid?.buckets.map(
+                                                            (c: any) => {
+                                                                if (c.key === b.databaseId) {
+                                                                    count = c.doc_count
+                                                                }
+                                                            }
+                                                        )
+    
+                                                        return {
+                                                            label: `${b.databaseId} (Results: ${count} / Total: ${b.assetCount})`,
+                                                            value: b.databaseId,
+                                                        };
+    
+                                                    }) || []),
+                                                ]}
+                                                onChange={({ detail }) =>
+                                                    changeFilter(
+                                                        "str_databaseid",
+                                                        detail.selectedOption,
+                                                        {
+                                                            state,
+                                                            dispatch,
+                                                        }
+                                                    )
+                                                }
+                                            />
+                                            <Select
                                                 selectedOption={state?.filters?.str_assettype}
                                                 placeholder="File Type"
                                                 options={[
@@ -470,31 +517,6 @@ function SearchPage(props: SearchPageProps) {
                                                 onChange={({ detail }) =>
                                                     changeFilter(
                                                         "str_assettype",
-                                                        detail.selectedOption,
-                                                        {
-                                                            state,
-                                                            dispatch,
-                                                        }
-                                                    )
-                                                }
-                                            />
-                                            <Select
-                                                selectedOption={state?.filters?.str_databaseid}
-                                                placeholder="Database"
-                                                options={[
-                                                    { label: "All", value: "all" },
-                                                    ...(state?.result?.aggregations?.str_databaseid?.buckets.map(
-                                                        (b: any) => {
-                                                            return {
-                                                                label: `${b.key} (${b.doc_count})`,
-                                                                value: b.key,
-                                                            };
-                                                        }
-                                                    ) || []),
-                                                ]}
-                                                onChange={({ detail }) =>
-                                                    changeFilter(
-                                                        "str_databaseid",
                                                         detail.selectedOption,
                                                         {
                                                             state,

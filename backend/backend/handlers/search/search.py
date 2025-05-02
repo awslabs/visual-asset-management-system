@@ -12,16 +12,24 @@ from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
 from common.validators import validate
 from common import get_ssm_parameter_value
 from handlers.authz import CasbinEnforcer
+from common.constants import STANDARD_JSON_RESPONSE
+from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.types import TypeDeserializer
 
 logger = safeLogger(service="Search")
 claims_and_roles = {}
 
 try:
     asset_table = os.environ['ASSET_STORAGE_TABLE_NAME']
+    database_table = os.environ['DATABASE_STORAGE_TABLE_NAME']
 
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise
+
+dbResource = boto3.resource('dynamodb')
+dbClient = boto3.client('dynamodb')
+deserializer = TypeDeserializer()
 
 #
 # Single doc Example
@@ -60,6 +68,90 @@ class ValidationError(Exception):
     def __init__(self, code: int, resp: object) -> None:
         self.code = code
         self.resp = resp
+
+
+def get_database(database_id):
+    tableDb = dbResource.Table(database_table)
+
+    db_response = tableDb.get_item(
+        Key={
+            'databaseId': database_id
+        }
+    )
+
+    database = db_response.get("Item", {})
+    allowed = False
+
+    if database:
+        # Add Casbin Enforcer to check if the current user has permissions to retrieve the asset for a database:
+        database.update({
+            "object__type": "asset"
+        })
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(database, "GET"):
+                allowed = True
+
+    return database_id if allowed else None
+
+
+def get_databases(show_deleted=False):
+    paginatorDb = dbClient.get_paginator('scan')
+    operator = "NOT_CONTAINS"
+    if show_deleted:
+        operator = "CONTAINS"
+    db_filter = {
+        "databaseId": {
+            "AttributeValueList": [{"S": "#deleted"}],
+            "ComparisonOperator": f"{operator}"
+        }
+    }
+    page_iteratorDb = paginatorDb.paginate(
+        TableName=database_table,
+        ScanFilter=db_filter,
+        PaginationConfig={
+            'MaxItems': 1000,
+            'PageSize': 1000,
+            'StartingToken': None
+        }
+    ).build_full_result()
+
+    pageIteratorItems = []
+    pageIteratorItems.extend(page_iteratorDb['Items'])
+
+    while 'NextToken' in page_iteratorDb:
+        nextToken = page_iteratorDb['NextToken']
+        page_iteratorDb = paginatorDb.paginate(
+            TableName=database_table,
+            ScanFilter=db_filter,
+            PaginationConfig={
+                'MaxItems': 1000,
+                'PageSize': 1000,
+                'StartingToken': nextToken
+            }
+        ).build_full_result()
+
+        pageIteratorItems.extend(page_iteratorDb['Items'])
+
+    result = {}
+    items = []
+    for item in pageIteratorItems:
+        deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
+
+        # Add Casbin Enforcer to check if the current user has permissions to retrieve the asset for a database:
+        deserialized_document.update({
+            "object__type": "asset"
+        })
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(deserialized_document, "GET"):
+                items.append(deserialized_document)
+
+    result['Items'] = items
+
+    if 'NextToken' in page_iteratorDb:
+        result['NextToken'] = page_iteratorDb['NextToken']
+    return result      
 
 def get_unique_mapping_fields(mapping):
     ignorePropertiesFields = ["_rectype"] #exclude these exact fields from search
@@ -144,6 +236,48 @@ def property_token_filter_to_opensearch_query(token_filter, uniqueMappingFieldsF
                     }
                 }
             })
+
+
+    #Conduct database access checks to reduce record count for processing
+
+    #Parse filters and look if there is a record with "str_databaseid" in it. 
+    #If there is, parse out the database name, then remove the database query string record from the original token_filter filters 
+    #Test if we have access to the database, if not remove it. If so, leave it and don't add back all allowed databases
+    #Example filter: "[{query_string: {query: "(_rectype:("asset"))"}}, {query_string: {query: "(str_databaseid:("test"))"}}]"
+    addAllAllowedDBs = True
+    if token_filter.get("filters"):
+        for filter in token_filter.get("filters"):
+            if filter.get("query_string", {}).get("query"):
+                if "str_databaseid" in filter.get("query_string", {}).get("query"):
+                    #parse out the database name from the filter
+                    specificDatabaseNameProvided = filter.get("query_string", {}).get("query").split(":")[1].split("(\"")[1].split("\")")[0]
+                    allowedDb = get_database(specificDatabaseNameProvided)
+
+                    if allowedDb is None:
+                        #remove the database query string record from the original token_filter filters
+                        token_filter["filters"].remove(filter)
+                    else:
+                        #We are keeping the record because it's allowed and not adding all the allowed back
+                        addAllAllowedDBs = False
+
+    #Add now all allowed DBs if no other specified
+    if addAllAllowedDBs:
+        allowedDatabases = get_databases()
+        databasebaseQueryString = ""
+
+        if len(allowedDatabases.get("Items", [])) > 0:
+            for allowedDatabase in allowedDatabases.get("Items", []):
+                databasebaseQueryString += "\""+allowedDatabase.get("databaseId") + "\" OR "
+            #Remove the last " OR "
+            databasebaseQueryString = databasebaseQueryString[:-4]
+        else:
+            databasebaseQueryString = "\"NOACCESSDATABASE\""
+
+        filter_criteria.append({
+            "query_string": {
+                "query": "(" + "str_databaseid:(" + databasebaseQueryString + "))"
+            }
+        })
 
 
     #Add the filters criteria
@@ -320,6 +454,7 @@ def lambda_handler(
                 })
                 if not valid:
                     logger.error(message)
+                    response = STANDARD_JSON_RESPONSE
                     response['body'] = json.dumps({"message": message})
                     response['statusCode'] = 400
                     return response

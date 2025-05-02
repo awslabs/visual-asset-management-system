@@ -49,6 +49,7 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
 -   Miscellaneous minor bug fixes across web and backend components.
 -   Fixed some multi-file/folder upload issues in UploadAssetWorkflow, Path Validation, and ScopedS3 retries
 -   Fixed bug where asset search results using OpenSearch were not paginiating correctly when total results went over 100
+-   Fixed bug where asset search result filters for database may restrict what users can search on based on previous results returned
 
 ### Chores
 
@@ -61,6 +62,7 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
 -   **Web** Turned on amplify gen1 Secure Cookie storage option.
 -   Updated GenAIMetadataLabeling pipeline container to use the latest blender version when deploying due to Alpine APK restrictions on holding earlier versions.
 -   Switched web API calls to use Cognito user access token for all requests authorizations instead of Id token. Created separate parameter for scopedS3Access to pass in ID token for this specific API call that needs it.
+-   Added logic to prefilter asset OpenSearch querying to only databases the user has access in order to increase performance for final asset permission checks for large asset databases
 -   Updated documentation for developer deployment machines to use Node version 20.18.1
 
 ## [2.1.1] (2025-01-17)

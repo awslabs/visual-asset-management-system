@@ -18,6 +18,7 @@ claims_and_roles = {}
 logger = safeLogger(service="DatabaseService")
 
 dynamodb = boto3.resource('dynamodb')
+dbClient = boto3.client('dynamodb')
 main_rest_response = STANDARD_JSON_RESPONSE
 deserializer = TypeDeserializer()
 
@@ -121,9 +122,8 @@ def get_database(database_id, show_deleted=False):
 
 
 def get_databases(query_params, show_deleted=False):
-    db = boto3.client('dynamodb')
-
-    paginator = db.get_paginator('scan')
+    
+    paginator = dbClient.get_paginator('scan')
     operator = "NOT_CONTAINS"
     if show_deleted:
         operator = "CONTAINS"
