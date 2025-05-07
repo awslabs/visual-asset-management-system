@@ -48,7 +48,7 @@ UNALLOWED_MIME_LIST = [
     "application/x-ms-dos-executable",
     "application/x-ini",
     "application/x-inf",
-    "application/x-sql"
+    "application/x-sql",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/x-ms-shortcut",
     "application/x-bat-script",

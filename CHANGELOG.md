@@ -63,6 +63,7 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
 -   Updated GenAIMetadataLabeling pipeline container to use the latest blender version when deploying due to Alpine APK restrictions on holding earlier versions.
 -   Switched web API calls to use Cognito user access token for all requests authorizations instead of Id token. Created separate parameter for scopedS3Access to pass in ID token for this specific API call that needs it.
 -   Added logic to prefilter asset OpenSearch querying to only databases the user has access in order to increase performance for final asset permission checks for large asset databases
+-   Added Stack Formation Template descriptions
 -   Updated documentation for developer deployment machines to use Node version 20.18.1
 
 ## [2.1.1] (2025-01-17)

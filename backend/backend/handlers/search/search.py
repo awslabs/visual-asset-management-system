@@ -528,9 +528,33 @@ def lambda_handler(
             'statusCode': ex.code,
             'body': json.dumps(ex.resp)
         }
-    except Exception as e:
-        logger.exception(e)
+    except boto3.exceptions.Boto3Error as e:
+        logger.exception(f"AWS Service Error: {str(e)}")
         return {
             'statusCode': 500,
-            'body': json.dumps({"message":'Internal Server Error'})
+            'body': json.dumps({"message": f"AWS Service Error: {str(e)}"})
+        }
+    except json.JSONDecodeError as e:
+        logger.exception(f"JSON Decode Error: {str(e)}")
+        return {
+            'statusCode': 400,
+            'body': json.dumps({"message": f"Invalid JSON format: {str(e)}"})
+        }
+    except KeyError as e:
+        logger.exception(f"Key Error: {str(e)}")
+        return {
+            'statusCode': 400,
+            'body': json.dumps({"message": f"Missing required field: {str(e)}"})
+        }
+    except ValueError as e:
+        logger.exception(f"Value Error: {str(e)}")
+        return {
+            'statusCode': 400,
+            'body': json.dumps({"message": f"Invalid value: {str(e)}"})
+        }
+    except Exception as e:
+        logger.exception(f"Unexpected error: {str(e)}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps({"message": "Internal Server Error"})
         }

@@ -21,6 +21,7 @@ interface EnvProps {
     env?: cdk.Environment;
     stackName: string;
     wafScope?: WAFScope;
+    description: string;
 }
 
 export class CfWafStack extends cdk.Stack {
@@ -28,7 +29,7 @@ export class CfWafStack extends cdk.Stack {
     public wafArn: string;
 
     constructor(scope: Construct, id: string, props: EnvProps) {
-        super(scope, id, { ...props, crossRegionReferences: true });
+        super(scope, id, { ...props, crossRegionReferences: true});
 
         // ssm parameter name must be unique in a region
         this.ssmWafArnParameterName = "waf_acl_arn_" + this.stackName;

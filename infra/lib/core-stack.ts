@@ -26,12 +26,14 @@ import { IamRoleTransform } from "./aspects/iam-role-transform.aspect";
 import { Aspects } from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { generateUniqueNameHash } from "./helper/security";
+import { CfnStack } from "aws-cdk-lib";
 
 export interface EnvProps {
     env: cdk.Environment;
     stackName: string;
     ssmWafArn: string;
     config: Config.Config;
+    description: string;
 }
 
 export class CoreVAMSStack extends cdk.Stack {
@@ -45,7 +47,7 @@ export class CoreVAMSStack extends cdk.Stack {
     private vpceSecurityGroup: ec2.ISecurityGroup;
 
     constructor(scope: Construct, id: string, props: EnvProps) {
-        super(scope, id, { ...props, crossRegionReferences: true });
+        super(scope, id, { ...props, crossRegionReferences: true});
 
         const adminUserId = new cdk.CfnParameter(this, "adminUserId", {
             type: "String",
@@ -406,6 +408,7 @@ export class CoreVAMSStack extends cdk.Stack {
         cdk.Tags.of(this).add("AppManagerCFNStackKey", this.stackId, {
             includeResourceTypes: ["AWS::CloudFormation::Stack"],
         });
+
 
         //Global Nag Supressions
         this.node.findAll().forEach((item) => {
