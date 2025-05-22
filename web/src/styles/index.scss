@@ -8,6 +8,14 @@ body {
     touch-action: none;
 }
 
+/* Firefox-specific rule to enable scrolling */
+@-moz-document url-prefix() {
+    html,
+    body {
+        touch-action: auto; /* Enable scrolling in Firefox */
+    }
+}
+
 body {
     margin: 0;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen", "Ubuntu",

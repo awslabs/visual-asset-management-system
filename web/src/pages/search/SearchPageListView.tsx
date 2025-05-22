@@ -245,6 +245,11 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                             onConfirm={({ detail }) => {
                                 console.log("detail", detail);
                                 dispatch({ type: "set-search-table-preferences", payload: detail });
+                                if (typeof detail.pageSize === "number") {
+                                    paginateSearch(0, detail.pageSize, { state, dispatch });
+                                } else {
+                                    console.error("Page size is undefined in preferences detail.");
+                                }
                             }}
                             visibleContentPreference={{
                                 title: "Columns",

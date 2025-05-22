@@ -98,7 +98,7 @@ def lambda_handler(event, context):
         # Starts excution of pipeline 
         execute_pipeline(data['inputS3AssetFilePath'], data['outputS3AssetFilesPath'], data['outputS3AssetPreviewPath']
                                             , data['outputS3AssetMetadataPath'], data['inputOutputS3AssetAuxiliaryFilesPath']
-                                            , input_metadata, input_parameters, external_task_token)
+                                            , input_metadata, input_parameters, external_task_token, executing_userName, executing_requestContext)
 
         return {
             'statusCode': 200,

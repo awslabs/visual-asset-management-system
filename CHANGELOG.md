@@ -50,6 +50,8 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
 -   Fixed some multi-file/folder upload issues in UploadAssetWorkflow, Path Validation, and ScopedS3 retries
 -   Fixed bug where asset search results using OpenSearch were not paginiating correctly when total results went over 100
 -   Fixed bug where asset search result filters for database may restrict what users can search on based on previous results returned
+-   Fixed scrolling issues with Firefox browser
+-   Fixed bug with PointClouder viewer / pipeline from executing and showing final outputs
 
 ### Chores
 
