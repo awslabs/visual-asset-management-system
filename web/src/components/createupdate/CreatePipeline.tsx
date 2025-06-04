@@ -173,7 +173,10 @@ export default function CreatePipeline({
             initAssetType = { label: type?.label, value: type?.value };
             type = fileTypeOptions.find((item) => item.value === initState.outputType);
             initOutputType = { label: type?.label, value: type?.value };
-            initDatabase = { label: initState.databaseId, value: initState.databaseId };
+            // Handle the case where databaseId is empty string (Global)
+            initDatabase = initState.databaseId === ""
+                ? { label: "Global", value: "" }
+                : { label: initState.databaseId, value: initState.databaseId };
             let obj = JSON.parse(initState.userProvidedResource);
             initLambdaName = obj.resourceId;
         }

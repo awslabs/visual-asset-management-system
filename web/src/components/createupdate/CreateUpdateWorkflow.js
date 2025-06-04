@@ -33,7 +33,13 @@ import Synonyms from "../../synonyms";
 const WorkflowEditor = React.lazy(() => import("../interactive/WorkflowEditor"));
 
 export default function CreateUpdateWorkflow(props) {
-    const { databaseId, workflowId } = useParams();
+    // Check if this is a global workflow route
+    const isGlobalWorkflow = window.location.hash.includes('/databases/global/workflows/');
+    // Get parameters from URL
+    const { databaseId: urlDatabaseId, workflowId } = useParams();
+    
+    // If this is a global workflow, use empty string as databaseId
+    const databaseId = isGlobalWorkflow ? "" : urlDatabaseId;
     const navigate = useNavigate();
     const [reload, setReload] = useState(true);
     const [loaded, setLoaded] = useState(!workflowId);
@@ -185,6 +191,7 @@ export default function CreateUpdateWorkflow(props) {
             databaseId: databaseId,
             assetId: asset?.value,
             workflowId: workflowId,
+            isGlobalWorkflow: isGlobalWorkflow
         });
         if (result !== false && Array.isArray(result)) {
             if (result[0] === false) {
@@ -232,14 +239,21 @@ export default function CreateUpdateWorkflow(props) {
             <Box padding={{ top: "s", horizontal: "l" }}>
                 <SpaceBetween direction="vertical" size="xs">
                     <BreadcrumbGroup
-                        items={[
-                            { text: Synonyms.Databases, href: "#/databases/" },
-                            {
-                                text: databaseId,
-                                href: "#/databases/" + databaseId + "/workflows/",
-                            },
-                            { text: "Create Workflow" },
-                        ]}
+                        items={isGlobalWorkflow ?
+                            [
+                                { text: Synonyms.Databases, href: "#/databases/" },
+                                { text: "Global", href: "#/databases/global/workflows/" },
+                                { text: "Create Workflow" }
+                            ] :
+                            [
+                                { text: Synonyms.Databases, href: "#/databases/" },
+                                {
+                                    text: databaseId,
+                                    href: "#/databases/" + databaseId + "/workflows/",
+                                },
+                                { text: "Create Workflow" },
+                            ]
+                        }
                         ariaLabel="Breadcrumbs"
                     />
                     <Container
@@ -255,7 +269,7 @@ export default function CreateUpdateWorkflow(props) {
                                     </SpaceBetween>
                                 }
                             >
-                                Container Workflow
+                                {isGlobalWorkflow ? "Global Workflow" : "Container Workflow"}
                             </Header>
                         }
                     >

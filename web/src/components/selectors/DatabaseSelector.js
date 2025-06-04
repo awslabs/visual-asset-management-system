@@ -27,12 +27,15 @@ const DatabaseSelector = (props) => {
     return (
         <Select
             {...props}
-            options={allItems.map((item) => {
-                return {
-                    label: item.databaseId,
-                    value: item.databaseId,
-                };
-            })}
+            options={[
+                { label: "Global", value: "" },
+                ...allItems.map((item) => {
+                    return {
+                        label: item.databaseId,
+                        value: item.databaseId,
+                    };
+                })
+            ]}
             filteringType="auto"
             selectedAriaLabel="Selected"
             data-testid="database-select"

@@ -9,7 +9,6 @@ import { fetchAllWorkflows, fetchDatabaseWorkflows } from "../services/APIServic
 import { WorkflowListDefinition } from "../components/list/list-definitions/WorkflowListDefinition";
 import ListPage from "./ListPage";
 import DatabaseSelectorWithModal from "../components/selectors/DatabaseSelectorWithModal";
-
 export default function Workflows(props) {
     const { databaseId } = useParams();
     const navigate = useNavigate();
@@ -25,7 +24,12 @@ export default function Workflows(props) {
 
     const handleSelectWorkflowDatabase = (event) => {
         const newDatabaseId = event?.detail?.selectedOption?.value;
-        navigate(`/databases/${newDatabaseId}/workflows/create`);
+        // If the selected database is Global (empty string), use the global database route
+        if (newDatabaseId === "") {
+            navigate(`/databases/global/workflows/create`);
+        } else {
+            navigate(`/databases/${newDatabaseId}/workflows/create`);
+        }
     };
 
     return (

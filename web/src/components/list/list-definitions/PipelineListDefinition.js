@@ -29,6 +29,7 @@ export const PipelineListDefinition = new ListDefinition({
         { name: "outputType", placeholder: "Output" },
     ],
     elementId: "pipelineId",
+    // The deleteElement function in APIService.js will handle the route modification for global pipelines
     deleteRoute: "database/{databaseId}/pipelines/{pipelineId}",
     columnDefinitions: [
         new ColumnDefinition({
@@ -44,6 +45,10 @@ export const PipelineListDefinition = new ListDefinition({
             header: Synonyms.Database,
             cellWrapper: (props) => {
                 const { item } = props;
+                // If databaseId is empty string, display "Global" and link to global pipelines
+                if (item.databaseId === "") {
+                    return <Link href={`#/databases/global/pipelines/`}>Global</Link>;
+                }
                 return (
                     <Link href={`#/databases/${item.databaseId}/pipelines/`}>{props.children}</Link>
                 );

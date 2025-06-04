@@ -20,25 +20,45 @@ const WorkflowPipelineSelector = (props) => {
         setActiveTab,
     } = useContext(WorkflowContext);
     const [allItems, setAllItems] = useState([]);
-
-    useEffect(() => {
-        const getData = async () => {
-            const items = await fetchDatabasePipelines({ databaseId: database });
-            if (items !== false && Array.isArray(items)) {
-                setReload(false);
-                setAllItems(items);
-                setPipelines(
-                    items.reduce((acc, cur) => {
-                        acc[cur.pipelineId] = cur;
-                        return acc;
-                    }, {})
-                );
+useEffect(() => {
+    const getData = async () => {
+        let items = [];
+        
+        // If database is empty string (Global workflow), only fetch global pipelines
+        if (database === "") {
+            const globalItems = await fetchDatabasePipelines({ databaseId: "" });
+            if (globalItems !== false && Array.isArray(globalItems)) {
+                items = globalItems;
             }
-        };
-        if (reload) {
-            getData();
+        } else {
+            // For database-specific workflows, fetch both database-specific and global pipelines
+            const databaseItems = await fetchDatabasePipelines({ databaseId: database });
+            const globalItems = await fetchDatabasePipelines({ databaseId: "" });
+            
+            if (databaseItems !== false && Array.isArray(databaseItems)) {
+                items = [...databaseItems];
+            }
+            
+            if (globalItems !== false && Array.isArray(globalItems)) {
+                items = [...items, ...globalItems];
+            }
         }
-    }, [database, reload, setPipelines]);
+        
+        if (items.length > 0) {
+            setReload(false);
+            setAllItems(items);
+            setPipelines(
+                items.reduce((acc, cur) => {
+                    acc[cur.pipelineId] = cur;
+                    return acc;
+                }, {})
+            );
+        }
+    };
+    if (reload) {
+        getData();
+    }
+}, [database, reload, setPipelines]);
 
     useEffect(() => {
         if (reloadPipelines) {
@@ -56,7 +76,7 @@ const WorkflowPipelineSelector = (props) => {
                 setWorkflowPipelines(newPipelines);
                 setActiveTab("pipelines");
             }}
-            placeholder={<>Select pipeline from {database} database.</>}
+            placeholder={<>Select pipeline from {database === "" ? "Global" : database} database.</>}
             options={allItems.map((item) => {
                 return {
                     label: item.pipelineId,

@@ -89,11 +89,19 @@ export const downloadAsset = async ({ databaseId, assetId, key, version }, api =
  */
 export const deleteElement = async ({ deleteRoute, elementId, item }, api = API) => {
     try {
+        let route = deleteRoute;
+        
+        // Handle global pipelines/workflows (no database ID)
+        if (item?.databaseId === "" && deleteRoute.includes("{databaseId}")) {
+            // For global items, use the global database route
+            route = deleteRoute.replace("{databaseId}", "global");
+        } else {
+            route = route.replace("{databaseId}", item?.databaseId);
+        }
+        
         const response = await api.del(
             "api",
-            deleteRoute
-                .replace("{databaseId}", item?.databaseId)
-                .replace(`{${elementId}}`, item[elementId]),
+            route.replace(`{${elementId}}`, item[elementId]),
             {}
         );
         if (response.message) {
@@ -112,13 +120,19 @@ export const deleteElement = async ({ deleteRoute, elementId, item }, api = API)
  * Returns array of boolean and response/error message for the workflow that the current user is running, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */
-export const runWorkflow = async ({ databaseId, assetId, workflowId }, api = API) => {
+export const runWorkflow = async ({ databaseId, assetId, workflowId, isGlobalWorkflow = false }, api = API) => {
     try {
-        const response = await api.post(
-            "api",
-            `database/${databaseId}/assets/${assetId}/workflows/${workflowId}`,
-            {}
-        );
+        let endpoint;
+        
+        // If it's a global workflow, use the global database route
+        if (isGlobalWorkflow) {
+            endpoint = `database/global/assets/${assetId}/workflows/${workflowId}`;
+        } else {
+            endpoint = `database/${databaseId}/assets/${assetId}/workflows/${workflowId}`;
+        }
+        
+        const response = await api.post("api", endpoint, {});
+        
         if (response.message) {
             if (
                 response.message.indexOf("error") !== -1 ||
@@ -144,7 +158,13 @@ export const runWorkflow = async ({ databaseId, assetId, workflowId }, api = API
  */
 export const saveWorkflow = async ({ config }, api = API) => {
     try {
-        const response = await api.put("api", "workflows", config || config.body);
+        // Check if this is a global workflow (databaseId is empty string)
+        const isGlobalWorkflow = config?.body?.databaseId === "";
+        
+        // Use different endpoint for global workflows
+        const endpoint = isGlobalWorkflow ? "database/global/workflows" : "workflows";
+        
+        const response = await api.put("api", endpoint, config || config.body);
         if (response.message) {
             if (
                 response.message.indexOf("error") !== -1 ||
@@ -672,26 +692,38 @@ export const fetchAllPipelines = async (api = API) => {
 export const fetchDatabasePipelines = async ({ databaseId }, api = API) => {
     try {
         let response;
-        if (databaseId) {
-            response = await api.get("api", `database/${databaseId}/pipelines`, {});
-            let items = [];
-            const init = { queryStringParameters: { startingToken: null } };
-            if (response.message) {
-                if (response.message.Items) {
-                    items = items.concat(response.message.Items);
-                    while (response.message.NextToken) {
-                        init["queryStringParameters"]["startingToken"] = response.message.NextToken;
-                        response = await api.get("api", `database/${databaseId}/pipelines`, init);
-                        items = items.concat(response.message.Items);
-                    }
-                    return items;
-                } else {
-                    return response.message;
-                }
-            }
-        } else {
+        // If databaseId is undefined, return false
+        if (databaseId === undefined) {
             console.log("not fetching pipelines");
             return false;
+        }
+        
+        // If databaseId is an empty string, fetch global pipelines using the global database route
+        if (databaseId === "") {
+            response = await api.get("api", `database/global/pipelines`, {});
+        } else {
+            // Otherwise fetch database-specific pipelines
+            response = await api.get("api", `database/${databaseId}/pipelines`, {});
+        }
+        
+        let items = [];
+        const init = { queryStringParameters: { startingToken: null } };
+        if (response.message) {
+            if (response.message.Items) {
+                items = items.concat(response.message.Items);
+                while (response.message.NextToken) {
+                    init["queryStringParameters"]["startingToken"] = response.message.NextToken;
+                    if (databaseId === "") {
+                        response = await api.get("api", `database/global/pipelines`, init);
+                    } else {
+                        response = await api.get("api", `database/${databaseId}/pipelines`, init);
+                    }
+                    items = items.concat(response.message.Items);
+                }
+                return items;
+            } else {
+                return response.message;
+            }
         }
     } catch (error) {
         console.log(error);
@@ -706,25 +738,38 @@ export const fetchDatabasePipelines = async ({ databaseId }, api = API) => {
 export const fetchDatabaseWorkflows = async ({ databaseId }, api = API) => {
     try {
         let response;
-        if (databaseId) {
-            response = await api.get("api", `database/${databaseId}/workflows`, {});
-            let items = [];
-            const init = { queryStringParameters: { startingToken: null } };
-            if (response.message) {
-                if (response.message.Items) {
-                    items = items.concat(response.message.Items);
-                    while (response.message.NextToken) {
-                        init["queryStringParameters"]["startingToken"] = response.message.NextToken;
-                        response = await api.get("api", `database/${databaseId}/workflows`, init);
-                        items = items.concat(response.message.Items);
-                    }
-                    return items;
-                } else {
-                    return response.message;
-                }
-            }
-        } else {
+        // If databaseId is undefined, return false
+        if (databaseId === undefined) {
+            console.log("not fetching workflows");
             return false;
+        }
+        
+        // If databaseId is an empty string, fetch global workflows using the global database route
+        if (databaseId === "") {
+            response = await api.get("api", `database/global/workflows`, {});
+        } else {
+            // Otherwise fetch database-specific workflows
+            response = await api.get("api", `database/${databaseId}/workflows`, {});
+        }
+        
+        let items = [];
+        const init = { queryStringParameters: { startingToken: null } };
+        if (response.message) {
+            if (response.message.Items) {
+                items = items.concat(response.message.Items);
+                while (response.message.NextToken) {
+                    init["queryStringParameters"]["startingToken"] = response.message.NextToken;
+                    if (databaseId === "") {
+                        response = await api.get("api", `database/global/workflows`, init);
+                    } else {
+                        response = await api.get("api", `database/${databaseId}/workflows`, init);
+                    }
+                    items = items.concat(response.message.Items);
+                }
+                return items;
+            } else {
+                return response.message;
+            }
         }
     } catch (error) {
         console.log(error);
@@ -766,15 +811,20 @@ export const fetchAllWorkflows = async (api = API) => {
  * Returns array of all workflow executions the current user can access for the given databaseId & assetId, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchWorkflowExecutions = async ({ databaseId, assetId, workflowId }, api = API) => {
+export const fetchWorkflowExecutions = async ({ databaseId, assetId, workflowId, isGlobalWorkflow = false }, api = API) => {
     try {
         let response;
-        if (databaseId && assetId && workflowId) {
-            response = await api.get(
-                "api",
-                `database/${databaseId}/assets/${assetId}/workflows/${workflowId}/executions`,
-                {}
-            );
+        let endpoint;
+        
+        if (assetId && workflowId) {
+            // Determine the endpoint based on whether it's a global workflow
+            if (isGlobalWorkflow) {
+                endpoint = `database/global/assets/${assetId}/workflows/${workflowId}/executions`;
+            } else {
+                endpoint = `database/${databaseId}/assets/${assetId}/workflows/${workflowId}/executions`;
+            }
+            
+            response = await api.get("api", endpoint, {});
             let items = [];
             const init = { queryStringParameters: { startingToken: null } };
             if (response.message) {
@@ -782,11 +832,7 @@ export const fetchWorkflowExecutions = async ({ databaseId, assetId, workflowId 
                     items = items.concat(response.message.Items);
                     while (response.message.NextToken) {
                         init["queryStringParameters"]["startingToken"] = response.message.NextToken;
-                        response = await api.get(
-                            "api",
-                            `database/${databaseId}/assets/${assetId}/workflows/${workflowId}/executions`,
-                            init
-                        );
+                        response = await api.get("api", endpoint, init);
                         items = items.concat(response.message.Items);
                     }
                     return items;
