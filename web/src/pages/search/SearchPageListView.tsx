@@ -26,11 +26,11 @@ import { INITIAL_STATE, SearchPageViewProps } from "./SearchPage";
 import Synonyms from "../../synonyms";
 import { EmptyState } from "../../common/common-components";
 import { useNavigate } from "react-router-dom";
-import DatabaseSelector from "../../components/selectors/DatabaseSelector";
 import { useEffect, useState } from "react";
-import { API } from "aws-amplify";
-import { fetchtagTypes } from "../../services/APIService";
+import { fetchtagTypes, fetchAllDatabases } from "../../services/APIService";
+
 var tagTypes: any;
+//let databases: any;
 
 function columnRender(e: any, name: string, value: any) {
     if (name === "str_databaseid") {
@@ -84,7 +84,12 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
         fetchtagTypes().then((res) => {
             tagTypes = res;
         });
+
+        // fetchAllDatabases().then((res) => {
+        //     databases = res;
+        // });
     }, []);
+
     const navigate = useNavigate();
 
     if (!state?.initialResult) {
@@ -240,6 +245,11 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                             onConfirm={({ detail }) => {
                                 console.log("detail", detail);
                                 dispatch({ type: "set-search-table-preferences", payload: detail });
+                                if (typeof detail.pageSize === "number") {
+                                    paginateSearch(0, detail.pageSize, { state, dispatch });
+                                } else {
+                                    console.error("Page size is undefined in preferences detail.");
+                                }
                             }}
                             visibleContentPreference={{
                                 title: "Columns",
@@ -321,7 +331,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                         />
                     }
                     filter={
-                        false && (
+                        false && ( //Disable these for now
                             <Grid
                                 gridDefinition={[
                                     { colspan: { default: 7 } },
@@ -417,14 +427,26 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                                             placeholder="Database"
                                             options={[
                                                 { label: "All", value: "all" },
-                                                ...(state?.result?.aggregations?.str_databaseid?.buckets.map(
-                                                    (b: any) => {
-                                                        return {
-                                                            label: `${b.key} (${b.doc_count})`,
-                                                            value: b.key,
-                                                        };
-                                                    }
-                                                ) || []),
+                                                //List every database from "databases" variable and then map to result aggregation to display (doc_count) next to each
+                                                //We do this because opensearch has a max items it will return in a query which may not be everything across aggregated databases
+                                                //Without this, you wouldn't be able to search on other databases not listed due to trimmed results. 
+                                                // ...(databases?.map((b: any) => {
+                                                //     var count = 0
+                                                //     //Map through result aggregation to find doc_count for each database
+                                                //     state?.result?.aggregations?.str_databaseid?.buckets.map(
+                                                //         (c: any) => {
+                                                //             if (c.key === b.databaseId) {
+                                                //                 count = c.doc_count
+                                                //             }
+                                                //         }
+                                                //     )
+
+                                                //     return {
+                                                //         label: `${b.databaseId} (Results: ${count} / Total: ${b.assetCount})`,
+                                                //         value: b.databaseId,
+                                                //     };
+
+                                                // }) || []),
                                             ]}
                                             onChange={({ detail }) =>
                                                 changeFilter(

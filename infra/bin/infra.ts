@@ -13,6 +13,7 @@ import { AwsSolutionsChecks, NagSuppressions, NIST80053R5Checks } from "cdk-nag"
 import { Aspects, Annotations } from "aws-cdk-lib";
 import { WAFScope } from "../lib/constructs/wafv2-basic-construct";
 import * as Config from "../config/config";
+import { STACK_WAF_DESCRIPTION, STACK_CORE_DESCRIPTION } from "../config/config";
 import * as Service from "../lib/helper/service-helper";
 
 const app = new cdk.App();
@@ -54,6 +55,7 @@ if (config.app.useWaf) {
             region: wafRegion,
         },
         wafScope: wafScope,
+        description: STACK_WAF_DESCRIPTION
     });
 
     // ssmWafArn = cfWafStack.wafArn;
@@ -67,6 +69,7 @@ if (config.app.useWaf) {
         },
         ssmWafArn: cfWafStack.wafArn,
         config: config,
+        description: STACK_CORE_DESCRIPTION
     });
 
     coreVamsStack.addDependency(cfWafStack);
@@ -99,6 +102,7 @@ else {
         },
         ssmWafArn: "",
         config: config,
+        description: STACK_CORE_DESCRIPTION
     });
 
     //Stack level NAG supressions

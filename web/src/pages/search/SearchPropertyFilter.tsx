@@ -33,7 +33,7 @@ async function search(overrides: any, { dispatch, state }: SearchPropertyFilterP
         });
     if (state.databaseId) {
         filters.push({
-            query_string: { query: `(str_databaseid:(${state?.databaseId}))` },
+            query_string: { query: `(str_databaseid:("${state?.databaseId}"))` },
         });
     }
 

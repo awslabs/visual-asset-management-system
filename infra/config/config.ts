@@ -20,6 +20,9 @@ export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_20_X;
 export const LAMBDA_MEMORY_SIZE = 3003;
 export const OPENSEARCH_VERSION = cdk.aws_opensearchservice.EngineVersion.OPENSEARCH_2_7;
 
+export const STACK_WAF_DESCRIPTION = "WAF Components for the Visual Asset Management Systems (VAMS) (SO9299)"
+export const STACK_CORE_DESCRIPTION = "Primary Components for the Visual Asset Management Systems (VAMS) (SO9299)"
+
 export function getConfig(app: cdk.App): Config {
     const file: string = readFileSync(join(__dirname, "config.json"), {
         encoding: "utf8",

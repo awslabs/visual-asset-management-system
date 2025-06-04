@@ -13,6 +13,7 @@ sagemaker_notebook_name_pattern = '^[a-zA-Z0-9](-*[a-zA-Z0-9])*'
 email_pattern = r'^[\w\-\.\+]+@([\w-]+\.)+[\w-]{2,4}$'
 relative_file_path_pattern = r'^(\/[a-zA-Z0-9_\-.\s]+){1,63}$'
 asset_path_pattern = r'^[a-z]([-_a-z0-9]){3,63}(\/[a-zA-Z0-9_\-.\s]+){1,63}$'
+asset_folder_path_pattern = r'^[a-z]([-_a-z0-9]){3,63}(\/[a-zA-Z0-9_\-.\s]*){0,63}(\/)$'
 asset_auxiliarypreview_path_pattern = r'^[a-z]([-_a-z0-9]){3,63}(\/[a-zA-Z0-9_\-.\s]+){1,63}\/preview(\/[a-zA-Z0-9_\-.\s]+){1,63}(\/?)$'
 asset_path_pipeline_pattern = r'^pipelines\/([a-zA-Z0-9_\-.\s]){1,63}\/([a-zA-Z0-9_\-.\s]){1,63}\/output(\/[a-zA-Z0-9_\-.\s]+){1,63}(\/)$'
 object_name_pattern = r'^[a-zA-Z0-9\-._\s]{1,256}$'
@@ -27,6 +28,7 @@ sagemaker_notebook_name_regex = re.compile(sagemaker_notebook_name_pattern)
 email_regex = re.compile(email_pattern)
 relative_file_path_regex = re.compile(relative_file_path_pattern)
 asset_path_regex = re.compile(asset_path_pattern)
+asset_folder_path_regex = re.compile(asset_folder_path_pattern)
 asset_auxiliarypreview_path_regex = re.compile(asset_auxiliarypreview_path_pattern)
 asset_path_pipeline_regex = re.compile(asset_path_pipeline_pattern)
 object_name_regex = re.compile(object_name_pattern)
@@ -46,14 +48,16 @@ def validate_relative_file_path(name, value):
     if not relative_file_path_regex.fullmatch(value):
         return (False, name + " is invalid. Must follow the regexp "+relative_file_path_pattern)
     elif value.count('..') > 0:
-            return (False, name + " is invalid. Cannot contain more than one '.' in sequence.")
+        return (False, name + " is invalid. Cannot contain more than one '.' in sequence.")
     return (True, '')
 
-def validate_asset_path(name, value):
-    if not asset_path_regex.fullmatch(value):
+def validate_asset_path(name, value, isFolder):
+    if isFolder and not asset_folder_path_regex.fullmatch(value):
+        return (False, name + " is invalid. Must follow the regexp "+asset_folder_path_pattern)
+    elif not isFolder and not asset_path_regex.fullmatch(value):
         return (False, name + " is invalid. Must follow the regexp "+asset_path_pattern)
     elif value.count('..') > 0:
-            return (False, name + " is invalid. Cannot contain more than one '.' in sequence.")
+        return (False, name + " is invalid. Cannot contain more than one '.' in sequence.")
     return (True, '')
 
 def validate_asset_auxiliarypreview_path(name, value):
@@ -277,7 +281,13 @@ def validate(values):
             if not valid:
                 return (valid, message)
         if v['validator'] == 'ASSET_PATH':
-            (valid, message) = validate_asset_path(k, v['value'])
+            isFolder = False
+            if 'isFolder' in v:
+                if isinstance(v['isFolder'], bool) and v['isFolder'] == True:
+                    isFolder = True
+                if not isinstance(v['isFolder'], bool):
+                    raise Exception("The isFolder field in validator for " + k + " field must be of type bool")
+            (valid, message) = validate_asset_path(k, v['value'], isFolder)
             if not valid:
                 return (valid, message)
         if v['validator'] == 'ASSET_PATH_PIPELINE':

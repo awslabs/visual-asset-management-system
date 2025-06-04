@@ -168,7 +168,7 @@ def lambda_handler(event, context):
 
             # if assetId exists in database
             if asset_location:
-                # Get Key from assetLocation dictionary (primary asset file)
+                # Get Key from assetLocation dictionary (primary asset file or folder)
                 primaryFileKey = asset_location['Key']
 
                 #For now grab all files from the top level asset location
@@ -177,6 +177,7 @@ def lambda_handler(event, context):
                 # get all files in assetLocation
                 result = get_all_files_in_path(key, primaryFileKey, queryParameters)
                 response['body'] = json.dumps({"message": result})
+                response['statusCode'] = 200
                 logger.info(response)
                 return response
             else:

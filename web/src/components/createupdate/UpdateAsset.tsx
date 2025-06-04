@@ -17,7 +17,10 @@ import ProgressBar from "@cloudscape-design/components/progress-bar";
 import { UploadAssetWorkflowApi, getUploadTaskPromiseLazy } from "../../pages/AssetUpload/onSubmit";
 import { fetchTags, fetchtagTypes } from "../../services/APIService";
 import { TagType } from "../../pages/Tag/TagType.interface";
-import { validateRequiredTagTypeSelected, validateNonZeroLengthTextAsYouType } from "../../pages/AssetUpload/validations";
+import {
+    validateRequiredTagTypeSelected,
+    validateNonZeroLengthTextAsYouType,
+} from "../../pages/AssetUpload/validations";
 
 interface UpdateAssetProps {
     asset: any;
@@ -83,15 +86,15 @@ const update = async (
                         .then((res) => {
                             setComplete(true);
                         })
-                        .catch((err:any) => {
+                        .catch((err: any) => {
                             setError({ isError: true, message: err.message });
                         });
                 },
                 (idx, error) => {
                     setError({ isError: true, message: error.message });
-                },
-            )
-        } catch (err:any) {
+                }
+            );
+        } catch (err: any) {
             setError({ isError: true, message: err.message });
         }
     } else {
@@ -208,11 +211,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
         };
         setValidationText(validation);
 
-        const isValid = !(
-            validation.assetName ||
-            validation.description ||
-            validation.tags
-        );
+        const isValid = !(validation.assetName || validation.description || validation.tags);
         setIsValid(isValid);
     }, [selectedTags, assetDetail.assetName, assetDetail.description, isFormTouched]);
 
@@ -249,11 +248,9 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                                     setError,
                                     setComplete,
                                     isValid
-                                )
+                                );
                             }}
-                            disabled={
-                                (inProgress && !error.isError) || !isValid
-                            }
+                            disabled={(inProgress && !error.isError) || !isValid}
                         >
                             Update Asset
                         </Button>
@@ -263,8 +260,10 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
             header="Update Asset"
         >
             <SpaceBetween direction="vertical" size="l">
-                <FormField label={`${Synonyms.Asset} Name`}
-                    errorText={isFormTouched && validationText.assetName}>
+                <FormField
+                    label={`${Synonyms.Asset} Name`}
+                    errorText={isFormTouched && validationText.assetName}
+                >
                     <Input
                         value={assetDetail.assetName || ""}
                         data-testid="assetid-input"
@@ -279,7 +278,8 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                 </FormField>
                 <FormField
                     label={`${Synonyms.Asset} Description`}
-                    errorText={isFormTouched && validationText.description}>
+                    errorText={isFormTouched && validationText.description}
+                >
                     <Input
                         value={assetDetail.description || ""}
                         data-testid="assetdescription-input"
