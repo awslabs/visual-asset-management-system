@@ -1028,6 +1028,38 @@ export default function UploadManager({
             await completeUpload();
         }
     }, [uploadFileParts, completeUpload, uploadState.uploadStatus]);
+    
+    // Retry a single failed file
+    const handleRetryItem = useCallback(async (fileIndex: number) => {
+        // Reset all parts for this file to pending
+        setFileParts(prev => 
+            prev.map(part => 
+                part.fileIndex === fileIndex && part.status === 'failed'
+                    ? { ...part, status: 'pending' }
+                    : part
+            )
+        );
+        
+        // Reset the file status to queued
+        setFileUploadItems(prev => 
+            prev.map(item => 
+                item.index === fileIndex && item.status === "Failed"
+                    ? { ...item, status: "Queued", progress: 0 }
+                    : item
+            )
+        );
+        
+        // Reset upload started flag to allow the upload to start again
+        setUploadStarted(false);
+        
+        // Retry upload
+        await uploadFileParts();
+        
+        // If upload is now successful, complete it
+        if (uploadState.uploadStatus === 'completed') {
+            await completeUpload();
+        }
+    }, [uploadFileParts, completeUpload, uploadState.uploadStatus]);
 
     // Handle manual completion (with only successful files)
     const handleManualCompletion = useCallback(async () => {
@@ -1061,6 +1093,27 @@ export default function UploadManager({
                 const assetId = uploadState.createdAssetId || assetDetail.assetId || '';
                 await initializeUpload(assetId);
                 // uploadFileParts will be called by the useEffect
+            } else if (uploadState.previewUploadInitStatus === 'failed') {
+                // Retry preview upload initialization
+                const assetId = uploadState.createdAssetId || assetDetail.assetId || '';
+                if (assetId && assetDetail.Preview) {
+                    await initializePreviewUpload(assetId);
+                }
+            } else if (uploadState.uploadStatus === 'failed') {
+                // Retry file uploads
+                await handleRetry();
+            } else if (uploadState.completionStatus === 'failed') {
+                // Retry completion
+                await completeUpload();
+            } else if (uploadState.previewCompletionStatus === 'failed') {
+                // Retry preview completion if we have the necessary data
+                if (uploadState.previewUploadId && assetDetail.Preview) {
+                    // We need to re-upload the preview file
+                    const assetId = uploadState.createdAssetId || assetDetail.assetId || '';
+                    if (assetId) {
+                        await initializePreviewUpload(assetId);
+                    }
+                }
             }
         } catch (error: any) {
             console.error('Retry error:', error);
@@ -1071,13 +1124,19 @@ export default function UploadManager({
         uploadState.metadataStatus,
         uploadState.uploadInitStatus,
         uploadState.uploadStatus,
+        uploadState.completionStatus,
+        uploadState.previewUploadInitStatus,
+        uploadState.previewCompletionStatus,
         uploadState.createdAssetId,
-        assetDetail.assetId,
+        uploadState.previewUploadId,
+        assetDetail,
         createAsset,
         addMetadata,
         initializeUpload,
+        initializePreviewUpload,
         uploadFileParts,
         completeUpload,
+        handleRetry,
         onError
     ]);
 
@@ -1096,10 +1155,13 @@ export default function UploadManager({
                     </Alert>
                 )}
 
-                {/* Retry and Back buttons for API errors */}
+                {/* Retry and Back buttons for all steps that can fail */}
                 {(uploadState.assetCreationStatus === 'failed' || 
                   uploadState.metadataStatus === 'failed' || 
-                  uploadState.uploadInitStatus === 'failed') && (
+                  uploadState.uploadInitStatus === 'failed' ||
+                  uploadState.previewUploadInitStatus === 'failed' ||
+                  uploadState.completionStatus === 'failed' ||
+                  uploadState.previewCompletionStatus === 'failed') && (
                     <SpaceBetween direction="horizontal" size="xs">
                         <Button onClick={() => handleRetryFromStep()} variant="primary">
                             Retry from Failed Step
@@ -1195,6 +1257,8 @@ export default function UploadManager({
                     allItems={fileUploadItems}
                     resume={false}
                     showCount={true}
+                    onRetry={handleRetry}
+                    onRetryItem={handleRetryItem}
                 />
 
                 {showRetryButton && (
@@ -1203,7 +1267,7 @@ export default function UploadManager({
                             Retry Failed Uploads
                         </Button>
                         <Button onClick={handleManualCompletion}>
-                            Complete with Successful Files Only
+                            Continue and ignore failed files
                         </Button>
                     </SpaceBetween>
                 )}

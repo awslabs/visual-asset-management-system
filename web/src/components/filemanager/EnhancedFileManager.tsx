@@ -95,6 +95,28 @@ function getRootByPath(root: FileTree | null, path: string): FileTree | null {
     return null;
 }
 
+// Helper function to check if a folder has any files beneath it (recursively)
+function hasFolderContent(folder: FileTree): boolean {
+    // Check if any direct children are files
+    const hasFiles = folder.subTree.some(item => {
+        const isFile = item.isFolder === false || 
+            (item.isFolder === undefined && item.subTree.length === 0 && !item.keyPrefix.endsWith('/'));
+        return isFile;
+    });
+    
+    if (hasFiles) {
+        return true;
+    }
+    
+    // Recursively check subfolders
+    return folder.subTree.some(item => {
+        const isSubfolder = item.isFolder === true || 
+            (item.isFolder === undefined && (item.subTree.length > 0 || item.keyPrefix.endsWith('/')));
+        
+        return isSubfolder && hasFolderContent(item);
+    });
+}
+
 function addDirectories(root: FileTree, directories: string): FileTree {
     const parts = directories.split("/");
     let currentRoot = root;
@@ -796,51 +818,55 @@ function FileInfoPanel() {
                 isLoading={isCreatingFolder}
             />
             
-            <div className="file-info-header">
-                <Header variant="h3">{selectedItem.displayName}</Header>
-                <div className="file-actions">
+            <div className="file-info-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                <div style={{ flexShrink: 1, overflow: 'hidden', textOverflow: 'ellipsis', marginRight: '16px', maxWidth: '50%' }}>
+                    <Header variant="h3">{selectedItem.displayName}</Header>
+                </div>
+                <div className="file-actions" style={{ flexShrink: 0, display: 'flex', flexWrap: 'nowrap', minWidth: 'fit-content' }}>
                     {isFolder ? (
                         <SpaceBetween direction="horizontal" size="xs">
                             <Button 
                                 iconName="upload" 
                                 onClick={handleUpload}
                             >
-                                Upload Files to {folderName}
+                                Upload Files
                             </Button>
                             <Button 
                                 iconName="folder" 
                                 onClick={() => setCreateFolderModalVisible(true)}
                             >
-                                Create Folder in {folderName}
+                                Create Folder
                             </Button>
-                            <Button 
-                                iconName="download" 
-                                onClick={() => {
-                                    navigate(`/databases/${databaseId}/assets/${assetId}/download`, {
-                                        state: {
-                                            fileTree: selectedItem,
-                                        },
-                                    });
-                                }}
-                            >
-                                Download {folderName} Folder
-                            </Button>
+                            {hasFolderContent(selectedItem) && (
+                                <Button 
+                                    iconName="download" 
+                                    onClick={() => {
+                                        navigate(`/databases/${databaseId}/assets/${assetId}/download`, {
+                                            state: {
+                                                fileTree: selectedItem,
+                                            },
+                                        });
+                                    }}
+                                >
+                                    Download Folder
+                                </Button>
+                            )}
                         </SpaceBetween>
                     ) : (
-                        <>
+                        <SpaceBetween direction="horizontal" size="xs">
                             <Button 
                                 iconName="download" 
                                 onClick={handleDownload}
                             >
-                                Download {selectedItem.name}
+                                Download File
                             </Button>
                             <Button 
                                 iconName="external" 
                                 onClick={handleView}
                             >
-                                View {selectedItem.name}
+                                View File
                             </Button>
-                        </>
+                        </SpaceBetween>
                     )}
                 </div>
             </div>
@@ -921,8 +947,25 @@ export function EnhancedFileManager({ assetName, assetFiles = [] }: { assetName:
             const fileTree = addFiles(assetFiles, initialState.fileTree);
             dispatch({ type: "FETCH_SUCCESS", payload: fileTree });
             
-            // Select the root item by default
-            dispatch({ type: "SELECT_ITEM", payload: { item: fileTree } });
+            // If there's exactly 1 file, select it by default
+            if (assetFiles.length === 1 && !assetFiles[0].isFolder && !assetFiles[0].key.endsWith('/')) {
+                // Find the file in the tree
+                const singleFile = fileTree.subTree.find(item => 
+                    item.keyPrefix === assetFiles[0].key && 
+                    !item.isFolder && 
+                    item.subTree.length === 0
+                );
+                
+                if (singleFile) {
+                    dispatch({ type: "SELECT_ITEM", payload: { item: singleFile } });
+                } else {
+                    // If we can't find the file directly (might be in a subfolder), select the root
+                    dispatch({ type: "SELECT_ITEM", payload: { item: fileTree } });
+                }
+            } else {
+                // Select the root item by default
+                dispatch({ type: "SELECT_ITEM", payload: { item: fileTree } });
+            }
         } else {
             dispatch({ type: "FETCH_SUCCESS", payload: initialState.fileTree });
         }

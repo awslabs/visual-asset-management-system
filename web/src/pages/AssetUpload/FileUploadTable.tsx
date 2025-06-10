@@ -59,6 +59,7 @@ const FileUploadTableColumnDefinitions = [
 interface FileUploadTableProps {
     allItems: FileUploadTableItem[];
     onRetry?: () => void;
+    onRetryItem?: (index: number) => void;
     resume: boolean;
     columnDefinitions?: typeof FileUploadTableColumnDefinitions;
     showCount?: boolean;
@@ -223,6 +224,7 @@ function getActions(
 export const FileUploadTable = ({
     allItems,
     onRetry,
+    onRetryItem,
     resume,
     columnDefinitions,
     showCount,
@@ -232,28 +234,42 @@ export const FileUploadTable = ({
 }: FileUploadTableProps) => {
     let visibleContent = ["filesize", "status", "progress"];
     
-    // If removal is allowed and no custom column definitions are provided,
-    // add a removal column to the default definitions
-    if (allowRemoval && !columnDefinitions && onRemoveItem) {
-        columnDefinitions = [
-            ...FileUploadTableColumnDefinitions,
-            {
+    // If no custom column definitions are provided, add actions column if needed
+    if (!columnDefinitions) {
+        // Start with the default column definitions
+        let customColumnDefinitions = [...FileUploadTableColumnDefinitions];
+        
+        // Add actions column if we need retry or removal functionality
+        if ((onRetryItem || (allowRemoval && onRemoveItem))) {
+            customColumnDefinitions.push({
                 id: "actions",
                 header: "Actions",
                 cell: (item: FileUploadTableItem) => (
-                    <Button
-                        iconName="remove"
-                        variant="icon"
-                        onClick={() => onRemoveItem(item.index)}
-                        ariaLabel={`Remove ${item.name}`}
-                    />
+                    <SpaceBetween direction="horizontal" size="xs">
+                        {item.status === "Failed" && onRetryItem && (
+                            <Button
+                                iconName="refresh"
+                                variant="icon"
+                                onClick={() => onRetryItem(item.index)}
+                                ariaLabel={`Retry ${item.name}`}
+                            />
+                        )}
+                        {allowRemoval && onRemoveItem && (
+                            <Button
+                                iconName="remove"
+                                variant="icon"
+                                onClick={() => onRemoveItem(item.index)}
+                                ariaLabel={`Remove ${item.name}`}
+                            />
+                        )}
+                    </SpaceBetween>
                 ),
                 sortingField: "actions",
                 isRowHeader: false,
-            },
-        ];
-    } else if (!columnDefinitions) {
-        columnDefinitions = FileUploadTableColumnDefinitions;
+            });
+        }
+        
+        columnDefinitions = customColumnDefinitions;
     }
     
     if (columnDefinitions) {

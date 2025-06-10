@@ -1,11 +1,11 @@
-import { useLocation } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { downloadAsset } from "../services/APIService";
 import { FileTree } from "../components/filemanager/EnhancedFileManager";
 import { FileUploadTable, FileUploadTableItem } from "./AssetUpload/FileUploadTable";
 import { useReducer, useState, useEffect } from "react";
 import { useParams } from "react-router";
 import axios from "axios";
-import { Box, Button, SpaceBetween } from "@cloudscape-design/components";
+import { Box, Button, Container, Header, SpaceBetween, StatusIndicator } from "@cloudscape-design/components";
 
 // Utility class for managing concurrent downloads
 class DownloadQueue {
@@ -158,10 +158,19 @@ const downloadSingleFile = async (
             await writable.write(responseFile.data);
             await writable.close();
             
-            // Update status to "Completed"
+            // Update status to "Completed" with 100% progress
+            const fileSize = responseFile.data.size;
+            console.log(`File ${file.relativePath} downloaded successfully, size: ${fileSize} bytes`);
+            
+            // Force progress to 100% when completed
             dispatch({
-                type: "UPDATE_STATUS",
-                payload: { relativePath: file.relativePath, status: "Completed" },
+                type: "COMPLETE_FILE",
+                payload: { 
+                    relativePath: file.relativePath,
+                    status: "Completed",
+                    loaded: fileSize,
+                    total: fileSize
+                },
             });
             
             return true;
@@ -205,7 +214,32 @@ const downloadFilesInParallel = async (
     );
     
     // Wait for all downloads to complete
-    await Promise.allSettled(downloadPromises);
+    const results = await Promise.allSettled(downloadPromises);
+    
+    console.log(`All downloads completed: ${results.length} files processed`);
+    
+    // Ensure all files are properly marked as completed or failed
+    results.forEach((result, index) => {
+        const file = files[index];
+        if (result.status === 'fulfilled' && result.value === true) {
+            // Double-check that the file is marked as completed
+            dispatch({
+                type: "FORCE_COMPLETE",
+                payload: { 
+                    relativePath: file.relativePath,
+                }
+            });
+        } else if (result.status === 'rejected' || (result.status === 'fulfilled' && result.value === false)) {
+            // Mark as failed if rejected or returned false
+            dispatch({
+                type: "UPDATE_STATUS",
+                payload: { 
+                    relativePath: file.relativePath,
+                    status: "Failed" 
+                }
+            });
+        }
+    });
 };
 
 // Main function to download a folder
@@ -228,9 +262,12 @@ async function downloadFolder(
         
         // Flatten the file tree
         const files = flattenFileTree(tree);
+        console.log(`Starting download of ${files.length} files`);
         
         // Download all files in parallel
         await downloadFilesInParallel(assetId, databaseId, files, directoryHandle, dispatch);
+        
+        console.log("All downloads have been processed");
     } catch (error) {
         console.error("Error downloading folder:", error);
         
@@ -291,11 +328,17 @@ function assetDownloadReducer(
         case "UPDATE_PROGRESS":
             return state.map((item) => {
                 if (item.relativePath === action.payload.relativePath) {
+                    // Calculate progress safely
+                    let progress = 0;
+                    if (action.payload.total > 0) {
+                        progress = Math.floor((action.payload.loaded / action.payload.total) * 100);
+                    }
+                    
                     return {
                         ...item,
                         status: action.payload.status,
                         size: action.payload.total,
-                        progress: Math.floor((action.payload.loaded / action.payload.total) * 100),
+                        progress: progress,
                         loaded: action.payload.loaded,
                         total: action.payload.total,
                     };
@@ -307,9 +350,47 @@ function assetDownloadReducer(
         case "UPDATE_STATUS":
             return state.map((item) => {
                 if (item.relativePath === action.payload.relativePath) {
+                    // If status is "Completed", ensure progress is 100%
+                    const progress = action.payload.status === "Completed" ? 100 : item.progress;
                     return {
                         ...item,
                         status: action.payload.status,
+                        progress: progress,
+                    };
+                } else {
+                    return item;
+                }
+            });
+            
+        case "COMPLETE_FILE":
+            return state.map((item) => {
+                if (item.relativePath === action.payload.relativePath) {
+                    // Ensure we have valid values for loaded and total
+                    const total = action.payload.total || item.total || 1;
+                    const loaded = action.payload.loaded || total;
+                    
+                    return {
+                        ...item,
+                        status: "Completed",
+                        progress: 100, // Always set to 100% for completed files
+                        loaded: loaded,
+                        total: total,
+                    };
+                } else {
+                    return item;
+                }
+            });
+            
+        case "FORCE_COMPLETE":
+            return state.map((item) => {
+                if (item.relativePath === action.payload.relativePath) {
+                    // Force the item to be completed with 100% progress
+                    return {
+                        ...item,
+                        status: "Completed",
+                        progress: 100,
+                        loaded: item.total || 1,
+                        total: item.total || 1,
                     };
                 } else {
                     return item;
@@ -335,6 +416,7 @@ function assetDownloadReducer(
 export default function AssetDownloadsPage() {
     const { state } = useLocation();
     const { databaseId, assetId } = useParams();
+    const navigate = useNavigate();
     const fileTree = state["fileTree"] as FileTree;
     const [resume, setResume] = useState(true);
     const [isDownloading, setIsDownloading] = useState(false);
@@ -363,6 +445,17 @@ export default function AssetDownloadsPage() {
             
             // Start download
             await downloadFolder(assetId!, databaseId!, fileTree, dispatch);
+            
+            // Force a final update of all items to ensure UI is up to date
+            setTimeout(() => {
+                const items = fileUploadTableItemsState.filter(item => item.status === "In Progress");
+                items.forEach(item => {
+                    dispatch({
+                        type: "FORCE_COMPLETE",
+                        payload: { relativePath: item.relativePath }
+                    });
+                });
+            }, 500);
         } finally {
             setIsDownloading(false);
             setResume(false);
@@ -380,27 +473,70 @@ export default function AssetDownloadsPage() {
         return { total, completed, failed, inProgress, queued };
     };
     
+    // Check if all downloads are complete
+    const isAllComplete = () => {
+        const stats = getDownloadStats();
+        return stats.total > 0 && stats.completed + stats.failed === stats.total;
+    };
+    
+    // Handle return to asset view
+    const handleReturnToAsset = () => {
+        navigate(`/databases/${databaseId}/assets/${assetId}`);
+    };
+    
+    // Force completion of any stuck downloads
+    const handleForceComplete = () => {
+        fileUploadTableItemsState.forEach(item => {
+            if (item.status === "In Progress" || item.status === "Queued") {
+                dispatch({
+                    type: "FORCE_COMPLETE",
+                    payload: { relativePath: item.relativePath }
+                });
+            }
+        });
+    };
+    
     const stats = getDownloadStats();
+    const allComplete = isAllComplete();
     
     return (
-        <div>
+        <Container header={<Header variant="h2">Downloading Folder ({fileTree.name})</Header>}>
             <SpaceBetween size="l" direction="vertical">
-                <h1>Downloading {fileTree.relativePath}</h1>
-                
                 <Box>
-                    <SpaceBetween size="xs" direction="horizontal">
-                        <Button
-                            variant="primary"
-                            onClick={handleDownload}
-                            loading={isDownloading}
-                            disabled={isDownloading}
-                        >
-                            {resume ? "Start Download" : "Restart Download"}
-                        </Button>
+                    <SpaceBetween size="m" direction="vertical">
+                        <SpaceBetween size="xs" direction="horizontal">
+                            <Button
+                                variant="primary"
+                                onClick={handleDownload}
+                                loading={isDownloading}
+                                disabled={isDownloading}
+                            >
+                                {resume ? "Start Download" : "Restart Download"}
+                            </Button>
+                            
+                            {!isDownloading && stats.inProgress > 0 && (
+                                <Button
+                                    onClick={handleForceComplete}
+                                >
+                                    Mark All as Complete
+                                </Button>
+                            )}
+                            
+                            {allComplete && (
+                                <Button
+                                    onClick={handleReturnToAsset}
+                                >
+                                    Return to View Asset
+                                </Button>
+                            )}
+                        </SpaceBetween>
                         
-                        <Box variant="span">
-                            {stats.completed} of {stats.total} files completed
-                            {stats.failed > 0 && `, ${stats.failed} failed`}
+                        <Box>
+                            <StatusIndicator type={allComplete ? "success" : "in-progress"}>
+                                {stats.completed} of {stats.total} files completed
+                                {stats.failed > 0 && `, ${stats.failed} failed`}
+                                {stats.inProgress > 0 && `, ${stats.inProgress} in progress`}
+                            </StatusIndicator>
                         </Box>
                     </SpaceBetween>
                 </Box>
@@ -412,6 +548,6 @@ export default function AssetDownloadsPage() {
                     mode={"Download"}
                 />
             </SpaceBetween>
-        </div>
+        </Container>
     );
 }
