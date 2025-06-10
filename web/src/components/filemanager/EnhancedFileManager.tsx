@@ -896,14 +896,14 @@ function FileInfoPanel() {
                 
                 {selectedItem.dateCreatedCurrentVersion && (
                     <div className="file-info-item">
-                        <div className="file-info-label">Date Created:</div>
+                        <div className="file-info-label">Version Date:</div>
                         <div className="file-info-value">{formatDate(selectedItem.dateCreatedCurrentVersion)}</div>
                     </div>
                 )}
                 
                 {selectedItem.versionId && (
                     <div className="file-info-item">
-                        <div className="file-info-label">Version ID:</div>
+                        <div className="file-info-label">Current Version:</div>
                         <div className="file-info-value">{selectedItem.versionId}</div>
                     </div>
                 )}
