@@ -413,7 +413,7 @@ function CreateFolderModal({
         <Modal
             visible={visible}
             onDismiss={onDismiss}
-            header={`Create folder in ${parentFolder || 'root'}`}
+            header={`Create sub-folder in ${parentFolder || 'root'}`}
             footer={
                 <Box float="right">
                     <SpaceBetween direction="horizontal" size="xs">
@@ -835,7 +835,7 @@ function FileInfoPanel() {
                                 iconName="folder" 
                                 onClick={() => setCreateFolderModalVisible(true)}
                             >
-                                Create Folder
+                                Create Sub-Folder
                             </Button>
                             {hasFolderContent(selectedItem) && (
                                 <Button 
