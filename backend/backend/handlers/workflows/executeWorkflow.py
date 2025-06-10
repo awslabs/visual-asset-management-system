@@ -250,6 +250,15 @@ def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
     claims_and_roles = request_to_claims(event)
     logger.info(event)
+    
+    # Parse request body if present
+    request_body = {}
+    if event.get('body'):
+        try:
+            request_body = json.loads(event['body'])
+            logger.info("Request body: %s", request_body)
+        except:
+            logger.warning("Failed to parse request body as JSON")
     try:
         pathParams = event.get('pathParameters', {})
         logger.info(pathParams)
@@ -276,6 +285,12 @@ def lambda_handler(event, context):
             'assetId': {
                 'value': pathParams.get('assetId', ''),
                 'validator': 'ID'
+            },
+            'assetKey': {
+                'value': request_body.get('fileKey', ''),
+                'validator': 'ASSET_PATH',
+                'isFolder': False,
+                'optional': True
             },
         })
 
@@ -344,7 +359,17 @@ def lambda_handler(event, context):
 
                             ##Formulate pipeline input metadata for VAMS
                             #TODO: Implement additional user input fields on execute (from a new UX popup?)
-                            metadataResponse = get_asset_metadata(pathParams['databaseId'], pathParams['assetId'], asset['assetLocation']['Key'], event)
+                            
+                            # Determine which file key to use
+                            # If fileKey is provided in request body, use it, otherwise use asset's primary file key
+                            file_key = asset['assetLocation']['Key']
+                            if request_body and 'fileKey' in request_body:
+                                file_key = request_body['fileKey']
+                                logger.info(f"Using file key from request: {file_key}")
+                            else:
+                                logger.info(f"Using asset's primary file key: {file_key}")
+                            
+                            metadataResponse = get_asset_metadata(pathParams['databaseId'], pathParams['assetId'], file_key, event)
                             metadata = metadataResponse.get("metadata", {})
 
                             #remove databaseId/assetId from metadata if exists
@@ -363,9 +388,8 @@ def lambda_handler(event, context):
                                 #"User": {}
                             }
 
-                            logger.info("Launching Workflow:"
-                                        )
-                            executionId = launchWorkflow(asset['assetLocation']['Key'], workflow['workflow_arn'],
+                            logger.info("Launching Workflow:")
+                            executionId = launchWorkflow(file_key, workflow['workflow_arn'],
                                                          pathParams['assetId'], workflow['workflowId'],
                                                          pathParams['databaseId'], executingUserName, executingRequestContext, inputMetadata)
                             response["statusCode"] = 200

@@ -21,7 +21,7 @@ class FileUploadProps {
     label?: string;
     errorText?: string;
     fileFormats!: string;
-    setFile!: (file: File) => void;
+    setFile!: (file: File | null) => void;
     file: File | undefined;
     disabled!: boolean;
 }
@@ -50,16 +50,27 @@ export const FileUpload = ({
                 }}
             />
             <SpaceBetween size="l">
-                <Button
-                    disabled={disabled}
-                    variant="normal"
-                    iconName="upload"
-                    onClick={(e) => {
-                        inputRef?.current?.click();
-                    }}
-                >
-                    Choose File
-                </Button>
+                <SpaceBetween direction="horizontal" size="xs">
+                    <Button
+                        disabled={disabled}
+                        variant="normal"
+                        iconName="upload"
+                        onClick={(e) => {
+                            inputRef?.current?.click();
+                        }}
+                    >
+                        Choose File
+                    </Button>
+                    {file && (
+                        <Button
+                            variant="normal"
+                            iconName="remove"
+                            onClick={() => setFile(null)}
+                        >
+                            Remove File
+                        </Button>
+                    )}
+                </SpaceBetween>
                 <DisplayFileMeta file={file} />
             </SpaceBetween>
         </FormField>

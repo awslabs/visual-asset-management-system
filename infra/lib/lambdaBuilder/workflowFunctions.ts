@@ -299,7 +299,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
-    uploadAssetLambdaFunction: lambda.Function,
+    fileUploadLambdaFunction: lambda.Function,
     readMetadataLambdaFunction: lambda.Function,
     createMetadataLambdaFunction: lambda.Function,
     config: Config.Config,
@@ -327,7 +327,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
                 storageResources.dynamo.workflowExecutionStorageTable.tableName,
-            UPLOAD_LAMBDA_FUNCTION_NAME: uploadAssetLambdaFunction.functionName,
+            FILE_UPLOAD_LAMBDA_FUNCTION_NAME: fileUploadLambdaFunction.functionName,
             READ_METADATA_LAMBDA_FUNCTION_NAME: readMetadataLambdaFunction.functionName,
             CREATE_METADATA_LAMBDA_FUNCTION_NAME: createMetadataLambdaFunction.functionName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
@@ -336,7 +336,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
-    uploadAssetLambdaFunction.grantInvoke(processWorkflowExecutionOutputFunction);
+    fileUploadLambdaFunction.grantInvoke(processWorkflowExecutionOutputFunction);
     readMetadataLambdaFunction.grantInvoke(processWorkflowExecutionOutputFunction);
     createMetadataLambdaFunction.grantInvoke(processWorkflowExecutionOutputFunction);
     storageResources.s3.assetBucket.grantReadWrite(processWorkflowExecutionOutputFunction);

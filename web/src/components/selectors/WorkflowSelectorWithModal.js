@@ -3,16 +3,24 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Modal, Select } from "@cloudscape-design/components";
+import { Modal, Select, SpaceBetween, FormField, Button, Box } from "@cloudscape-design/components";
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { fetchDatabaseWorkflows, runWorkflow } from "../../services/APIService";
 
+// Helper function to check if a file has an extension (is a file, not a folder)
+const isFile = (file) => {
+    // Check if the fileName contains a dot (.) which indicates it has an extension
+    return file.fileName.includes('.');
+};
+
 export default function WorkflowSelectorWithModal(props) {
-    const { databaseId, assetId, setOpen, open } = props;
+    const { databaseId, assetId, setOpen, open, assetFiles = [] } = props;
     const [reload, setReload] = useState(true);
     const [allItems, setAllItems] = useState([]);
     const [workflowId, setWorkflowId] = useState(null);
+    const [selectedFileKey, setSelectedFileKey] = useState(null);
+    const [filteredFiles, setFilteredFiles] = useState([]);
     const navigate = useNavigate();
 
     useEffect(() => {
@@ -28,13 +36,35 @@ export default function WorkflowSelectorWithModal(props) {
         }
     }, [databaseId, reload]);
 
-    const handleExecuteWorkflow = async (event) => {
+    // Initialize filtered files and find primary file when asset files change
+    useEffect(() => {
+        if (assetFiles && assetFiles.length > 0) {
+            // Filter out folders, only keep files with extensions
+            const onlyFiles = assetFiles.filter(file => isFile(file));
+            
+            setFilteredFiles(onlyFiles);
+            
+            // Only set the selected file key if there are files available
+            if (onlyFiles.length > 0) {
+                setSelectedFileKey(onlyFiles[0].key);
+            }
+        }
+    }, [assetFiles]);
+
+
+    const handleWorkflowSelection = (event) => {
         const newWorkflowId = event.detail.selectedOption.value;
         setWorkflowId(newWorkflowId);
+    };
+
+    const handleExecuteWorkflow = async () => {
+        if (!workflowId) return;
+        
         const result = await runWorkflow({
             databaseId: databaseId,
             assetId: assetId,
-            workflowId: newWorkflowId,
+            workflowId: workflowId,
+            fileKey: selectedFileKey, // Pass the selected file key
         });
         if (result !== false && Array.isArray(result)) {
             if (result[0] === false) {
@@ -47,6 +77,11 @@ export default function WorkflowSelectorWithModal(props) {
         handleClose();
     };
 
+    const handleFileSelection = (event) => {
+        setSelectedFileKey(event.detail.selectedOption.value);
+    };
+
+
     const handleClose = () => {
         setOpen(false);
     };
@@ -57,19 +92,69 @@ export default function WorkflowSelectorWithModal(props) {
             visible={open}
             closeAriaLabel="Close modal"
             size="medium"
-            header="Select Workflow"
+            header="Execute Workflow"
         >
-            <Select
-                onChange={handleExecuteWorkflow}
-                options={allItems.map((item) => {
-                    return {
-                        label: item.workflowId,
-                        value: item.workflowId,
-                    };
-                })}
-                filteringType="auto"
-                selectedAriaLabel="Selected"
-            />
+            <SpaceBetween direction="vertical" size="l">
+                <FormField label="Select Workflow">
+                    <Select
+                        onChange={handleWorkflowSelection}
+                        options={allItems.map((item) => {
+                            return {
+                                label: item.workflowId,
+                                value: item.workflowId,
+                            };
+                        })}
+                        selectedOption={
+                            workflowId
+                                ? {
+                                      value: workflowId,
+                                      label: workflowId,
+                                  }
+                                : null
+                        }
+                        filteringType="auto"
+                        selectedAriaLabel="Selected"
+                    />
+                </FormField>
+
+                {assetFiles && assetFiles.length > 0 && (
+                    <FormField label="Select File to Process (Optional)">
+                        <Select
+                            onChange={handleFileSelection}
+                            options={filteredFiles.map((file) => {
+                                return {
+                                    label: file.relativePath || file.fileName,
+                                    value: file.key,
+                                    description: "",
+                                };
+                            })}
+                            selectedOption={
+                                selectedFileKey
+                                    ? {
+                                          value: selectedFileKey,
+                                          label: filteredFiles.find(f => f.key === selectedFileKey)?.relativePath || 
+                                                 filteredFiles.find(f => f.key === selectedFileKey)?.fileName || 
+                                                 selectedFileKey,
+                                      }
+                                    : null
+                            }
+                            filteringType="auto"
+                            selectedAriaLabel="Selected"
+                            empty="No files match your search"
+                        />
+                    </FormField>
+                )}
+                
+                <Box textAlign="right">
+                    <Button 
+                        variant="primary" 
+                        onClick={handleExecuteWorkflow}
+                        disabled={!workflowId}
+                    >
+                        Execute Workflow
+                    </Button>
+                </Box>
+            </SpaceBetween>
         </Modal>
     );
 }

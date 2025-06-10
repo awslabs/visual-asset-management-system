@@ -20,11 +20,11 @@ s3_client = boto3.client('s3')
 paginator = s3_client.get_paginator('list_objects_v2')
 
 asset_database = None
-bucket_name = None
+bucket_name_default = None
 
 try:
     asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    bucket_name = os.environ["S3_ASSET_STORAGE_BUCKET"]
+    bucket_name_default = os.environ["S3_ASSET_STORAGE_BUCKET"]
 
 except:
     logger.exception("Failed Loading Environment Variables")
@@ -37,13 +37,28 @@ asset_table = dynamodb.Table(asset_database)
 # A method that takes in s3 path and returns all the files in that path using paginator and s3_client
 
 
-def get_all_files_in_path(path, primaryKeyPath, query_params):
+def get_all_files_in_path(path, query_params, bucket=None):
+    """Get all files in the specified S3 path
+    
+    Args:
+        path: The S3 key prefix to list objects from
+        query_params: Dictionary containing pagination parameters
+        bucket: The S3 bucket to use (defaults to bucket_name if None)
+        
+    Returns:
+        Dictionary containing the list of files and pagination token if applicable
+    """
+    # Use the provided bucket or fall back to the default
+    bucket_to_use = bucket if bucket else bucket_name_default
+    
+    logger.info(f"Listing files from bucket: {bucket_to_use}, path: {path}")
+    
     result = {
         "Items": []
     }
 
     for page_iterator in paginator.paginate(
-        Bucket=bucket_name,
+        Bucket=bucket_to_use,
         Prefix=path,
         PaginationConfig={
             'MaxItems': int(query_params['maxItems']),
@@ -53,18 +68,37 @@ def get_all_files_in_path(path, primaryKeyPath, query_params):
     ):
         for obj in page_iterator.get('Contents', []):
             fileName = os.path.basename(obj['Key'])
-            primaryFile = False
-
-            #This is the primary asset file, so label it
-            if primaryKeyPath == obj['Key']:
-                primaryFile = True
-
-            result["Items"].append({
+            
+            # Determine if it's a folder (key ends with '/' or fileName is empty)
+            isFolder = obj['Key'].endswith('/') or not fileName
+            
+            # Create the item with all required fields
+            item = {
                 'fileName': fileName,
                 'key': obj['Key'],
                 'relativePath': obj['Key'].removeprefix(path),
-                "primary": primaryFile
-            })
+                'isFolder': isFolder
+            }
+            
+            # Add size for non-folders (already available in list_objects_v2 response)
+            if not isFolder:
+                item['size'] = obj['Size']
+            
+            # Add last modified date (already available in list_objects_v2 response)
+            item['dateCreatedCurrentVersion'] = obj['LastModified'].isoformat()
+            
+            # Get version ID if needed (requires additional API call)
+            try:
+                version_info = s3_client.head_object(
+                    Bucket=bucket_to_use,
+                    Key=obj['Key']
+                )
+                item['versionId'] = version_info.get('VersionId', 'null')
+            except Exception as e:
+                logger.warning(f"Error getting version info for {obj['Key']}: {e}")
+                item['versionId'] = 'null'
+            
+            result["Items"].append(item)
 
         if 'NextToken' in page_iterator:
             result['NextToken'] = page_iterator['NextToken']
@@ -168,14 +202,15 @@ def lambda_handler(event, context):
 
             # if assetId exists in database
             if asset_location:
-                # Get Key from assetLocation dictionary (primary asset file or folder)
-                primaryFileKey = asset_location['Key']
-
-                #For now grab all files from the top level asset location
-                key = asset_id + "/"
+                # Get the key and bucket from the asset location
+                key = asset_location.get('Key')
+                bucket = asset_location.get('Bucket')
+                
+                # Log the bucket and key we're using
+                logger.info(f"Using bucket: {bucket or bucket_name_default}, key: {key}")
 
                 # get all files in assetLocation
-                result = get_all_files_in_path(key, primaryFileKey, queryParameters)
+                result = get_all_files_in_path(key, queryParameters, bucket)
                 response['body'] = json.dumps({"message": result})
                 response['statusCode'] = 200
                 logger.info(response)

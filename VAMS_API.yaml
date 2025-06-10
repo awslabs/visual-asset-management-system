@@ -102,30 +102,6 @@ paths:
                             application/json:
                                 schema:
                                     $ref: '#/components/schemas/error'
-    /assets/uploadAssetWorkflow:
-        post:
-            summary: "Upload asset workflow."
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            $ref: '#/components/schemas/uploadAssetWorkflow'
-            responses:
-                "200":
-                    description: OK
-                "400":
-                    description: Invalid parameters.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
     /asset-links:
         post:
             summary: "Create or update asset links."
@@ -449,31 +425,6 @@ paths:
                                 $ref: '#/components/schemas/error'
             security:
             -   DefaultCognitoAuthorizer: []
-    /auth/scopeds3access:
-        post:
-            summary: "Get S3 access."
-            description: "Given an assetId and databaseId, determine if a user has access to mutate s3 objects for that asset."
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            $ref: "#/components/schemas/s3_access"
-            responses:
-                "200":
-                    description: OK
-                "400":
-                    description: Invalid parameters.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
     /check-subscription:
         post:
             summary: "Verify if subscription exists or not."
@@ -878,6 +829,67 @@ paths:
                   required: false
                   schema:
                     type: "boolean"
+        put:
+            summary: "Update an asset's editable fields."
+            description: "Update an asset's editable fields (assetName, description, isDistributable, tags)."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/assetUpdate"
+            responses:
+                "200":
+                    description: Asset updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: string
+                                        example: "Asset updated successfully"
+                                    asset:
+                                        $ref: "#/components/schemas/asset"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to update asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+                - name: "databaseId"
+                  in: path
+                  description: "Unique identifier for database."
+                  required: true
+                  schema:
+                    $ref: "#/components/schemas/id_regex"
+                - name: "assetId"
+                  in: path
+                  description: "Unique identifier for asset."
+                  required: true
+                  schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+                - DefaultCognitoAuthorizer: []
         delete:
             summary: "Delete an asset."
             responses:
@@ -1131,9 +1143,89 @@ paths:
             required: true
             schema:
                 $ref: '#/components/schemas/id_regex'
+                
+    /database/{databaseId}/assets/{assetId}/createFolder:
+        post:
+            summary: "Create a folder in S3 for the specified asset"
+            description: "Creates a folder (zero-byte object with trailing slash) in S3 for the specified asset. The key path must be a folder prefix (ends with a slash) and must contain the base assetlocation key as the start of the path."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            required:
+                                - keyPath
+                            properties:
+                                keyPath:
+                                    type: string
+                                    description: "The key path for the folder to create. Must end with a slash and start with the asset's base key."
+            responses:
+                "200":
+                    description: Folder created successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: string
+                                        example: "Folder created successfully"
+                                    keyPath:
+                                        type: string
+                                        example: "asset-id/folder/subfolder/"
+                "400":
+                    description: Invalid parameters or key path.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create folders for this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+                - name: "databaseId"
+                  in: "path"
+                  description: "Unique identifier for database."
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/id_regex'
+                - name: "assetId"
+                  in: "path"
+                  description: "Unique identifier for asset."
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/id_regex'
+            security:
+                - DefaultCognitoAuthorizer: []
     /database/{databaseId}/assets/{assetId}/workflows/{workflowId}:
         post:
             summary: "Execute a workflow using an asset as the input source."
+            requestBody:
+                required: false
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                fileKey:
+                                    $ref: "#/components/schemas/asset_path_pattern_regex"
+                                    description: "Optional file key to specify which file to use for workflow execution"
             responses:
                 "200":
                     description: Workflow execution started.
@@ -2483,6 +2575,101 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/asset_path_pattern_regex'
+    /uploads:
+        post:
+            summary: "Initialize a multipart upload for asset files or preview."
+            description: "Initialize a multipart upload for asset files or preview. Returns an uploadId and presigned URLs for uploading file parts."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/initializeUploadRequest"
+            responses:
+                "200":
+                    description: Upload initialized successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/initializeUploadResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to upload to this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+    
+    /uploads/{uploadId}/complete:
+        post:
+            summary: "Complete a multipart upload."
+            description: "Complete a multipart upload by providing the ETags for all uploaded parts. Files are validated and moved from temporary to final location."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/completeUploadRequest"
+            responses:
+                "200":
+                    description: Upload completed successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/completeUploadResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to complete this upload.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Upload not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+                - name: "uploadId"
+                  in: path
+                  description: "Unique identifier for the upload."
+                  required: true
+                  schema:
+                    type: string
+            security:
+                - DefaultCognitoAuthorizer: []
+    
     /workflows:
         put:
             summary: "Create or update a workflow."
@@ -2801,25 +2988,6 @@ components:
             required: 
                 - tagTypeName
                 - description
-        uploadAssetWorkflow:
-            type: object
-            properties:
-                databaseId:
-                    $ref: '#/components/schemas/id_regex'
-                assetId:
-                    $ref: '#/components/schemas/id_regex'
-                assetName:
-                    $ref: '#/components/schemas/object_name_pattern_regex'
-                description:
-                    $ref: "#/components/schemas/string256Param"
-                assetPathKey:
-                    $ref: '#/components/schemas/asset_path_pattern_regex'
-            required:
-                - databaseId
-                - assetId
-                - assetName
-                - description
-                - assetPathKey
         userid_regex:
             type: string
             pattern: ^[\w\-\.\+\@]{3,256}$
@@ -2862,6 +3030,193 @@ components:
                     type: array
                     items:
                         type: string
+        assetUpdate:
+            type: object
+            properties:
+                assetName:
+                    $ref: '#/components/schemas/object_name_pattern_regex'
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                isDistributable:
+                    type: boolean
+                tags:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/object_name_pattern_regex"
+        
+        initializeUploadRequest:
+            type: object
+            properties:
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                uploadType:
+                    type: string
+                    enum: [assetFile, assetPreview]
+                files:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/uploadFile"
+            required:
+                - assetId
+                - databaseId
+                - uploadType
+                - files
+        
+        uploadFile:
+            type: object
+            properties:
+                key:
+                    $ref: '#/components/schemas/filename_pattern'
+                file_size:
+                    type: integer
+                    minimum: 1
+                num_parts:
+                    type: integer
+                    minimum: 1
+            required:
+                - key
+        
+        uploadPart:
+            type: object
+            properties:
+                PartNumber:
+                    type: integer
+                    minimum: 1
+                UploadUrl:
+                    type: string
+                    format: uri
+            required:
+                - PartNumber
+                - UploadUrl
+        
+        uploadFileResponse:
+            type: object
+            properties:
+                key:
+                    $ref: '#/components/schemas/filename_pattern'
+                uploadIdS3:
+                    type: string
+                numParts:
+                    type: integer
+                    minimum: 1
+                partUploadUrls:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/uploadPart"
+            required:
+                - key
+                - uploadIdS3
+                - numParts
+                - partUploadUrls
+        
+        initializeUploadResponse:
+            type: object
+            properties:
+                uploadId:
+                    type: string
+                files:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/uploadFileResponse"
+                message:
+                    type: string
+            required:
+                - uploadId
+                - files
+                - message
+        
+        uploadPartCompletion:
+            type: object
+            properties:
+                PartNumber:
+                    type: integer
+                    minimum: 1
+                ETag:
+                    type: string
+            required:
+                - PartNumber
+                - ETag
+        
+        uploadFileCompletion:
+            type: object
+            properties:
+                key:
+                    $ref: '#/components/schemas/filename_pattern'
+                uploadIdS3:
+                    type: string
+                parts:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/uploadPartCompletion"
+            required:
+                - key
+                - uploadIdS3
+                - parts
+        
+        completeUploadRequest:
+            type: object
+            properties:
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                uploadType:
+                    type: string
+                    enum: [assetFile, assetPreview]
+                files:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/uploadFileCompletion"
+            required:
+                - assetId
+                - databaseId
+                - uploadType
+                - files
+        
+        fileCompletionResult:
+            type: object
+            properties:
+                key:
+                    $ref: '#/components/schemas/filename_pattern'
+                uploadIdS3:
+                    type: string
+                success:
+                    type: boolean
+                error:
+                    type: string
+            required:
+                - key
+                - uploadIdS3
+                - success
+        
+        completeUploadResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                uploadId:
+                    type: string
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                assetType:
+                    type: string
+                version:
+                    type: string
+                fileResults:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/fileCompletionResult"
+                overallSuccess:
+                    type: boolean
+            required:
+                - message
+                - uploadId
+                - assetId
+                - fileResults
+                - overallSuccess
+        
         workflow:
             type: object
             properties:

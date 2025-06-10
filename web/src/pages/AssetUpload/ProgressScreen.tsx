@@ -3,14 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 import { Box, Grid, Link, SpaceBetween, TextContent } from "@cloudscape-design/components";
-
 import ProgressBar, { ProgressBarProps } from "@cloudscape-design/components/progress-bar";
 import StatusIndicator, {
     StatusIndicatorProps,
 } from "@cloudscape-design/components/status-indicator";
-import { FileUploadTable, FileUploadTableItem } from "./FileUploadTable";
+import { FileUploadTableItem } from "./FileUploadTable";
 import { AssetDetail } from "../AssetUpload";
 import Synonyms from "../../synonyms";
+import UploadManager from "./UploadManager";
+import { useState } from "react";
+import { CompleteUploadResponse } from "../../services/AssetUploadService";
 
 class ProgressScreenProps {
     assetDetail!: AssetDetail;
@@ -27,9 +29,21 @@ export default function ProgressScreen({
     allFileUploadItems,
     onRetry,
 }: ProgressScreenProps): JSX.Element {
-    const get_completed_items = (items: FileUploadTableItem[]) => {
-        return items.filter((item) => item.status === "Completed");
+    const [uploadComplete, setUploadComplete] = useState(false);
+    const [uploadError, setUploadError] = useState<Error | null>(null);
+    const [uploadResponse, setUploadResponse] = useState<CompleteUploadResponse | null>(null);
+
+    // Handle upload completion
+    const handleUploadComplete = (response: CompleteUploadResponse) => {
+        setUploadComplete(true);
+        setUploadResponse(response);
     };
+
+    // Handle upload error
+    const handleUploadError = (error: Error) => {
+        setUploadError(error);
+    };
+
     return (
         <Box padding={{ top: false ? "s" : "m", horizontal: "l" }}>
             <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
@@ -44,27 +58,18 @@ export default function ProgressScreen({
                                 {assetDetail.assetName}
                             </Link>
                         </Box>
-                        <ProgressBar
-                            status={
-                                get_completed_items(allFileUploadItems).length ===
-                                allFileUploadItems.length
-                                    ? "success"
-                                    : "in-progress"
-                            }
-                            value={
-                                (get_completed_items(allFileUploadItems).length /
-                                    allFileUploadItems.length) *
-                                100
-                            }
-                            label="Overall Upload Progress"
+
+                        {/* Use the new UploadManager component */}
+                        <UploadManager
+                            assetDetail={assetDetail}
+                            metadata={{}} // We'll need to pass the actual metadata here
+                            fileItems={allFileUploadItems}
+                            onUploadComplete={handleUploadComplete}
+                            onError={handleUploadError}
+                            isExistingAsset={false}
                         />
 
-                        <FileUploadTable
-                            allItems={allFileUploadItems}
-                            onRetry={onRetry}
-                            resume={false}
-                            showCount={true}
-                        />
+                        {/* Preview upload progress if applicable */}
                         {assetDetail.Preview && previewUploadProgress && (
                             <ProgressBar
                                 status={previewUploadProgress.status}
@@ -72,13 +77,7 @@ export default function ProgressScreen({
                                 label="Preview Upload Progress"
                             />
                         )}
-                        <Box variant="awsui-key-label">Exec Progress</Box>
 
-                        {Object.keys(execStatus).map((label) => (
-                            <div key={label}>
-                                <StatusIndicator type={execStatus[label]}>{label}</StatusIndicator>
-                            </div>
-                        ))}
                         <div>
                             <TextContent>
                                 Please do not close your browser window until processing completes.

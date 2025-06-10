@@ -39,11 +39,11 @@ import {
     validateRequiredTagTypeSelected,
 } from "./AssetUpload/validations";
 import { DisplayKV, FileUpload } from "./AssetUpload/components";
-import ProgressScreen from "./AssetUpload/ProgressScreen";
+import AssetUploadWorkflow from "./AssetUpload/AssetUploadWorkflow";
 import ControlledMetadata from "../components/metadata/ControlledMetadata";
 import Synonyms from "../synonyms";
 import onSubmit, { onUploadRetry, UploadExecutionProps } from "./AssetUpload/onSubmit";
-import FolderUpload from "../components/form/FolderUpload";
+import EnhancedFileSelector from "../components/form/EnhancedFileSelector";
 import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./AssetUpload/FileUploadTable";
 import localforage from "localforage";
 import { fetchTags, fetchAllAssets, fetchtagTypes } from "../services/APIService";
@@ -76,16 +76,14 @@ export class AssetDetail {
         related?: any[];
     };
     key?: string;
-    assetType?: string;
     isDistributable?: boolean;
-    Comment?: string;
     specifiedPipelines?: string[];
     previewLocation?: {
         Key?: string;
     };
     Asset?: FileUploadTableItem[];
     DirectoryHandle?: any;
-    Preview?: File;
+    Preview?: File | null;
 }
 
 type UpdateAssetIdAction = {
@@ -132,11 +130,6 @@ type UpdateAssetLinks = {
     };
 };
 
-type UpdateAssetComment = {
-    type: "UPDATE_ASSET_COMMENT";
-    payload: string;
-};
-
 type UpdateAssetType = {
     type: "UPDATE_ASSET_TYPE";
     payload: string;
@@ -156,7 +149,7 @@ type UpdateAssetPreviewLocation = {
 
 type UpdateAssetPreview = {
     type: "UPDATE_ASSET_PREVIEW";
-    payload: File;
+    payload: File | null;
 };
 
 type UpdateAssetDirectoryHandle = {
@@ -193,7 +186,6 @@ type AssetDetailAction =
     | UpdateAssetFrontendTags
     | UpdateAssetLinksFe
     | UpdateAssetLinks
-    | UpdateAssetComment
     | UpdateAssetType
     | UpdateAssetPipelines
     | UpdateAssetPreviewLocation
@@ -248,18 +240,6 @@ const assetDetailReducer = (
             return {
                 ...assetDetailState,
                 assetLinks: assetDetailAction.payload,
-            };
-
-        case "UPDATE_ASSET_COMMENT":
-            return {
-                ...assetDetailState,
-                Comment: assetDetailAction.payload,
-            };
-
-        case "UPDATE_ASSET_TYPE":
-            return {
-                ...assetDetailState,
-                assetType: assetDetailAction.payload,
             };
 
         case "UPDATE_ASSET_PIPELINES":
@@ -371,7 +351,6 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
         assetId?: string;
         databaseId?: string;
         description?: string;
-        Comment?: string;
         tags?: string;
     }>({});
     const [selectedTags, setSelectedTags] = useState<OptionDefinition[]>(
@@ -382,14 +361,8 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
     }>({});
     const [tagsValid, setTagsValid] = useState(true);
 
-    // Default `Comment` to an empty string so that it's optional and passes API validation
     useEffect(() => {
-        if (!assetDetailState.Comment) {
-            assetDetailDispatch({
-                type: "UPDATE_ASSET_COMMENT",
-                payload: "",
-            });
-        }
+
         if (!assetDetailState.tags) {
             assetDetailDispatch({
                 type: "UPDATE_ASSET_TAGS",
@@ -404,7 +377,6 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
             assetId: validateNonZeroLengthTextAsYouType(assetDetailState.assetId),
             databaseId: validateNonZeroLengthTextAsYouType(assetDetailState.databaseId),
             description: validateNonZeroLengthTextAsYouType(assetDetailState.description),
-            Comment: "",
             tags: validateRequiredTagTypeSelected(assetDetailState.tags, tagTypes),
         };
         setValidationText(validation);
@@ -419,13 +391,11 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
             validation.assetId ||
             validation.databaseId ||
             validation.description ||
-            validation.Comment ||
             validation.tags
         );
         setValid(isValid);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
-        assetDetailState.Comment,
         assetDetailState.assetId,
         assetDetailState.databaseId,
         assetDetailState.description,
@@ -475,7 +445,31 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
                                 type: "UPDATE_ASSET_ID",
                                 payload: e.detail.value,
                             });
+                            // Also update the assetName property
+                            assetDetailDispatch({
+                                type: "UPDATE_ASSET_NAME",
+                                payload: e.detail.value,
+                            });
                         }}
+                    />
+                </FormField>
+
+                <FormField
+                    label={Synonyms.Database}
+                    errorText={showErrors && validationText.databaseId}
+                >
+                    <DatabaseSelector
+                        onChange={(x: any) => {
+                            assetDetailDispatch({
+                                type: "UPDATE_ASSET_DATABASE",
+                                payload: x.detail.selectedOption.value,
+                            });
+                        }}
+                        selectedOption={{
+                            label: assetDetailState.databaseId,
+                            value: assetDetailState.databaseId,
+                        }}
+                        data-testid="database-selector"
                     />
                 </FormField>
 
@@ -501,25 +495,6 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
                         filteringType="auto"
                         selectedAriaLabel="Selected"
                         data-testid="isDistributable-select"
-                    />
-                </FormField>
-
-                <FormField
-                    label={Synonyms.Database}
-                    errorText={showErrors && validationText.databaseId}
-                >
-                    <DatabaseSelector
-                        onChange={(x: any) => {
-                            assetDetailDispatch({
-                                type: "UPDATE_ASSET_DATABASE",
-                                payload: x.detail.selectedOption.value,
-                            });
-                        }}
-                        selectedOption={{
-                            label: assetDetailState.databaseId,
-                            value: assetDetailState.databaseId,
-                        }}
-                        data-testid="database-selector"
                     />
                 </FormField>
 
@@ -570,18 +545,6 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
                     />
                 </FormField>
 
-                <FormField label="Comment">
-                    <Input
-                        value={assetDetailState.Comment || ""}
-                        onChange={(e) => {
-                            assetDetailDispatch({
-                                type: "UPDATE_ASSET_COMMENT",
-                                payload: e.detail.value,
-                            });
-                        }}
-                        data-testid="asset-comment-input"
-                    />
-                </FormField>
             </SpaceBetween>
         </Container>
     );
@@ -1245,6 +1208,9 @@ const AssetFileInfo = ({
 }) => {
     const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
     const { assetDetailState, assetDetailDispatch } = assetDetailContext;
+    const [selectionMode, setSelectionMode] = useState<"folder" | "files" | "both">(
+        assetDetailState.isMultiFile ? "folder" : "files"
+    );
 
     useEffect(() => {
         if (assetDetailState.Asset?.length && assetDetailState.Asset.length > 0) {
@@ -1254,36 +1220,73 @@ const AssetFileInfo = ({
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [assetDetailState]);
+    
+    // Function to remove a file
+    const handleRemoveFile = (index: number) => {
+        if (assetDetailState.Asset) {
+            const updatedFiles = assetDetailState.Asset.filter(item => item.index !== index);
+            
+            // Update indices to be sequential
+            const reindexedFiles = updatedFiles.map((item, idx) => ({
+                ...item,
+                index: idx
+            }));
+            
+            setFileUploadTableItems(reindexedFiles);
+            assetDetailDispatch({ 
+                type: "UPDATE_ASSET_FILES", 
+                payload: reindexedFiles 
+            });
+        }
+    };
 
     return (
         <Container header={<Header variant="h2">Select Files to Upload</Header>}>
             <>
-                <FormField>
-                    <Toggle
-                        onChange={({ detail }) => {
-                            assetDetailDispatch({
-                                type: "UPDATE_ASSET_IS_MULTI_FILE",
-                                payload: detail.checked,
-                            });
-                        }}
-                        checked={assetDetailState.isMultiFile}
-                    >
-                        Folder Upload?
-                    </Toggle>
+                <FormField label="Selection Mode">
+                    <SpaceBetween direction="horizontal" size="xs">
+                        <Toggle
+                            onChange={({ detail }) => {
+                                assetDetailDispatch({
+                                    type: "UPDATE_ASSET_IS_MULTI_FILE",
+                                    payload: detail.checked,
+                                });
+                                setSelectionMode(detail.checked ? "folder" : "files");
+                            }}
+                            checked={assetDetailState.isMultiFile}
+                        >
+                            Folder Upload?
+                        </Toggle>
+                    </SpaceBetween>
                 </FormField>
+                
+                {/* Display selected files with remove option */}
+                {assetDetailState.Asset && assetDetailState.Asset.length > 0 && (
+                    <SpaceBetween direction="vertical" size="m">
+                        <FileUploadTable
+                            allItems={assetDetailState.Asset}
+                            resume={false}
+                            showCount={true}
+                            allowRemoval={true}
+                            onRemoveItem={handleRemoveFile}
+                        />
+                    </SpaceBetween>
+                )}
+                
                 <Grid gridDefinition={[{ colspan: { default: 6 } }, { colspan: { default: 6 } }]}>
-                    <FolderUpload
-                        label={assetDetailState.isMultiFile ? "Choose Folder" : "Choose File"}
+                    <EnhancedFileSelector
+                        label="Select Assets"
                         description={
                             assetDetailState.Asset
-                                ? "Total Files to Upload " + assetDetailState.Asset.length
-                                : ""
+                                ? `Total Files to Upload: ${assetDetailState.Asset.length}`
+                                : "Select a folder or multiple files"
                         }
-                        multiFile={assetDetailState.isMultiFile}
                         errorText={
                             (!assetDetailState.Asset && showErrors && "Asset is required") ||
                             undefined
                         }
+                        multiFile={true}
+                        selectionMode={selectionMode}
                         onSelect={async (directoryHandle: any, fileHandles: any[]) => {
                             const files = await getFilesFromFileHandles(fileHandles);
                             setFileUploadTableItems(files);
@@ -1294,10 +1297,10 @@ const AssetFileInfo = ({
                             assetDetailDispatch({ type: "UPDATE_ASSET_FILES", payload: files });
                             assetDetailDispatch({
                                 type: "UPDATE_ASSET_IS_MULTI_FILE",
-                                payload: files.length > 1,
+                                payload: files.length > 1 || !!directoryHandle,
                             });
                         }}
-                    ></FolderUpload>
+                    />
 
                     <FileUpload
                         label="Preview (Optional)"
@@ -1306,7 +1309,7 @@ const AssetFileInfo = ({
                             assetDetailDispatch({ type: "UPDATE_ASSET_PREVIEW", payload: file });
                         }}
                         fileFormats={previewFileFormatsStr}
-                        file={assetDetailState.Preview}
+                        file={assetDetailState.Preview || undefined}
                         data-testid="preview-file"
                     />
                 </Grid>
@@ -1325,8 +1328,27 @@ const AssetUploadReview = ({
     const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
     const { assetDetailState } = assetDetailContext;
 
+    // Create a preview file item if it exists
+    const previewFileItem = assetDetailState.Preview ? {
+        handle: { getFile: () => Promise.resolve(assetDetailState.Preview as File) },
+        index: 999, // Use a high index to distinguish from regular files
+        name: assetDetailState.Preview.name,
+        size: assetDetailState.Preview.size,
+        relativePath: `preview/${assetDetailState.Preview.name}`,
+        progress: 0,
+        status: "Queued" as "Queued" | "In Progress" | "Completed" | "Failed", // Explicitly type the status
+        loaded: 0,
+        total: assetDetailState.Preview.size,
+    } as FileUploadTableItem : null;
+
+    // Combine asset files and preview file for display
+    const allFiles = [
+        ...(assetDetailState.Asset || []),
+        ...(previewFileItem ? [previewFileItem] : [])
+    ];
+
     return (
-        <SpaceBetween size="xs">
+        <SpaceBetween size="l">
             <Header
                 variant="h3"
                 actions={<Button onClick={() => setActiveStepIndex(0)}>Edit</Button>}
@@ -1335,29 +1357,39 @@ const AssetUploadReview = ({
             </Header>
             <Container header={<Header variant="h2">{Synonyms.Asset} Detail</Header>}>
                 <ColumnLayout columns={2} variant="text-grid">
-                    {Object.keys(assetDetailState)
-                        .filter(
-                            (k) =>
-                                k !== "Asset" &&
-                                k !== "DirectoryHandle" &&
-                                k !== "frontendTags" &&
-                                k !== "assetLinksFe" &&
-                                k !== "assetLinks"
-                        )
-                        .sort()
-                        .map((k) => {
-                            let transformedValue = assetDetailState[k as keyof AssetDetail];
-                            if (k === "tags" && assetDetailState.frontendTags) {
-                                transformedValue = assetDetailState.frontendTags
-                                    .map((tag: any) => tag?.label)
-                                    .join(", ");
-                            }
-
-                            return <DisplayKV key={k} label={k} value={transformedValue + " "} />;
-                        })}
+                    <SpaceBetween direction="vertical" size="xl">
+                        {/* Left Column: Asset Name, Database, Description */}
+                        <DisplayKV 
+                            label="Asset Name" 
+                            value={assetDetailState.assetName || ""} 
+                        />
+                        <DisplayKV 
+                            label="Database" 
+                            value={assetDetailState.databaseId || ""} 
+                        />
+                        <DisplayKV 
+                            label="Description" 
+                            value={assetDetailState.description || ""} 
+                        />
+                    </SpaceBetween>
+                    
+                    <SpaceBetween direction="vertical" size="xl">
+                        {/* Right Column: Is Distributable, Tags */}
+                        <DisplayKV 
+                            label="Is Distributable" 
+                            value={assetDetailState.isDistributable === false ? "No" : "Yes"} 
+                        />
+                        <DisplayKV 
+                            label="Tags" 
+                            value={assetDetailState.frontendTags 
+                                ? assetDetailState.frontendTags.map((tag: any) => tag?.label).join(", ")
+                                : ""
+                            } 
+                        />
+                    </SpaceBetween>
                 </ColumnLayout>
             </Container>
-            <Container header={<Header variant="h2">Linked {Synonyms.Asset}s Detail</Header>}>
+            <Container header={<Header variant="h2">Linked {Synonyms.Asset}s</Header>}>
                 <ColumnLayout columns={3} variant="text-grid">
                     {assetDetailState.assetLinksFe && (
                         <>
@@ -1406,12 +1438,20 @@ const AssetUploadReview = ({
                     ))}
                 </ColumnLayout>
             </Container>
-            {assetDetailState.Asset && (
+            {allFiles.length > 0 && (
                 <FileUploadTable
-                    allItems={assetDetailState.Asset}
+                    allItems={allFiles}
                     resume={false}
                     showCount={false}
                     columnDefinitions={[
+                        {
+                            id: "type",
+                            header: "Type",
+                            cell: (item: FileUploadTableItem) => 
+                                item.index === 999 ? "Preview File" : "Asset File",
+                            sortingField: "type",
+                            isRowHeader: false,
+                        },
                         {
                             id: "filepath",
                             header: "Path",
@@ -1425,7 +1465,7 @@ const AssetUploadReview = ({
                             cell: (item: FileUploadTableItem) =>
                                 item.total ? shortenBytes(item.total) : "0b",
                             sortingField: "filesize",
-                            isRowHeader: true,
+                            isRowHeader: false,
                         },
                     ]}
                 />
@@ -1549,14 +1589,23 @@ const UploadForm = () => {
             {isCancelVisible && (
                 <CancelButtonModal onDismiss={setCancelVisible} visible={isCancelVisible} />
             )}
-            {showUploadAndExecProgress && uploadExecutionProps && (
+            {showUploadAndExecProgress && (
                 <>
-                    <ProgressScreen
+                    <AssetUploadWorkflow
                         assetDetail={assetDetailState}
-                        execStatus={execStatus}
-                        previewUploadProgress={previewUploadProgress}
-                        allFileUploadItems={fileUploadTableItems}
-                        onRetry={() => onUploadRetry(uploadExecutionProps)}
+                        metadata={metadata}
+                        fileItems={fileUploadTableItems}
+                        onComplete={(response) => {
+                            console.log("Upload completed:", response);
+                            // Remove window beforeunload handler
+                            window.onbeforeunload = null;
+                        }}
+                        onCancel={() => {
+                            setShowUploadAndExecProgress(false);
+                            setFreezeWizardButtons(false);
+                            // Remove window beforeunload handler
+                            window.onbeforeunload = null;
+                        }}
                     />
                 </>
             )}
@@ -1692,7 +1741,7 @@ export default function AssetUploadPage() {
                 <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
                     <div>
                         <TextContent>
-                            <Header variant="h1">Create {Synonyms.Asset}</Header>
+                            <Header variant="h1">Upload and Create {Synonyms.Asset}</Header>
                         </TextContent>
                         <UploadForm />
                     </div>

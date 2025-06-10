@@ -151,6 +151,62 @@ def get_asset(databaseId, assetId, showDeleted=False):
     return asset if allowed else {}
 
 
+def update_asset(databaseId, assetId, update_data):
+    """Update an existing asset with new data"""
+    response = {
+        'statusCode': 404,
+        'message': 'Record not found'
+    }
+    
+    table = dynamodb.Table(asset_database)
+    
+    # Get the existing asset
+    db_response = table.get_item(Key={'databaseId': databaseId, 'assetId': assetId})
+    item = db_response.get('Item', {})
+    
+    if item:
+        allowed = False
+        # Add Casbin Enforcer to check if the current user has permissions to UPDATE the asset:
+        item.update({
+            "object__type": "asset"
+        })
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(item, "PUT"):
+                allowed = True
+        
+        if allowed:
+            logger.info("Updating asset: ")
+            logger.info(item)
+            
+            # Update only the editable fields
+            if 'assetName' in update_data:
+                item['assetName'] = update_data['assetName']
+            
+            if 'description' in update_data:
+                item['description'] = update_data['description']
+                # Also update the description in the current version
+                if 'currentVersion' in item:
+                    item['currentVersion']['description'] = update_data['description']
+            
+            if 'isDistributable' in update_data:
+                item['isDistributable'] = update_data['isDistributable']
+            
+            if 'tags' in update_data:
+                item['tags'] = update_data['tags']
+            
+            # Save the updated asset
+            table.put_item(Item=item)
+            
+            response['statusCode'] = 200
+            response['message'] = "Asset updated successfully"
+            response['asset'] = item
+        else:
+            response['statusCode'] = 403
+            response['message'] = "Not Authorized"
+    
+    return response
+
 def delete_asset(databaseId, assetId, queryParameters):
     response = {
         'statusCode': 404,
@@ -368,6 +424,119 @@ def get_handler(event, response, path_parameters, query_parameters):
         return response
 
 
+def put_handler(response, pathParameters, body):
+    if 'databaseId' not in pathParameters:
+        message = "No database ID in API Call"
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        logger.error(response)
+        return response
+    
+    if 'assetId' not in pathParameters:
+        message = "No asset ID in API Call"
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        logger.error(response)
+        return response
+    
+    # Validate path parameters
+    logger.info("Validating path parameters")
+    (valid, message) = validate({
+        'databaseId': {
+            'value': pathParameters['databaseId'],
+            'validator': 'ID'
+        },
+        'assetId': {
+            'value': pathParameters['assetId'],
+            'validator': 'ID'
+        },
+    })
+    if not valid:
+        logger.error(message)
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        return response
+    
+    # Validate request body fields
+    update_data = {}
+    
+    if 'assetName' in body:
+        logger.info("Validating assetName")
+        (valid, message) = validate({
+            'assetName': {
+                'value': body['assetName'],
+                'validator': 'OBJECT_NAME'
+            }
+        })
+        if not valid:
+            logger.error(message)
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            return response
+        update_data['assetName'] = body['assetName']
+    
+    if 'description' in body:
+        logger.info("Validating description")
+        (valid, message) = validate({
+            'description': {
+                'value': body['description'],
+                'validator': 'STRING_256'
+            }
+        })
+        if not valid:
+            logger.error(message)
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            return response
+        update_data['description'] = body['description']
+    
+    if 'isDistributable' in body:
+        if not isinstance(body['isDistributable'], bool):
+            message = "isDistributable must be a boolean"
+            logger.error(message)
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            return response
+        update_data['isDistributable'] = body['isDistributable']
+    
+    if 'tags' in body:
+        logger.info("Validating tags")
+        (valid, message) = validate({
+            'tags': {
+                'value': body['tags'],
+                'validator': 'STRING_256_ARRAY',
+                'optional': True
+            }
+        })
+        if not valid:
+            logger.error(message)
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            return response
+        update_data['tags'] = body['tags']
+    
+    # If no fields to update, return error
+    if not update_data:
+        message = "No valid fields to update"
+        logger.error(message)
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        return response
+    
+    logger.info("Updating Asset: " + pathParameters['assetId'])
+    result = update_asset(pathParameters['databaseId'], pathParameters['assetId'], update_data)
+    response['body'] = json.dumps({"message": result['message']})
+    response['statusCode'] = result['statusCode']
+    
+    # Include the updated asset in the response if successful
+    if result['statusCode'] == 200 and 'asset' in result:
+        response_body = json.loads(response['body'])
+        response_body['asset'] = result['asset']
+        response['body'] = json.dumps(response_body)
+    
+    logger.info(response)
+    return response
+
 def delete_handler(response, pathParameters, queryParameters):
     if 'databaseId' not in pathParameters:
         message = "No database ID in API Call"
@@ -430,6 +599,12 @@ def lambda_handler(event, context):
 
         if httpMethod == 'GET' and method_allowed_on_api:
             return get_handler(event, response, pathParameters, queryParameters)
+        elif httpMethod == 'PUT' and method_allowed_on_api:
+            # Parse request body if it's a string
+            body = event.get('body', {})
+            if isinstance(body, str):
+                body = json.loads(body)
+            return put_handler(response, pathParameters, body)
         elif httpMethod == 'DELETE' and method_allowed_on_api:
             return delete_handler(response, pathParameters, queryParameters)
         else:

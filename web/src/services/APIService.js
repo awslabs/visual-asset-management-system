@@ -120,7 +120,7 @@ export const deleteElement = async ({ deleteRoute, elementId, item }, api = API)
  * Returns array of boolean and response/error message for the workflow that the current user is running, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */
-export const runWorkflow = async ({ databaseId, assetId, workflowId, isGlobalWorkflow = false }, api = API) => {
+export const runWorkflow = async ({ databaseId, assetId, workflowId, fileKey, isGlobalWorkflow = false }, api = API) => {
     try {
         let endpoint;
         
@@ -131,7 +131,9 @@ export const runWorkflow = async ({ databaseId, assetId, workflowId, isGlobalWor
             endpoint = `database/${databaseId}/assets/${assetId}/workflows/${workflowId}`;
         }
         
-        const response = await api.post("api", endpoint, {});
+        // Include fileKey in request body if provided
+        const body = fileKey ? { fileKey } : {};
+        const response = await api.post("api", endpoint, { body });
         
         if (response.message) {
             if (
@@ -913,6 +915,31 @@ export const fetchDatabaseMetadataSchema = async ({ databaseId }, api = API) => 
 };
 
 /** add in the columnar data loaders **/
+/**
+ * Creates a new folder in the specified asset
+ * @returns {Promise<boolean|{message}|any>}
+ */
+export const createFolder = async ({ databaseId, assetId, relativeKey }, api = API) => {
+    try {
+        const response = await api.post(
+            "api",
+            `database/${databaseId}/assets/${assetId}/createFolder`,
+            {
+                body: { relativeKey }
+            }
+        );
+        
+        if (response.message) {
+            return [true, response.message];
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
 export const ACTIONS = {
     CREATE: {},
     UPDATE: {},

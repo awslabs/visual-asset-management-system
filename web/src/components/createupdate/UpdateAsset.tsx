@@ -1,5 +1,4 @@
 import {
-    FileUpload,
     Modal,
     Select,
     SpaceBetween,
@@ -12,9 +11,8 @@ import Synonyms from "../../synonyms";
 import Input from "@cloudscape-design/components/input";
 import { useEffect, useState } from "react";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
-import { Storage, API } from "aws-amplify";
+import { API } from "aws-amplify";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
-import { UploadAssetWorkflowApi, getUploadTaskPromiseLazy } from "../../pages/AssetUpload/onSubmit";
 import { fetchTags, fetchtagTypes } from "../../services/APIService";
 import { TagType } from "../../pages/Tag/TagType.interface";
 import {
@@ -40,91 +38,49 @@ var tagTypes: TagType[] = [];
 
 const update = async (
     updatedAsset: any,
-    files: File[],
-    setProgress: (progress: number) => void,
     setError: (error: { isError: boolean; message: string }) => void,
     setComplete: (complete: boolean) => void,
     isFormValid: boolean
 ) => {
     if (!isFormValid) return; // Don't attempt to update if form is not valid
 
-    let uploadBody = Object.assign({}, updatedAsset);
-    uploadBody.key = updatedAsset.assetLocation.Key;
-    uploadBody.Comment = updatedAsset.currentVersion.Comment;
-
-    if (files && files.length > 0) {
-        const newKey =
-            "previews" +
-            "/" +
-            updatedAsset.assetId +
-            "/" +
-            updatedAsset.assetName +
-            "." +
-            files[0].name.split(".").pop();
-
-        uploadBody.previewLocation = {
-            Key: newKey,
+    try {
+        // Update asset metadata using the new API endpoint
+        const updateAssetData = {
+            assetId: updatedAsset.assetId,
+            assetName: updatedAsset.assetName,
+            databaseId: updatedAsset.databaseId,
+            description: updatedAsset.description,
+            isDistributable: updatedAsset.isDistributable,
+            tags: updatedAsset.tags || [],
+            Comment: updatedAsset.currentVersion?.Comment || "",
         };
-        try {
-            await getUploadTaskPromiseLazy(
-                0,
-                newKey,
-                files[0],
-                {
-                    assetId: updatedAsset.assetId,
-                    databaseId: updatedAsset.databaseId,
-                },
-                (idx, progress) => {
-                    setProgress(Math.floor((progress.loaded / progress.total) * 100));
-                },
-                (idx, complete) => {
-                    const body: Partial<UploadAssetWorkflowApi> = { uploadAssetBody: uploadBody };
-                    return API.post("api", "assets/uploadAssetWorkflow", {
-                        "Content-type": "application/json",
-                        body,
-                    })
-                        .then((res) => {
-                            setComplete(true);
-                        })
-                        .catch((err: any) => {
-                            setError({ isError: true, message: err.message });
-                        });
-                },
-                (idx, error) => {
-                    setError({ isError: true, message: error.message });
-                }
-            );
-        } catch (err: any) {
-            setError({ isError: true, message: err.message });
-        }
-    } else {
-        const body: Partial<UploadAssetWorkflowApi> = { uploadAssetBody: uploadBody };
-        API.post("api", "assets/uploadAssetWorkflow", {
+
+        // Update asset metadata using the new API endpoint
+        await API.put("api", `database/${updatedAsset.databaseId}/assets/${updatedAsset.assetId}`, {
             "Content-type": "application/json",
-            body,
-        })
-            .then((res) => {
-                setComplete(true);
-            })
-            .catch((err) => {
-                setError({ isError: true, message: err });
-            });
+            body: updateAssetData,
+        });
+
+        // Mark as complete
+        setComplete(true);
+    } catch (err: any) {
+        setError({ isError: true, message: err.message || "An error occurred during the update process" });
     }
 };
 
 export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     const [assetDetail, setAssetDetail] = useState(asset);
-    const [progress, setProgress] = useState(0);
     const [error, setError] = useState({ isError: false, message: "" });
     const [complete, setComplete] = useState(false);
     const [isValid, setIsValid] = useState(true);
     const [isFormTouched, setIsFormTouched] = useState(false);
     const [inProgress, setInProgress] = useState(false);
-
-    const [value, setValue] = useState<File[]>([]);
+    
     if (complete) {
         props.onComplete();
     }
+    
     const [selectedTags, setSelectedTags] = useState<OptionDefinition[]>([]);
 
     const [validationText, setValidationText] = useState<{
@@ -243,8 +199,6 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                                 setIsFormTouched(true);
                                 update(
                                     assetDetail,
-                                    value,
-                                    setProgress,
                                     setError,
                                     setComplete,
                                     isValid
@@ -339,39 +293,20 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                         }}
                     />
                 </FormField>
-                <FormField label="Preview">
-                    <FileUpload
-                        onChange={({ detail }) => {
-                            setValue(detail.value);
-                            setIsFormTouched(true);
-                        }}
-                        value={value}
-                        i18nStrings={{
-                            uploadButtonText: (e) => (e ? "Choose files" : "Choose file"),
-                            dropzoneText: (e) =>
-                                e ? "Drop files to upload" : "Drop file to upload",
-                            removeFileAriaLabel: (e) => `Remove file ${e + 1}`,
-                            limitShowFewer: "Show fewer files",
-                            limitShowMore: "Show more files",
-                            errorIconAriaLabel: "Error",
-                        }}
-                        accept={"image/*"}
-                        multiple={false}
-                        showFileLastModified
-                        showFileSize
-                        showFileThumbnail
-                        tokenLimit={3}
-                        constraintText="Image files only"
-                    />
-                </FormField>
-                {(progress > 0 || error.isError) && (
+                {error.isError && (
                     <ProgressBar
-                        value={complete ? 100 : progress}
-                        label={"Preview upload progress"}
-                        status={error.isError ? "error" : complete ? "success" : "in-progress"}
-                        additionalInfo={
-                            error.isError ? error.message : complete ? "Upload complete" : ""
-                        }
+                        value={0}
+                        label={"Update status"}
+                        status={"error"}
+                        additionalInfo={error.message}
+                    ></ProgressBar>
+                )}
+                {complete && !error.isError && (
+                    <ProgressBar
+                        value={100}
+                        label={"Update status"}
+                        status={"success"}
+                        additionalInfo={"Update complete"}
                     ></ProgressBar>
                 )}
             </SpaceBetween>

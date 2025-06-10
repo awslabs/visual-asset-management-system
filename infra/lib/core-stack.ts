@@ -288,7 +288,6 @@ export class CoreVAMSStack extends cdk.Stack {
             //Nag supressions
             const refactorPaths = [
                 `/${props.stackName}/ApiBuilder/VAMSWorkflowIAMRole/Resource`,
-                `/${props.stackName}/ApiBuilder/storageBucketScopedS3AccessRole/DefaultPolicy/Resource`,
             ];
 
             for (const path of refactorPaths) {

@@ -40,6 +40,7 @@ export interface storageResources {
         appFeatureEnabledStorageTable: dynamodb.Table;
         assetLinksStorageTable: dynamodb.Table;
         assetStorageTable: dynamodb.Table;
+        assetUploadsStorageTable: dynamodb.Table;
         authEntitiesStorageTable: dynamodb.Table;
         commentStorageTable: dynamodb.Table;
         databaseStorageTable: dynamodb.Table;
@@ -229,7 +230,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         lifecycleRules: [
             {
                 enabled: true,
-                abortIncompleteMultipartUploadAfter: Duration.days(14),
+                abortIncompleteMultipartUploadAfter: Duration.days(7),
             },
         ],
         serverAccessLogsBucket: accessLogsBucket,
@@ -597,6 +598,42 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         },
     });
 
+    const assetUploadsStorageTable = new dynamodb.Table(scope, "AssetUploadsStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "uploadId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    assetUploadsStorageTable.addGlobalSecondaryIndex({
+        indexName: "AssetIdGSI",
+        partitionKey: {
+            name: "assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "uploadId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    assetUploadsStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdGSI",
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "uploadId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
     return {
         encryption: {
             kmsKey: kmsEncryptionKey,
@@ -617,6 +654,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         dynamo: {
             appFeatureEnabledStorageTable: appFeatureEnabledStorageTable,
             assetStorageTable: assetStorageTable,
+            assetUploadsStorageTable: assetUploadsStorageTable,
             commentStorageTable: commentStorageTable,
             jobStorageTable: jobStorageTable,
             pipelineStorageTable: pipelineStorageTable,

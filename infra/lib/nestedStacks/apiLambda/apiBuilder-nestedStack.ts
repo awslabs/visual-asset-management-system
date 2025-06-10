@@ -30,13 +30,13 @@ import {
     buildAssetColumnsFunction,
     buildAssetMetadataFunction,
     buildAssetService,
-    buildUploadAssetFunction,
     buildStreamAuxiliaryPreviewAssetFunction,
     buildDownloadAssetFunction,
     buildRevertAssetFunction,
-    buildUploadAssetWorkflowFunction,
     buildAssetFiles,
     buildIngestAssetFunction,
+    buildCreateAssetFunction,
+    buildUploadFileFunction
 } from "../../lambdaBuilder/assetFunctions";
 import {
     buildAddCommentLambdaFunction,
@@ -53,7 +53,6 @@ import { NestedStack } from "aws-cdk-lib";
 import { buildMetadataSchemaService } from "../../lambdaBuilder/metadataSchemaFunctions";
 
 import { buildMetadataFunctions } from "../../lambdaBuilder/metadataFunctions";
-import { buildUploadAssetWorkflow } from "./constructs/uploadAssetWorkflowBuilder";
 import { buildAuthFunctions } from "../../lambdaBuilder/authFunctions";
 import { buildTagService, buildCreateTagFunction } from "../../lambdaBuilder/tagFunctions";
 import {
@@ -73,7 +72,7 @@ import {
 } from "../../lambdaBuilder/tagTypeFunctions";
 import { buildRoleService, buildCreateRoleFunction } from "../../lambdaBuilder/roleFunctions";
 import { buildUserRolesService } from "../../lambdaBuilder/userRoleFunctions";
-
+import { buildSendEmailFunction } from "../../lambdaBuilder/sendEmailFunctions";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../config/config";
 import { generateUniqueNameHash } from "../../helper/security";
@@ -200,6 +199,16 @@ export function apiBuilder(
         method: apigwv2.HttpMethod.DELETE,
         api: api,
     });
+
+    //Email Resources
+    const sendEmailFunction = buildSendEmailFunction(
+        scope,
+        lambdaCommonBaseLayer,
+        storageResources,
+        config,
+        vpc,
+        subnets
+    );
 
     //Comment Resources
     const commentService = buildCommentService(
@@ -586,6 +595,11 @@ export function apiBuilder(
         api: api,
     });
     attachFunctionToApi(scope, assetService, {
+        routePath: "/database/{databaseId}/assets/{assetId}",
+        method: apigwv2.HttpMethod.PUT,
+        api: api,
+    });
+    attachFunctionToApi(scope, assetService, {
         routePath: "/assets",
         method: apigwv2.HttpMethod.GET,
         api: api,
@@ -633,7 +647,7 @@ export function apiBuilder(
         api: api,
     });
 
-    const uploadAssetFunction = buildUploadAssetFunction(
+    const createAssetFunction = buildCreateAssetFunction(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
@@ -641,9 +655,36 @@ export function apiBuilder(
         vpc,
         subnets
     );
-    attachFunctionToApi(scope, uploadAssetFunction, {
+    attachFunctionToApi(scope, createAssetFunction, {
         routePath: "/assets",
-        method: apigwv2.HttpMethod.PUT,
+        method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+
+    const uploadFileFunction = buildUploadFileFunction(
+        scope,
+        lambdaCommonBaseLayer,
+        storageResources,
+        sendEmailFunction,
+        config,
+        vpc,
+        subnets
+    );
+    attachFunctionToApi(scope, uploadFileFunction, {
+        routePath: "/uploads",
+        method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+
+    attachFunctionToApi(scope, uploadFileFunction, {
+        routePath: "/uploads/{uploadId}/complete",
+        method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+
+    attachFunctionToApi(scope, uploadFileFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/createFolder",
+        method: apigwv2.HttpMethod.POST,
         api: api,
     });
 
@@ -841,7 +882,7 @@ export function apiBuilder(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
-        uploadAssetFunction,
+        uploadFileFunction,
         metadataCrudFunctions[1],
         metadataCrudFunctions[0],
         config,
@@ -880,54 +921,19 @@ export function apiBuilder(
         method: apigwv2.HttpMethod.POST,
         api: api,
     });
-    //Enabling API Gateway Access Logging: Currently the only way to do this is via V1 constructs
-    //https://github.com/aws/aws-cdk/issues/11100#issuecomment-904627081
 
-    const uploadAssetWorkflowStateMachine = buildUploadAssetWorkflow(
-        scope,
-        config,
-        uploadAssetFunction,
-        metadataCrudFunctions[2],
-        runWorkflowFunction,
-        storageResources.s3.assetStagingBucket
-        //storageResources.s3.assetAuxiliaryStagingBucket
-    );
-    uploadAssetFunction.grantInvoke(uploadAssetWorkflowStateMachine);
-    storageResources.s3.assetBucket.grantReadWrite(uploadAssetWorkflowStateMachine);
-    if (storageResources.s3.assetStagingBucket) {
-        storageResources.s3.assetStagingBucket.grantRead(uploadAssetWorkflowStateMachine);
-    }
-
-    // if (storageResources.s3.assetAuxiliaryStagingBucket) {
-    //     storageResources.s3.assetAuxiliaryStagingBucket.grantRead(uploadAssetStagingMigrationWorkflowStateMachine);
-    // }
     const ingestAssetFunction = buildIngestAssetFunction(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
-        uploadAssetFunction,
+        uploadFileFunction,
+        createAssetFunction,
         config,
         vpc,
         subnets
     );
     attachFunctionToApi(scope, ingestAssetFunction, {
         routePath: "/ingest-asset",
-        method: apigwv2.HttpMethod.POST,
-        api: api,
-    });
-
-    const uploadAssetWorkflowFunction = buildUploadAssetWorkflowFunction(
-        scope,
-        lambdaCommonBaseLayer,
-        uploadAssetWorkflowStateMachine,
-        storageResources,
-        config,
-        vpc,
-        subnets,
-        storageResources.encryption.kmsKey
-    );
-    attachFunctionToApi(scope, uploadAssetWorkflowFunction, {
-        routePath: "/assets/uploadAssetWorkflow",
         method: apigwv2.HttpMethod.POST,
         api: api,
     });
@@ -941,12 +947,6 @@ export function apiBuilder(
         vpc,
         subnets
     );
-
-    attachFunctionToApi(scope, authFunctions.scopeds3access, {
-        routePath: "/auth/scopeds3access",
-        method: apigwv2.HttpMethod.POST,
-        api: api,
-    });
 
     attachFunctionToApi(scope, authFunctions.authConstraintsService, {
         routePath: "/auth/constraints",

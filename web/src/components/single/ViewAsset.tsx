@@ -38,6 +38,7 @@ import {
     fetchDatabaseWorkflows,
     fetchWorkflowExecutions,
     fetchtagTypes,
+    fetchAssetFiles,
 } from "../../services/APIService";
 import { assetDetailReducer, AssetDetailContext } from "../../context/AssetDetailContext";
 /**
@@ -50,7 +51,7 @@ import localforage from "localforage";
 import { ErrorBoundary } from "react-error-boundary";
 import Synonyms from "../../synonyms";
 import { UpdateAsset } from "../createupdate/UpdateAsset";
-import { FileManager } from "../filemanager/FileManager";
+import { EnhancedFileManager } from "../filemanager/EnhancedFileManager";
 import { AssetDetail } from "../../pages/AssetUpload";
 import BellIcon from "../../resources/img/bellIcon.svg";
 import CustomTable from "../table/CustomTable";
@@ -90,7 +91,8 @@ export default function ViewAsset() {
     const [loading, setLoading] = useState(true);
     const [allItems, setAllItems] = useState<any[]>([]);
     const [workflowOpen, setWorkflowOpen] = useState(false);
-    const [containsIncompleteUploads, setContainsIncompleteUploads] = useState(false);
+    const [assetFiles, setAssetFiles] = useState<any[]>([]);
+    const [loadingAssetFiles, setLoadingAssetFiles] = useState(false);
 
     //Enabled Features
     const config = Cache.getItem("config");
@@ -536,19 +538,30 @@ export default function ViewAsset() {
                 const item = await fetchAsset({ databaseId: databaseId, assetId: assetId });
                 if (item !== false) {
                     setAsset(item);
+                    
+                    // Fetch asset files for workflow execution
+                    setLoadingAssetFiles(true);
+                    try {
+                        const files = await fetchAssetFiles({ databaseId, assetId });
+                        if (files && Array.isArray(files)) {
+                            // Sort files by relativePath in ascending order
+                            const sortedFiles = [...files].sort((a, b) => 
+                                a.relativePath.localeCompare(b.relativePath)
+                            );
+                            setAssetFiles(sortedFiles);
+                        }
+                    } catch (error) {
+                        console.error("Error fetching asset files:", error);
+                    } finally {
+                        setLoadingAssetFiles(false);
+                    }
                 }
                 if (assetId) {
                     localforage.getItem(assetId).then((value: any) => {
                         if (value && value.Asset) {
                             // console.log("Reading from localforage:", value);
                             for (let i = 0; i < value.Asset.length; i++) {
-                                if (
-                                    value.Asset[i].status !== "Completed" &&
-                                    value.Asset[i].loaded !== value.Asset[i].total
-                                ) {
-                                    setContainsIncompleteUploads(true);
-                                    break;
-                                }
+                                // Removed incomplete uploads check
                             }
                             dispatch({
                                 type: "SET_ASSET_DETAIL",
@@ -614,30 +627,11 @@ export default function ViewAsset() {
                                 ]}
                                 ariaLabel="Breadcrumbs"
                             />
+                            {messageVisible && <Alert type={alertLabel}>{message}</Alert>}
                             <Grid gridDefinition={[{ colspan: 4 }]}>
-                                <Container
-                                    header={
-                                        <Header
-                                            variant="h2"
-                                            actions={
-                                                asset && (
-                                                    <Button
-                                                        iconAlign="right"
-                                                        iconUrl={subscribed ? BellIcon : ""}
-                                                        variant={subscribed ? "normal" : "primary"}
-                                                        onClick={() => setShowModal(true)}
-                                                    >
-                                                        {subscribed ? "Subscribed" : "Subscribe"}
-                                                    </Button>
-                                                )
-                                            }
-                                        >
-                                            {asset?.assetName}
-                                        </Header>
-                                    }
-                                >
-                                    {messageVisible && <Alert type={alertLabel}>{message}</Alert>}
-                                </Container>
+                                <Header variant="h2">
+                                    {asset?.assetName}
+                                </Header>
                                 <Modal
                                     onDismiss={() => {
                                         setShowDeleteModal(false);
@@ -727,74 +721,99 @@ export default function ViewAsset() {
                                 <div id="view-edit-asset-left-column">
                                     <Container
                                         header={
-                                            <div className="view-edit-asset-header">
-                                                <div className="asset-edit-button">
-                                                    <Button
-                                                        onClick={() => handleOpenUpdateAsset(true)}
-                                                    >
-                                                        Edit
-                                                    </Button>
-                                                </div>
-                                                <Header variant="h2">
-                                                    {Synonyms.Asset} Details
-                                                </Header>
-                                            </div>
+                                            <Header 
+                                                variant="h2"
+                                                actions={
+                                                    <SpaceBetween direction="horizontal" size="xs">
+                                                        {asset && (
+                                                            <Button
+                                                                iconAlign="right"
+                                                                iconUrl={subscribed ? BellIcon : ""}
+                                                                variant={subscribed ? "normal" : "primary"}
+                                                                onClick={() => setShowModal(true)}
+                                                            >
+                                                                {subscribed ? "Subscribed" : "Subscribe"}
+                                                            </Button>
+                                                        )}
+                                                        <Button
+                                                            onClick={() => handleOpenUpdateAsset(true)}
+                                                        >
+                                                            Edit
+                                                        </Button>
+                                                    </SpaceBetween>
+                                                }
+                                            >
+                                                {Synonyms.Asset} Details
+                                            </Header>
                                         }
                                     >
-                                        <h5>Id</h5>
-                                        <>{asset?.assetId}</>
-                                        <h5>Description</h5>
-                                        <>{asset?.description}</>
-                                        <h5>File Extension</h5>
-                                        {asset?.assetType}
-                                        <h5>Distributable</h5>
-                                        <>{asset?.isDistributable === true ? "Yes" : "No"}</>
-                                        <h5>Version</h5>
-                                        <>{asset?.currentVersion?.Version}</>
-                                        <h5>Date Modified</h5>
-                                        {asset?.currentVersion?.DateModified}
-                                        <h5>Tags</h5>
-                                        {Array.isArray(asset?.tags) && asset.tags.length > 0
-                                            ? asset.tags
-                                                  .map((tag: any) => {
-                                                      const tagType = JSON.parse(
-                                                          localStorage.getItem("tagTypes") ||
-                                                              "{'tagTypeName': '', 'tags': []}"
-                                                      ).find((type: any) =>
-                                                          type.tags.includes(tag)
-                                                      );
+                                        <Grid
+                                            gridDefinition={[
+                                                { colspan: 4 },
+                                                { colspan: 4 },
+                                                { colspan: 4 },
+                                            ]}
+                                        >
+                                            {/* Column 1 */}
+                                            <div>
+                                                <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>Asset Id</div>
+                                                <div style={{ marginBottom: "16px" }}>{asset?.assetId}</div>
+                                                <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>Description</div>
+                                                <div style={{ marginBottom: "16px" }}>{asset?.description}</div>
+                                                <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>Tags</div>
+                                                <div style={{ marginBottom: "16px" }}>
+                                                    {Array.isArray(asset?.tags) && asset.tags.length > 0
+                                                        ? asset.tags
+                                                              .map((tag: any) => {
+                                                                  const tagType = JSON.parse(
+                                                                      localStorage.getItem("tagTypes") ||
+                                                                          "{'tagTypeName': '', 'tags': []}"
+                                                                  ).find((type: any) =>
+                                                                      type.tags.includes(tag)
+                                                                  );
 
-                                                      //If tagType has required field add [R] to tag type name
-                                                      if (tagType && tagType.required === "True") {
-                                                          tagType.tagTypeName += " [R]";
-                                                      }
+                                                                  //If tagType has required field add [R] to tag type name
+                                                                  if (tagType && tagType.required === "True") {
+                                                                      tagType.tagTypeName += " [R]";
+                                                                  }
 
-                                                      return tagType
-                                                          ? `${tag} (${tagType.tagTypeName})`
-                                                          : tag;
-                                                  })
-                                                  .join(", ")
-                                            : "No tags available"}
-                                        {containsIncompleteUploads && (
-                                            <>
-                                                <h5>Finish Incomplete uploads</h5>
-                                                <Link
-                                                    href={`#/databases/${databaseId}/assets/${assetId}/uploads`}
-                                                >
-                                                    {" "}
-                                                    Finish Incomplete uploads{" "}
-                                                </Link>
-                                            </>
-                                        )}
+                                                                  return tagType
+                                                                      ? `${tag} (${tagType.tagTypeName})`
+                                                                      : tag;
+                                                              })
+                                                              .join(", ")
+                                                        : "No tags available"}
+                                                </div>
+                                            </div>
+                                            
+                                            {/* Column 2 */}
+                                            <div>
+                                                <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>Asset Type</div>
+                                                <div style={{ marginBottom: "16px" }}>{asset?.assetType}</div>
+                                                <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>Is Distributable</div>
+                                                <div style={{ marginBottom: "16px" }}>{asset?.isDistributable === true ? "Yes" : "No"}</div>
+                                            </div>
+                                            
+                                            {/* Column 3 */}
+                                            <div>
+                                                <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>Version</div>
+                                                <div style={{ marginBottom: "16px" }}>{asset?.currentVersion?.Version}</div>
+                                                <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>Version Date</div>
+                                                <div style={{ marginBottom: "16px" }}>{asset?.currentVersion?.DateModified}</div>
+                                            </div>
+                                        </Grid>
                                     </Container>
                                 </div>
                             </ExpandableSection>
                             <div id="view-edit-asset-right-column">
-                                {state && state.assetName && (
-                                    <>
-                                        <FileManager assetName={state.assetName} />
-                                    </>
-                                )}
+                            {state && state.assetName && (
+                                <>
+                                    <EnhancedFileManager 
+                                        assetName={state.assetName} 
+                                        assetFiles={assetFiles}
+                                    />
+                                </>
+                            )}
                             </div>
 
                             {showWorkflow && (
@@ -1158,6 +1177,7 @@ export default function ViewAsset() {
                         databaseId={databaseId}
                         open={workflowOpen}
                         setOpen={setWorkflowOpen}
+                        assetFiles={assetFiles}
                     />
                 </>
             )}

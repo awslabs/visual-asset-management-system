@@ -63,6 +63,8 @@ interface FileUploadTableProps {
     columnDefinitions?: typeof FileUploadTableColumnDefinitions;
     showCount?: boolean;
     mode?: "Upload" | "Download" | "Delete";
+    onRemoveItem?: (index: number) => void;
+    allowRemoval?: boolean;
 }
 
 /**
@@ -205,18 +207,12 @@ function getActions(
     onRetry?: () => void,
     mode: "Upload" | "Download" | "Delete" = "Upload"
 ) {
+    // Only show retry button for failed items when onRetry is provided
     const failed = allItems.filter((item) => item.status === "Failed").length;
-    const notCompleted = allItems.filter((item) => item.status !== "Completed").length;
-    if (failed > 0) {
+    if (failed > 0 && onRetry) {
         return (
             <Button variant={"primary"} onClick={onRetry}>
-                {mode} {failed} failed Items
-            </Button>
-        );
-    } else if (resume) {
-        return (
-            <Button variant={"primary"} onClick={onRetry}>
-                {mode} {notCompleted} Items
+                Retry {failed} failed Items
             </Button>
         );
     } else {
@@ -231,11 +227,36 @@ export const FileUploadTable = ({
     columnDefinitions,
     showCount,
     mode = "Upload",
+    onRemoveItem,
+    allowRemoval = false,
 }: FileUploadTableProps) => {
     let visibleContent = ["filesize", "status", "progress"];
-    if (!columnDefinitions) {
+    
+    // If removal is allowed and no custom column definitions are provided,
+    // add a removal column to the default definitions
+    if (allowRemoval && !columnDefinitions && onRemoveItem) {
+        columnDefinitions = [
+            ...FileUploadTableColumnDefinitions,
+            {
+                id: "actions",
+                header: "Actions",
+                cell: (item: FileUploadTableItem) => (
+                    <Button
+                        iconName="remove"
+                        variant="icon"
+                        onClick={() => onRemoveItem(item.index)}
+                        ariaLabel={`Remove ${item.name}`}
+                    />
+                ),
+                sortingField: "actions",
+                isRowHeader: false,
+            },
+        ];
+    } else if (!columnDefinitions) {
         columnDefinitions = FileUploadTableColumnDefinitions;
-    } else {
+    }
+    
+    if (columnDefinitions) {
         visibleContent = columnDefinitions.map((definition) => definition.id);
     }
     const [preferences, setPreferences] = useState({
