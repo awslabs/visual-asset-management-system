@@ -1241,28 +1241,11 @@ const AssetFileInfo = ({
     };
 
     return (
-        <Container header={<Header variant="h2">Select Files to Upload</Header>}>
-            <>
-                <FormField label="Selection Mode">
-                    <SpaceBetween direction="horizontal" size="xs">
-                        <Toggle
-                            onChange={({ detail }) => {
-                                assetDetailDispatch({
-                                    type: "UPDATE_ASSET_IS_MULTI_FILE",
-                                    payload: detail.checked,
-                                });
-                                setSelectionMode(detail.checked ? "folder" : "files");
-                            }}
-                            checked={assetDetailState.isMultiFile}
-                        >
-                            Folder Upload?
-                        </Toggle>
-                    </SpaceBetween>
-                </FormField>
-                
+        <Container>
+            <SpaceBetween direction="vertical" size="l">
                 {/* Display selected files with remove option */}
                 {assetDetailState.Asset && assetDetailState.Asset.length > 0 && (
-                    <SpaceBetween direction="vertical" size="m">
+                    <Box padding={{ bottom: "l" }}>
                         <FileUploadTable
                             allItems={assetDetailState.Asset}
                             resume={false}
@@ -1270,37 +1253,57 @@ const AssetFileInfo = ({
                             allowRemoval={true}
                             onRemoveItem={handleRemoveFile}
                         />
-                    </SpaceBetween>
+                    </Box>
                 )}
                 
                 <Grid gridDefinition={[{ colspan: { default: 6 } }, { colspan: { default: 6 } }]}>
-                    <EnhancedFileSelector
-                        label="Select Assets"
-                        description={
-                            assetDetailState.Asset
-                                ? `Total Files to Upload: ${assetDetailState.Asset.length}`
-                                : "Select a folder or multiple files"
-                        }
-                        errorText={
-                            (!assetDetailState.Asset && showErrors && "Asset is required") ||
-                            undefined
-                        }
-                        multiFile={true}
-                        selectionMode={selectionMode}
-                        onSelect={async (directoryHandle: any, fileHandles: any[]) => {
-                            const files = await getFilesFromFileHandles(fileHandles);
-                            setFileUploadTableItems(files);
-                            assetDetailDispatch({
-                                type: "UPDATE_ASSET_DIRECTORY_HANDLE",
-                                payload: directoryHandle,
-                            });
-                            assetDetailDispatch({ type: "UPDATE_ASSET_FILES", payload: files });
-                            assetDetailDispatch({
-                                type: "UPDATE_ASSET_IS_MULTI_FILE",
-                                payload: files.length > 1 || !!directoryHandle,
-                            });
-                        }}
-                    />
+                    <SpaceBetween direction="vertical" size="m">
+                        <EnhancedFileSelector
+                            label="Select Assets"
+                            description={
+                                assetDetailState.Asset
+                                    ? `Total Files to Upload: ${assetDetailState.Asset.length}`
+                                    : "Select a folder or multiple files"
+                            }
+                            errorText={
+                                (!assetDetailState.Asset && showErrors && "Asset is required") ||
+                                undefined
+                            }
+                            multiFile={true}
+                            selectionMode={selectionMode}
+                            onSelect={async (directoryHandle: any, fileHandles: any[]) => {
+                                const files = await getFilesFromFileHandles(fileHandles);
+                                setFileUploadTableItems(files);
+                                assetDetailDispatch({
+                                    type: "UPDATE_ASSET_DIRECTORY_HANDLE",
+                                    payload: directoryHandle,
+                                });
+                                assetDetailDispatch({ type: "UPDATE_ASSET_FILES", payload: files });
+                                assetDetailDispatch({
+                                    type: "UPDATE_ASSET_IS_MULTI_FILE",
+                                    payload: files.length > 1 || !!directoryHandle,
+                                });
+                            }}
+                        />
+                        
+                        {/* Move the toggle below the file selector */}
+                        <FormField label="Selection Mode">
+                            <SpaceBetween direction="horizontal" size="xs">
+                                <Toggle
+                                    onChange={({ detail }) => {
+                                        assetDetailDispatch({
+                                            type: "UPDATE_ASSET_IS_MULTI_FILE",
+                                            payload: detail.checked,
+                                        });
+                                        setSelectionMode(detail.checked ? "folder" : "files");
+                                    }}
+                                    checked={assetDetailState.isMultiFile}
+                                >
+                                    Folder Upload?
+                                </Toggle>
+                            </SpaceBetween>
+                        </FormField>
+                    </SpaceBetween>
 
                     <FileUpload
                         label="Preview (Optional)"
@@ -1313,7 +1316,7 @@ const AssetFileInfo = ({
                         data-testid="preview-file"
                     />
                 </Grid>
-            </>
+            </SpaceBetween>
         </Container>
     );
 };

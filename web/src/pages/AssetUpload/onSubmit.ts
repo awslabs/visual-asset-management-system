@@ -104,6 +104,13 @@ export function getUploadTaskPromiseLazy(
             // Import the AssetUploadService
             const { default: AssetUploadService } = await import("../../services/AssetUploadService");
             
+            // Ensure we have a valid asset ID
+            if (!metadata.assetId) {
+                throw new Error('No asset ID available for preview upload');
+            }
+            
+            console.log(`Starting preview file upload with assetId: ${metadata.assetId}`);
+            
             // Initialize upload for a single preview file
             const uploadRequest = {
                 assetId: metadata.assetId,
@@ -125,6 +132,9 @@ export function getUploadTaskPromiseLazy(
             const parts = [];
             let totalUploaded = 0;
             
+            // Use the same part size as in UploadManager.tsx for consistency
+            const partSize = 50 * 1024 * 1024; // 50MB parts
+            
             for (let i = 0; i < fileResponse.numParts; i++) {
                 const partNumber = i + 1;
                 const partUrl = fileResponse.partUploadUrls.find(p => p.PartNumber === partNumber)?.UploadUrl;
@@ -134,7 +144,6 @@ export function getUploadTaskPromiseLazy(
                 }
                 
                 // Calculate part start and end
-                const partSize = 5 * 1024 * 1024; // 5MB parts
                 const start = i * partSize;
                 const end = Math.min(start + partSize, f.size);
                 const blob = f.slice(start, end);
@@ -170,15 +179,20 @@ export function getUploadTaskPromiseLazy(
                 ]
             };
             
+            console.log('Sending preview completion request:', JSON.stringify(completionRequest, null, 2));
+            
             const completionResponse = await AssetUploadService.completeUpload(
                 initResponse.uploadId,
                 completionRequest
             );
             
+            console.log('Preview completion response:', JSON.stringify(completionResponse, null, 2));
+            
             // Call completion callback
             completeCallback(index, completionResponse);
             resolve();
         } catch (error) {
+            console.error('Error uploading preview file:', error);
             errorCallback(index, error);
             reject(error);
         }

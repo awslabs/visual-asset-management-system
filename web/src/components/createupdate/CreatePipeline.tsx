@@ -54,9 +54,9 @@ interface PipelineFields {
 
 // when a string is all lower case, return null, otherwise return the string "All lower case letters only"
 function validatePipelineNameLowercase(name: string) {
-    return name.match(/^[a-z0-9_-]+$/) !== null
+    return name.match(/^[a-zA-Z0-9_-]+$/) !== null
         ? null
-        : "All lower case letters only. No special characters except - and _";
+        : "No special characters or spaces except - and _";
 }
 
 // when a string is between 4 and 64 characters, return null, otherwise return the string "Between 4 and 64 characters"
@@ -377,7 +377,7 @@ export default function CreatePipeline({
                             <FormField
                                 label="Pipeline Name"
                                 errorText={validatePipelineName(formState.pipelineId)}
-                                constraintText="Required. All lower case, no special chars or spaces except - and _ only letters for first character min 4 and max 64"
+                                constraintText="Required. No special chars or spaces except - and _ min 3 and max 64"
                             >
                                 <Input
                                     value={formState.pipelineId}

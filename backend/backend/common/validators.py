@@ -5,7 +5,7 @@ import re
 import json
 
 #Define patterns as global constants
-id_pattern = '^[a-zA-Z]([-_a-zA-Z0-9]){3,63}$'
+id_pattern = r'^[-_a-zA-Z0-9]{3,63}$'
 uuid_pattern = r'^[0-9a-fA-F]{8}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{12}$'
 file_type_pattern = '^[\\.]([a-z0-9]){1,7}$'
 filename_pattern = r'^[a-zA-Z0-9_\-.\s]+$'

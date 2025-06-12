@@ -255,17 +255,22 @@ export default function UploadManager({
             return;
         }
         
-        // Make sure we have a valid asset ID
-        const validAssetId = uploadState.createdAssetId || assetId;
-        if (!validAssetId) {
-            console.error('No asset ID available for preview upload initialization');
+        // Always use the provided assetId parameter directly, which should be valid at this point
+        if (!assetId) {
+            console.error('No asset ID provided for preview upload initialization');
             setUploadState(prev => ({
                 ...prev,
                 previewUploadInitStatus: 'failed',
-                errors: [...prev.errors, { step: 'Preview Upload Initialization', message: 'No asset ID available for preview upload initialization' }],
+                errors: [...prev.errors, { step: 'Preview Upload Initialization', message: 'No asset ID provided for preview upload initialization' }],
             }));
             return;
         }
+        
+        // Store the asset ID in state for future reference
+        setUploadState(prev => ({
+            ...prev,
+            createdAssetId: assetId
+        }));
 
         try {
             setUploadState(prev => ({ ...prev, previewUploadInitStatus: 'in-progress' }));
@@ -273,10 +278,10 @@ export default function UploadManager({
             // Prepare file information for preview upload initialization
             const previewFile = assetDetail.Preview;
             
-            console.log(`Initializing preview upload with assetId: ${validAssetId}`);
+            console.log(`Initializing preview upload with assetId: ${assetId}`);
             
             const uploadRequest = {
-                assetId: validAssetId,
+                assetId: assetId,
                 databaseId: assetDetail.databaseId || '',
                 uploadType: "assetPreview" as const,
                 files: [{
@@ -292,14 +297,14 @@ export default function UploadManager({
                 ...prev,
                 previewUploadInitStatus: 'completed',
                 previewUploadId: response.uploadId,
-                createdAssetId: validAssetId // Ensure the asset ID is set
+                createdAssetId: assetId // Ensure the asset ID is set
             }));
 
             // Store the asset ID in state before uploading the preview file
-            console.log(`About to upload preview file with assetId: ${validAssetId}`);
+            console.log(`About to upload preview file with assetId: ${assetId}`);
             
             // Upload the preview file directly
-            await uploadPreviewFile(response, previewFile);
+            await uploadPreviewFile(response, previewFile, assetId);
 
             return response;
         } catch (error: any) {
@@ -313,10 +318,8 @@ export default function UploadManager({
     }, [assetDetail]);
     
     // Upload preview file
-    const uploadPreviewFile = useCallback(async (initResponse: InitializeUploadResponse, previewFile: File) => {
+    const uploadPreviewFile = useCallback(async (initResponse: InitializeUploadResponse, previewFile: File, assetId: string) => {
         try {
-            // Get the assetId from state
-            const assetId = uploadState.createdAssetId;
             console.log(`Starting preview file upload with assetId: ${assetId}`);
             
             if (!assetId) {
@@ -380,7 +383,7 @@ export default function UploadManager({
                 );
             }
             
-            // Complete the preview upload with the stored assetId
+            // Complete the preview upload with the provided assetId
             await completePreviewUpload(initResponse.uploadId, fileResponse.relativeKey, fileResponse.uploadIdS3, parts, assetId);
             
         } catch (error: any) {
@@ -392,7 +395,7 @@ export default function UploadManager({
             }));
             throw error;
         }
-    }, [uploadState.createdAssetId]);
+    }, []);
     
     // Step 5b: Complete Preview Upload
     const completePreviewUpload = useCallback(async (uploadId: string, relativeKey: string, uploadIdS3: string, parts: UploadPartResult[], assetId: string) => {
@@ -416,7 +419,7 @@ export default function UploadManager({
             };
             
             // Log the asset ID being used
-            console.log(`Using asset ID for preview completion: ${uploadState.createdAssetId}`);
+            console.log(`Using asset ID for preview completion: ${assetId}`);
             
             console.log('Sending preview completion request:', JSON.stringify(completionRequest, null, 2));
             
@@ -438,7 +441,7 @@ export default function UploadManager({
             }));
             throw error;
         }
-    }, [assetDetail, uploadState.createdAssetId]);
+    }, [assetDetail]);
 
     // Step 4: Upload File Parts
     const uploadFileParts = useCallback(async () => {
@@ -534,24 +537,35 @@ export default function UploadManager({
                         }, 1000);
                     }
                     
-                    // Update file progress
-                    const filePartsForThisFile = fileParts.filter(p => p.fileIndex === part.fileIndex);
-                    const fileCompletedParts = filePartsForThisFile.filter(p => p.status === 'completed').length + 
-                        (updatedPart.status === 'completed' ? 1 : 0);
-                    const fileProgress = Math.round((fileCompletedParts / filePartsForThisFile.length) * 100);
-                    
-                    setFileUploadItems(prev => 
-                        prev.map((item, idx) => 
-                            idx === part.fileIndex
-                                ? { 
-                                    ...item, 
-                                    progress: fileProgress,
-                                    loaded: fileProgress * item.total / 100,
-                                    status: fileProgress === 100 ? "Completed" : "In Progress"
-                                }
-                                : item
-                        )
-                    );
+                    // Update file progress - get the latest state to ensure accurate counts
+                    setFileParts(currentFileParts => {
+                        // Use the current state to calculate progress
+                        const filePartsForThisFile = currentFileParts.filter(p => p.fileIndex === part.fileIndex);
+                        // Count completed parts including the one we just updated
+                        const fileCompletedParts = filePartsForThisFile.filter(p => 
+                            (p.status === 'completed') || 
+                            (p.fileIndex === updatedPart.fileIndex && p.partNumber === updatedPart.partNumber && updatedPart.status === 'completed')
+                        ).length;
+                        
+                        const fileProgress = Math.round((fileCompletedParts / filePartsForThisFile.length) * 100);
+                        
+                        // Update the file item with accurate progress
+                        setFileUploadItems(prev => 
+                            prev.map((item, idx) => 
+                                idx === part.fileIndex
+                                    ? { 
+                                        ...item, 
+                                        progress: fileProgress,
+                                        loaded: fileProgress * item.total / 100,
+                                        status: fileProgress === 100 ? "Completed" : "In Progress"
+                                    }
+                                    : item
+                            )
+                        );
+                        
+                        // Return the current state unchanged - we're just using it for calculation
+                        return currentFileParts;
+                    });
                     
                     return updatedPart;
                 } catch (error) {
@@ -982,6 +996,8 @@ export default function UploadManager({
                 // Step 3b: Initialize Preview File Upload (if applicable)
                 // Only initialize preview upload if we have a valid asset ID
                 if (assetDetail.Preview && assetId) {
+                    // Ensure we have the latest assetId before initializing preview upload
+                    console.log(`Initializing preview upload with confirmed assetId: ${assetId}`);
                     await initializePreviewUpload(assetId);
                 }
                 
@@ -1095,8 +1111,9 @@ export default function UploadManager({
                 // uploadFileParts will be called by the useEffect
             } else if (uploadState.previewUploadInitStatus === 'failed') {
                 // Retry preview upload initialization
-                const assetId = uploadState.createdAssetId || assetDetail.assetId || '';
+                const assetId = assetDetail.assetId || '';
                 if (assetId && assetDetail.Preview) {
+                    console.log(`Retrying preview upload initialization with assetId: ${assetId}`);
                     await initializePreviewUpload(assetId);
                 }
             } else if (uploadState.uploadStatus === 'failed') {
@@ -1109,8 +1126,9 @@ export default function UploadManager({
                 // Retry preview completion if we have the necessary data
                 if (uploadState.previewUploadId && assetDetail.Preview) {
                     // We need to re-upload the preview file
-                    const assetId = uploadState.createdAssetId || assetDetail.assetId || '';
+                    const assetId = assetDetail.assetId || '';
                     if (assetId) {
+                        console.log(`Retrying preview upload after completion failure with assetId: ${assetId}`);
                         await initializePreviewUpload(assetId);
                     }
                 }

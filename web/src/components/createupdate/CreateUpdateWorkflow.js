@@ -319,7 +319,7 @@ export default function CreateUpdateWorkflow(props) {
                                                             <FormField
                                                                 label={"Workflow Name"}
                                                                 constraintText={
-                                                                    "Required. All lower case, no special chars or spaces except - and _ only letters for first character min 4 and max 64."
+                                                                    "Required. No special chars or spaces except - and _ only letters for first character min 4 and max 64."
                                                                 }
                                                                 errorText={workflowIdError}
                                                             >

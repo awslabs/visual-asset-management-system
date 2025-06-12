@@ -41,7 +41,7 @@ const roleBody = {
 
 function validateNameLength(name: string) {
     if (name === undefined) return undefined;
-    return name.length >= 4 && name.length <= 64 ? null : "Name to be between 4 and 64 characters";
+    return name.length >= 3 && name.length <= 64 ? null : "Name to be between 3 and 64 characters";
 }
 
 function validateName(name: string) {

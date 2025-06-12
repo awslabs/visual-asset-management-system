@@ -194,26 +194,37 @@ def determine_asset_type(assetId, bucket=None, prefix=None):
             Prefix=prefix_to_use,
         )
         
-        # Count the files
-        file_count = len(response.get('Contents', []))
-        logger.info(f"Found {file_count} files in {bucket_to_use}/{prefix_to_use}")
+        # Get the contents and filter out folder markers (objects ending with '/')
+        contents = response.get('Contents', [])
+        actual_files = [item for item in contents if not item['Key'].endswith('/')]
+        
+        # Count the actual files (excluding folder markers)
+        file_count = len(actual_files)
+        logger.info(f"Found {file_count} actual files in {bucket_to_use}/{prefix_to_use} (total objects: {len(contents)})")
         
         # Determine asset type
         if file_count == 0:
+            logger.info("No actual files found, returning None")
             return None  # No files found
         elif file_count == 1:
             # Extract file extension from the single file
-            file_key = response['Contents'][0]['Key']
+            file_key = actual_files[0]['Key']
             file_name = os.path.basename(file_key)
+            
+            # Skip if the file is just a folder marker
+            if file_name == '':
+                logger.info("Single object is a folder marker, returning 'folder'")
+                return 'folder'
+                
             if '.' in file_name:
-                extension = '.' + file_name.split('.')[-1]
+                extension = '.' + file_name.split('.')[-1].lower()  # Convert to lowercase for consistency
                 logger.info(f"Determined asset type as file with extension: {extension}")
                 return extension
             else:
                 logger.info("Determined asset type as unknown (no file extension)")
                 return 'unknown'
         else:
-            logger.info("Determined asset type as folder (multiple files)")
+            logger.info(f"Determined asset type as folder (multiple files: {file_count})")
             return 'folder'
     except Exception as e:
         logger.exception(f"Error determining asset type: {e}")
@@ -283,18 +294,7 @@ def create_folder(databaseId: str, assetId: str, request_model: CreateFolderRequ
     # Get the asset's base location
     asset_bucket = asset.get('assetLocation', {}).get('Bucket', asset_bucket_name_default)
     asset_base_key = asset.get('assetLocation', {}).get('Key', f"{assetId}/")
-    
-    # Validate the folder path format
-    (valid, message) = validate({
-        'relativeKey': {
-            'value': request_model.relativeKey,
-            'validator': 'ASSET_PATH',
-            'isFolder': True
-        }
-    })
-    
-    if not valid:
-        raise VAMSGeneralErrorResponse(message)
+
     
     # Normalize the path by combining asset base key with the relative folder path
     normalized_key_path = normalize_s3_path(asset_base_key, request_model.relativeKey)
@@ -381,7 +381,6 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
                 "databaseid": databaseId,
                 "assetid": assetId,
                 "uploadid": uploadId,  # Store the overall uploadId in S3 metadata
-                "finalkey": final_s3_key  # Store the final key for later use
             }
         )
         s3_upload_id = resp['UploadId']
@@ -567,28 +566,21 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     
     # Get the asset's specified bucket and key location
     asset_bucket = asset.get('assetLocation', {}).get('Bucket', asset_bucket_name_default)
-    asset_base_key = asset.get('assetLocation', {}).get('Key', f"{assetId}/")
     
     # Copy successful files from temporary to final location
     for file_detail in successful_files:
-        # Determine the final key by combining the asset's base key with the file key
-        # If the asset base key already ends with '/', don't add another one
-        if asset_base_key.endswith('/'):
-            final_key = f"{asset_base_key}{file_detail['relativeKey']}"
-        else:
-            final_key = f"{asset_base_key}/{file_detail['relativeKey']}"
         
-        logger.info(f"Copying file from {file_detail['temp_s3_key']} to {asset_bucket}/{final_key}")
+        logger.info(f"Copying file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
         
         copy_success = copy_s3_object(
             asset_bucket_name_default, 
             file_detail['temp_s3_key'], 
             asset_bucket, 
-            final_key
+            file_detail['final_s3_key']
         )
         
         if not copy_success:
-            logger.error(f"Failed to copy file from {file_detail['temp_s3_key']} to {asset_bucket}/{final_key}")
+            logger.error(f"Failed to copy file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
             # Update the file result to indicate copy failure
             for result in file_results:
                 if result.relativeKey == file_detail['relativeKey'] and result.success:
@@ -603,6 +595,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     if uploadType == "assetFile" and any(f.success for f in file_results):
         # Determine asset type using the asset's bucket and key location
         assetType = determine_asset_type(assetId, asset_bucket, asset_base_key)
+        logger.info(f"Asset type determined for asset {assetId}: {assetType}")
         
         # Update asset version
         current_version = int(asset['currentVersion']['Version'])
@@ -623,8 +616,12 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             'specifiedPipelines': asset.get('specifiedPipelines', [])
         }
         
-        # Update asset type
-        asset['assetType'] = assetType if assetType else asset.get('assetType', 'none')
+        # Update asset type - ensure we're not overriding with None
+        if assetType:
+            asset['assetType'] = assetType
+        elif 'assetType' not in asset or not asset.get('assetType'):
+            asset['assetType'] = 'none'
+        # If asset already has a type and assetType is None, keep the existing type
         
         # Save updated asset
         save_asset_details(asset)
@@ -634,7 +631,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
         
     elif uploadType == "assetPreview" and file_results[0].success:
         # Find the successful preview file
-        successful_preview = next((f for f in successful_files if f['relativeKey'] == file_results[0].relativeKeyy), None)
+        successful_preview = next((f for f in successful_files if f['relativeKey'] == file_results[0].relativeKey), None)
         if successful_preview:
             # Update asset with preview location
             asset['previewLocation'] = {
@@ -786,7 +783,6 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                 # Extract metadata
                 metadata = head_response.get('Metadata', {})
                 s3_upload_id = metadata.get('uploadid')
-                stored_final_s3_key = metadata.get('finalkey')
                 
                 # Verify the uploadId matches
                 if s3_upload_id != uploadId:
@@ -802,9 +798,6 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                     has_failures = True
                     continue
                 
-                # Use the final_s3_key from metadata if available, otherwise use our constructed one
-                if stored_final_s3_key:
-                    final_s3_key = stored_final_s3_key
             except Exception as e:
                 # Delete the uploaded file since we couldn't verify metadata
                 delete_s3_object(asset_bucket_name_default, temp_s3_key)
@@ -887,24 +880,18 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
     
     # Copy successful files from temporary to final location
     for file_detail in successful_files:
-        # Determine the final key by combining the asset's base key with the file key
-        # If the asset base key already ends with '/', don't add another one
-        if asset_base_key.endswith('/'):
-            final_key = f"{asset_base_key}{file_detail['relativeKey']}"
-        else:
-            final_key = f"{asset_base_key}/{file_detail['relativeKey']}"
         
-        logger.info(f"Copying file from {file_detail['temp_s3_key']} to {asset_bucket}/{final_key}")
+        logger.info(f"Copying file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
         
         copy_success = copy_s3_object(
             asset_bucket_name_default, 
             file_detail['temp_s3_key'], 
             asset_bucket, 
-            final_key
+            file_detail['final_s3_key']
         )
         
         if not copy_success:
-            logger.error(f"Failed to copy file from {file_detail['temp_s3_key']} to {asset_bucket}/{final_key}")
+            logger.error(f"Failed to copy file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
             # Update the file result to indicate copy failure
             for result in file_results:
                 if result.relativeKey == file_detail['relativeKey'] and result.success:
@@ -919,6 +906,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
     if uploadType == "assetFile" and any(f.success for f in file_results):
         # Determine asset type using the asset's bucket and key location
         assetType = determine_asset_type(assetId, asset_bucket, asset_base_key)
+        logger.info(f"Asset type determined for asset {assetId}: {assetType}")
         
         # Update asset version
         current_version = int(asset['currentVersion']['Version'])
@@ -939,8 +927,12 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
             'specifiedPipelines': asset.get('specifiedPipelines', [])
         }
         
-        # Update asset type
-        asset['assetType'] = assetType if assetType else asset.get('assetType', 'none')
+        # Update asset type - ensure we're not overriding with None
+        if assetType:
+            asset['assetType'] = assetType
+        elif 'assetType' not in asset or not asset.get('assetType'):
+            asset['assetType'] = 'none'
+        # If asset already has a type and assetType is None, keep the existing type
         
         # Save updated asset
         save_asset_details(asset)

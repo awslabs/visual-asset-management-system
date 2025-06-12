@@ -93,6 +93,11 @@ export default function ViewAsset() {
     const [workflowOpen, setWorkflowOpen] = useState(false);
     const [assetFiles, setAssetFiles] = useState<any[]>([]);
     const [loadingAssetFiles, setLoadingAssetFiles] = useState(false);
+    
+    // API error handling
+    const [apiError, setApiError] = useState<string | null>(null);
+    const [showApiError, setShowApiError] = useState(false);
+    const [apiErrorType, setApiErrorType] = useState<AlertProps.Type>("error");
 
     //Enabled Features
     const config = Cache.getItem("config");
@@ -129,32 +134,51 @@ export default function ViewAsset() {
         userName = JSON.parse(localStorage.getItem("user")!).username;
         const getData = async () => {
             setLoading(true);
-            const items = await fetchDatabaseWorkflows({ databaseId: databaseId });
-            if (items !== false && Array.isArray(items)) {
-                const newRows = [];
-                for (let i = 0; i < items.length; i++) {
-                    const newParentRow = Object.assign({}, items[i]);
-                    newParentRow.name = newParentRow?.workflowId;
-                    newRows.push(newParentRow);
-                    const workflowId = newParentRow?.workflowId;
-                    const subItems = await fetchWorkflowExecutions({
-                        databaseId: databaseId,
-                        assetId: assetId,
-                        workflowId: workflowId,
-                    });
-                    if (subItems !== false && Array.isArray(subItems)) {
-                        for (let j = 0; j < subItems.length; j++) {
-                            const newParentRowChild = Object.assign({}, subItems[j]);
-                            newParentRowChild.parentId = workflowId;
-                            newParentRowChild.name = newParentRowChild.executionId;
-                            if (newParentRowChild.stopDate === "") {
-                                newParentRowChild.stopDate = "N/A";
+            try {
+                const items = await fetchDatabaseWorkflows({ databaseId: databaseId });
+                if (items !== false && Array.isArray(items)) {
+                    const newRows = [];
+                    for (let i = 0; i < items.length; i++) {
+                        const newParentRow = Object.assign({}, items[i]);
+                        newParentRow.name = newParentRow?.workflowId;
+                        newRows.push(newParentRow);
+                        const workflowId = newParentRow?.workflowId;
+                        try {
+                            const subItems = await fetchWorkflowExecutions({
+                                databaseId: databaseId,
+                                assetId: assetId,
+                                workflowId: workflowId,
+                            });
+                            if (subItems !== false && Array.isArray(subItems)) {
+                                for (let j = 0; j < subItems.length; j++) {
+                                    const newParentRowChild = Object.assign({}, subItems[j]);
+                                    newParentRowChild.parentId = workflowId;
+                                    newParentRowChild.name = newParentRowChild.executionId;
+                                    if (newParentRowChild.stopDate === "") {
+                                        newParentRowChild.stopDate = "N/A";
+                                    }
+                                    newRows.push(newParentRowChild);
+                                }
                             }
-                            newRows.push(newParentRowChild);
+                        } catch (execError) {
+                            console.error("Error fetching workflow executions:", execError);
                         }
                     }
+                    setAllItems(newRows);
+                    setLoading(false);
+                    setReload(false);
+                } else if (typeof items === 'string' && items.includes('not found')) {
+                    setApiError("Workflow data not found. The requested asset may have been deleted or you may not have permission to access it.");
+                    setShowApiError(true);
+                    setApiErrorType("error");
+                    setLoading(false);
+                    setReload(false);
                 }
-                setAllItems(newRows);
+            } catch (error) {
+                console.error("Error fetching workflows:", error);
+                setApiError("Failed to load workflow data. Please try again later.");
+                setShowApiError(true);
+                setApiErrorType("error");
                 setLoading(false);
                 setReload(false);
             }
@@ -213,8 +237,22 @@ export default function ViewAsset() {
 
     useEffect(() => {
         const getResponse = async () => {
-            const res = await fetchAssetLinks({ assetId: assetId });
-            setApiResponse(res);
+            try {
+                const res = await fetchAssetLinks({ assetId: assetId });
+                if (res && typeof res === 'object') {
+                    setApiResponse(res);
+                } else if (typeof res === 'string' && res.includes('not found')) {
+                    // Handle "Asset not Found" error
+                    setApiError("Asset links not found. The requested asset may have been deleted or you may not have permission to access it.");
+                    setShowApiError(true);
+                    setApiErrorType("error");
+                }
+            } catch (error) {
+                console.error("Error fetching asset links:", error);
+                setApiError("Failed to load asset links. Please try again later.");
+                setShowApiError(true);
+                setApiErrorType("error");
+            }
         };
         if (reload) {
             getResponse();
@@ -535,9 +573,24 @@ export default function ViewAsset() {
     useEffect(() => {
         const getData = async () => {
             if (databaseId && assetId) {
-                const item = await fetchAsset({ databaseId: databaseId, assetId: assetId });
-                if (item !== false) {
-                    setAsset(item);
+                try {
+                    const item = await fetchAsset({ databaseId: databaseId, assetId: assetId });
+                    if (item !== false) {
+                        setAsset(item);
+                    } else if (typeof item === 'string' && item.includes('not found')) {
+                        // Handle "Asset not Found" error
+                        setApiError("Asset not found. The requested asset may have been deleted or you may not have permission to access it.");
+                        setShowApiError(true);
+                        setApiErrorType("error");
+                    }
+                } catch (error) {
+                    console.error("Error fetching asset:", error);
+                    setApiError("Failed to load asset data. Please try again later.");
+                    setShowApiError(true);
+                    setApiErrorType("error");
+                }
+                
+                if (asset && asset.assetId) {
                     
                     // Fetch asset files for workflow execution
                     setLoadingAssetFiles(true);
@@ -549,9 +602,17 @@ export default function ViewAsset() {
                                 a.relativePath.localeCompare(b.relativePath)
                             );
                             setAssetFiles(sortedFiles);
+                        } else if (typeof files === 'string' && files.includes('not found')) {
+                            // Handle "Asset not Found" error
+                            setApiError("Asset files not found. The requested asset may have been deleted or you may not have permission to access it.");
+                            setShowApiError(true);
+                            setApiErrorType("error");
                         }
                     } catch (error) {
                         console.error("Error fetching asset files:", error);
+                        setApiError("Failed to load asset files. Please try again later.");
+                        setShowApiError(true);
+                        setApiErrorType("error");
                     } finally {
                         setLoadingAssetFiles(false);
                     }
@@ -580,21 +641,21 @@ export default function ViewAsset() {
                                     Asset: value.Asset,
                                 },
                             });
-                        } else {
+                        } else if (asset && asset.assetId) {
                             dispatch({
                                 type: "SET_ASSET_DETAIL",
                                 payload: {
-                                    isMultiFile: item.isMultiFile,
+                                    isMultiFile: asset.isMultiFile,
                                     assetId: assetId,
-                                    assetName: item.assetName,
+                                    assetName: asset.assetName,
                                     databaseId: databaseId,
-                                    description: item.description,
-                                    key: item.key || item.assetLocation["Key"],
+                                    description: asset.description,
+                                    key: asset.key || (asset.assetLocation && asset.assetLocation["Key"]),
                                     assetLocation: {
-                                        Key: item.key || item.assetLocation["Key"],
+                                        Key: asset.key || (asset.assetLocation && asset.assetLocation["Key"]),
                                     },
-                                    assetType: item.assetType,
-                                    isDistributable: item.isDistributable,
+                                    assetType: asset.assetType,
+                                    isDistributable: asset.isDistributable,
                                     Asset: [],
                                 },
                             });
@@ -628,6 +689,17 @@ export default function ViewAsset() {
                                 ariaLabel="Breadcrumbs"
                             />
                             {messageVisible && <Alert type={alertLabel}>{message}</Alert>}
+                            {showApiError && (
+                                <Alert 
+                                    type={apiErrorType}
+                                    statusIconAriaLabel="Error"
+                                    header="API Error"
+                                    dismissible
+                                    onDismiss={() => setShowApiError(false)}
+                                >
+                                    {apiError}
+                                </Alert>
+                            )}
                             <Grid gridDefinition={[{ colspan: 4 }]}>
                                 <Header variant="h2">
                                     {asset?.assetName}

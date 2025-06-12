@@ -764,20 +764,20 @@ function FileInfoPanel() {
         setIsCreatingFolder(true);
         
         try {
-            // Construct the full path for the new folder
+            // Construct the relative path for the new folder
             let relativeKey;
             
             // If we're at the root level
             if (selectedItem.relativePath === "/") {
                 relativeKey = `${newFolderName}/`;
             } else {
-                // If we're in a subfolder, use the selected item's keyPrefix
+                // If we're in a subfolder, use the selected item's relativePath
                 // Make sure it ends with a slash
-                const baseKey = selectedItem.keyPrefix.endsWith('/') 
-                    ? selectedItem.keyPrefix 
-                    : `${selectedItem.keyPrefix}/`;
+                const basePath = selectedItem.relativePath.endsWith('/') 
+                    ? selectedItem.relativePath 
+                    : `${selectedItem.relativePath}/`;
                 
-                relativeKey = `${baseKey}${newFolderName}/`;
+                relativeKey = `${basePath}${newFolderName}/`;
             }
             
             // Call the API to create the folder

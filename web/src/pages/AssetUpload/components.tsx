@@ -65,7 +65,13 @@ export const FileUpload = ({
                         <Button
                             variant="normal"
                             iconName="remove"
-                            onClick={() => setFile(null)}
+                            onClick={() => {
+                                setFile(null);
+                                // Reset the input value to allow reselecting the same file
+                                if (inputRef.current) {
+                                    inputRef.current.value = "";
+                                }
+                            }}
                         >
                             Remove File
                         </Button>

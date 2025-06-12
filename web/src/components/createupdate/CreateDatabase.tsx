@@ -31,14 +31,14 @@ interface DatabaseFields {
 
 // when a string is all lower case, return null, otherwise return the string "All lower case letters only"
 function validateDatabaseNameLowercase(name: string) {
-    return name.match(/^[a-z0-9_-]+$/) !== null
+    return name.match(/^[-_a-zA-Z0-9]{3,63}$/) !== null
         ? null
-        : "All lower case letters only. No special characters except - and _";
+        : "No special characters or spaces except - and _";
 }
 
-// when a string is between 4 and 64 characters, return null, otherwise return the string "Between 4 and 64 characters"
+// when a string is between 4 and 64 characters, return null, otherwise return the string "Between 3 and 64 characters"
 function validateDatabaseNameLength(name: string) {
-    return name.length >= 4 && name.length <= 64 ? null : "Between 4 and 64 characters";
+    return name.length >= 3 && name.length <= 64 ? null : "Between 3 and 64 characters";
 }
 
 // chain together the above three functions, when they return null, then return null
@@ -152,7 +152,7 @@ export default function CreateDatabase({
                         <FormField
                             label="Database Name"
                             errorText={validateDatabaseName(formState.databaseId)}
-                            constraintText="Required. All lower case, no special chars or spaces except - and _ only letters for first character min 4 and max 64"
+                            constraintText="Required. No special chars or spaces except - and _ min 3 and max 64"
                         >
                             <Input
                                 value={formState.databaseId}

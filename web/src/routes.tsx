@@ -29,7 +29,7 @@ const Tags = React.lazy(() => import("./pages/Tag/Tags"));
 const Subscriptions = React.lazy(() => import("./pages/Subscription/Subscriptions"));
 const Roles = React.lazy(() => import("./pages/auth/Roles"));
 const UserRoles = React.lazy(() => import("./pages/auth/UserRoles"));
-const FinishUploadsPage = React.lazy(() => import("./pages/FinishUploads"));
+const ModifyAssetsUploadsPage = React.lazy(() => import("./pages/ModifyAssetsUploads"));
 const MetadataSchema = React.lazy(() => import("./pages/MetadataSchema"));
 const ViewFile = React.lazy(() => import("./components/single/ViewFile"));
 const AssetIngestion = React.lazy(() => import("./components/single/AssetIngestion"));
@@ -64,7 +64,7 @@ export const routeTable: RouteOption[] = [
     },
     {
         path: "/databases/:databaseId/assets/:assetId/uploads",
-        Page: FinishUploadsPage,
+        Page: ModifyAssetsUploadsPage,
         active: "#/assets/",
     },
     {

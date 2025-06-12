@@ -63,7 +63,7 @@ const convertToFileUploadTableItems = (fileInfo: FileInfo[], prefix: string = ""
     });
 };
 
-export default function FinishUploadsPage() {
+export default function ModifyAssetsUploadsPage() {
     const { state } = useLocation();
     const navigate = useNavigate();
     const { databaseId, assetId } = useParams();
