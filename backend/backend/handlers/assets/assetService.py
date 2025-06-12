@@ -408,7 +408,7 @@ def get_handler(event, response, path_parameters, query_parameters):
             },
             'assetId': {
                 'value': path_parameters['assetId'],
-                'validator': 'ID'
+                'validator': 'ASSET_ID'
             },
         })
         if not valid:
@@ -448,7 +448,7 @@ def put_handler(response, pathParameters, body):
         },
         'assetId': {
             'value': pathParameters['assetId'],
-            'validator': 'ID'
+            'validator': 'ASSET_ID'
         },
     })
     if not valid:
@@ -559,7 +559,7 @@ def delete_handler(response, pathParameters, queryParameters):
         },
         'assetId': {
             'value': pathParameters['assetId'],
-            'validator': 'ID'
+            'validator': 'ASSET_ID'
         },
     })
     if not valid:

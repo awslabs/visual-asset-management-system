@@ -301,7 +301,7 @@ def lambda_handler(event, context):
             },
             'assetId': {
                 'value': event['assetId'],
-                'validator': 'ID'
+                'validator': 'ASSET_ID'
             },
             'executingUserName': {
                 'value': event['executingUserName'],

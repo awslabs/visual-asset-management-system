@@ -84,7 +84,7 @@ def validate_event(event):
         },
         'assetId': {
             'value': event['pathParameters']['assetId'],
-            'validator': 'ID'
+            'validator': 'ASSET_ID'
         },
     })
 

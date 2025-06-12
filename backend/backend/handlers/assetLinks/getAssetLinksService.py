@@ -179,7 +179,7 @@ def lambda_handler(event, context):
         (valid, message) = validate({
             'assetId': {
                 'value': asset_id,
-                'validator': 'ID'
+                'validator': 'ASSET_ID'
             }
         })
 

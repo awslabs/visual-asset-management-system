@@ -16,12 +16,12 @@ from customLogging.logger import safeLogger
 from common.s3 import validateS3AssetExtensionsAndContentType
 
 claims_and_roles = {}
-logger = safeLogger(service_name="DownlaodAsset")
+logger = safeLogger(service_name="DownloadAsset")
 dynamodb = boto3.resource('dynamodb')
 
 main_rest_response = STANDARD_JSON_RESPONSE
 asset_Database = None
-bucket_name = None
+asset_bucket_name_default = None
 timeout = 1800
 unitTest = {
     "body": {
@@ -32,7 +32,7 @@ unitTest['body'] = json.dumps(unitTest['body'])
 
 try:
     asset_Database = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    bucket_name = os.environ["S3_ASSET_STORAGE_BUCKET"]
+    asset_bucket_name_default = os.environ["S3_ASSET_STORAGE_BUCKET"]
     region = os.environ['AWS_REGION']
     timeout = int(os.environ['CRED_TOKEN_TIMEOUT_SECONDS'])
     #s3Endpoint = os.environ['S3_ENDPOINT']
@@ -91,6 +91,8 @@ def get_File(databaseId, assetId, key, version):
     if(key is None or key is ""):
         key = item['assetLocation']['Key']
 
+    asset_bucket = item.get('assetLocation', {}).get('Bucket', asset_bucket_name_default)
+
     isDistributable = item['isDistributable']
     if isinstance(isDistributable, bool):
         if not isDistributable:
@@ -101,24 +103,24 @@ def get_File(databaseId, assetId, key, version):
         return "Error: Asset not distributable"
 
     #Validate for malicious content type
-    if not validateS3AssetExtensionsAndContentType(bucket_name, key):
+    if not validateS3AssetExtensionsAndContentType(asset_bucket_name_default, key):
         return "Error: Unallowed file extention or content type in asset file. Unable to download file."
 
     if version is None or version == "" or (version != "" and (version == "Latest" or version == item['currentVersion']['Version'])):
         return s3_client.generate_presigned_url('get_object', Params={
-            'Bucket': bucket_name,
+            'Bucket': asset_bucket,
             'Key': key
         }, ExpiresIn=timeout)
     else:
-        versions = item['versions']
-        for i in versions:
-            if i['Version'] == version:
-                return s3_client.generate_presigned_url('get_object', Params={
-                    'Bucket': bucket_name,
-                    'Key': key,
-                    'VersionId': i['S3Version']
-                }, ExpiresIn=timeout)
-        return "Error: Asset not found or not authorized to view the assets"
+        # versions = item['versions']
+        # for i in versions:
+        #     if i['Version'] == version:
+        return s3_client.generate_presigned_url('get_object', Params={
+            'Bucket': asset_bucket,
+            'Key': key,
+            'VersionId': version
+        }, ExpiresIn=timeout)
+        #return "Error: Asset not found or not authorized to view the assets"
 
 
 def lambda_handler(event, context):
@@ -148,8 +150,12 @@ def lambda_handler(event, context):
             },
             'assetId': {
                 'value': pathParameters['assetId'],
-                'validator': 'ID'
+                'validator': 'ASSET_ID'
             },
+            'assetPathKey': {
+                'value': event['body']['key'],
+                'validator': 'ASSET_PATH'
+            }
         })
         if not valid:
             logger.exception(message)
@@ -157,32 +163,19 @@ def lambda_handler(event, context):
             response['statusCode'] = 400
             return response
 
-        #optional params
-        if 'key' in event['body'] and event['body']['key'] is not None:
-            (valid, message) = validate({
-                'assetPathKey': {
-                    'value': event['body']['key'],
-                    'validator': 'ASSET_PATH'
-                }
-            })
-            if not valid:
-                logger.error(message)
-                response['body'] = json.dumps({"message": message})
-                response['statusCode'] = 400
-                return response
 
-            #Split object key by path and return the first value (the asset ID)
-            asset_idFromKeyPath = event['body']['key'].split("/")[0]
+        #Split object key by path and return the first value (the asset ID)
+        asset_idFromKeyPath = event['body']['key'].split("/")[0]
 
-            #If we are downloading a preview file, go down the path chain by 1
-            if(asset_idFromKeyPath == "previews"):
-                asset_idFromKeyPath = event['body']['key'].split("/")[1]
+        #If we are downloading a preview file, go down the path chain by 1
+        if(asset_idFromKeyPath == "previews"):
+            asset_idFromKeyPath = event['body']['key'].split("/")[1]
 
-            #Check if the asset ID is the same as the asset ID from the path
-            if asset_idFromKeyPath != pathParameters['assetId']:
-                response['body'] = json.dumps({"message": "Asset ID from path does not match the asset ID"})
-                response['statusCode'] = 400
-                return response
+        #Check if the asset ID is the same as the asset ID from the path
+        if asset_idFromKeyPath != pathParameters['assetId']:
+            response['body'] = json.dumps({"message": "Asset ID from path does not match the asset ID"})
+            response['statusCode'] = 400
+            return response
 
         method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
@@ -193,10 +186,7 @@ def lambda_handler(event, context):
         if method_allowed_on_api:
             logger.info("Getting Assets")
 
-            key = ""
-            if 'key' in event['body'] and event['body']['key'] is not None:
-                key = event['body']['key']
-                logger.info("Key Provided: " + key)
+            key = event['body']['key']
 
             version = ""
             if 'version' in event['body'] and event['body']['version'] is not None:

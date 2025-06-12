@@ -7,7 +7,9 @@ All notable changes to this project will be documented in this file. See [standa
 This minor version includes changes to VAMS infrastructure, authentication, web UI, pipelines, use-case pipeline implementations, and v2.0+ bug fixes.
 
 ### Features
--   Database, Pipeline, Workflow, Tag, Tag Types, Role, and Constraints ID and Names no longer need to follow as strict of regex guidelines. New Regex: ^[-_a-zA-Z0-9]{3,63}$
+-   Database, Pipeline, Workflow, Tag, Tag Types, Role, and Constraints id/names no longer need to follow as strict of regex guidelines. New Regex: ^[-_a-zA-Z0-9]{3,63}$
+-   AssetId no longer need to follow as strict of regex guidelines. New Regex (regular filename regex): ^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$'
+-   File paths no longer need to follow as strict of regex guidelines and now allows for deep pathing. Some restrictions apply as it relates to specific input paths for auxiliary asset previews and pipeline output paths.
 -   The asset upload API and backend along with many associated supporting asset API backends have been rewritten to support new features, security, and performance improvements. 
     -   The old uploadAsset, uploadAssetWorkflow, and s3scoped access APIs and backend have been removed
     -   A new uploadFile (initialize, complete, createFolder), createAsset, and assetService (edit asset) have been created to support seperation of assets and files. UploadFile now fully supports S3 Signed URL uploads for better security and performance (replaces providing UI with scoped S3 access). 

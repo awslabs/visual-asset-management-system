@@ -168,7 +168,7 @@ def lambda_handler(event, context):
             },
             'assetId': {
                 'value': pathParams.get('assetId', ''),
-                'validator': 'ID'
+                'validator': 'ASSET_ID'
             },
         })
 

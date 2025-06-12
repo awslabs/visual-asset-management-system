@@ -284,7 +284,7 @@ def lambda_handler(event, context):
             },
             'assetId': {
                 'value': pathParams.get('assetId', ''),
-                'validator': 'ID'
+                'validator': 'ASSET_ID'
             },
             'assetKey': {
                 'value': request_body.get('fileKey', ''),

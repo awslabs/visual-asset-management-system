@@ -139,11 +139,11 @@ def lambda_handler(event, context):
         (valid, message) = validate({
             'assetIdFrom': {
                 'value': event['body']['assetIdFrom'],
-                'validator': 'ID'
+                'validator': 'ASSET_ID'
             },
             'assetIdTo': {
                 'value': event['body']['assetIdTo'],
-                'validator': 'ID'
+                'validator': 'ASSET_ID'
             },
             'relationshipType': {
                 'value': event['body']['relationshipType'],

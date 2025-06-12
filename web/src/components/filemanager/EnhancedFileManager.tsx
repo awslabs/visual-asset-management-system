@@ -903,7 +903,7 @@ function FileInfoPanel() {
                 
                 {selectedItem.versionId && (
                     <div className="file-info-item">
-                        <div className="file-info-label">Current Version:</div>
+                        <div className="file-info-label">Latest Version:</div>
                         <div className="file-info-value">{selectedItem.versionId}</div>
                     </div>
                 )}

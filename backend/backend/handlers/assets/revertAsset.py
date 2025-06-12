@@ -236,7 +236,7 @@ def lambda_handler(event, context):
             },
             'assetId': {
                 'value': pathParams['assetId'],
-                'validator': 'ID'
+                'validator': 'ASSET_ID'
             },
         })
         if not valid:
