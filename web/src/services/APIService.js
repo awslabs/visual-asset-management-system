@@ -47,14 +47,21 @@ export const webRoutes = async (body) => {
 
 /**
  * Returns array of boolean and response/error message for the element that the current user is downloading, or false if error.
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {string} params.key - Optional key path for the file
+ * @param {string} params.versionId - Optional version ID
+ * @param {string} params.downloadType - Download type: "assetFile" (default) or "assetPreview"
  * @returns {Promise<boolean|{message}|any>}
  */
-export const downloadAsset = async ({ databaseId, assetId, key, version }, api = API) => {
+export const downloadAsset = async ({ databaseId, assetId, key, versionId, downloadType = "assetFile" }, api = API) => {
     try {
-        //Version and key are optional fields
+        // Build request body with new model structure
         const body = {
-            version: version,
+            downloadType: downloadType,
             key: key,
+            versionId: versionId
         };
 
         const response = await api.post(
@@ -64,7 +71,13 @@ export const downloadAsset = async ({ databaseId, assetId, key, version }, api =
                 body: body,
             }
         );
-        if (response.message) {
+        
+        // Handle new response structure
+        if (response.downloadUrl) {
+            // New API response format
+            return [true, response.downloadUrl];
+        } else if (response.message) {
+            // Legacy or error response format
             if (
                 response.message.indexOf("error") !== -1 ||
                 response.message.indexOf("Error") !== -1
@@ -79,6 +92,10 @@ export const downloadAsset = async ({ databaseId, assetId, key, version }, api =
         }
     } catch (error) {
         console.log(error);
+        // Check for 410 Gone status (archived file)
+        if (error.response && error.response.status === 410) {
+            return [false, "This file version has been archived and cannot be downloaded"];
+        }
         return [false, error?.message];
     }
 };
@@ -244,14 +261,40 @@ export const fetchAllDatabases = async (api = API) => {
 
 /**
  * Returns the asset that the current user can access for the given databaseId & assetId, or false if error.
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {boolean} params.showArchived - Whether to include archived assets (optional)
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchAsset = async ({ databaseId, assetId }, api = API) => {
+export const fetchAsset = async ({ databaseId, assetId, showArchived = false }, api = API) => {
     try {
         let response;
         if (databaseId && assetId) {
-            response = await api.get("api", `database/${databaseId}/assets/${assetId}`, {});
-            if (response.message) return response.message;
+            response = await api.get("api", `database/${databaseId}/assets/${assetId}`, {
+                queryStringParameters: {
+                    showArchived: showArchived.toString()
+                }
+            });
+            
+            // Handle the new API response structure
+            // If response has a message field and it contains "error" or "Error", it's an error message
+            if (response.message && (
+                response.message.indexOf && (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1)
+            )) {
+                console.log("Error fetching asset:", response.message);
+                return response.message;
+            }
+            
+            // If response has a message field, return it (for backward compatibility)
+            if (response.message) {
+                return response.message;
+            }
+            
+            // Otherwise, return the response directly (new API structure)
+            return response;
         } else {
             return false;
         }
@@ -504,41 +547,6 @@ export const fetchConstraints = async (api = API) => {
 //     }
 // };
 
-export const fetchAssetFiles = async ({ databaseId, assetId }, api = API) => {
-    try {
-        let response;
-
-        if (databaseId && assetId) {
-            response = await api.get(
-                "api",
-                `database/${databaseId}/assets/${assetId}/listFiles`,
-                {}
-            );
-            //console.log("fetchAssetFiles response", response)
-            let items = [];
-            const init = { queryStringParameters: { startingToken: null } };
-            if (response.message) {
-                items = items.concat(response.message.Items);
-                while (response.message.NextToken) {
-                    init["queryStringParameters"]["startingToken"] = response.message.NextToken;
-                    response = await api.get(
-                        "api",
-                        `database/${databaseId}/assets/${assetId}/listFiles`,
-                        init
-                    );
-                    items = items.concat(response.message.Items);
-                }
-
-                return items;
-            } else return false;
-        } else {
-            return false;
-        }
-    } catch (error) {
-        console.log(error);
-        return error?.message;
-    }
-};
 
 /**
  * Returns array of all the comments that are attached to a given assetId
@@ -594,26 +602,56 @@ export const deleteComment = async ({ assetId, assetVersionIdAndCommentId }, api
     }
 };
 
+
 /**
- * Returns array of all assets the current user can access for all databases, or false if error.
+ * Returns array of all assets the current user can access for a given database, or false if error.
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {boolean} params.showArchived - Whether to include archived assets (optional)
+ * @param {number} params.maxItems - Maximum items per page (optional)
+ * @param {number} params.pageSize - Page size for pagination (optional)
+ * @param {string} params.startingToken - Pagination token (optional)
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchAllAssets = async (api = API) => {
+export const fetchDatabaseAssets = async ({ 
+    databaseId, 
+    showArchived = false, 
+    maxItems = 1000, 
+    pageSize = 1000, 
+    startingToken = null 
+}, api = API) => {
     try {
-        let response = await api.get("api", `assets`, {});
-        let items = [];
-        const init = { queryStringParameters: { startingToken: null } };
-        if (response.message) {
-            if (response.message.Items) {
-                items = items.concat(response.message.Items);
-                while (response.message.NextToken) {
-                    init["queryStringParameters"]["startingToken"] = response.message.NextToken;
-                    response = await api.get("api", `assets`, init);
+        let response;
+        if (databaseId) {
+            const queryParams = {
+                showArchived: showArchived.toString(),
+                maxItems: maxItems.toString(),
+                pageSize: pageSize.toString()
+            };
+            
+            if (startingToken) {
+                queryParams.startingToken = startingToken;
+            }
+            
+            response = await api.get("api", `database/${databaseId}/assets`, {
+                queryStringParameters: queryParams
+            });
+            
+            let items = [];
+            if (response.message) {
+                if (response.message.Items) {
                     items = items.concat(response.message.Items);
+                    while (response.message.NextToken) {
+                        queryParams.startingToken = response.message.NextToken;
+                        response = await api.get("api", `database/${databaseId}/assets`, {
+                            queryStringParameters: queryParams
+                        });
+                        items = items.concat(response.message.Items);
+                    }
+                    return items;
+                } else {
+                    return response.message;
                 }
-                return items;
-            } else {
-                return response.message;
             }
         } else {
             return false;
@@ -625,28 +663,49 @@ export const fetchAllAssets = async (api = API) => {
 };
 
 /**
- * Returns array of all assets the current user can access for a given database, or false if error.
+ * Returns array of all assets the current user can access for all databases, or false if error.
+ * @param {Object} params - Parameters object (optional)
+ * @param {boolean} params.showArchived - Whether to include archived assets (optional)
+ * @param {number} params.maxItems - Maximum items per page (optional)
+ * @param {number} params.pageSize - Page size for pagination (optional)
+ * @param {string} params.startingToken - Pagination token (optional)
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchDatabaseAssets = async ({ databaseId }, api = API) => {
+export const fetchAllAssets = async ({ 
+    showArchived = false, 
+    maxItems = 1000, 
+    pageSize = 1000, 
+    startingToken = null 
+} = {}, api = API) => {
     try {
-        let response;
-        if (databaseId) {
-            response = await api.get("api", `database/${databaseId}/assets`, {});
-            let items = [];
-            const init = { queryStringParameters: { startingToken: null } };
-            if (response.message) {
-                if (response.message.Items) {
+        const queryParams = {
+            showArchived: showArchived.toString(),
+            maxItems: maxItems.toString(),
+            pageSize: pageSize.toString()
+        };
+        
+        if (startingToken) {
+            queryParams.startingToken = startingToken;
+        }
+        
+        let response = await api.get("api", `assets`, {
+            queryStringParameters: queryParams
+        });
+        
+        let items = [];
+        if (response.message) {
+            if (response.message.Items) {
+                items = items.concat(response.message.Items);
+                while (response.message.NextToken) {
+                    queryParams.startingToken = response.message.NextToken;
+                    response = await api.get("api", `assets`, {
+                        queryStringParameters: queryParams
+                    });
                     items = items.concat(response.message.Items);
-                    while (response.message.NextToken) {
-                        init["queryStringParameters"]["startingToken"] = response.message.NextToken;
-                        response = await api.get("api", `database/${databaseId}/assets`, init);
-                        items = items.concat(response.message.Items);
-                    }
-                    return items;
-                } else {
-                    return response.message;
                 }
+                return items;
+            } else {
+                return response.message;
             }
         } else {
             return false;
@@ -940,14 +999,235 @@ export const createFolder = async ({ databaseId, assetId, relativeKey }, api = A
     }
 };
 
+/**
+ * Returns detailed file information including version history for a specific file
+ * @returns {Promise<boolean|{message}|any>}
+ */
+export const getFileVersions = async ({ databaseId, assetId, filePath }, api = API) => {
+    try {
+        if (!databaseId || !assetId || !filePath) {
+            return [false, "Missing required parameters"];
+        }
+
+        const response = await api.get(
+            "api",
+            `database/${databaseId}/assets/${assetId}/fileInfo`,
+            {
+                queryStringParameters: {
+                    filePath: filePath,
+                    includeVersions: 'true'
+                }
+            }
+        );
+
+        // Handle both old format (response.message) and new format (direct response)
+        if (response.message) {
+            // Old API format with message wrapper
+            return [true, response.message];
+        } else if (response && (response.versions || response.fileName)) {
+            // New API format - response contains the data directly
+            return [true, response];
+        } else {
+            return [false, "No response received"];
+        }
+    } catch (error) {
+        console.log("Error fetching file versions:", error);
+        return [false, error?.message || "Failed to fetch file versions"];
+    }
+};
+
+/**
+ * Reverts a file to a specific version by creating a new current version with the contents of the specified version
+ * @returns {Promise<boolean|{message}|any>}
+ */
+export const revertFileVersion = async ({ databaseId, assetId, filePath, versionId }, api = API) => {
+    try {
+        if (!databaseId || !assetId || !filePath || !versionId) {
+            return [false, "Missing required parameters"];
+        }
+
+        const response = await api.post(
+            "api",
+            `database/${databaseId}/assets/${assetId}/revertFileVersion/${versionId}`,
+            {
+                body: { filePath }
+            }
+        );
+
+        if (response.message) {
+            if (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1
+            ) {
+                console.log("Revert error:", response.message);
+                return [false, response.message];
+            } else {
+                return [true, response.message];
+            }
+        } else {
+            return [false, "No response received"];
+        }
+    } catch (error) {
+        console.log("Error reverting file version:", error);
+        return [false, error?.message || "Failed to revert file version"];
+    }
+};
+
+/**
+ * Updates an asset with new properties
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {Object} params.updateData - Data to update (assetName, description, isDistributable, tags)
+ * @returns {Promise<boolean|{message}|any>}
+ */
+export const updateAsset = async ({ databaseId, assetId, updateData }, api = API) => {
+    try {
+        if (!databaseId || !assetId || !updateData) {
+            return [false, "Missing required parameters"];
+        }
+
+        const response = await api.put(
+            "api",
+            `database/${databaseId}/assets/${assetId}`,
+            {
+                body: updateData
+            }
+        );
+
+        if (response.message) {
+            if (
+                response.message.indexOf && (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1)
+            ) {
+                console.log("Update asset error:", response.message);
+                return [false, response.message];
+            } else {
+                return [true, response.message];
+            }
+        } else {
+            return [false, "No response received"];
+        }
+    } catch (error) {
+        console.log("Error updating asset:", error);
+        return [false, error?.message || "Failed to update asset"];
+    }
+};
+
+/**
+ * Archives an asset (soft delete)
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {boolean} params.confirmArchive - Confirmation flag (required)
+ * @param {string} params.reason - Optional reason for archiving
+ * @returns {Promise<boolean|{message}|any>}
+ */
+export const archiveAsset = async ({ databaseId, assetId, confirmArchive = true, reason = "" }, api = API) => {
+    try {
+        if (!databaseId || !assetId) {
+            return [false, "Database ID and Asset ID are required"];
+        }
+
+        if (!confirmArchive) {
+            return [false, "Archive operation must be confirmed"];
+        }
+
+        const response = await api.post(
+            "api",
+            `database/${databaseId}/assets/${assetId}/archiveAsset`,
+            {
+                body: {
+                    confirmArchive,
+                    reason
+                }
+            }
+        );
+
+        if (response.message) {
+            if (
+                response.message.indexOf && (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1)
+            ) {
+                console.log("Archive asset error:", response.message);
+                return [false, response.message];
+            } else {
+                return [true, response.message];
+            }
+        } else {
+            return [false, "No response received"];
+        }
+    } catch (error) {
+        console.log("Error archiving asset:", error);
+        return [false, error?.message || "Failed to archive asset"];
+    }
+};
+
+/**
+ * Permanently deletes an asset
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {boolean} params.confirmPermanentDelete - Confirmation flag (required)
+ * @param {string} params.reason - Optional reason for deletion
+ * @returns {Promise<boolean|{message}|any>}
+ */
+export const deleteAssetPermanent = async ({ databaseId, assetId, confirmPermanentDelete = false, reason = "" }, api = API) => {
+    try {
+        if (!databaseId || !assetId) {
+            return [false, "Database ID and Asset ID are required"];
+        }
+
+        if (!confirmPermanentDelete) {
+            return [false, "Permanent deletion requires explicit confirmation"];
+        }
+
+        const response = await api.post(
+            "api",
+            `database/${databaseId}/assets/${assetId}/deleteAsset`,
+            {
+                body: {
+                    confirmPermanentDelete,
+                    reason
+                }
+            }
+        );
+
+        if (response.message) {
+            if (
+                response.message.indexOf && (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1)
+            ) {
+                console.log("Delete asset error:", response.message);
+                return [false, response.message];
+            } else {
+                return [true, response.message];
+            }
+        } else {
+            return [false, "No response received"];
+        }
+    } catch (error) {
+        console.log("Error deleting asset:", error);
+        return [false, error?.message || "Failed to delete asset"];
+    }
+};
+
 export const ACTIONS = {
     CREATE: {},
-    UPDATE: {},
+    UPDATE: {
+        ASSET: updateAsset
+    },
     READ: {
         ASSET: fetchAsset,
     },
     LIST: {},
-    DELETE: {},
+    DELETE: {
+        ASSET_ARCHIVE: archiveAsset,
+        ASSET_PERMANENT: deleteAssetPermanent
+    },
     EXECUTE: {},
     REVERT: {},
 };

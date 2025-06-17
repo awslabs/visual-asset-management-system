@@ -24,12 +24,14 @@ import AssetUploadService, {
     AssetLinks,
 } from "../../services/AssetUploadService";
 import { Metadata } from "../../components/single/Metadata";
-import { AssetDetail } from "../AssetUpload";
+import { AssetDetail } from "./AssetUpload";
 
 // Maximum number of concurrent uploads
 const MAX_CONCURRENT_UPLOADS = 6;
-// Maximum size of each part in bytes (50MB)
-const MAX_PART_SIZE = 50 * 1024 * 1024;
+// Maximum size of each part in bytes (150MB)
+const MAX_PART_SIZE = 150 * 1024 * 1024;
+// Maximum number of parts per file
+const MAX_NUM_PARTS_PER_FILE = 10;
 
 interface UploadManagerProps {
     assetDetail: AssetDetail;
@@ -45,16 +47,19 @@ interface UploadManagerProps {
 interface UploadState {
     assetCreationStatus: 'pending' | 'in-progress' | 'completed' | 'failed';
     metadataStatus: 'pending' | 'in-progress' | 'completed' | 'failed';
-    uploadInitStatus: 'pending' | 'in-progress' | 'completed' | 'failed';
+    uploadInitStatus: 'pending' | 'in-progress' | 'completed' | 'failed' | 'skipped';
     previewUploadInitStatus: 'pending' | 'in-progress' | 'completed' | 'failed' | 'skipped';
-    uploadStatus: 'pending' | 'in-progress' | 'completed' | 'failed';
-    completionStatus: 'pending' | 'in-progress' | 'completed' | 'failed';
+    uploadStatus: 'pending' | 'in-progress' | 'completed' | 'failed' | 'skipped';
+    completionStatus: 'pending' | 'in-progress' | 'completed' | 'failed' | 'skipped';
     previewCompletionStatus: 'pending' | 'in-progress' | 'completed' | 'failed' | 'skipped';
     createdAssetId?: string;
     uploadId?: string;
     previewUploadId?: string;
     errors: { step: string; message: string }[];
     overallProgress: number;
+    finalCompletionTriggered: boolean;
+    hasFailedParts: boolean;
+    hasSkippedParts: boolean;
 }
 
 interface FilePart {
@@ -96,13 +101,16 @@ export default function UploadManager({
     const [uploadState, setUploadState] = useState<UploadState>({
         assetCreationStatus: isExistingAsset ? 'completed' : 'pending',
         metadataStatus: isExistingAsset ? 'completed' : 'pending',
-        uploadInitStatus: 'pending',
+        uploadInitStatus: fileItems.length > 0 ? 'pending' : 'skipped',
         previewUploadInitStatus: assetDetail.Preview ? 'pending' : 'skipped',
-        uploadStatus: 'pending',
-        completionStatus: 'pending',
+        uploadStatus: fileItems.length > 0 ? 'pending' : 'skipped',
+        completionStatus: fileItems.length > 0 ? 'pending' : 'skipped',
         previewCompletionStatus: assetDetail.Preview ? 'pending' : 'skipped',
         errors: [],
         overallProgress: 0,
+        finalCompletionTriggered: false,
+        hasFailedParts: false,
+        hasSkippedParts: false,
     });
 
     const [fileParts, setFileParts] = useState<FilePart[]>([]);
@@ -113,6 +121,405 @@ export default function UploadManager({
     const [totalParts, setTotalParts] = useState(0);
     const [showRetryButton, setShowRetryButton] = useState(false);
     const [uploadStarted, setUploadStarted] = useState(false);
+    const [hasIncreasedPartSizes, setHasIncreasedPartSizes] = useState(false);
+
+    // Get active upload types based on what files are provided
+    const getActiveUploadTypes = useCallback(() => {
+        const types: ('assetFiles' | 'preview')[] = [];
+        if (fileItems.length > 0) types.push('assetFiles');
+        if (assetDetail.Preview) types.push('preview');
+        return types;
+    }, [fileItems.length, assetDetail.Preview]);
+
+    // Centralized completion logic to prevent race conditions
+    const checkAndTriggerFinalCompletion = useCallback(() => {
+        // Don't trigger if already triggered
+        if (uploadState.finalCompletionTriggered) {
+            console.log('Final completion already triggered, skipping');
+            return;
+        }
+        
+        const activeTypes = getActiveUploadTypes();
+        console.log('Checking completion with active types:', activeTypes);
+        
+        // If no files at all, complete immediately after asset/metadata steps
+        if (activeTypes.length === 0) {
+            const prerequisitesComplete = isExistingAsset || 
+                (uploadState.assetCreationStatus === 'completed' && uploadState.metadataStatus === 'completed');
+            
+            if (prerequisitesComplete) {
+                console.log('No files to upload and prerequisites complete - triggering final completion');
+                triggerFinalCompletion('Asset created successfully without files', true);
+                return;
+            }
+        }
+        
+        // Check if all active upload types are complete
+        const assetFilesComplete = !activeTypes.includes('assetFiles') || 
+            (uploadState.completionStatus === 'completed' || uploadState.completionStatus === 'skipped');
+        const previewComplete = !activeTypes.includes('preview') || 
+            (uploadState.previewCompletionStatus === 'completed' || uploadState.previewCompletionStatus === 'skipped');
+        
+        console.log('Completion status check:', {
+            assetFilesComplete,
+            previewComplete,
+            assetFilesStatus: uploadState.completionStatus,
+            previewStatus: uploadState.previewCompletionStatus
+        });
+        
+        if (assetFilesComplete && previewComplete) {
+            // Determine completion message based on what was uploaded
+            let message = 'Upload completed successfully';
+            let isFullSuccess = true;
+            
+            if (activeTypes.includes('assetFiles') && activeTypes.includes('preview')) {
+                const hasAssetErrors = uploadState.completionStatus === 'failed';
+                const hasPreviewErrors = uploadState.previewCompletionStatus === 'failed';
+                
+                if (hasAssetErrors || hasPreviewErrors) {
+                    message = 'Upload completed with some issues';
+                    isFullSuccess = false;
+                } else {
+                    message = 'Asset files and preview uploaded successfully';
+                }
+            } else if (activeTypes.includes('assetFiles')) {
+                const hasErrors = uploadState.completionStatus === 'failed';
+                message = hasErrors ? 'Asset files uploaded with some issues' : 'Asset files uploaded successfully';
+                isFullSuccess = !hasErrors;
+            } else if (activeTypes.includes('preview')) {
+                const hasErrors = uploadState.previewCompletionStatus === 'failed';
+                message = hasErrors ? 'Preview file uploaded with some issues' : 'Preview file uploaded successfully';
+                isFullSuccess = !hasErrors;
+            }
+            
+            console.log('All upload types complete - triggering final completion:', message);
+            triggerFinalCompletion(message, isFullSuccess);
+        }
+    }, [uploadState, isExistingAsset, getActiveUploadTypes]);
+
+    // Safe completion trigger to prevent multiple calls
+    const triggerFinalCompletion = useCallback((message: string, isFullSuccess: boolean) => {
+        console.log('Triggering final completion:', message, 'Success:', isFullSuccess);
+        
+        setUploadState(prev => ({ ...prev, finalCompletionTriggered: true }));
+        
+        const finalResponse: CompleteUploadResponse = {
+            assetId: uploadState.createdAssetId || assetDetail.assetId || '',
+            message,
+            uploadId: uploadState.uploadId || uploadState.previewUploadId || 'no-upload-required',
+            fileResults: [],
+            overallSuccess: isFullSuccess
+        };
+        
+        onUploadComplete(finalResponse);
+    }, [uploadState, assetDetail, onUploadComplete]);
+
+    // Step 4: Upload File Parts (simplified and more reliable)
+    const uploadFileParts = useCallback(async () => {
+        console.log(`uploadFileParts called: uploadResponse=${!!uploadResponse}, fileParts.length=${fileParts.length}`);
+        
+        if (!uploadResponse || fileParts.length === 0) {
+            console.warn('Cannot upload file parts: uploadResponse or fileParts is missing');
+            return;
+        }
+
+        try {
+            console.log('Setting upload status to in-progress');
+            setUploadState(prev => ({ ...prev, uploadStatus: 'in-progress' }));
+
+            // Create a queue of parts to upload - only include pending parts
+            const pendingParts = fileParts.filter(part => part.status === 'pending');
+            console.log(`Created queue with ${pendingParts.length} parts to upload`);
+            
+            let completed = fileParts.filter(part => part.status === 'completed').length;
+            setCompletedParts(completed);
+
+            // Simple queue manager with proper concurrency control
+            class UploadQueue {
+                private queue: FilePart[] = [];
+                private activeUploads = new Set<string>();
+                private completedCount = 0;
+                private failedCount = 0;
+
+                constructor(parts: FilePart[]) {
+                    this.queue = [...parts];
+                    this.completedCount = completed;
+                }
+
+                private getPartKey(part: FilePart): string {
+                    return `${part.fileIndex}-${part.partNumber}`;
+                }
+
+                async processQueue(): Promise<void> {
+                    console.log(`Starting queue processing with ${this.queue.length} parts`);
+                    
+                    // Start initial batch
+                    this.fillActiveSlots();
+                    
+                    // Wait for all uploads to complete
+                    while (this.activeUploads.size > 0 || this.queue.length > 0) {
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                        this.fillActiveSlots();
+                    }
+                    
+                    console.log(`Queue processing completed. Completed: ${this.completedCount}, Failed: ${this.failedCount}`);
+                }
+
+                private fillActiveSlots(): void {
+                    while (this.queue.length > 0 && this.activeUploads.size < MAX_CONCURRENT_UPLOADS) {
+                        const part = this.queue.shift();
+                        if (part) {
+                            const partKey = this.getPartKey(part);
+                            this.activeUploads.add(partKey);
+                            this.uploadPart(part, partKey);
+                        }
+                    }
+                }
+
+                private async uploadPart(part: FilePart, partKey: string): Promise<void> {
+                    try {
+                        console.log(`Starting upload for part ${part.partNumber} of file ${part.fileIndex}`);
+                        
+                        // Update part status to in-progress
+                        setFileParts(prev => 
+                            prev.map(p => 
+                                p.fileIndex === part.fileIndex && p.partNumber === part.partNumber
+                                    ? { ...p, status: 'in-progress' as const }
+                                    : p
+                            )
+                        );
+
+                        // Update file item status if needed
+                        setFileUploadItems(prev => 
+                            prev.map((item, idx) => 
+                                idx === part.fileIndex && item.status === "Queued"
+                                    ? { ...item, status: "In Progress", startedAt: Math.floor(new Date().getTime() / 1000) }
+                                    : item
+                            )
+                        );
+
+                        // Get the file and create blob
+                        const file = await fileUploadItems[part.fileIndex].handle.getFile();
+                        const blob = file.slice(part.start, part.end);
+                        
+                        // Upload the part
+                        const etag = await AssetUploadService.uploadPart(part.uploadUrl, blob);
+                        console.log(`Upload successful for part ${part.partNumber}, etag: ${etag}`);
+                        
+                        // Update part status to completed
+                        setFileParts(prev => 
+                            prev.map(p => 
+                                p.fileIndex === part.fileIndex && p.partNumber === part.partNumber
+                                    ? { ...p, status: 'completed', etag }
+                                    : p
+                            )
+                        );
+                        
+                        // Update counters
+                        this.completedCount++;
+                        setCompletedParts(this.completedCount);
+                        
+                        // Update overall progress
+                        const progress = Math.round((this.completedCount / totalParts) * 100);
+                        setUploadState(prev => ({ ...prev, overallProgress: progress }));
+                        
+                        // Update file progress
+                        this.updateFileProgress(part.fileIndex);
+                        
+                        // Check if all parts are completed
+                        if (this.completedCount === totalParts) {
+                            console.log('All parts completed, setting upload status to completed');
+                            setUploadState(prev => ({ ...prev, uploadStatus: 'completed' }));
+                        }
+                        
+                    } catch (error) {
+                        console.error(`Error uploading part ${part.partNumber} for file ${part.fileIndex}:`, error);
+                        
+                        // Update part status to failed
+                        setFileParts(prev => 
+                            prev.map(p => 
+                                p.fileIndex === part.fileIndex && p.partNumber === part.partNumber
+                                    ? { ...p, status: 'failed', retryCount: p.retryCount + 1 }
+                                    : p
+                            )
+                        );
+                        
+                        // Update file status to failed
+                        setFileUploadItems(prev => 
+                            prev.map((item, idx) => 
+                                idx === part.fileIndex
+                                    ? { ...item, status: "Failed" }
+                                    : item
+                            )
+                        );
+                        
+                        this.failedCount++;
+                        setShowRetryButton(true);
+                        
+                    } finally {
+                        // Remove from active uploads
+                        this.activeUploads.delete(partKey);
+                    }
+                }
+
+                private updateFileProgress(fileIndex: number): void {
+                    setFileParts(currentFileParts => {
+                        const filePartsForThisFile = currentFileParts.filter(p => p.fileIndex === fileIndex);
+                        const fileCompletedParts = filePartsForThisFile.filter(p => p.status === 'completed').length;
+                        const fileProgress = Math.round((fileCompletedParts / filePartsForThisFile.length) * 100);
+                        
+                        setFileUploadItems(prev => 
+                            prev.map((item, idx) => 
+                                idx === fileIndex
+                                    ? { 
+                                        ...item, 
+                                        progress: fileProgress,
+                                        loaded: Math.round(fileProgress * item.total / 100),
+                                        status: fileProgress === 100 ? "Completed" : "In Progress"
+                                    }
+                                    : item
+                            )
+                        );
+                        
+                        return currentFileParts;
+                    });
+                }
+            }
+
+            // Create and run the upload queue
+            const uploadQueue = new UploadQueue(pendingParts);
+            await uploadQueue.processQueue();
+            
+            // Final status check
+            const currentFileParts = fileParts;
+            const failedParts = currentFileParts.filter(part => part.status === 'failed');
+            const completedParts = currentFileParts.filter(part => part.status === 'completed');
+            
+            console.log(`Final status: ${completedParts.length} completed, ${failedParts.length} failed out of ${currentFileParts.length} total parts`);
+            
+            if (failedParts.length === 0 && completedParts.length > 0) {
+                console.log('All parts completed successfully');
+                setFileUploadItems(prev => 
+                    prev.map(item => ({ 
+                        ...item, 
+                        status: "Completed",
+                        progress: 100,
+                        loaded: item.total
+                    }))
+                );
+                setShowRetryButton(false);
+                setUploadState(prev => ({ ...prev, uploadStatus: 'completed' }));
+            } else if (failedParts.length > 0) {
+                console.log(`${failedParts.length} parts failed to upload`);
+                setUploadState(prev => ({
+                    ...prev,
+                    uploadStatus: 'failed',
+                    errors: [...prev.errors, { step: 'File Upload', message: `${failedParts.length} file parts failed to upload` }],
+                }));
+                setShowRetryButton(true);
+            }
+            
+        } catch (error: any) {
+            console.error('Upload process error:', error);
+            setUploadState(prev => ({
+                ...prev,
+                uploadStatus: 'failed',
+                errors: [...prev.errors, { step: 'File Upload', message: error.message || 'Failed to upload files' }],
+            }));
+            setShowRetryButton(true);
+        }
+    }, [uploadResponse, fileParts, fileUploadItems, totalParts]);
+
+    // Enhanced retry logic for failed parts
+    const retryFailedParts = useCallback(async (fileIndex?: number) => {
+        console.log('Retrying failed parts for file index:', fileIndex);
+        
+        // Reset specific file parts or all failed parts
+        setFileParts(prev => 
+            prev.map(part => {
+                if (part.status === 'failed' && 
+                    (fileIndex === undefined || part.fileIndex === fileIndex) &&
+                    part.retryCount < 3) { // Max 3 retries
+                    return { 
+                        ...part, 
+                        status: 'pending', 
+                        retryCount: part.retryCount + 1
+                    };
+                }
+                return part;
+            })
+        );
+        
+        // Reset file status
+        setFileUploadItems(prev => 
+            prev.map((item, idx) => {
+                if (fileIndex === undefined || idx === fileIndex) {
+                    if (item.status === "Failed") {
+                        return { ...item, status: "Queued", progress: 0 };
+                    }
+                }
+                return item;
+            })
+        );
+        
+        // Reset upload started flag to allow retry
+        setUploadStarted(false);
+        setShowRetryButton(false);
+        
+        // Update upload state to allow retry
+        setUploadState(prev => ({
+            ...prev,
+            uploadStatus: 'in-progress',
+            hasFailedParts: false
+        }));
+        
+        // Restart upload process
+        await uploadFileParts();
+    }, [uploadFileParts]);
+
+    // Skip failed parts and continue with successful ones
+    const skipFailedParts = useCallback((fileIndex?: number) => {
+        console.log('Skipping failed parts for file index:', fileIndex);
+        
+        setFileParts(prev => 
+            prev.map(part => {
+                if (part.status === 'failed' && 
+                    (fileIndex === undefined || part.fileIndex === fileIndex)) {
+                    return { ...part, status: 'completed', etag: 'skipped' }; // Mark as completed to allow progress
+                }
+                return part;
+            })
+        );
+        
+        // Update file status to reflect skipped parts
+        setFileUploadItems(prev => 
+            prev.map((item, idx) => {
+                if (fileIndex === undefined || idx === fileIndex) {
+                    const itemParts = fileParts.filter(p => p.fileIndex === idx);
+                    const failedParts = itemParts.filter(p => p.status === 'failed');
+                    const completedParts = itemParts.filter(p => p.status === 'completed');
+                    
+                    if (failedParts.length > 0 && completedParts.length > 0) {
+                        return { ...item, status: "Completed", progress: 100 }; // Mark as completed with issues
+                    } else if (failedParts.length === itemParts.length) {
+                        return { ...item, status: "Completed", progress: 100 }; // All parts skipped
+                    }
+                }
+                return item;
+            })
+        );
+        
+        setUploadState(prev => ({
+            ...prev,
+            hasSkippedParts: true,
+            uploadStatus: 'completed' // Allow completion with skipped parts
+        }));
+        
+        setShowRetryButton(false);
+        
+        // Trigger completion check
+        setTimeout(() => checkAndTriggerFinalCompletion(), 500);
+    }, [fileParts, checkAndTriggerFinalCompletion]);
 
     // Step 1: Create Asset
     const createAsset = useCallback(async () => {
@@ -182,17 +589,35 @@ export default function UploadManager({
         try {
             setUploadState(prev => ({ ...prev, uploadInitStatus: 'in-progress' }));
 
-            // Prepare file information for upload initialization
+            // Prepare file information for upload initialization with scaled part sizes
+            let hasLargeFiles = false;
             const files = await Promise.all(
                 fileUploadItems.map(async (item) => {
                     const file = await item.handle.getFile();
+                    
+                    // Calculate if this file would exceed MAX_NUM_PARTS_PER_FILE with standard part size
+                    const standardNumParts = Math.ceil(file.size / MAX_PART_SIZE);
+                    let actualNumParts = standardNumParts;
+                    
+                    if (standardNumParts > MAX_NUM_PARTS_PER_FILE) {
+                        hasLargeFiles = true;
+                        actualNumParts = MAX_NUM_PARTS_PER_FILE;
+                        console.log(`File ${file.name} would have ${standardNumParts} parts, scaling to ${actualNumParts} parts`);
+                    }
+                    
                     // Use the item's relativePath which already includes the keyPrefix if it was set
                     return {
                         relativeKey: item.relativePath,
                         file_size: file.size,
+                        num_parts: actualNumParts,
                     };
                 })
             );
+            
+            // Set flag if we have files that require increased part sizes
+            if (hasLargeFiles) {
+                setHasIncreasedPartSizes(true);
+            }
 
             const uploadRequest = {
                 assetId,
@@ -204,17 +629,28 @@ export default function UploadManager({
             const response = await AssetUploadService.initializeUpload(uploadRequest);
             setUploadResponse(response);
 
-            // Prepare file parts for upload
+            // Prepare file parts for upload with scaled part sizes
             const allParts: FilePart[] = [];
             let totalPartsCount = 0;
 
             response.files.forEach((file, fileIndex) => {
+                // Calculate the actual part size for this file
+                const fileSize = fileUploadItems[fileIndex].size;
+                const standardNumParts = Math.ceil(fileSize / MAX_PART_SIZE);
+                
+                let actualPartSize = MAX_PART_SIZE;
+                if (standardNumParts > MAX_NUM_PARTS_PER_FILE) {
+                    // Scale up part size to limit to MAX_NUM_PARTS_PER_FILE
+                    actualPartSize = Math.ceil(fileSize / MAX_NUM_PARTS_PER_FILE);
+                    console.log(`File ${fileUploadItems[fileIndex].name}: scaled part size from ${MAX_PART_SIZE} to ${actualPartSize} bytes`);
+                }
+                
                 file.partUploadUrls.forEach(part => {
                     allParts.push({
                         fileIndex,
                         partNumber: part.PartNumber,
-                        start: (part.PartNumber - 1) * MAX_PART_SIZE,
-                        end: Math.min(part.PartNumber * MAX_PART_SIZE, fileUploadItems[fileIndex].size),
+                        start: (part.PartNumber - 1) * actualPartSize,
+                        end: Math.min(part.PartNumber * actualPartSize, fileSize),
                         uploadUrl: part.UploadUrl,
                         status: 'pending',
                         retryCount: 0,
@@ -233,10 +669,25 @@ export default function UploadManager({
 
             return response;
         } catch (error: any) {
+            console.error('Upload initialization error:', error);
+            
+            // Check if this is a 503 error (service unavailable/timeout)
+            const is503Error = error.message?.includes('503') || 
+                              error.status === 503 || 
+                              error.response?.status === 503 ||
+                              error.message?.toLowerCase().includes('service unavailable') ||
+                              error.message?.toLowerCase().includes('timeout');
+            
+            let errorMessage = error.message || 'Failed to initialize upload';
+            
+            if (is503Error) {
+                errorMessage = `Upload initialization API timed out (503 error). You may have uploaded too many individual files or file parts, which has caused the API to timeout. Consider reducing the number of files in this batch or breaking large files into smaller ones. Original error: ${error.message || 'Service unavailable'}`;
+            }
+            
             setUploadState(prev => ({
                 ...prev,
                 uploadInitStatus: 'failed',
-                errors: [...prev.errors, { step: 'Upload Initialization', message: error.message || 'Failed to initialize upload' }],
+                errors: [...prev.errors, { step: 'Upload Initialization', message: errorMessage }],
             }));
             throw error;
         }
@@ -432,6 +883,19 @@ export default function UploadManager({
             
             setUploadState(prev => ({ ...prev, previewCompletionStatus: 'completed' }));
             
+            // If this is the only upload (no asset files), trigger final completion
+            if (fileItems.length === 0) {
+                console.log('Preview upload completed and no asset files - triggering final completion');
+                const finalResponse: CompleteUploadResponse = {
+                    assetId: assetId,
+                    message: 'Asset created successfully with preview file',
+                    uploadId: uploadId,
+                    fileResults: [],
+                    overallSuccess: true
+                };
+                onUploadComplete(finalResponse);
+            }
+            
             return response;
         } catch (error: any) {
             setUploadState(prev => ({
@@ -443,369 +907,6 @@ export default function UploadManager({
         }
     }, [assetDetail]);
 
-    // Step 4: Upload File Parts
-    const uploadFileParts = useCallback(async () => {
-        console.log(`uploadFileParts called: uploadResponse=${!!uploadResponse}, fileParts.length=${fileParts.length}`);
-        
-        if (!uploadResponse || fileParts.length === 0) {
-            console.warn('Cannot upload file parts: uploadResponse or fileParts is missing');
-            return;
-        }
-
-        try {
-            console.log('Setting upload status to in-progress');
-            setUploadState(prev => ({ ...prev, uploadStatus: 'in-progress' }));
-
-            // Create a queue of parts to upload - make a deep copy to avoid state mutation issues
-            const queue = JSON.parse(JSON.stringify(fileParts.filter(part => part.status !== 'completed')));
-            console.log(`Created queue with ${queue.length} parts to upload`);
-            
-            let completed = fileParts.filter(part => part.status === 'completed').length;
-            setCompletedParts(completed);
-
-            // Function to upload a single part
-            const uploadPart = async (part: FilePart): Promise<FilePart> => {
-                try {
-                    console.log(`Starting upload for part ${part.partNumber} of file ${part.fileIndex}, size: ${part.end - part.start} bytes`);
-                    setActiveUploads(prev => prev + 1);
-                    
-                    // Update part status to in-progress
-                    setFileParts(prev => 
-                        prev.map(p => 
-                            p.fileIndex === part.fileIndex && p.partNumber === part.partNumber
-                                ? { ...p, status: 'in-progress' as const }
-                                : p
-                        )
-                    );
-
-                    // Update file item status
-                    const fileItem = fileUploadItems[part.fileIndex];
-                    if (fileItem.status !== "In Progress") {
-                        setFileUploadItems(prev => 
-                            prev.map((item, idx) => 
-                                idx === part.fileIndex
-                                    ? { ...item, status: "In Progress", startedAt: Math.floor(new Date().getTime() / 1000) }
-                                    : item
-                            )
-                        );
-                    }
-
-                    // Get the file
-                    console.log(`Getting file for part ${part.partNumber} of file ${part.fileIndex}`);
-                    const file = await fileUploadItems[part.fileIndex].handle.getFile();
-                    console.log(`File retrieved: ${file.name}, size: ${file.size}`);
-                    
-                    // Create a blob for this part
-                    const blob = file.slice(part.start, part.end);
-                    console.log(`Created blob for part ${part.partNumber}, size: ${blob.size}`);
-                    
-                    // Upload the part
-                    console.log(`Uploading part ${part.partNumber} to URL: ${part.uploadUrl.substring(0, 100)}...`);
-                    const etag = await AssetUploadService.uploadPart(part.uploadUrl, blob);
-                    console.log(`Upload successful for part ${part.partNumber}, etag: ${etag}`);
-                    
-                    // Update part status to completed
-                    const updatedPart: FilePart = { ...part, status: 'completed', etag };
-                    setFileParts(prev => 
-                        prev.map(p => 
-                            p.fileIndex === part.fileIndex && p.partNumber === part.partNumber
-                                ? updatedPart
-                                : p
-                        )
-                    );
-                    
-                    // Update completed count
-                    completed++;
-                    setCompletedParts(completed);
-                    
-                    // Update overall progress
-                    const progress = Math.round((completed / totalParts) * 100);
-                    setUploadState(prev => ({ ...prev, overallProgress: progress }));
-                    
-                    // Check if this was the last part to complete
-                    if (completed === totalParts) {
-                        console.log('All parts completed, directly calling completion');
-                        // Set upload status to completed
-                        setUploadState(prev => ({ ...prev, uploadStatus: 'completed' }));
-                        
-                        // Call completeUpload directly
-                        setTimeout(() => {
-                            console.log('Directly calling completeUpload after all parts completed');
-                            completeUpload().catch(error => {
-                                console.error('Error in direct completeUpload call:', error);
-                            });
-                        }, 1000);
-                    }
-                    
-                    // Update file progress - get the latest state to ensure accurate counts
-                    setFileParts(currentFileParts => {
-                        // Use the current state to calculate progress
-                        const filePartsForThisFile = currentFileParts.filter(p => p.fileIndex === part.fileIndex);
-                        // Count completed parts including the one we just updated
-                        const fileCompletedParts = filePartsForThisFile.filter(p => 
-                            (p.status === 'completed') || 
-                            (p.fileIndex === updatedPart.fileIndex && p.partNumber === updatedPart.partNumber && updatedPart.status === 'completed')
-                        ).length;
-                        
-                        const fileProgress = Math.round((fileCompletedParts / filePartsForThisFile.length) * 100);
-                        
-                        // Update the file item with accurate progress
-                        setFileUploadItems(prev => 
-                            prev.map((item, idx) => 
-                                idx === part.fileIndex
-                                    ? { 
-                                        ...item, 
-                                        progress: fileProgress,
-                                        loaded: fileProgress * item.total / 100,
-                                        status: fileProgress === 100 ? "Completed" : "In Progress"
-                                    }
-                                    : item
-                            )
-                        );
-                        
-                        // Return the current state unchanged - we're just using it for calculation
-                        return currentFileParts;
-                    });
-                    
-                    return updatedPart;
-                } catch (error) {
-                    console.error(`Error uploading part ${part.partNumber} for file ${part.fileIndex}:`, error);
-                    
-                    // Update part status to failed
-                    const updatedPart: FilePart = { ...part, status: 'failed', retryCount: part.retryCount + 1 };
-                    setFileParts(prev => 
-                        prev.map(p => 
-                            p.fileIndex === part.fileIndex && p.partNumber === part.partNumber
-                                ? updatedPart
-                                : p
-                        )
-                    );
-                    
-                    // Update file status if this is the first failure
-                    if (fileUploadItems[part.fileIndex].status !== "Failed") {
-                        setFileUploadItems(prev => 
-                            prev.map((item, idx) => 
-                                idx === part.fileIndex
-                                    ? { ...item, status: "Failed" }
-                                    : item
-                            )
-                        );
-                    }
-                    
-                    setShowRetryButton(true);
-                    return updatedPart;
-                } finally {
-                    setActiveUploads(prev => prev - 1);
-                }
-            };
-
-                // Process queue with concurrency limit
-            const processQueue = async () => {
-                // Keep track of all upload promises and their parts
-                const uploadTasks: { promise: Promise<FilePart>; part: FilePart }[] = [];
-                
-                console.log(`Starting to process queue with ${queue.length} parts`);
-                
-                // Process initial batch - start up to MAX_CONCURRENT_UPLOADS uploads immediately
-                while (queue.length > 0 && uploadTasks.length < MAX_CONCURRENT_UPLOADS) {
-                    const part = queue.shift();
-                    if (part) {
-                        console.log(`Starting initial upload for part ${part.partNumber} of file ${part.fileIndex}`);
-                        try {
-                            // Start the upload and store the promise
-                            const promise = uploadPart(part);
-                            uploadTasks.push({ promise, part });
-                        } catch (error) {
-                            console.error(`Error starting upload for part ${part.partNumber}:`, error);
-                        }
-                    }
-                }
-                
-                // Process remaining queue as uploads complete
-                while (queue.length > 0 || uploadTasks.length > 0) {
-                    if (uploadTasks.length === 0 && queue.length > 0) {
-                        // If we somehow have no active tasks but still have queue items, start a new batch
-                        const part = queue.shift();
-                        if (part) {
-                            console.log(`Starting new batch upload for part ${part.partNumber} of file ${part.fileIndex}`);
-                            try {
-                                const promise = uploadPart(part);
-                                uploadTasks.push({ promise, part });
-                            } catch (error) {
-                                console.error(`Error starting upload for part ${part.partNumber}:`, error);
-                            }
-                        }
-                    }
-                    
-                    if (uploadTasks.length > 0) {
-                        try {
-                            // Create a Promise.race with a timeout to prevent hanging
-                            const timeoutPromise = new Promise<FilePart>((_, reject) => {
-                                setTimeout(() => reject(new Error('Upload task timeout')), 10000); // 10 second timeout
-                            });
-                            
-                            // Wait for any upload to complete or timeout
-                            const promises = uploadTasks.map(task => {
-                                // Wrap each promise to handle rejection
-                                return task.promise.catch(error => {
-                                    console.error(`Upload error caught for part ${task.part.partNumber}:`, error);
-                                    return { ...task.part, status: 'failed' as const }; // Return the part so we can identify which one failed
-                                });
-                            });
-                            
-                            // Add the timeout promise to the race
-                            try {
-                                // Wait for the first promise to resolve or timeout
-                                await Promise.race([...promises, timeoutPromise]);
-                            } catch (error) {
-                                console.warn('Upload task timeout or error:', error);
-                                // Continue processing - we'll check for completed tasks below
-                            }
-                            
-                            // Get the latest state
-                            const latestFileParts = fileParts;
-                            let tasksRemoved = false;
-                            
-                            // Remove completed or failed tasks
-                            for (let i = uploadTasks.length - 1; i >= 0; i--) {
-                                const task = uploadTasks[i];
-                                // Check if this promise is settled
-                                const isSettled = await Promise.race([
-                                    task.promise.then(() => true).catch(() => true),
-                                    new Promise(resolve => setTimeout(() => resolve(false), 0))
-                                ]);
-                                
-                                if (isSettled) {
-                                    // Find the current state of this part
-                                    const currentPart = latestFileParts.find(
-                                        p => p.fileIndex === task.part.fileIndex && p.partNumber === task.part.partNumber
-                                    );
-                                    
-                                    if (currentPart && (currentPart.status === 'completed' || currentPart.status === 'failed')) {
-                                        console.log(`Removing ${currentPart.status} task for part ${task.part.partNumber}`);
-                                        uploadTasks.splice(i, 1);
-                                        tasksRemoved = true;
-                                    }
-                                }
-                            }
-                            
-                            // If no tasks were removed but we're still waiting, add a small delay
-                            // to prevent CPU spinning
-                            if (!tasksRemoved && uploadTasks.length > 0) {
-                                await new Promise(resolve => setTimeout(resolve, 100));
-                            }
-                        } catch (error) {
-                            console.error('Error waiting for upload tasks:', error);
-                            // Add a delay to prevent CPU spinning in case of repeated errors
-                            await new Promise(resolve => setTimeout(resolve, 500));
-                        }
-                    }
-                    
-                    // Fill up to max concurrent uploads
-                    while (queue.length > 0 && uploadTasks.length < MAX_CONCURRENT_UPLOADS) {
-                        const part = queue.shift();
-                        if (part) {
-                            console.log(`Starting additional upload for part ${part.partNumber} of file ${part.fileIndex}`);
-                            try {
-                                const promise = uploadPart(part);
-                                uploadTasks.push({ promise, part });
-                            } catch (error) {
-                                console.error(`Error starting upload for part ${part.partNumber}:`, error);
-                            }
-                        }
-                    }
-                    
-                    // If we still have tasks but no more queue items, wait a bit before checking again
-                    if (uploadTasks.length > 0) {
-                        await new Promise(resolve => setTimeout(resolve, 100));
-                    }
-                }
-                
-                console.log('All uploads completed or failed');
-                
-                // Check if all parts are completed
-                const allParts = [...fileParts];
-                const allCompleted = allParts.every(part => part.status === 'completed');
-                
-                if (allCompleted) {
-                    console.log('All parts completed in processQueue, directly calling completion');
-                    // Set upload status to completed
-                    setUploadState(prev => ({ ...prev, uploadStatus: 'completed' }));
-                    
-                    // Call completeUpload directly
-                    setTimeout(() => {
-                        console.log('Directly calling completeUpload from processQueue');
-                        completeUpload().catch(error => {
-                            console.error('Error in direct completeUpload call from processQueue:', error);
-                        });
-                    }, 1000);
-                }
-            };
-
-            // Start processing the queue
-            await processQueue();
-            
-            // Get the latest state of file parts from the state
-            const latestFileParts = [...fileParts];
-            
-            // Check if all parts completed successfully
-            const failedParts = latestFileParts.filter(part => part.status === 'failed');
-            const completedParts = latestFileParts.filter(part => part.status === 'completed');
-            
-            console.log(`Upload status check: ${completedParts.length} completed, ${failedParts.length} failed out of ${latestFileParts.length} total parts`);
-            console.log('Latest file parts:', JSON.stringify(latestFileParts));
-            
-            // If we have any completed parts and no failed parts, consider it a success
-            if (failedParts.length === 0 && completedParts.length > 0) {
-                console.log('All parts completed successfully, setting upload status to completed');
-                
-                // Make sure all file items show as completed
-                setFileUploadItems(prev => 
-                    prev.map(item => ({ 
-                        ...item, 
-                        status: "Completed",
-                        progress: 100,
-                        loaded: item.total
-                    }))
-                );
-                
-                // Hide retry button
-                setShowRetryButton(false);
-                
-                // Set upload status to completed immediately to trigger completion step
-                console.log('Setting upload status to completed to trigger completion step');
-                setUploadState(prev => ({ ...prev, uploadStatus: 'completed' }));
-                
-                // Call completeUpload directly to ensure it's triggered
-                setTimeout(() => {
-                    console.log('Directly calling completeUpload from uploadFileParts');
-                    completeUpload().catch(error => {
-                        console.error('Error in direct completeUpload call:', error);
-                    });
-                }, 1000);
-            } else if (failedParts.length > 0) {
-                console.log(`${failedParts.length} parts failed to upload, setting upload status to failed`);
-                setUploadState(prev => ({
-                    ...prev,
-                    uploadStatus: 'failed',
-                    errors: [...prev.errors, { step: 'File Upload', message: `${failedParts.length} file parts failed to upload` }],
-                }));
-                setShowRetryButton(true);
-            } else {
-                // This shouldn't happen, but just in case
-                console.warn('No completed parts found, but no failures either');
-                setUploadState(prev => ({ ...prev, uploadStatus: 'completed' }));
-                setShowRetryButton(false);
-            }
-        } catch (error: any) {
-            setUploadState(prev => ({
-                ...prev,
-                uploadStatus: 'failed',
-                errors: [...prev.errors, { step: 'File Upload', message: error.message || 'Failed to upload files' }],
-            }));
-            setShowRetryButton(true);
-        }
-    }, [uploadResponse, fileParts, fileUploadItems, totalParts, activeUploads]);
 
     // Step 5: Complete Upload
     const completeUpload = useCallback(async () => {
@@ -909,10 +1010,25 @@ export default function UploadManager({
             
             return response;
         } catch (error: any) {
+            console.error('Upload completion error:', error);
+            
+            // Check if this is a 503 error (service unavailable/timeout)
+            const is503Error = error.message?.includes('503') || 
+                              error.status === 503 || 
+                              error.response?.status === 503 ||
+                              error.message?.toLowerCase().includes('service unavailable') ||
+                              error.message?.toLowerCase().includes('timeout');
+            
+            let errorMessage = error.message || 'Failed to complete upload';
+            
+            if (is503Error) {
+                errorMessage = `Upload completion API timed out (503 error). The files may have been successfully uploaded despite this error. Please check the asset page's file manager in a few minutes to verify which files actually completed. Original error: ${error.message || 'Service unavailable'}`;
+            }
+            
             setUploadState(prev => ({
                 ...prev,
                 completionStatus: 'failed',
-                errors: [...prev.errors, { step: 'Upload Completion', message: error.message || 'Failed to complete upload' }],
+                errors: [...prev.errors, { step: 'Upload Completion', message: errorMessage }],
             }));
             throw error;
         }
@@ -990,8 +1106,18 @@ export default function UploadManager({
                     }));
                 }
 
-                // Step 3a: Initialize Asset Files Upload
-                await initializeUpload(assetId);
+                // Step 3a: Initialize Asset Files Upload (only if we have files)
+                if (fileItems.length > 0) {
+                    await initializeUpload(assetId);
+                } else {
+                    console.log('No asset files to upload, skipping asset file upload initialization');
+                    setUploadState(prev => ({
+                        ...prev,
+                        uploadInitStatus: 'skipped',
+                        uploadStatus: 'skipped',
+                        completionStatus: 'skipped'
+                    }));
+                }
                 
                 // Step 3b: Initialize Preview File Upload (if applicable)
                 // Only initialize preview upload if we have a valid asset ID
@@ -999,6 +1125,20 @@ export default function UploadManager({
                     // Ensure we have the latest assetId before initializing preview upload
                     console.log(`Initializing preview upload with confirmed assetId: ${assetId}`);
                     await initializePreviewUpload(assetId);
+                }
+                
+                // If no files at all (neither asset files nor preview), complete the process
+                if (fileItems.length === 0 && !assetDetail.Preview) {
+                    console.log('No files to upload, completing asset creation process');
+                    // Create a mock completion response for assets with no files
+                    const mockResponse: CompleteUploadResponse = {
+                        assetId: assetId,
+                        message: 'Asset created successfully without files',
+                        uploadId: 'no-upload-required',
+                        fileResults: [],
+                        overallSuccess: true
+                    };
+                    onUploadComplete(mockResponse);
                 }
                 
                 // Steps 4 and 5 (Upload File Parts and Complete Upload) are handled by the other useEffect
@@ -1170,6 +1310,12 @@ export default function UploadManager({
                                 </li>
                             ))}
                         </ul>
+                    </Alert>
+                )}
+
+                {hasIncreasedPartSizes && (
+                    <Alert type="warning" header="Increased Part Sizes">
+                        Some files in this upload are very large and have been automatically configured with increased part sizes to limit the number of parts per file to {MAX_NUM_PARTS_PER_FILE}. This may result in larger individual upload chunks but helps prevent initialization timeouts.
                     </Alert>
                 )}
 

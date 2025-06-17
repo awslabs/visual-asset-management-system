@@ -1,0 +1,152 @@
+.directory-tree-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.search-box {
+    padding: 10px 5px;
+    border-bottom: 1px solid #eaeded;
+}
+
+.search-container {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.search-container > div:first-child {
+    flex-grow: 1;
+}
+
+.directory-tree {
+    padding: 5px;
+    overflow: auto;
+}
+
+.search-results {
+    padding: 5px;
+    overflow: auto;
+}
+
+.search-result-item {
+    display: flex;
+    align-items: center;
+    padding: 8px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-bottom: 4px;
+}
+
+.search-result-item:hover {
+    background-color: #f2f8fd;
+}
+
+.search-result-item.selected {
+    background-color: #e6f2ff;
+}
+
+.search-result-icon {
+    margin-right: 8px;
+    display: inline-flex;
+    align-items: center;
+}
+
+.search-result-name {
+    font-weight: bold;
+    margin-right: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.search-result-path {
+    color: #5f6b7a;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tree-item {
+    margin: 2px 0;
+}
+
+.tree-item-content {
+    display: flex;
+    align-items: center;
+    padding: 6px 4px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.tree-item-content:hover {
+    background-color: #f2f8fd;
+}
+
+.tree-item-content.selected {
+    background-color: #e6f2ff;
+}
+
+.tree-item-caret {
+    margin-right: 4px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+}
+
+.tree-item-icon {
+    margin-right: 6px;
+    display: inline-flex;
+    align-items: center;
+}
+
+.tree-item-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Multi-selection styles */
+.tree-item-content.multi-selected {
+    background-color: #d4edda;
+    border-left: 3px solid #28a745;
+}
+
+.tree-item-content.multi-selected:hover {
+    background-color: #c3e6cb;
+}
+
+.selection-controls {
+    padding: 8px 10px;
+    border-top: 1px solid #eaeded;
+    background-color: #f8f9fa;
+    margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.selection-note {
+    font-size: 11px;
+    color: #6c757d;
+    text-align: center;
+}
+
+.archived-toggle {
+    display: flex;
+    justify-content: center;
+    margin-top: 4px;
+}
+
+.archived-label {
+    margin-left: 6px;
+    font-size: 10px;
+    background-color: #ffc107;
+    color: #212529;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-weight: bold;
+    display: inline-block;
+    vertical-align: middle;
+}

@@ -35,6 +35,7 @@ try:
     tag_type_table_name = os.environ["TAG_TYPES_STORAGE_TABLE_NAME"]
     tag_table_name = os.environ["TAG_STORAGE_TABLE_NAME"]
     asset_bucket_name_default = os.environ["ASSET_BUCKET_NAME_DEFAULT"]
+    asset_versions_table_name = os.environ.get("ASSET_VERSIONS_STORAGE_TABLE_NAME")
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -262,6 +263,35 @@ def create_prefix_folder(bucket, prefix):
         logger.exception(f"Error creating prefix folder: {e}")
         return False
 
+def create_initial_version_record(asset_id, version_number, description, created_by='system'):
+    """Create initial version record in the asset versions table"""
+    try:
+        versions_table = dynamodb.Table(asset_versions_table_name)
+        version_id = f"v{version_number}"
+        now = datetime.utcnow().isoformat()
+        
+        version_record = {
+            'assetId': asset_id,
+            'assetVersionId': version_id,
+            'versionNumber': version_number,
+            'dateCreated': now,
+            'comment': f'Initial asset creation - Version {version_number} (No Files)',
+            'description': description,
+            'createdBy': created_by,
+            'specifiedPipelines': [],
+            'isCurrentVersion': True,
+            'files': [],  # No files initially
+            'createdAt': now
+        }
+        
+        versions_table.put_item(Item=version_record)
+        logger.info(f"Created initial version record {version_id} for asset {asset_id}")
+        return version_id
+        
+    except Exception as e:
+        logger.exception(f"Error creating initial version record: {e}")
+        raise VAMSGeneralErrorResponse(f"Error creating initial version record: {str(e)}")
+
 #######################
 # API Implementation
 #######################
@@ -351,6 +381,18 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles):
         logger.info(f"Creating new prefix folder: {s3_key} in bucket: {s3_bucket}")
         create_prefix_folder(s3_bucket, s3_key)
     
+    # Get username for version creation
+    username = claims_and_roles.get("tokens", ["system"])[0]
+    
+    # Create initial version record in versions table
+    initial_version_id = create_initial_version_record(
+        assetId, 
+        '0', 
+        request_model.description, 
+        username
+    )
+    
+    # Create asset record with new structure
     asset = {
         'databaseId': databaseId,
         'assetId': assetId,
@@ -360,18 +402,11 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles):
         'tags': request_model.tags if request_model.tags else [],
         'assetType': 'none',  # No files yet
         'snsTopic': create_sns_topic_for_asset(assetId),
-        'currentVersion': {
-            'Version': '0',  # Initial version with no files
-            'DateModified': now,
-            'Comment': 'Initial asset creation',
-            'description': request_model.description,
-            'specifiedPipelines': []
-        },
+        'currentVersionId': initial_version_id,
         'assetLocation' : {
             'Key': s3_key,
             'Bucket': s3_bucket
-        },
-        'versions': []  # No previous versions
+        }
     }
     
     # Save asset to DynamoDB

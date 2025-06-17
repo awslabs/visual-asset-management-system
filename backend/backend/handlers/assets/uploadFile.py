@@ -26,20 +26,39 @@ from models.assetsV3 import (
     AssetUploadTableModel, CreateFolderRequestModel, CreateFolderResponseModel
 )
 
-# Configure AWS clients
+# Configure AWS clients with retry configuration
 region = os.environ['AWS_REGION']
-s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'})
+
+# Standardized retry configuration merged with existing S3 config
+s3_config = Config(
+    signature_version='s3v4', 
+    s3={'addressing_style': 'path'},
+    retries={
+        'max_attempts': 10,
+        'mode': 'adaptive'
+    }
+)
+
+# Retry configuration for other AWS clients
+retry_config = Config(
+    retries={
+        'max_attempts': 10,
+        'mode': 'adaptive'
+    }
+)
+
 s3 = boto3.client('s3', region_name=region, config=s3_config)
-lambda_client = boto3.client('lambda')
-dynamodb = boto3.resource('dynamodb')
-dynamodb_client = boto3.client('dynamodb')
+s3_resource = boto3.resource('s3', region_name=region, config=s3_config)
+lambda_client = boto3.client('lambda', config=retry_config)
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+dynamodb_client = boto3.client('dynamodb', config=retry_config)
 logger = safeLogger(service_name="FileIngestion")
 
 # Constants
 UPLOAD_EXPIRATION_DAYS = 7  # TTL for upload records and S3 multipart uploads
 TEMPORARY_UPLOAD_PREFIX = 'temp-uploads/'  # Prefix for temporary uploads
 PREVIEW_PREFIX = 'previews/'
-MAX_PART_SIZE = 50 * 1024 * 1024  # 50MB per part
+MAX_PART_SIZE = 150 * 1024 * 1024  # 150MB per part
 
 # Load environment variables
 try:
@@ -112,7 +131,7 @@ def save_upload_details(upload_data):
         logger.exception(f"Error saving upload details: {e}")
         raise VAMSGeneralErrorResponse(f"Error saving upload details: {str(e)}")
 
-def get_upload_details(uploadId, assetId=None):
+def get_upload_details(uploadId, assetId):
     """Get upload details from DynamoDB
     
     Args:
@@ -123,24 +142,15 @@ def get_upload_details(uploadId, assetId=None):
         The upload details from DynamoDB
     """
     try:
-        # If assetId is provided, use it as part of the key
-        if assetId:
-            logger.info(f"Getting upload details for uploadId: {uploadId}, assetId: {assetId}")
-            response = asset_upload_table.get_item(
-                Key={
-                    'uploadId': uploadId,
-                    'assetId': assetId
-                }
-            )
-        else:
-            # Try with just uploadId (for backward compatibility)
-            logger.info(f"Getting upload details for uploadId: {uploadId}")
-            response = asset_upload_table.get_item(
-                Key={
-                    'uploadId': uploadId
-                }
-            )
-            
+
+        logger.info(f"Getting upload details for uploadId: {uploadId}, assetId: {assetId}")
+        response = asset_upload_table.get_item(
+            Key={
+                'uploadId': uploadId,
+                'assetId': assetId
+            }
+        )
+
         if 'Item' not in response:
             raise VAMSGeneralErrorResponse("Upload record not found")
         return response['Item']
@@ -150,7 +160,7 @@ def get_upload_details(uploadId, assetId=None):
         logger.exception(f"Error getting upload details: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving upload details: {str(e)}")
 
-def delete_upload_details(uploadId, assetId=None):
+def delete_upload_details(uploadId, assetId):
     """Delete upload details from DynamoDB
     
     Args:
@@ -159,25 +169,36 @@ def delete_upload_details(uploadId, assetId=None):
     """
     try:
         # If assetId is provided, use it as part of the key
-        if assetId:
-            logger.info(f"Deleting upload details for uploadId: {uploadId}, assetId: {assetId}")
-            asset_upload_table.delete_item(
-                Key={
-                    'uploadId': uploadId,
-                    'assetId': assetId
-                }
-            )
-        else:
-            # Try with just uploadId (for backward compatibility)
-            logger.info(f"Deleting upload details for uploadId: {uploadId}")
-            asset_upload_table.delete_item(
-                Key={
-                    'uploadId': uploadId
-                }
-            )
+
+        logger.info(f"Deleting upload details for uploadId: {uploadId}, assetId: {assetId}")
+        asset_upload_table.delete_item(
+            Key={
+                'uploadId': uploadId,
+                'assetId': assetId
+            }
+        )
+
     except Exception as e:
         logger.exception(f"Error deleting upload details: {e}")
         # Don't raise here, just log the error
+
+def is_file_archived(metadata):
+    """Determine if file is archived based on S3 metadata
+    
+    Args:
+        metadata: The S3 object metadata
+        
+    Returns:
+        True if file is archived, False otherwise
+    """
+    vams_status = metadata.get('Metadata', {}).get('vams-status', '')
+    storage_class = metadata.get('StorageClass', 'STANDARD')
+    
+    # File is archived if:
+    # 1. Has vams-status=archived or deleted metadata, OR
+    # 2. Storage class is GLACIER/DEEP_ARCHIVE
+    return (vams_status in ['archived', 'deleted'] or 
+            storage_class in ['GLACIER', 'DEEP_ARCHIVE'])
 
 def determine_asset_type(assetId, bucket=None, prefix=None):
     """Determine the asset type based on S3 contents"""
@@ -196,19 +217,40 @@ def determine_asset_type(assetId, bucket=None, prefix=None):
         
         # Get the contents and filter out folder markers (objects ending with '/')
         contents = response.get('Contents', [])
-        actual_files = [item for item in contents if not item['Key'].endswith('/')]
         
-        # Count the actual files (excluding folder markers)
-        file_count = len(actual_files)
-        logger.info(f"Found {file_count} actual files in {bucket_to_use}/{prefix_to_use} (total objects: {len(contents)})")
+        # Filter out archived files
+        non_archived_files = []
+        for item in contents:
+            if item['Key'].endswith('/'):
+                # Skip folder markers
+                continue
+                
+            try:
+                # Get object metadata to check if archived
+                head_response = s3.head_object(
+                    Bucket=bucket_to_use,
+                    Key=item['Key']
+                )
+                
+                # Only include non-archived files
+                if not is_file_archived(head_response):
+                    non_archived_files.append(item)
+            except Exception as e:
+                logger.warning(f"Error checking if file {item['Key']} is archived: {e}")
+                # If we can't check archive status, include the file by default
+                non_archived_files.append(item)
+        
+        # Count the actual files (excluding folder markers and archived files)
+        file_count = len(non_archived_files)
+        logger.info(f"Found {file_count} non-archived files in {bucket_to_use}/{prefix_to_use} (total objects: {len(contents)})")
         
         # Determine asset type
         if file_count == 0:
-            logger.info("No actual files found, returning None")
+            logger.info("No non-archived files found, returning None")
             return None  # No files found
         elif file_count == 1:
             # Extract file extension from the single file
-            file_key = actual_files[0]['Key']
+            file_key = non_archived_files[0]['Key']
             file_name = os.path.basename(file_key)
             
             # Skip if the file is just a folder marker
@@ -247,7 +289,8 @@ def send_subscription_email(asset_id):
 def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key):
     """Copy an object from one S3 location to another"""
     try:
-        s3.copy_object(
+        # Use s3_resource for managed transfer to handle large files
+        s3_resource.meta.client.copy(
             CopySource={'Bucket': source_bucket, 'Key': source_key},
             Bucket=dest_bucket,
             Key=dest_key
@@ -435,7 +478,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     uploadType = request_model.uploadType
     
     # Get upload details from DynamoDB
-    upload_details = get_upload_details(uploadId)
+    upload_details = get_upload_details(uploadId, assetId)
     
     # Verify asset exists
     asset = get_asset_details(databaseId, assetId)
@@ -597,24 +640,6 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
         assetType = determine_asset_type(assetId, asset_bucket, asset_base_key)
         logger.info(f"Asset type determined for asset {assetId}: {assetType}")
         
-        # Update asset version
-        current_version = int(asset['currentVersion']['Version'])
-        new_version = current_version + 1
-        now = datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
-        
-        # Add current version to versions history
-        if 'versions' not in asset:
-            asset['versions'] = []
-        asset['versions'].append(asset['currentVersion'])
-        
-        # Update current version
-        asset['currentVersion'] = {
-            'Version': str(new_version),
-            'DateModified': now,
-            'Comment': f"Updated asset files (version {new_version})",
-            'description': asset['description'],
-            'specifiedPipelines': asset.get('specifiedPipelines', [])
-        }
         
         # Update asset type - ensure we're not overriding with None
         if assetType:
@@ -635,7 +660,8 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
         if successful_preview:
             # Update asset with preview location
             asset['previewLocation'] = {
-                'Key': successful_preview['final_s3_key']
+                'Key': successful_preview['final_s3_key'],
+                'Bucket': asset_bucket_name_default
             }
             
             # Save updated asset
@@ -660,16 +686,24 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     except Exception as e:
         logger.warning(f"Failed to update upload status: {e}")
     
-    # Return response with file results
-    return CompleteUploadResponseModel(
+    # Check if all files failed
+    all_files_failed = all(not result.success for result in file_results)
+    
+    # Create response model
+    response = CompleteUploadResponseModel(
         message="External upload completed" + (" with some failures" if has_failures else " successfully"),
         uploadId=uploadId,
         assetId=assetId,
         assetType=asset.get('assetType'),
-        version=asset['currentVersion']['Version'],
         fileResults=file_results,
         overallSuccess=not has_failures
     )
+    
+    # Return 409 status if all files failed, otherwise return 200
+    if all_files_failed:
+        return general_error(status_code=409, body=response.dict())
+    else:
+        return response
 
 def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, claims_and_roles):
     """Complete a multipart upload and update the asset"""
@@ -908,24 +942,6 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
         assetType = determine_asset_type(assetId, asset_bucket, asset_base_key)
         logger.info(f"Asset type determined for asset {assetId}: {assetType}")
         
-        # Update asset version
-        current_version = int(asset['currentVersion']['Version'])
-        new_version = current_version + 1
-        now = datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
-        
-        # Add current version to versions history
-        if 'versions' not in asset:
-            asset['versions'] = []
-        asset['versions'].append(asset['currentVersion'])
-        
-        # Update current version
-        asset['currentVersion'] = {
-            'Version': str(new_version),
-            'DateModified': now,
-            'Comment': f"Updated asset files (version {new_version})",
-            'description': asset['description'],
-            'specifiedPipelines': asset.get('specifiedPipelines', [])
-        }
         
         # Update asset type - ensure we're not overriding with None
         if assetType:
@@ -946,7 +962,8 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
         if successful_preview:
             # Update asset with preview location
             asset['previewLocation'] = {
-                'Key': successful_preview['final_s3_key']
+                'Key': successful_preview['final_s3_key'],
+                'Bucket': asset_bucket_name_default
             }
             
             # Save updated asset
@@ -967,20 +984,28 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
             )
         else:
             # Delete upload record if all successful
-            delete_upload_details(uploadId)
+            delete_upload_details(uploadId, assetId)
     except Exception as e:
         logger.warning(f"Failed to update upload status: {e}")
     
-    # Return response with file results
-    return CompleteUploadResponseModel(
+    # Check if all files failed
+    all_files_failed = all(not result.success for result in file_results)
+    
+    # Create response model
+    response = CompleteUploadResponseModel(
         message="Upload completed" + (" with some failures" if has_failures else " successfully"),
         uploadId=uploadId,
         assetId=assetId,
         assetType=asset.get('assetType'),
-        version=asset['currentVersion']['Version'],
         fileResults=file_results,
         overallSuccess=not has_failures
     )
+    
+    # Return 409 status if all files failed, otherwise return 200
+    if all_files_failed:
+        return general_error(status_code=409, body=response.dict())
+    else:
+        return response
 
 #######################
 # Lambda Handler
@@ -1045,7 +1070,11 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
             # Process request
             response = complete_external_upload(uploadId, request_model, claims_and_roles)
-            return success(body=response.dict())
+            # Check if response is already an APIGatewayProxyResponseV2 (error case)
+            if isinstance(response, dict) and 'statusCode' in response and 'body' in response:
+                return response
+            else:
+                return success(body=response.dict())
             
         elif method == 'POST' and '/uploads/' in path and path.endswith('/complete'):
             # Complete Upload API - Extract uploadId from path parameters
@@ -1071,7 +1100,11 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             
             # Process request
             response = complete_upload(uploadId, request_model, claims_and_roles)
-            return success(body=response.dict())
+            # Check if response is already an APIGatewayProxyResponseV2 (error case)
+            if isinstance(response, dict) and 'statusCode' in response and 'body' in response:
+                return response
+            else:
+                return success(body=response.dict())
             
         elif method == 'POST' and '/assets/' in path and path.endswith('/createFolder'):
             # Create Folder API - Extract databaseId and assetId from path parameters

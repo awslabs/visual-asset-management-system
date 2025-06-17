@@ -756,7 +756,7 @@ def test_object_copied_to_glacier():
         'Metadata': {
             'assetid': assetId,
             'databaseid': 'databaseId',
-            'vams-status': 'deleted',
+            'x-amz-delete-marker': True,
         },
         'ETag': '"..."',
         'LastModified': datetime.datetime(

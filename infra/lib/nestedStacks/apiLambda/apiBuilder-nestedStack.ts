@@ -32,11 +32,11 @@ import {
     buildAssetService,
     buildStreamAuxiliaryPreviewAssetFunction,
     buildDownloadAssetFunction,
-    buildRevertAssetFunction,
     buildAssetFiles,
     buildIngestAssetFunction,
     buildCreateAssetFunction,
-    buildUploadFileFunction
+    buildUploadFileFunction,
+    buildAssetVersionsFunction
 } from "../../lambdaBuilder/assetFunctions";
 import {
     buildAddCommentLambdaFunction,
@@ -589,8 +589,15 @@ export function apiBuilder(
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
+    
     attachFunctionToApi(scope, assetService, {
-        routePath: "/database/{databaseId}/assets/{assetId}",
+        routePath: "/database/{databaseId}/assets/{assetId}/archiveAsset",
+        method: apigwv2.HttpMethod.DELETE,
+        api: api,
+    });
+    
+    attachFunctionToApi(scope, assetService, {
+        routePath: "/database/{databaseId}/assets/{assetId}/deleteAsset",
         method: apigwv2.HttpMethod.DELETE,
         api: api,
     });
@@ -605,17 +612,61 @@ export function apiBuilder(
         api: api,
     });
 
-    const listAssetFiles = buildAssetFiles(
+    const assetFilesFunction = buildAssetFiles(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
+        sendEmailFunction,
         config,
         vpc,
         subnets
     );
-    attachFunctionToApi(scope, listAssetFiles, {
+    attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/listFiles",
         method: apigwv2.HttpMethod.GET,
+        api: api,
+    });
+    
+    // Add new file operation routes
+    attachFunctionToApi(scope, assetFilesFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/fileInfo",
+        method: apigwv2.HttpMethod.GET,
+        api: api,
+    });
+    
+    attachFunctionToApi(scope, assetFilesFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/moveFile",
+        method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+    
+    attachFunctionToApi(scope, assetFilesFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/copyFile",
+        method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+    
+    attachFunctionToApi(scope, assetFilesFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/archiveFile",
+        method: apigwv2.HttpMethod.DELETE,
+        api: api,
+    });
+    
+    attachFunctionToApi(scope, assetFilesFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/deleteFile",
+        method: apigwv2.HttpMethod.DELETE,
+        api: api,
+    });
+    
+    attachFunctionToApi(scope, assetFilesFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}",
+        method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+    
+    attachFunctionToApi(scope, assetFilesFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/unarchiveFile",
+        method: apigwv2.HttpMethod.POST,
         api: api,
     });
 
@@ -715,8 +766,9 @@ export function apiBuilder(
         method: apigwv2.HttpMethod.POST,
         api: api,
     });
-
-    const assetRevertFunction = buildRevertAssetFunction(
+    
+    // Asset Versions Function
+    const assetVersionsFunction = buildAssetVersionsFunction(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
@@ -724,9 +776,28 @@ export function apiBuilder(
         vpc,
         subnets
     );
-    attachFunctionToApi(scope, assetRevertFunction, {
-        routePath: "/database/{databaseId}/assets/{assetId}/revert",
+    // Attach to createVersion endpoint
+    attachFunctionToApi(scope, assetVersionsFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/createVersion",
         method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+    // Attach to revertVersion endpoint
+    attachFunctionToApi(scope, assetVersionsFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/revertAssetVersion/{assetVersionId}",
+        method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+    // Attach to getVersions endpoint
+    attachFunctionToApi(scope, assetVersionsFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/getVersions",
+        method: apigwv2.HttpMethod.GET,
+        api: api,
+    });
+    // Attach to getVersion endpoint
+    attachFunctionToApi(scope, assetVersionsFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}",
+        method: apigwv2.HttpMethod.GET,
         api: api,
     });
 

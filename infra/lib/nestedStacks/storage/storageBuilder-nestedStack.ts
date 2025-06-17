@@ -41,6 +41,8 @@ export interface storageResources {
         assetLinksStorageTable: dynamodb.Table;
         assetStorageTable: dynamodb.Table;
         assetUploadsStorageTable: dynamodb.Table;
+        assetVersionsStorageTable: dynamodb.Table;
+        assetFileVersionsStorageTable: dynamodb.Table;
         authEntitiesStorageTable: dynamodb.Table;
         commentStorageTable: dynamodb.Table;
         databaseStorageTable: dynamodb.Table;
@@ -598,6 +600,30 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         },
     });
 
+    const assetFileVersionsStorageTable = new dynamodb.Table(scope, "AssetFileVersionsStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "assetVersionId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    const assetVersionsStorageTable = new dynamodb.Table(scope, "AssetVersionsStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "assetVersionId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
     const assetUploadsStorageTable = new dynamodb.Table(scope, "AssetUploadsStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
@@ -655,6 +681,8 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
             appFeatureEnabledStorageTable: appFeatureEnabledStorageTable,
             assetStorageTable: assetStorageTable,
             assetUploadsStorageTable: assetUploadsStorageTable,
+            assetFileVersionsStorageTable: assetFileVersionsStorageTable,
+            assetVersionsStorageTable: assetVersionsStorageTable,
             commentStorageTable: commentStorageTable,
             jobStorageTable: jobStorageTable,
             pipelineStorageTable: pipelineStorageTable,

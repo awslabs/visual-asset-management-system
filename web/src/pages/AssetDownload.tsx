@@ -1,6 +1,6 @@
 import { useLocation, useNavigate } from "react-router";
 import { downloadAsset } from "../services/APIService";
-import { FileTree } from "../components/filemanager/EnhancedFileManager";
+import { FileTree } from "../components/filemanager/types/FileManagerTypes";
 import { FileUploadTable, FileUploadTableItem } from "./AssetUpload/FileUploadTable";
 import { useReducer, useState, useEffect } from "react";
 import { useParams } from "react-router";
@@ -119,12 +119,13 @@ const downloadSingleFile = async (
             const fileHandle = await fileDirectoryHandle.getFileHandle(fileName, { create: true });
             const writable = await fileHandle.createWritable();
             
-            // Get download URL
+            // Get download URL with new downloadType parameter
             const response = await downloadAsset({
-                assetId,
                 databaseId,
+                assetId,
                 key: file.keyPrefix,
-                version: "",
+                versionId: "",
+                downloadType: "assetFile"
             });
 
             if (response === false || !Array.isArray(response)) {

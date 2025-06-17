@@ -5,7 +5,7 @@
 
 import React, { useContext, useState } from "react";
 import { Alert, Box, Button, Container, Grid, Header, SpaceBetween } from "@cloudscape-design/components";
-import { AssetDetail } from "../AssetUpload";
+import { AssetDetail } from "./AssetUpload";
 import { Metadata } from "../../components/single/Metadata";
 import { FileUploadTableItem } from "./FileUploadTable";
 import UploadManager from "./UploadManager";

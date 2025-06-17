@@ -1,0 +1,111 @@
+.file-info-panel {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.file-info-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid #eaeded;
+    margin-bottom: 10px;
+}
+
+/* Ensure buttons are displayed side by side */
+.file-info-header button {
+    white-space: nowrap;
+    margin-left: 10px;
+}
+
+.file-info-header button:first-child {
+    margin-left: 0;
+}
+
+.file-actions {
+    display: flex;
+    flex-direction: row;
+}
+
+.file-info-content {
+    padding: 20px 0;
+}
+
+.file-info-item {
+    display: flex;
+    margin-bottom: 12px;
+}
+
+.file-info-label {
+    font-weight: bold;
+    width: 130px;
+}
+
+.file-info-value {
+    flex: 1;
+    word-break: break-word;
+}
+
+.file-info-future-space {
+    margin-top: 30px;
+    min-height: 200px;
+    border: 1px dashed #eaeded;
+    border-radius: 4px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: #aab7b8;
+}
+
+.multi-select-info {
+    padding: 10px 0;
+}
+
+.selected-files-list {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid #eaeded;
+    border-radius: 4px;
+    padding: 8px;
+    background-color: #f8f9fa;
+}
+
+.selected-file-item {
+    display: flex;
+    align-items: center;
+    padding: 4px 8px;
+    margin-bottom: 4px;
+    border-radius: 3px;
+    background-color: white;
+    border: 1px solid #e9ecef;
+}
+
+.selected-file-item:last-child {
+    margin-bottom: 0;
+}
+
+.selected-file-icon {
+    margin-right: 8px;
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.selected-file-path {
+    font-size: 12px;
+    color: #495057;
+    word-break: break-all;
+    flex: 1;
+}
+
+.archived-file-label {
+    background-color: #ffc107;
+    color: #212529;
+    font-weight: bold;
+    padding: 2px 8px;
+    border-radius: 4px;
+    display: inline-block;
+    margin-bottom: 4px;
+    font-size: 12px;
+}

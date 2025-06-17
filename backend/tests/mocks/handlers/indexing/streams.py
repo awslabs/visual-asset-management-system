@@ -135,7 +135,8 @@ def handle_s3_event_record(record, **kwargs):
             
             # Check if object is in Glacier or marked as deleted
             if head_response.get('StorageClass') == 'GLACIER' or \
-               (head_response.get('Metadata', {}).get('vams-status') == 'deleted'):
+               (head_response.get('Metadata', {}).get('vams-status') == 'archived') or \
+               head_response.get('x-amz-delete-marker', False):
                 s3index = s3index_fn()
                 s3index.delete_item(key)
                 return

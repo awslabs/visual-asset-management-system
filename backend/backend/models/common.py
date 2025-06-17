@@ -75,5 +75,6 @@ class VAMSGeneralError(Exception):
     pass
 
 class VAMSGeneralErrorResponse(VAMSGeneralError):
-    def __init__(self, message):
+    def __init__(self, message, status_code=400):
         super().__init__(f"VAMS General Error: {message}")
+        self.status_code = status_code

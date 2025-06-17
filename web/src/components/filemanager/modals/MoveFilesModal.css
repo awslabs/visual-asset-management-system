@@ -1,0 +1,114 @@
+.move-files-modal {
+    /* Modal-specific styles if needed */
+}
+
+.move-files-modal .selected-files-summary {
+    background-color: #f2f3f3;
+    padding: 12px;
+    border-radius: 4px;
+    margin-bottom: 16px;
+}
+
+.move-files-modal .selected-files-summary strong {
+    color: #0972d3;
+}
+
+.move-files-modal .operation-mode-toggle {
+    margin-bottom: 16px;
+}
+
+.move-files-modal .copy-target-toggle {
+    margin-bottom: 16px;
+}
+
+.move-files-modal .destination-folder-section {
+    margin-top: 16px;
+}
+
+.move-files-modal .asset-selector-section {
+    margin-bottom: 16px;
+    padding: 16px;
+    border: 1px solid #d5dbdb;
+    border-radius: 4px;
+    background-color: #fafbfc;
+}
+
+.move-files-modal .processing-section {
+    margin: 16px 0;
+    padding: 16px;
+    background-color: #f2f3f3;
+    border-radius: 4px;
+}
+
+.move-files-modal .results-section {
+    margin-top: 16px;
+}
+
+.move-files-modal .results-summary {
+    font-weight: bold;
+    margin-bottom: 8px;
+}
+
+.move-files-modal .error-list {
+    margin: 8px 0;
+    padding-left: 20px;
+}
+
+.move-files-modal .error-list li {
+    margin-bottom: 4px;
+}
+
+.move-files-modal .success-message {
+    color: #037f0c;
+    font-weight: 500;
+}
+
+.move-files-modal .error-message {
+    color: #d91515;
+    font-weight: 500;
+}
+
+/* Folder tree view within modal */
+.move-files-modal .folder-tree-view {
+    max-height: 250px;
+    margin-top: 8px;
+}
+
+/* Asset selector styles */
+.move-files-modal .asset-search-input {
+    margin-bottom: 12px;
+}
+
+.move-files-modal .selected-asset-info {
+    padding: 12px;
+    background-color: #e8f4fd;
+    border: 1px solid #0972d3;
+    border-radius: 4px;
+    margin-bottom: 16px;
+}
+
+.move-files-modal .selected-asset-info strong {
+    color: #0972d3;
+}
+
+/* Progress bar styling */
+.move-files-modal .progress-container {
+    margin: 16px 0;
+}
+
+/* Button states */
+.move-files-modal .modal-footer .primary-button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .move-files-modal .folder-tree-view {
+        max-height: 200px;
+    }
+    
+    .move-files-modal .asset-selector-section {
+        padding: 12px;
+    }
+}

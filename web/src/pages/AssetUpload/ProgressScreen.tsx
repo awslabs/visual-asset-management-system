@@ -8,7 +8,7 @@ import StatusIndicator, {
     StatusIndicatorProps,
 } from "@cloudscape-design/components/status-indicator";
 import { FileUploadTableItem } from "./FileUploadTable";
-import { AssetDetail } from "../AssetUpload";
+import { AssetDetail } from "./AssetUpload";
 import Synonyms from "../../synonyms";
 import UploadManager from "./UploadManager";
 import { useState } from "react";

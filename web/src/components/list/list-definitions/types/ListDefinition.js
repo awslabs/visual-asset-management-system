@@ -19,6 +19,7 @@ export default function ListDefinition(props) {
         //@todo find better way to handle delete logic
         elementId,
         deleteRoute,
+        createAction,
     } = props;
     this.columnDefinitions = columnDefinitions;
     this.visibleColumns = visibleColumns;
@@ -28,6 +29,7 @@ export default function ListDefinition(props) {
     this.singularNameTitleCase = singularNameTitleCase;
     this.elementId = elementId;
     this.deleteRoute = deleteRoute;
+    this.createAction = createAction;
     if (props.deleteFunction !== null && props.deleteFunction !== undefined) {
         this.deleteFunction = props.deleteFunction;
     } else {
@@ -51,4 +53,5 @@ ListDefinition.propTypes = {
     elementId: PropTypes.string.isRequired,
     deleteRoute: PropTypes.string.isRequired,
     deleteFunction: PropTypes.func,
+    createAction: PropTypes.bool,
 };

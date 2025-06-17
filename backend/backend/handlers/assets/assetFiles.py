@@ -1,232 +1,1958 @@
+# Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+import os
 import boto3
 import json
-import os
-from handlers.authz import CasbinEnforcer
-from handlers.auth import request_to_claims
-from customLogging.logger import safeLogger
+from datetime import datetime
+from typing import Dict, List, Tuple, Optional, Any
+from botocore.exceptions import ClientError
+from botocore.config import Config
+from aws_lambda_powertools.utilities.typing import LambdaContext
+from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
 from common.dynamodb import validate_pagination_info
+from handlers.authz import CasbinEnforcer
+from handlers.auth import request_to_claims
+from customLogging.logger import safeLogger
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.assetsV3 import (
+    AssetFileItemModel, ListAssetFilesRequestModel, ListAssetFilesResponseModel,
+    FileInfoRequestModel, FileInfoResponseModel, MoveFileRequestModel,
+    CopyFileRequestModel, ArchiveFileRequestModel, UnarchiveFileRequestModel, DeleteFileRequestModel,
+    FileOperationResponseModel, RevertFileVersionRequestModel, RevertFileVersionResponseModel
+)
 
-claims_and_roles = {}
-main_rest_response = STANDARD_JSON_RESPONSE
+# Configure AWS clients with retry configuration
+region = os.environ.get('AWS_REGION', 'us-east-1')
 
-# Create a logger object to log the events
+# Standardized retry configuration for all AWS clients
+retry_config = Config(
+    retries={
+        'max_attempts': 10,
+        'mode': 'adaptive'
+    }
+)
+
+s3_client = boto3.client('s3', config=retry_config)
+s3_resource = boto3.resource('s3', config=retry_config)
+dynamodb = boto3.resource('dynamodb', config=retry_config)
 logger = safeLogger(service_name="AssetFiles")
 
-dynamodb_client = boto3.client('dynamodb')
-dynamodb = boto3.resource('dynamodb')
-s3_client = boto3.client('s3')
-paginator = s3_client.get_paginator('list_objects_v2')
-
-asset_database = None
-bucket_name_default = None
-
+# Load environment variables
 try:
     asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    bucket_name_default = os.environ["S3_ASSET_STORAGE_BUCKET"]
+    asset_bucket_name_default = os.environ["S3_ASSET_STORAGE_BUCKET"]
+    asset_aux_bucket_name = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
+except Exception as e:
+    logger.exception("Failed loading environment variables")
+    raise e
 
-except:
-    logger.exception("Failed Loading Environment Variables")
-    main_rest_response['body'] = json.dumps(
-        {"message": "Failed Loading Environment Variables"})
-
-
+# Initialize DynamoDB tables
 asset_table = dynamodb.Table(asset_database)
 
-# A method that takes in s3 path and returns all the files in that path using paginator and s3_client
+#######################
+# Utility Functions
+#######################
 
-
-def get_all_files_in_path(path, query_params, bucket=None):
-    """Get all files in the specified S3 path
+def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, claims_and_roles: Dict) -> Dict:
+    """Get asset and verify permissions for the specified operation
     
     Args:
-        path: The S3 key prefix to list objects from
+        databaseId: The database ID
+        assetId: The asset ID
+        operation: The operation to check permissions for (GET, POST, PUT, DELETE)
+        claims_and_roles: The claims and roles from the request
+        
+    Returns:
+        The asset if found and user has permissions, otherwise raises an exception
+        
+    Raises:
+        VAMSGeneralErrorResponse: If asset not found or user doesn't have permissions
+    """
+    try:
+        # Get the asset from DynamoDB
+        response = asset_table.get_item(Key={'databaseId': databaseId, 'assetId': assetId})
+        asset = response.get('Item', {})
+        
+        if not asset:
+            raise VAMSGeneralErrorResponse(f"Asset {assetId} not found in database {databaseId}")
+        
+        # Check permissions
+        asset["object__type"] = "asset"
+        
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforce(asset, operation):
+                raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
+        
+        return asset
+    except Exception as e:
+        if isinstance(e, VAMSGeneralErrorResponse):
+            raise e
+        logger.exception(f"Error getting asset with permissions: {e}")
+        raise VAMSGeneralErrorResponse(f"Error retrieving asset: {str(e)}")
+
+def get_asset_s3_location(asset: Dict) -> Tuple[str, str]:
+    """Extract bucket and key from asset location
+    
+    Args:
+        asset: The asset dictionary
+        
+    Returns:
+        Tuple of (bucket, key)
+        
+    Raises:
+        VAMSGeneralErrorResponse: If asset location is missing
+    """
+    asset_location = asset.get('assetLocation', {})
+    
+    if not asset_location:
+        raise VAMSGeneralErrorResponse("Asset location not found")
+    
+    bucket = asset_location.get('Bucket', asset_bucket_name_default)
+    key = asset_location.get('Key')
+    
+    if not key:
+        raise VAMSGeneralErrorResponse("Asset key not found in asset location")
+    
+    return bucket, key
+
+def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
+    """
+    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
+    
+    Args:
+        asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
+        file_path: The file path from the request (may or may not include the base key)
+        
+    Returns:
+        The properly resolved S3 key without duplication
+    """
+    # Normalize the asset base key to ensure it ends with '/'
+    if asset_base_key and not asset_base_key.endswith('/'):
+        asset_base_key = asset_base_key + '/'
+    
+    # Remove leading slash from file path if present
+    if file_path.startswith('/'):
+        file_path = file_path[1:]
+    
+    # Check if file_path already starts with the asset_base_key
+    if file_path.startswith(asset_base_key):
+        # File path already contains the base key, use as-is
+        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
+        return file_path
+    else:
+        # File path doesn't contain base key, combine them
+        resolved_path = asset_base_key + file_path
+        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
+        return resolved_path
+
+def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
+    """Determine if file is archived based on S3 delete markers
+    
+    Args:
+        bucket: The S3 bucket name
+        key: The S3 object key
+        version_id: Optional specific version ID to check
+        
+    Returns:
+        True if file is archived (has delete marker), False otherwise
+    """
+    try:
+        if version_id:
+            # Check if specific version is a delete marker
+            response = s3_client.list_object_versions(
+                Bucket=bucket,
+                Prefix=key,
+                MaxKeys=1000
+            )
+            
+            # Check if the specified version is a delete marker
+            for marker in response.get('DeleteMarkers', []):
+                if marker['Key'] == key and marker['VersionId'] == version_id:
+                    return True
+            return False
+        else:
+            # Check if current version is deleted (has delete marker as latest)
+            try:
+                s3_client.head_object(Bucket=bucket, Key=key)
+                return False  # Object exists, not archived
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'NoSuchKey':
+                    # Object doesn't exist, check if it has delete markers
+                    response = s3_client.list_object_versions(
+                        Bucket=bucket,
+                        Prefix=key,
+                        MaxKeys=1
+                    )
+                    return len(response.get('DeleteMarkers', [])) > 0
+                else:
+                    raise
+    except Exception as e:
+        logger.warning(f"Error checking archive status for {key}: {e}")
+        return False
+
+def filter_archived_files(file_list: List[Dict], include_archived: bool = False) -> List[Dict]:
+    """Filter out archived files unless explicitly requested
+    
+    Args:
+        file_list: List of file dictionaries
+        include_archived: Whether to include archived files
+        
+    Returns:
+        Filtered list of files
+    """
+    if include_archived:
+        return file_list
+    
+    return [f for f in file_list if not f.get('isArchived', False)]
+
+def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str) -> bool:
+    """Copy an S3 object from one location to another
+    
+    Args:
+        source_bucket: Source bucket
+        source_key: Source key
+        dest_bucket: Destination bucket
+        dest_key: Destination key
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Copy the object to the new location using managed transfer for large files
+        s3_resource.meta.client.copy(
+            CopySource={'Bucket': source_bucket, 'Key': source_key},
+            Bucket=dest_bucket,
+            Key=dest_key
+        )
+        return True
+    except Exception as e:
+        logger.exception(f"Error copying S3 object from {source_key} to {dest_key}: {e}")
+        return False
+
+
+def delete_s3_object(bucket: str, key: str) -> bool:
+    """Permanently delete an S3 object (current version only)
+    
+    Args:
+        bucket: The S3 bucket
+        key: The S3 object key
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        s3_client.delete_object(
+            Bucket=bucket,
+            Key=key
+        )
+        return True
+    except Exception as e:
+        logger.exception(f"Error deleting S3 object {key}: {e}")
+        return False
+
+def delete_s3_object_all_versions(bucket: str, key: str) -> bool:
+    """Permanently delete an S3 object and all its versions
+    
+    Args:
+        bucket: The S3 bucket
+        key: The S3 object key
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # List all versions of the object
+        versions_response = s3_client.list_object_versions(
+            Bucket=bucket,
+            Prefix=key,
+            MaxKeys=1000  # Limit to 1000 versions
+        )
+        
+        # Delete all versions
+        for version in versions_response.get('Versions', []):
+            if version['Key'] == key:
+                s3_client.delete_object(
+                    Bucket=bucket,
+                    Key=key,
+                    VersionId=version['VersionId']
+                )
+                logger.info(f"Deleted version {version['VersionId']} of {key}")
+        
+        # Delete all delete markers
+        for marker in versions_response.get('DeleteMarkers', []):
+            if marker['Key'] == key:
+                s3_client.delete_object(
+                    Bucket=bucket,
+                    Key=key,
+                    VersionId=marker['VersionId']
+                )
+                logger.info(f"Deleted delete marker {marker['VersionId']} of {key}")
+        
+        return True
+    except Exception as e:
+        logger.exception(f"Error deleting all versions of S3 object {key}: {e}")
+        return False
+
+def delete_s3_prefix(bucket: str, prefix: str) -> List[str]:
+    """Permanently delete all objects under a prefix (current versions only)
+    
+    Args:
+        bucket: The S3 bucket
+        prefix: The S3 key prefix
+        
+    Returns:
+        List of deleted file keys
+    """
+    deleted_files = []
+    
+    try:
+        # List all objects with the prefix
+        paginator = s3_client.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get('Contents', []):
+                key = obj['Key']
+                
+                # Skip if it's a folder marker (key ends with '/')
+                if key.endswith('/'):
+                    continue
+                
+                # Delete the object
+                if delete_s3_object(bucket, key):
+                    deleted_files.append(key)
+    
+    except Exception as e:
+        logger.exception(f"Error deleting files under prefix {prefix}: {e}")
+    
+    return deleted_files
+
+def delete_s3_prefix_all_versions(bucket: str, prefix: str) -> List[str]:
+    """Permanently delete all objects and their versions under a prefix
+    
+    Args:
+        bucket: The S3 bucket
+        prefix: The S3 key prefix
+        
+    Returns:
+        List of deleted file keys
+    """
+    deleted_files = []
+    
+    try:
+        # Get all object versions under the prefix
+        paginator = s3_client.get_paginator('list_object_versions')
+        
+        # Track keys we've already processed to avoid duplicates
+        processed_keys = set()
+        
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            # Process all versions
+            for version in page.get('Versions', []):
+                key = version['Key']
+                
+                # Skip if it's a folder marker or already processed
+                if key.endswith('/') or key in processed_keys:
+                    continue
+                
+                # Delete all versions of this object
+                if delete_s3_object_all_versions(bucket, key):
+                    deleted_files.append(key)
+                    processed_keys.add(key)
+            
+            # Check for any keys in delete markers that weren't in versions
+            for marker in page.get('DeleteMarkers', []):
+                key = marker['Key']
+                
+                # Skip if it's a folder marker or already processed
+                if key.endswith('/') or key in processed_keys:
+                    continue
+                
+                # Delete all versions of this object
+                if delete_s3_object_all_versions(bucket, key):
+                    deleted_files.append(key)
+                    processed_keys.add(key)
+    
+    except Exception as e:
+        logger.exception(f"Error deleting all versions under prefix {prefix}: {e}")
+    
+    return deleted_files
+
+def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str) -> List[str]:
+    """Archive all objects under a prefix
+    
+    Args:
+        bucket: The S3 bucket
+        prefix: The S3 key prefix
+        databaseId: The database ID
+        assetId: The asset ID
+        
+    Returns:
+        List of archived file keys
+    """
+    archived_files = []
+    
+    try:
+        # List all objects with the prefix
+        paginator = s3_client.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get('Contents', []):
+                key = obj['Key']
+                
+                # Skip if it's a folder marker (key ends with '/')
+                if key.endswith('/'):
+                    continue
+                
+                # Archive the object
+                if delete_s3_object(bucket, key):
+                    archived_files.append(key)
+    
+    except Exception as e:
+        logger.exception(f"Error archiving files under prefix {prefix}: {e}")
+    
+    return archived_files
+
+def validate_cross_asset_permissions(source_asset: Dict, dest_asset: Dict, claims_and_roles: Dict) -> bool:
+    """Validate permissions for operations involving multiple assets
+    
+    Args:
+        source_asset: Source asset dictionary
+        dest_asset: Destination asset dictionary
+        claims_and_roles: The claims and roles from the request
+        
+    Returns:
+        True if user has permissions on both assets, False otherwise
+        
+    Raises:
+        VAMSGeneralErrorResponse: If assets are in different databases
+    """
+    # Ensure both assets are in the same database
+    if source_asset['databaseId'] != dest_asset['databaseId']:
+        raise VAMSGeneralErrorResponse("Cross-database operations are not allowed")
+    
+    # Check permissions on both assets
+    source_asset["object__type"] = "asset"
+    dest_asset["object__type"] = "asset"
+    
+    if len(claims_and_roles["tokens"]) > 0:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        
+        # Need GET permission on source and POST permission on destination
+        source_allowed = casbin_enforcer.enforce(source_asset, "GET")
+        dest_allowed = casbin_enforcer.enforce(dest_asset, "POST")
+        
+        if not source_allowed:
+            raise VAMSGeneralErrorResponse("Not authorized to read from source asset")
+        
+        if not dest_allowed:
+            raise VAMSGeneralErrorResponse("Not authorized to write to destination asset")
+        
+        return True
+    
+    return False
+
+def move_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str) -> bool:
+    """Move an S3 object from one location to another
+    
+    Args:
+        source_bucket: Source bucket
+        source_key: Source key
+        dest_bucket: Destination bucket
+        dest_key: Destination key
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Copy the object to the new location using managed transfer for large files
+        s3_resource.meta.client.copy(
+            CopySource={'Bucket': source_bucket, 'Key': source_key},
+            Bucket=dest_bucket,
+            Key=dest_key
+        )
+        
+        # Delete the original object
+        s3_client.delete_object(
+            Bucket=source_bucket,
+            Key=source_key
+        )
+        
+        return True
+    except Exception as e:
+        logger.exception(f"Error moving S3 object from {source_key} to {dest_key}: {e}")
+        return False
+
+# Function removed as asset versioning is now a standalone capability
+
+def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False) -> Dict:
+    """Get detailed metadata for an S3 object
+    
+    Args:
+        bucket: The S3 bucket
+        key: The S3 object key
+        include_versions: Whether to include version history
+        
+    Returns:
+        Dictionary containing object metadata and versions if requested
+        
+    Raises:
+        VAMSGeneralErrorResponse: If object not found or error retrieving metadata
+    """
+    try:
+        # Get object metadata
+        response = s3_client.head_object(Bucket=bucket, Key=key)
+        
+        # Extract basic metadata
+        result = {
+            'fileName': os.path.basename(key),
+            'key': key,
+            'relativePath': '/' + key.split('/', 1)[1] if '/' in key else key,
+            'isFolder': key.endswith('/'),
+            'size': response.get('ContentLength'),
+            'contentType': response.get('ContentType'),
+            'lastModified': response['LastModified'].isoformat(),
+            'etag': response.get('ETag', '').strip('"'),
+            'storageClass': response.get('StorageClass', 'STANDARD'),
+            'isArchived': is_file_archived(bucket, key)
+        }
+        
+        # Include version history if requested
+        if include_versions:
+            try:
+                versions_response = s3_client.list_object_versions(
+                    Bucket=bucket,
+                    Prefix=key,
+                    MaxKeys=100  # Limit to 100 versions
+                )
+                
+                versions = []
+                for version in versions_response.get('Versions', []):
+                    if version['Key'] == key:
+                        # Enhanced version information
+                        version_info = {
+                            'versionId': version['VersionId'],
+                            'lastModified': version['LastModified'].isoformat(),
+                            'size': version['Size'],
+                            'isLatest': version['IsLatest'],
+                            'storageClass': version.get('StorageClass', 'STANDARD'),
+                            'etag': version.get('ETag', '').strip('"'),
+                            'isArchived': is_file_archived(bucket, key, version['VersionId'])
+                        }
+                        versions.append(version_info)
+                
+                # Sort versions by date (newest first)
+                versions.sort(key=lambda x: x['lastModified'], reverse=True)
+                result['versions'] = versions
+            except Exception as e:
+                logger.warning(f"Error retrieving version history for {key}: {e}")
+                # Continue without version history
+        
+        return result
+    
+    except ClientError as e:
+        logger.exception(f"Error getting S3 object metadata: {e}")
+        if e.response['Error']['Code'] == 'NoSuchKey':
+            raise VAMSGeneralErrorResponse(f"File not found: {key}")
+        raise VAMSGeneralErrorResponse(f"Error retrieving file metadata: {str(e)}")
+
+def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: Dict, include_archived: bool = False) -> Dict:
+    """List S3 objects with pagination and archive status
+    
+    Args:
+        bucket: The S3 bucket
+        prefix: The S3 key prefix
         query_params: Dictionary containing pagination parameters
-        bucket: The S3 bucket to use (defaults to bucket_name if None)
+        include_archived: Whether to include archived files
         
     Returns:
         Dictionary containing the list of files and pagination token if applicable
     """
-    # Use the provided bucket or fall back to the default
-    bucket_to_use = bucket if bucket else bucket_name_default
+    logger.info(f"Listing files from bucket: {bucket}, prefix: {prefix}")
     
-    logger.info(f"Listing files from bucket: {bucket_to_use}, path: {path}")
-    
-    result = {
-        "Items": []
+    # Configure pagination
+    pagination_config = {
+        'MaxItems': int(query_params.get('maxItems', 1000)),
+        'PageSize': int(query_params.get('pageSize', 1000))
     }
-
-    for page_iterator in paginator.paginate(
-        Bucket=bucket_to_use,
-        Prefix=path,
-        PaginationConfig={
-            'MaxItems': int(query_params['maxItems']),
-            'PageSize': int(query_params['pageSize']),
-            'StartingToken': query_params['startingToken']
-        }
-    ):
-        for obj in page_iterator.get('Contents', []):
-            fileName = os.path.basename(obj['Key'])
+    
+    # Add starting token if provided
+    if query_params.get('startingToken'):
+        pagination_config['StartingToken'] = query_params['startingToken']
+    
+    # If prefix filter is provided, append it to the base prefix
+    if query_params.get('prefix'):
+        if not prefix.endswith('/'):
+            prefix = prefix + '/'
+        prefix = prefix + query_params['prefix'].lstrip('/')
+    
+    # List objects with pagination
+    result = {
+        "items": []
+    }
+    
+    try:
+        # First, get current objects (non-archived)
+        paginator = s3_client.get_paginator('list_objects_v2')
+        for page in paginator.paginate(
+            Bucket=bucket,
+            Prefix=prefix,
+            PaginationConfig=pagination_config
+        ):
+            for obj in page.get('Contents', []):
+                # Extract filename from key
+                file_name = os.path.basename(obj['Key'])
+                
+                # Determine if it's a folder (key ends with '/' or fileName is empty)
+                is_folder = obj['Key'].endswith('/') or not file_name
+                
+                # Get relative path by removing the prefix
+                relative_path = obj['Key']
+                if relative_path.startswith(prefix):
+                    relative_path = relative_path[len(prefix):]
+                    # Ensure relative path starts with /
+                    if not relative_path.startswith('/'):
+                        relative_path = '/' + relative_path
+                
+                # Create the item with all required fields
+                item = {
+                    'fileName': file_name,
+                    'key': obj['Key'],
+                    'relativePath': relative_path,
+                    'isFolder': is_folder,
+                    'dateCreatedCurrentVersion': obj['LastModified'].isoformat(),
+                    'storageClass': obj.get('StorageClass', 'STANDARD')
+                }
+                
+                # Add size for non-folders
+                if not is_folder:
+                    item['size'] = obj['Size']
+                
+                # Get version ID and check archive status
+                try:
+                    version_info = s3_client.head_object(
+                        Bucket=bucket,
+                        Key=obj['Key']
+                    )
+                    item['versionId'] = version_info.get('VersionId', 'null')
+                    
+                    # Check if file is archived
+                    item['isArchived'] = is_file_archived(bucket, obj['Key'])
+                    
+                except Exception as e:
+                    logger.warning(f"Error getting version info for {obj['Key']}: {e}")
+                    item['versionId'] = 'null'
+                    item['isArchived'] = False
+                
+                # Only add non-archived files unless include_archived is True
+                if not item['isArchived'] or include_archived:
+                    result["items"].append(item)
             
-            # Determine if it's a folder (key ends with '/' or fileName is empty)
-            isFolder = obj['Key'].endswith('/') or not fileName
-            
-            # Create the item with all required fields
-            item = {
-                'fileName': fileName,
-                'key': obj['Key'],
-                'relativePath': obj['Key'].removeprefix(path),
-                'isFolder': isFolder
-            }
-            
-            # Add size for non-folders (already available in list_objects_v2 response)
-            if not isFolder:
-                item['size'] = obj['Size']
-            
-            # Add last modified date (already available in list_objects_v2 response)
-            item['dateCreatedCurrentVersion'] = obj['LastModified'].isoformat()
-            
-            # Get version ID if needed (requires additional API call)
+            # Add next token if available
+            if 'NextToken' in page:
+                result['nextToken'] = page['NextToken']
+        
+        # If include_archived is True, also get objects with delete markers
+        if include_archived:
+            logger.info("Including archived files with delete markers")
+            # Use list_object_versions to get delete markers
             try:
-                version_info = s3_client.head_object(
-                    Bucket=bucket_to_use,
-                    Key=obj['Key']
-                )
-                item['versionId'] = version_info.get('VersionId', 'null')
-            except Exception as e:
-                logger.warning(f"Error getting version info for {obj['Key']}: {e}")
-                item['versionId'] = 'null'
+                # Create a new paginator for versions
+                version_paginator = s3_client.get_paginator('list_object_versions')
+                
+                # Track keys we've already processed to avoid duplicates
+                existing_keys = {item['key'] for item in result['items']}
+                
+                for page in version_paginator.paginate(
+                    Bucket=bucket,
+                    Prefix=prefix,
+                    PaginationConfig=pagination_config
+                ):
+                    # Process delete markers
+                    for marker in page.get('DeleteMarkers', []):
+                        key = marker['Key']
+                        
+                        # Skip if we already have this key in our results
+                        if key in existing_keys:
+                            continue
+                        
+                        # Skip folders
+                        if key.endswith('/'):
+                            continue
+                        
+                        # Extract filename and relative path
+                        file_name = os.path.basename(key)
+                        relative_path = key
+                        if relative_path.startswith(prefix):
+                            relative_path = relative_path[len(prefix):]
+                            if not relative_path.startswith('/'):
+                                relative_path = '/' + relative_path
+                        
+                        # Find the latest version before the delete marker
+                        latest_version = None
+                        for version in page.get('Versions', []):
+                            if version['Key'] == key:
+                                latest_version = version
+                                break
+                        
+                        # Create item for the archived file
+                        item = {
+                            'fileName': file_name,
+                            'key': key,
+                            'relativePath': relative_path,
+                            'isFolder': False,
+                            'dateCreatedCurrentVersion': marker['LastModified'].isoformat(),
+                            'storageClass': 'STANDARD',
+                            'versionId': marker['VersionId'],
+                            'isArchived': True
+                        }
+                        
+                        # Add size if we found a version
+                        if latest_version:
+                            item['size'] = latest_version.get('Size', 0)
+                        
+                        # Add to results
+                        result["items"].append(item)
+                        existing_keys.add(key)
+                    
+                    # We don't update the nextToken here as we're just supplementing the main listing
             
-            result["Items"].append(item)
-
-        if 'NextToken' in page_iterator:
-            result['NextToken'] = page_iterator['NextToken']
-
-    # Log the length of files with a description
-    logger.info("Files in the path: ")
-    logger.info(len(result["Items"]))
+            except Exception as e:
+                logger.warning(f"Error listing delete markers: {e}")
+                # Continue with what we have, don't fail the whole request
+    
+    except ClientError as e:
+        logger.exception(f"Error listing S3 objects: {e}")
+        if e.response['Error']['Code'] == 'NoSuchKey':
+            # If the prefix doesn't exist, return empty list
+            return result
+        raise VAMSGeneralErrorResponse(f"Error listing files: {str(e)}")
+    
+    logger.info(f"Found {len(result['items'])} files in the path")
     return result
 
-# Check if the assetId is present in the database using asset_table resource
-# If it exists return the assetLocation key
-# If it does not exist return None
+#######################
+# API Handler Functions
+#######################
 
-def get_asset(database_id, asset_id):
-    db_response = asset_table.get_item(
-        Key={
-            'databaseId': database_id,
-            'assetId': asset_id
-        })
-    asset = db_response.get('Item', {})
-    allowed = False
-
-    if asset:
-        # Add Casbin Enforcer to check if the current user has permissions to GET the asset:
-        asset.update({
-            "object__type": "asset"
-        })
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if casbin_enforcer.enforce(asset, "GET"):
-                allowed = True
-
-    return asset if allowed else {}
-
-
-def lambda_handler(event, context):
-    global claims_and_roles
-    response = STANDARD_JSON_RESPONSE
-    claims_and_roles = request_to_claims(event)
-
-    queryParameters = event.get('queryStringParameters', {})
-    validate_pagination_info(queryParameters)
-
+def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, confirm_permanent_delete: bool, claims_and_roles: Dict) -> FileOperationResponseModel:
+    """Permanently delete a file or files under a prefix
+    
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        file_path: The file path or prefix
+        is_prefix: Whether to delete all files under the prefix
+        confirm_permanent_delete: Safety confirmation for permanent deletion
+        claims_and_roles: The claims and roles from the request
+        
+    Returns:
+        FileOperationResponseModel with the result of the operation
+    """
+    # Require confirmation for permanent deletion
+    if not confirm_permanent_delete:
+        raise VAMSGeneralErrorResponse("Permanent deletion requires confirmation. Set confirmPermanentDelete to true.")
+    
+    # Get asset and verify permissions (need POST permission to modify)
+    asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
+    
+    # Get asset location
+    bucket, base_key = get_asset_s3_location(asset)
+    
+    # Use smart path resolution to avoid duplication
+    full_key = resolve_asset_file_path(base_key, file_path)
+    
+    # Check if path exists (including archived files)
     try:
+        if not is_prefix:
+            # For single file, check if it exists using list_object_versions
+            # This will find both regular files and archived files (with delete markers)
+            versions_response = s3_client.list_object_versions(
+                Bucket=bucket,
+                Prefix=full_key,
+                MaxKeys=100
+            )
+            
+            # Check if the file exists (has any versions or delete markers)
+            has_versions = any(version['Key'] == full_key for version in versions_response.get('Versions', []))
+            has_delete_markers = any(marker['Key'] == full_key for marker in versions_response.get('DeleteMarkers', []))
+            
+            if not (has_versions or has_delete_markers):
+                raise VAMSGeneralErrorResponse(f"File not found: {file_path}")
+        else:
+            # For prefix, check if at least one object exists
+            response = s3_client.list_objects_v2(
+                Bucket=bucket,
+                Prefix=full_key,
+                MaxKeys=1
+            )
+            if 'Contents' not in response or len(response['Contents']) == 0:
+                # If no current objects, check for archived objects
+                versions_response = s3_client.list_object_versions(
+                    Bucket=bucket,
+                    Prefix=full_key,
+                    MaxKeys=1
+                )
+                
+                has_versions = any(version['Key'].startswith(full_key) for version in versions_response.get('Versions', []))
+                has_delete_markers = any(marker['Key'].startswith(full_key) for marker in versions_response.get('DeleteMarkers', []))
+                
+                if not (has_versions or has_delete_markers):
+                    raise VAMSGeneralErrorResponse(f"No files found under prefix: {file_path}")
+    except ClientError as e:
+        logger.exception(f"Error checking file existence: {e}")
+        raise VAMSGeneralErrorResponse(f"Error checking file: {str(e)}")
+    
+    # Delete file(s)
+    affected_files = []
+    
+    if is_prefix:
+        # Delete all files under prefix including all versions
+        deleted_keys = delete_s3_prefix_all_versions(bucket, full_key)
+        
+        # Convert full keys to relative paths
+        for key in deleted_keys:
+            if key.startswith(base_key):
+                relative_path = key[len(base_key):]
+                affected_files.append(relative_path)
+    else:
+        # Delete single file including all versions
+        success = delete_s3_object_all_versions(bucket, full_key)
+        
+        if not success:
+            raise VAMSGeneralErrorResponse(f"Failed to delete file: {file_path}")
+        
+        affected_files.append(file_path)
+    
+    # Return response
+    return FileOperationResponseModel(
+        success=True,
+        message=f"Successfully deleted {len(affected_files)} file(s) and all versions" + 
+                (f" under prefix {file_path}" if is_prefix else f": {file_path}"),
+        affectedFiles=affected_files
+    )
 
+def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, claims_and_roles: Dict) -> FileOperationResponseModel:
+    """Archive a file or files under a prefix (soft delete)
+    
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        file_path: The file path or prefix
+        is_prefix: Whether to archive all files under the prefix
+        claims_and_roles: The claims and roles from the request
+        
+    Returns:
+        FileOperationResponseModel with the result of the operation
+    """
+    # Get asset and verify permissions (need POST permission to modify)
+    asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
+    
+    # Get asset location
+    bucket, base_key = get_asset_s3_location(asset)
+    
+    # Use smart path resolution to avoid duplication
+    full_key = resolve_asset_file_path(base_key, file_path)
+    
+    # Check if path exists and if it's already archived
+    try:
+        if not is_prefix:
+            try:
+                # For single file, check if it exists
+                s3_client.head_object(Bucket=bucket, Key=full_key)
+                
+                # If we get here, the file exists and is not archived
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'NoSuchKey':
+                    # File doesn't exist, check if it's archived
+                    if is_file_archived(bucket, full_key):
+                        raise VAMSGeneralErrorResponse(f"File is already archived: {file_path}")
+                    else:
+                        raise VAMSGeneralErrorResponse(f"File not found: {file_path}")
+                raise e
+        else:
+            # For prefix, check if at least one object exists
+            response = s3_client.list_objects_v2(
+                Bucket=bucket,
+                Prefix=full_key,
+                MaxKeys=1
+            )
+            if 'Contents' not in response or len(response['Contents']) == 0:
+                raise VAMSGeneralErrorResponse(f"No files found under prefix: {file_path}")
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'NoSuchKey':
+            raise VAMSGeneralErrorResponse(f"File not found: {file_path}")
+        raise VAMSGeneralErrorResponse(f"Error checking file: {str(e)}")
+    
+    # Archive file(s)
+    affected_files = []
+    
+    if is_prefix:
+        # Archive all files under prefix
+        archived_keys = archive_s3_prefix(bucket, full_key, databaseId, assetId)
+        
+        # Convert full keys to relative paths
+        for key in archived_keys:
+            if key.startswith(base_key):
+                relative_path = key[len(base_key):]
+                affected_files.append(relative_path)
+    else:
+        # Archive single file
+        success = delete_s3_object(bucket, full_key)
+        
+        if not success:
+            raise VAMSGeneralErrorResponse(f"Failed to archive file: {file_path}")
+        
+        affected_files.append(file_path)
+    
+    # Return response
+    return FileOperationResponseModel(
+        success=True,
+        message=f"Successfully archived {len(affected_files)} file(s)" + 
+                (f" under prefix {file_path}" if is_prefix else f": {file_path}"),
+        affectedFiles=affected_files
+    )
 
-        method_allowed_on_api = False
+def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_roles: Dict) -> FileOperationResponseModel:
+    """Unarchive a file by creating a new version prior to the delete marker
+    
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        file_path: The file path to unarchive
+        claims_and_roles: The claims and roles from the request
+        
+    Returns:
+        FileOperationResponseModel with the result of the operation
+    """
+    # Get asset and verify permissions (need POST permission to modify)
+    asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
+    
+    # Get asset location
+    bucket, base_key = get_asset_s3_location(asset)
+    
+    # Use smart path resolution to avoid duplication
+    full_key = resolve_asset_file_path(base_key, file_path)
+    
+    # Check if file exists and is archived using list_object_versions instead of head_object
+    # since head_object will fail with 404 for archived files
+    try:
+        versions_response = s3_client.list_object_versions(
+            Bucket=bucket,
+            Prefix=full_key,
+            MaxKeys=100
+        )
+        
+        # Check if the file exists (has any versions or delete markers)
+        has_versions = any(version['Key'] == full_key for version in versions_response.get('Versions', []))
+        has_delete_markers = any(marker['Key'] == full_key for marker in versions_response.get('DeleteMarkers', []))
+        
+        if not (has_versions or has_delete_markers):
+            raise VAMSGeneralErrorResponse(f"File not found: {file_path}")
+        
+        # Check if the file is archived (latest version is a delete marker)
+        is_archived = False
+        for marker in versions_response.get('DeleteMarkers', []):
+            if marker['Key'] == full_key and marker.get('IsLatest', False):
+                is_archived = True
+                break
+        
+        if not is_archived:
+            raise VAMSGeneralErrorResponse(f"File is not archived: {file_path}")
+    except ClientError as e:
+        logger.exception(f"Error checking file archive status: {e}")
+        raise VAMSGeneralErrorResponse(f"Error checking file: {str(e)}")
+    
+    # Get version history to find the delete marker and the version before it
+    try:
+        versions_response = s3_client.list_object_versions(
+            Bucket=bucket,
+            Prefix=full_key,
+            MaxKeys=100  # Limit to 100 versions
+        )
+        
+        # Find the delete marker
+        delete_marker = None
+        for marker in versions_response.get('DeleteMarkers', []):
+            if marker['Key'] == full_key and marker.get('IsLatest', False):
+                delete_marker = marker
+                break
+        
+        if not delete_marker:
+            raise VAMSGeneralErrorResponse(f"Could not find delete marker for file: {file_path}")
+        
+        # Find the latest version before the delete marker
+        latest_version = None
+        for version in versions_response.get('Versions', []):
+            if version['Key'] == full_key:
+                # Found a version, check if it's the latest one before the delete marker
+                if not latest_version or version['LastModified'] > latest_version['LastModified']:
+                    latest_version = version
+        
+        if not latest_version:
+            raise VAMSGeneralErrorResponse(f"Could not find a previous version for file: {file_path}")
+        
+        # Copy the latest version to create a new current version (effectively unarchiving)
+        copy_response = s3_client.copy_object(
+            CopySource={
+                'Bucket': bucket,
+                'Key': full_key,
+                'VersionId': latest_version['VersionId']
+            },
+            Bucket=bucket,
+            Key=full_key,
+            MetadataDirective='COPY'  # Preserve metadata from source version
+        )
+        
+        new_version_id = copy_response.get('VersionId', 'null')
+        
+        # Return response
+        return FileOperationResponseModel(
+            success=True,
+            message=f"Successfully unarchived file: {file_path}",
+            affectedFiles=[file_path]
+        )
+        
+    except ClientError as e:
+        logger.exception(f"Error unarchiving file: {e}")
+        raise VAMSGeneralErrorResponse(f"Error unarchiving file: {str(e)}")
+
+def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, dest_asset_id: Optional[str], claims_and_roles: Dict) -> FileOperationResponseModel:
+    """Copy a file within an asset or between assets in the same database
+    
+    Args:
+        databaseId: The database ID
+        assetId: The source asset ID
+        source_path: The source file path
+        dest_path: The destination file path
+        dest_asset_id: Optional destination asset ID (if different from source)
+        claims_and_roles: The claims and roles from the request
+        
+    Returns:
+        FileOperationResponseModel with the result of the operation
+    """
+    # Get source asset and verify permissions
+    source_asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
+    
+    # Determine if this is a cross-asset operation
+    is_cross_asset = dest_asset_id is not None and dest_asset_id != assetId
+    
+    # Get destination asset if cross-asset operation
+    if is_cross_asset:
+        dest_asset = get_asset_with_permissions(databaseId, dest_asset_id, "POST", claims_and_roles)
+        
+        # Validate cross-asset permissions
+        validate_cross_asset_permissions(source_asset, dest_asset, claims_and_roles)
+    else:
+        # Same asset, need POST permission
+        dest_asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
+    
+    # Get asset locations
+    source_bucket, source_base_key = get_asset_s3_location(source_asset)
+    dest_bucket, dest_base_key = get_asset_s3_location(dest_asset)
+    
+    # Use smart path resolution to avoid duplication for both source and destination
+    source_key = resolve_asset_file_path(source_base_key, source_path)
+    dest_key = resolve_asset_file_path(dest_base_key, dest_path)
+    
+    # Check if source exists
+    try:
+        s3_client.head_object(Bucket=source_bucket, Key=source_key)
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'NoSuchKey':
+            raise VAMSGeneralErrorResponse(f"Source file not found: {source_path}")
+        raise VAMSGeneralErrorResponse(f"Error checking source file: {str(e)}")
+    
+    # Check if destination already exists
+    try:
+        s3_client.head_object(Bucket=dest_bucket, Key=dest_key)
+        raise VAMSGeneralErrorResponse(f"Destination file already exists: {dest_path}")
+    except ClientError as e:
+        if e.response['Error']['Code'] != 'NoSuchKey':
+            raise VAMSGeneralErrorResponse(f"Error checking destination file: {str(e)}")
+    
+    # Copy the file
+    success = copy_s3_object(source_bucket, source_key, dest_bucket, dest_key)
+    
+    if not success:
+        raise VAMSGeneralErrorResponse(f"Failed to copy file from {source_path} to {dest_path}")
+    
+    # Return response
+    affected_files = [dest_path]
+    return FileOperationResponseModel(
+        success=True,
+        message=f"Successfully copied file from {source_path} to {dest_path}" + 
+                (f" in asset {dest_asset_id}" if is_cross_asset else ""),
+        affectedFiles=affected_files
+    )
+
+def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, claims_and_roles: Dict) -> FileOperationResponseModel:
+    """Move a file within an asset
+    
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        source_path: The source file path
+        dest_path: The destination file path
+        claims_and_roles: The claims and roles from the request
+        
+    Returns:
+        FileOperationResponseModel with the result of the operation
+    """
+    # Get asset and verify permissions (need POST permission to modify)
+    asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
+    
+    # Get asset location
+    bucket, base_key = get_asset_s3_location(asset)
+    
+    # Use smart path resolution to avoid duplication
+    source_key = resolve_asset_file_path(base_key, source_path)
+    dest_key = resolve_asset_file_path(base_key, dest_path)
+    
+    # Check if source exists
+    try:
+        s3_client.head_object(Bucket=bucket, Key=source_key)
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'NoSuchKey':
+            raise VAMSGeneralErrorResponse(f"Source file not found: {source_path}")
+        raise VAMSGeneralErrorResponse(f"Error checking source file: {str(e)}")
+    
+    # Check if destination already exists
+    try:
+        s3_client.head_object(Bucket=bucket, Key=dest_key)
+        raise VAMSGeneralErrorResponse(f"Destination file already exists: {dest_path}")
+    except ClientError as e:
+        if e.response['Error']['Code'] != 'NoSuchKey':
+            raise VAMSGeneralErrorResponse(f"Error checking destination file: {str(e)}")
+    
+    # Move the file
+    success = move_s3_object(bucket, source_key, bucket, dest_key)
+    
+    if not success:
+        raise VAMSGeneralErrorResponse(f"Failed to move file from {source_path} to {dest_path}")
+    
+    # Return response
+    affected_files = [source_path, dest_path]
+    return FileOperationResponseModel(
+        success=True,
+        message=f"Successfully moved file from {source_path} to {dest_path}",
+        affectedFiles=affected_files
+    )
+
+def revert_file_version(databaseId: str, assetId: str, file_path: str, version_id: str, claims_and_roles: Dict) -> RevertFileVersionResponseModel:
+    """Revert a file to a previous version by copying it as the new current version
+    
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        file_path: The file path to revert
+        version_id: The version ID to revert to
+        claims_and_roles: The claims and roles from the request
+        
+    Returns:
+        RevertFileVersionResponseModel with the result of the operation
+    """
+    # Get asset and verify permissions (need POST permission to modify)
+    asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
+    
+    # Get asset location
+    bucket, base_key = get_asset_s3_location(asset)
+    
+    # Use smart path resolution to avoid duplication
+    full_key = resolve_asset_file_path(base_key, file_path)
+    
+    # Check if file exists
+    try:
+        # Get object metadata with version history
+        metadata = get_s3_object_metadata(bucket, full_key, include_versions=True)
+        
+        # Check if the specified version exists
+        if not metadata.get('versions'):
+            raise VAMSGeneralErrorResponse(f"No version history found for file: {file_path}")
+        
+        version_found = False
+        for version in metadata.get('versions', []):
+            if version['versionId'] == version_id:
+                version_found = True
+                # Check if version is already the latest
+                if version['isLatest']:
+                    raise VAMSGeneralErrorResponse(f"Version {version_id} is already the current version")
+                # Check if version is archived
+                if version['isArchived']:
+                    raise VAMSGeneralErrorResponse(f"Cannot revert to archived version: {version_id}")
+                break
+        
+        if not version_found:
+            raise VAMSGeneralErrorResponse(f"Version {version_id} not found for file: {file_path}")
+        
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'NoSuchKey':
+            raise VAMSGeneralErrorResponse(f"File not found: {file_path}")
+        raise VAMSGeneralErrorResponse(f"Error checking file: {str(e)}")
+    
+    # Get the current version ID for reference
+    current_version_id = next((v['versionId'] for v in metadata.get('versions', []) if v['isLatest']), None)
+    
+    # Copy the specified version to create a new current version
+    try:
+        copy_response = s3_client.copy_object(
+            CopySource={
+                'Bucket': bucket,
+                'Key': full_key,
+                'VersionId': version_id
+            },
+            Bucket=bucket,
+            Key=full_key,
+            MetadataDirective='COPY'  # Preserve metadata from source version
+        )
+        
+        new_version_id = copy_response.get('VersionId', 'null')
+        
+    except Exception as e:
+        logger.exception(f"Error reverting file version: {e}")
+        raise VAMSGeneralErrorResponse(f"Failed to revert file version: {str(e)}")
+    
+    # Return response
+    affected_files = [file_path]
+    return RevertFileVersionResponseModel(
+        success=True,
+        message=f"Successfully reverted file {file_path} to version {version_id}",
+        filePath=file_path,
+        revertedFromVersionId=version_id,
+        newVersionId=new_version_id
+    )
+
+def get_file_info(databaseId: str, assetId: str, file_path: str, include_versions: bool, claims_and_roles: Dict) -> FileInfoResponseModel:
+    """Get detailed information about a specific file
+    
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        file_path: The relative file path
+        include_versions: Whether to include version history
+        claims_and_roles: The claims and roles from the request
+        
+    Returns:
+        FileInfoResponseModel with detailed file information
+    """
+    # Get asset and verify permissions
+    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
+    
+    # Get asset location
+    bucket, base_key = get_asset_s3_location(asset)
+    
+    # Use smart path resolution to avoid duplication
+    full_key = resolve_asset_file_path(base_key, file_path)
+    
+    # Get object metadata
+    metadata = get_s3_object_metadata(bucket, full_key, include_versions)
+    
+    # Return response model
+    return FileInfoResponseModel(**metadata)
+
+def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_and_roles: Dict) -> ListAssetFilesResponseModel:
+    """List files for an asset
+    
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        query_params: Dictionary containing query parameters
+        claims_and_roles: The claims and roles from the request
+        
+    Returns:
+        ListAssetFilesResponseModel with the list of files
+    """
+    # Get asset and verify permissions
+    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
+    
+    # Get asset location
+    bucket, key = get_asset_s3_location(asset)
+    
+    # Parse query parameters
+    request_model = ListAssetFilesRequestModel(
+        maxItems=query_params.get('maxItems', 1000),
+        pageSize=query_params.get('pageSize', 1000),
+        startingToken=query_params.get('startingToken'),
+        prefix=query_params.get('prefix'),
+        includeArchived=query_params.get('includeArchived', False)
+    )
+    
+    # List files with archive status
+    result = list_s3_objects_with_archive_status(
+        bucket, 
+        key, 
+        request_model.dict(),
+        request_model.includeArchived
+    )
+    
+    # Convert to response model
+    file_items = []
+    for item in result.get('items', []):
+        file_items.append(AssetFileItemModel(**item))
+    
+    return ListAssetFilesResponseModel(
+        items=file_items,
+        nextToken=result.get('nextToken')
+    )
+
+def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
+    """Handle DELETE /deleteFile requests
+    
+    Args:
+        event: The API Gateway event
+        context: The Lambda context
+        
+    Returns:
+        APIGatewayProxyResponseV2 with the response
+    """
+    try:
+        # Get claims and roles
+        claims_and_roles = request_to_claims(event)
+        
+        # Check API authorization
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if casbin_enforcer.enforceAPI(event):
-                method_allowed_on_api = True
-
-        if method_allowed_on_api:
-            pathParams = event.get('pathParameters', {})
-            if 'databaseId' not in pathParams:
-                message = "No database ID in API Call"
-                response['body'] = json.dumps({"message": message})
-                response['statusCode'] = 400
-                logger.error(response)
-                return response
-
-            if 'assetId' not in pathParams:
-                message = "No asset ID in API Call"
-                response['body'] = json.dumps({"message": message})
-                response['statusCode'] = 400
-                logger.error(response)
-                return response
-
-            logger.info("Validating parameters")
-            (valid, message) = validate({
-                'databaseId': {
-                    'value': event['pathParameters']['databaseId'],
-                    'validator': 'ID'
-                },
-                'assetId': {
-                    'value': event['pathParameters']['assetId'],
-                    'validator': 'ASSET_ID'
-                },
-            })
-
-            if not valid:
-                logger.error(message)
-                response['body'] = json.dumps({"message": message})
-                response['statusCode'] = 400
-                return response
-
-
-            # get assetId, databaseId from event
-            asset_id = event['pathParameters']['assetId']
-            database_id = event['pathParameters']['databaseId']
-
-            # log the assetId and databaseId
-            logger.info("AssetId: " + asset_id + " DatabaseId: " + database_id)
-
-            # check if assetId exists in database
-            asset = get_asset(database_id, asset_id)
-            asset_location = asset.get('assetLocation')
-
-            # log the asset_location
-            logger.info("AssetLocation: " + str(asset_location))
-
-            # if assetId exists in database
-            if asset_location:
-                # Get the key and bucket from the asset location
-                key = asset_location.get('Key')
-                bucket = asset_location.get('Bucket')
-                
-                # Log the bucket and key we're using
-                logger.info(f"Using bucket: {bucket or bucket_name_default}, key: {key}")
-
-                # get all files in assetLocation
-                result = get_all_files_in_path(key, queryParameters, bucket)
-                response['body'] = json.dumps({"message": result})
-                response['statusCode'] = 200
-                logger.info(response)
-                return response
-            else:
-                # log the assetId and databaseId on a single line and include they don't exist
-                logger.info("AssetId: " + asset_id + " DatabaseId: " + database_id + " Asset does not exist")
-
-                response['statusCode'] = 404
-                response['body'] = json.dumps({"message":"Asset not found"})
-                return response
+            if not casbin_enforcer.enforceAPI(event):
+                return authorization_error()
+        
+        # Get path parameters
+        path_params = event.get('pathParameters', {})
+        if 'databaseId' not in path_params:
+            return validation_error(body={'message': "No database ID in API Call"})
+        
+        if 'assetId' not in path_params:
+            return validation_error(body={'message': "No asset ID in API Call"})
+        
+        # Validate path parameters
+        (valid, message) = validate({
+            'databaseId': {
+                'value': path_params['databaseId'],
+                'validator': 'ID'
+            },
+            'assetId': {
+                'value': path_params['assetId'],
+                'validator': 'ASSET_ID'
+            },
+        })
+        
+        if not valid:
+            return validation_error(body={'message': message})
+        
+        # Parse request body
+        if not event.get('body'):
+            return validation_error(body={'message': "Request body is required"})
+        
+        if isinstance(event['body'], str):
+            body = json.loads(event['body'])
         else:
-            response['statusCode'] = 403
-            response['body'] = json.dumps({"message": "Not Authorized"})
-            return response
+            body = event['body']
+        
+        # Parse request model
+        request_model = parse(body, model=DeleteFileRequestModel)
+        
+        # Process request
+        response = delete_file(
+            path_params['databaseId'],
+            path_params['assetId'],
+            request_model.filePath,
+            request_model.isPrefix,
+            request_model.confirmPermanentDelete,
+            claims_and_roles
+        )
+        
+        return success(body=response.dict())
+    
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)})
     except Exception as e:
-        response['statusCode'] = 500
-        logger.exception(e)
-        response['body'] = json.dumps({"message": "Internal Server Error"})
+        logger.exception(f"Internal error: {e}")
+        return internal_error()
+
+def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
+    """Handle POST /unarchiveFile requests
+    
+    Args:
+        event: The API Gateway event
+        context: The Lambda context
+        
+    Returns:
+        APIGatewayProxyResponseV2 with the response
+    """
+    try:
+        # Get claims and roles
+        claims_and_roles = request_to_claims(event)
+        
+        # Check API authorization
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforceAPI(event):
+                return authorization_error()
+        
+        # Get path parameters
+        path_params = event.get('pathParameters', {})
+        if 'databaseId' not in path_params:
+            return validation_error(body={'message': "No database ID in API Call"})
+        
+        if 'assetId' not in path_params:
+            return validation_error(body={'message': "No asset ID in API Call"})
+        
+        # Validate path parameters
+        (valid, message) = validate({
+            'databaseId': {
+                'value': path_params['databaseId'],
+                'validator': 'ID'
+            },
+            'assetId': {
+                'value': path_params['assetId'],
+                'validator': 'ASSET_ID'
+            },
+        })
+        
+        if not valid:
+            return validation_error(body={'message': message})
+        
+        # Parse request body
+        if not event.get('body'):
+            return validation_error(body={'message': "Request body is required"})
+        
+        if isinstance(event['body'], str):
+            body = json.loads(event['body'])
+        else:
+            body = event['body']
+        
+        # Parse request model
+        request_model = parse(body, model=UnarchiveFileRequestModel)
+        
+        # Process request
+        response = unarchive_file(
+            path_params['databaseId'],
+            path_params['assetId'],
+            request_model.filePath,
+            claims_and_roles
+        )
+        
+        return success(body=response.dict())
+    
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Internal error: {e}")
+        return internal_error()
+
+def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
+    """Handle DELETE /archiveFile requests
+    
+    Args:
+        event: The API Gateway event
+        context: The Lambda context
+        
+    Returns:
+        APIGatewayProxyResponseV2 with the response
+    """
+    try:
+        # Get claims and roles
+        claims_and_roles = request_to_claims(event)
+        
+        # Check API authorization
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforceAPI(event):
+                return authorization_error()
+        
+        # Get path parameters
+        path_params = event.get('pathParameters', {})
+        if 'databaseId' not in path_params:
+            return validation_error(body={'message': "No database ID in API Call"})
+        
+        if 'assetId' not in path_params:
+            return validation_error(body={'message': "No asset ID in API Call"})
+        
+        # Validate path parameters
+        (valid, message) = validate({
+            'databaseId': {
+                'value': path_params['databaseId'],
+                'validator': 'ID'
+            },
+            'assetId': {
+                'value': path_params['assetId'],
+                'validator': 'ASSET_ID'
+            },
+        })
+        
+        if not valid:
+            return validation_error(body={'message': message})
+        
+        # Parse request body
+        if not event.get('body'):
+            return validation_error(body={'message': "Request body is required"})
+        
+        if isinstance(event['body'], str):
+            body = json.loads(event['body'])
+        else:
+            body = event['body']
+        
+        # Parse request model
+        request_model = parse(body, model=ArchiveFileRequestModel)
+        
+        # Process request
+        response = archive_file(
+            path_params['databaseId'],
+            path_params['assetId'],
+            request_model.filePath,
+            request_model.isPrefix,
+            claims_and_roles
+        )
+        
+        return success(body=response.dict())
+    
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Internal error: {e}")
+        return internal_error()
+
+def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
+    """Handle POST /copyFile requests
+    
+    Args:
+        event: The API Gateway event
+        context: The Lambda context
+        
+    Returns:
+        APIGatewayProxyResponseV2 with the response
+    """
+    try:
+        # Get claims and roles
+        claims_and_roles = request_to_claims(event)
+        
+        # Check API authorization
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforceAPI(event):
+                return authorization_error()
+        
+        # Get path parameters
+        path_params = event.get('pathParameters', {})
+        if 'databaseId' not in path_params:
+            return validation_error(body={'message': "No database ID in API Call"})
+        
+        if 'assetId' not in path_params:
+            return validation_error(body={'message': "No asset ID in API Call"})
+        
+        # Validate path parameters
+        (valid, message) = validate({
+            'databaseId': {
+                'value': path_params['databaseId'],
+                'validator': 'ID'
+            },
+            'assetId': {
+                'value': path_params['assetId'],
+                'validator': 'ASSET_ID'
+            },
+        })
+        
+        if not valid:
+            return validation_error(body={'message': message})
+        
+        # Parse request body
+        if not event.get('body'):
+            return validation_error(body={'message': "Request body is required"})
+        
+        if isinstance(event['body'], str):
+            body = json.loads(event['body'])
+        else:
+            body = event['body']
+        
+        # Parse request model
+        request_model = parse(body, model=CopyFileRequestModel)
+        
+        # Process request
+        response = copy_file(
+            path_params['databaseId'],
+            path_params['assetId'],
+            request_model.sourcePath,
+            request_model.destinationPath,
+            request_model.destinationAssetId,
+            claims_and_roles
+        )
+        
+        return success(body=response.dict())
+    
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Internal error: {e}")
+        return internal_error()
+
+def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
+    """Handle POST /moveFile requests
+    
+    Args:
+        event: The API Gateway event
+        context: The Lambda context
+        
+    Returns:
+        APIGatewayProxyResponseV2 with the response
+    """
+    try:
+        # Get claims and roles
+        claims_and_roles = request_to_claims(event)
+        
+        # Check API authorization
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforceAPI(event):
+                return authorization_error()
+        
+        # Get path parameters
+        path_params = event.get('pathParameters', {})
+        if 'databaseId' not in path_params:
+            return validation_error(body={'message': "No database ID in API Call"})
+        
+        if 'assetId' not in path_params:
+            return validation_error(body={'message': "No asset ID in API Call"})
+        
+        # Validate path parameters
+        (valid, message) = validate({
+            'databaseId': {
+                'value': path_params['databaseId'],
+                'validator': 'ID'
+            },
+            'assetId': {
+                'value': path_params['assetId'],
+                'validator': 'ASSET_ID'
+            },
+        })
+        
+        if not valid:
+            return validation_error(body={'message': message})
+        
+        # Parse request body
+        if not event.get('body'):
+            return validation_error(body={'message': "Request body is required"})
+        
+        if isinstance(event['body'], str):
+            body = json.loads(event['body'])
+        else:
+            body = event['body']
+        
+        # Parse request model
+        request_model = parse(body, model=MoveFileRequestModel)
+        
+        # Process request
+        response = move_file(
+            path_params['databaseId'],
+            path_params['assetId'],
+            request_model.sourcePath,
+            request_model.destinationPath,
+            claims_and_roles
+        )
+        
+        return success(body=response.dict())
+    
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Internal error: {e}")
+        return internal_error()
+
+def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
+    """Handle GET /fileInfo requests
+    
+    Args:
+        event: The API Gateway event
+        context: The Lambda context
+        
+    Returns:
+        APIGatewayProxyResponseV2 with the response
+    """
+    try:
+        # Get claims and roles
+        claims_and_roles = request_to_claims(event)
+        
+        # Check API authorization
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforceAPI(event):
+                return authorization_error()
+        
+        # Get path parameters
+        path_params = event.get('pathParameters', {})
+        if 'databaseId' not in path_params:
+            return validation_error(body={'message': "No database ID in API Call"})
+        
+        if 'assetId' not in path_params:
+            return validation_error(body={'message': "No asset ID in API Call"})
+        
+        # Validate path parameters
+        (valid, message) = validate({
+            'databaseId': {
+                'value': path_params['databaseId'],
+                'validator': 'ID'
+            },
+            'assetId': {
+                'value': path_params['assetId'],
+                'validator': 'ASSET_ID'
+            },
+        })
+        
+        if not valid:
+            return validation_error(body={'message': message})
+        
+        # Get query parameters
+        query_params = event.get('queryStringParameters', {}) or {}
+        
+        # Parse request body if present
+        if event.get('body'):
+            if isinstance(event['body'], str):
+                body = json.loads(event['body'])
+            else:
+                body = event['body']
+                
+            # Parse request model
+            request_model = parse(body, model=FileInfoRequestModel)
+        else:
+            # If no body, require filePath in query parameters
+            if 'filePath' not in query_params:
+                return validation_error(body={'message': "filePath is required in query parameters or request body"})
+            
+            # Create request model from query parameters
+            request_model = FileInfoRequestModel(
+                filePath=query_params['filePath'],
+                includeVersions=query_params.get('includeVersions', 'false').lower() == 'true'
+            )
+        
+        # Process request
+        response = get_file_info(
+            path_params['databaseId'],
+            path_params['assetId'],
+            request_model.filePath,
+            request_model.includeVersions,
+            claims_and_roles
+        )
+        
+        return success(body=response.dict())
+    
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Internal error: {e}")
+        return internal_error()
+
+def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
+    """Handle POST /revertVersion requests
+    
+    Args:
+        event: The API Gateway event
+        context: The Lambda context
+        
+    Returns:
+        APIGatewayProxyResponseV2 with the response
+    """
+    try:
+        # Get claims and roles
+        claims_and_roles = request_to_claims(event)
+        
+        # Check API authorization
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforceAPI(event):
+                return authorization_error()
+        
+        # Get path parameters
+        path_params = event.get('pathParameters', {})
+        if 'databaseId' not in path_params:
+            return validation_error(body={'message': "No database ID in API Call"})
+        
+        if 'assetId' not in path_params:
+            return validation_error(body={'message': "No asset ID in API Call"})
+        
+        if 'versionId' not in path_params:
+            return validation_error(body={'message': "No version ID in API Call"})
+        
+        # Validate path parameters
+        (valid, message) = validate({
+            'databaseId': {
+                'value': path_params['databaseId'],
+                'validator': 'ID'
+            },
+            'assetId': {
+                'value': path_params['assetId'],
+                'validator': 'ASSET_ID'
+            },
+            'versionId': {
+                'value': path_params['versionId'],
+                'validator': 'STRING_256'
+            },
+        })
+        
+        if not valid:
+            return validation_error(body={'message': message})
+        
+        # Parse request body
+        if not event.get('body'):
+            return validation_error(body={'message': "Request body is required"})
+        
+        if isinstance(event['body'], str):
+            body = json.loads(event['body'])
+        else:
+            body = event['body']
+        
+        # Parse request model
+        request_model = parse(body, model=RevertFileVersionRequestModel)
+        
+        # Process request
+        response = revert_file_version(
+            path_params['databaseId'],
+            path_params['assetId'],
+            request_model.filePath,
+            path_params['versionId'],
+            claims_and_roles
+        )
+        
+        return success(body=response.dict())
+    
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Internal error: {e}")
+        return internal_error()
+
+def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
+    """Handle GET /listFiles requests
+    
+    Args:
+        event: The API Gateway event
+        context: The Lambda context
+        
+    Returns:
+        APIGatewayProxyResponseV2 with the response
+    """
+    try:
+        # Get claims and roles
+        claims_and_roles = request_to_claims(event)
+        
+        # Check API authorization
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforceAPI(event):
+                return authorization_error()
+        
+        # Get path parameters
+        path_params = event.get('pathParameters', {})
+        if 'databaseId' not in path_params:
+            return validation_error(body={'message': "No database ID in API Call"})
+        
+        if 'assetId' not in path_params:
+            return validation_error(body={'message': "No asset ID in API Call"})
+        
+        # Validate path parameters
+        (valid, message) = validate({
+            'databaseId': {
+                'value': path_params['databaseId'],
+                'validator': 'ID'
+            },
+            'assetId': {
+                'value': path_params['assetId'],
+                'validator': 'ASSET_ID'
+            },
+        })
+        
+        if not valid:
+            return validation_error(body={'message': message})
+        
+        # Get query parameters
+        query_params = event.get('queryStringParameters', {}) or {}
+        validate_pagination_info(query_params)
+        
+        # Process request
+        response = list_asset_files(
+            path_params['databaseId'],
+            path_params['assetId'],
+            query_params,
+            claims_and_roles
+        )
+        
+        return success(body=response.dict())
+    
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Internal error: {e}")
+        return internal_error()
+
+#######################
+# Lambda Handler
+#######################
+
+def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    """Lambda handler for asset file operations
+    
+    Args:
+        event: The API Gateway event
+        context: The Lambda context
+        
+    Returns:
+        APIGatewayProxyResponseV2 with the response
+    """
+    try:
+        # Get API path and method
+        path = event['requestContext']['http']['path']
+        method = event['requestContext']['http']['method']
+        
+        # Route to appropriate handler based on path pattern
+        if method == 'GET' and path.endswith('/listFiles'):
+            return handle_list_files(event, context)
+        elif method == 'GET' and path.endswith('/fileInfo'):
+            return handle_file_info(event, context)
+        elif method == 'POST' and path.endswith('/moveFile'):
+            return handle_move_file(event, context)
+        elif method == 'POST' and path.endswith('/copyFile'):
+            return handle_copy_file(event, context)
+        elif method == 'POST' and path.endswith('/unarchiveFile'):
+            return handle_unarchive_file(event, context)
+        elif method == 'DELETE' and path.endswith('/archiveFile'):
+            return handle_archive_file(event, context)
+        elif method == 'DELETE' and path.endswith('/deleteFile'):
+            return handle_delete_file(event, context)
+        elif method == 'POST' and '/revertFileVersion/' in path:
+            return handle_revert_file_version(event, context)
+        else:
+            return validation_error(body={'message': "Invalid API path or method"})
+    
+    except Exception as e:
+        logger.exception(f"Unhandled error in lambda_handler: {e}")
+        return internal_error()

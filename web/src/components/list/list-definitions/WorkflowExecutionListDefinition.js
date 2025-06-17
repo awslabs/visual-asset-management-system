@@ -23,7 +23,8 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
     ],
     filterColumns: [{ name: "databaseId", placeholder: Synonyms.Database }],
     elementId: "workflowId",
-    deleteRoute: "database/{databaseId}/workflows/{workflowId}",
+    //deleteRoute: "database/{databaseId}/workflows/{workflowId}",
+    createAction: false,
     columnDefinitions: [
         new ColumnDefinition({
             id: "name",

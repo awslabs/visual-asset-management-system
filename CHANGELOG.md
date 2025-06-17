@@ -14,6 +14,7 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
     -   The old uploadAsset, uploadAssetWorkflow, and s3scoped access APIs and backend have been removed
     -   A new uploadFile (initialize, complete, createFolder), createAsset, and assetService (edit asset) have been created to support seperation of assets and files. UploadFile now fully supports S3 Signed URL uploads for better security and performance (replaces providing UI with scoped S3 access). 
     -   ScopedS3Access removal provides benefits as previous implementations had hard times with scoped role timeouts, different authentication implementations in VAMS, parallelization issues which prevented doing file validation, asset file overwrite issues, and more. 
+    -   New AssetUploads DynamoDB created to track uploads between initializations and completions
     -   IngestAsset API, intended for backend data system ingresses, wraps the new APIs as an all-in-one API caller. 
     -   UploadFile is now split into two stages for upload which allow for multiple files and multiple parts per file to be specified for better performant uplaods of large files
     -   Assets now are better built to support a range of different files, including no files. The separation allows for better reliance on S3 functionalities to support file versioning.
@@ -23,21 +24,40 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
     -   UploadFile now supports upload types for assetFiles and assetPreview to better support the separation of the uploads. This will allow for future enhancement support of adding filePreviews, seaparate of assets. 
     -   Workflow execution final steps which return files to an asset are now rigged to use the new uploadFile lambda to support all file checks before versioning as part of an asset and to now support pipelines that return asset previews. This process follows an alternate external upload stage where presigned URLs are not needed due to the direct access nature of pipelines into the assets bucket (still uses temporary locations for security). 
     -   AssetFiles API now brings back additional information for each file such as size, version, version created, and if the file is a versioned prefix folder or a file
+    -   Support for empty asset creation and/or throughout life cycle of an asset (uploads no longer required during asset creation)
 -   **Web** The front-end asset upload has been heavily modified to support the new backend asset changes
     -   Now supports choosing multiple files and/or entire folders
     -   Files now keep their original names and are no longer changed to the assetName
     -   Supports the presigned URL and multi-stage API calls needed now for an upload (including support for splitting large files into multiple parts for parallel upload)
     -   Supports stage and file error recovery options, including proceeding with certain failed uploads that will be discarded
     -   Comments no longer a supported field for now as part of upload, this will be updated as more asset version features get added; this was a confusing field as this was the comment on a version and not part of the comments feature. 
+-   The assetFiles API now supports additional paths for functionality including `../fileInfo`, `../moveFile`, `../copyFile`, `../archiveFile`, `../deleteFile`, `../revertFileVersion`. ListFiles now provides additional data back as well about each file. 
 -   **Web** The front-end asset download for multiple files has been updated to support downloading again an entire folders worth of files in parallel
     -   Note: This still fetches individual files based on their presigned URL for automation, it does not pre-ZIP files on a server and may still cause issues if hundreds or thousands of files need to be downloaded. 
     -   Overall UI and field displays
 -   **Web** The asset viewer file manager has been rewritten to support new features and richer user experience
-    -   Instead of having a separate redundant icon view of files in the right pane of the file manager, it now shows file information such as file name, path, size, and any version information. This will now allow for expansion to support file preview and thumbnails. 
+    -   Instead of having a separate redundant icon view of files in the right pane of the file manager, it now shows file information such as file name, path, size, and any version information. This will now allow for support for file preview and thumbnails. 
     -   Added back buttons for various downloads of file and folders
     -   Add ability and button to create sub-folders in an asset
     -   ViewAsset button still shown on files for asset 3D visualization, preview files, and file specific metadata.
 -   **Web** Execute Workflow in View Assets now allows the user to choose which file on the asset will be processed due to the new multifile support implementation of assets
+-   **Web** Enhanced asset file management capabilities with comprehensive file operations:
+    -   Added new API endpoints for file operations: fileInfo, moveFile, copyFile, archiveFile, unarchive, deleteFile, getVersion, getVersions, revertFileVersion
+    -   Implemented file versioning with UI for showing files, knowing what version you are looking at, and reverting to a version
+    -   Implemented file archiving which is just using S3 delete markers (vs a permenant delete that deletes the entire file)
+    -   Added support for cross-asset file copying with proper permission validation
+    -   Implemented detailed file metadata retrieval including size, storage class, and version history
+    -   Added permanent file deletion with safety confirmation to prevent accidental data loss
+    -   All file operations update asset version history for complete audit trail
+    -   Implemented proper error handling and validation for all file operations
+-   **Web** All new asset versioning capability and version comparisons
+-   Displayed as Versions tab under Asset Viewer and labels throughout (such as on file versions) to show files versions included in the current asset version (or mismatched)
+-   **Web** New tabbed design for Viewing Asset
+    -   Moved comments page for assets to now be a tab under view assets
+-   Assets as a whole now support both permanent deletion and archiving. 
+-   Note: currently unarchiving an asset as a whole doesns't exist yet
+
+### Chores
 
 ### Chores
 

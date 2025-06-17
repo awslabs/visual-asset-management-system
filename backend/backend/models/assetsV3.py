@@ -47,9 +47,35 @@ class AssetLinksModel(BaseModel, extra=Extra.ignore):
             raise ValueError(message)
         return values
 
+class AssetLocationModel(BaseModel, extra=Extra.ignore):
+    """Model for asset location in S3"""
+    Key: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
+    Bucket: Optional[str] = None
+
 class AssetPreviewLocationModel(BaseModel, extra=Extra.ignore):
     """Model for asset preview location in S3"""
     Key: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
+    Bucket: Optional[str] = None
+
+class CurrentVersionModel(BaseModel, extra=Extra.ignore):
+    """Model for current version information"""
+    Version: str
+    DateModified: str
+    Comment: str = ""
+    description: str = ""
+    specifiedPipelines: List[str] = []
+    createdBy: str = "system"
+
+class AssetVersionListItemModel(BaseModel, extra=Extra.ignore):
+    """Model for individual version items in version lists"""
+    Version: str
+    DateModified: str
+    Comment: str = ""
+    description: str = ""
+    specifiedPipelines: List[str] = []
+    createdBy: str = "system"
+    isCurrent: bool = False
+    fileCount: int = 0  # Number of available files for this version
 
 ######################## Create Asset API Models ##########################
 class CreateAssetRequestModel(BaseModel, extra=Extra.ignore):
@@ -253,7 +279,6 @@ class CompleteUploadResponseModel(BaseModel, extra=Extra.ignore):
     uploadId: str
     assetId: str
     assetType: Optional[str] = None
-    version: Optional[str] = None
     fileResults: List[FileCompletionResult] = []
     overallSuccess: bool = True
 
@@ -273,6 +298,106 @@ class CreateFolderResponseModel(BaseModel, extra=Extra.ignore):
     """Response model for creating a folder in S3"""
     message: str
     relativeKey: str
+
+######################## Asset Files API Models ##########################
+
+class AssetFileItemModel(BaseModel, extra=Extra.ignore):
+    """Base model for file/folder items"""
+    fileName: str
+    key: str
+    relativePath: str
+    isFolder: bool
+    size: Optional[int] = None
+    dateCreatedCurrentVersion: str
+    versionId: str
+    storageClass: Optional[str] = None  # To identify archived files
+    isArchived: bool = False  # Computed field based on metadata
+
+class ListAssetFilesRequestModel(BaseModel, extra=Extra.ignore):
+    """Query parameters for listing asset files"""
+    maxItems: Optional[int] = Field(default=1000, ge=1, le=1000)
+    pageSize: Optional[int] = Field(default=1000, ge=1, le=1000)
+    startingToken: Optional[str] = None
+    prefix: Optional[str] = None
+    includeArchived: Optional[bool] = Field(default=False)  # Show archived files
+
+class ListAssetFilesResponseModel(BaseModel, extra=Extra.ignore):
+    """Response model for listing asset files"""
+    items: List[AssetFileItemModel]
+    nextToken: Optional[str] = None
+
+class FileInfoRequestModel(BaseModel, extra=Extra.ignore):
+    """Request model for getting detailed file information"""
+    filePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
+    includeVersions: Optional[bool] = Field(default=False)
+
+class FileVersionModel(BaseModel, extra=Extra.ignore):
+    """Model for individual file version information"""
+    versionId: str
+    lastModified: str
+    size: int
+    isLatest: bool
+    storageClass: str = 'STANDARD'
+    etag: Optional[str] = None
+    isArchived: bool = False
+
+class FileInfoResponseModel(BaseModel, extra=Extra.ignore):
+    """Response model for detailed file information"""
+    fileName: str
+    key: str
+    relativePath: str
+    isFolder: bool
+    size: Optional[int] = None
+    contentType: Optional[str] = None
+    lastModified: str
+    etag: Optional[str] = None
+    storageClass: Optional[str] = None
+    isArchived: bool = False
+    versions: Optional[List[FileVersionModel]] = None
+
+class MoveFileRequestModel(BaseModel, extra=Extra.ignore):
+    """Request model for moving/renaming files"""
+    sourcePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
+    destinationPath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
+
+class CopyFileRequestModel(BaseModel, extra=Extra.ignore):
+    """Request model for copying files within same database"""
+    sourcePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
+    destinationPath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
+    destinationAssetId: Optional[str] = Field(None, min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
+
+class ArchiveFileRequestModel(BaseModel, extra=Extra.ignore):
+    """Request model for archiving files (soft delete)"""
+    filePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
+    isPrefix: Optional[bool] = Field(default=False)  # Archive all files under prefix
+
+class UnarchiveFileRequestModel(BaseModel, extra=Extra.ignore):
+    """Request model for unarchiving files (restore from soft delete)"""
+    filePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
+
+class DeleteFileRequestModel(BaseModel, extra=Extra.ignore):
+    """Request model for permanently deleting files"""
+    filePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
+    isPrefix: Optional[bool] = Field(default=False)  # Delete all files under prefix
+    confirmPermanentDelete: bool = Field(default=False)  # Safety confirmation
+
+class FileOperationResponseModel(BaseModel, extra=Extra.ignore):
+    """Generic response model for file operations"""
+    success: bool
+    message: str
+    affectedFiles: List[str] = []
+
+class RevertFileVersionRequestModel(BaseModel, extra=Extra.ignore):
+    """Request model for reverting a file to a previous version"""
+    filePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
+
+class RevertFileVersionResponseModel(BaseModel, extra=Extra.ignore):
+    """Response model for reverting a file version"""
+    success: bool
+    message: str
+    filePath: str
+    revertedFromVersionId: str
+    newVersionId: str
 
 ######################## Ingest Asset API Models ##########################
 class IngestAssetInitializeRequestModel(BaseModel, extra=Extra.ignore):
@@ -384,6 +509,203 @@ class IngestAssetCompleteResponseModel(BaseModel, extra=Extra.ignore):
     assetId: str
     fileResults: List[FileCompletionResult] = []
     overallSuccess: bool = True
+
+######################## Asset Service API Models ##########################
+class GetAssetRequestModel(BaseModel, extra=Extra.ignore):
+    """Request model for getting a single asset"""
+    showArchived: Optional[bool] = False
+
+class GetAssetsRequestModel(BaseModel, extra=Extra.ignore):
+    """Request model for listing assets"""
+    maxItems: Optional[int] = Field(default=1000, ge=1, le=1000)
+    pageSize: Optional[int] = Field(default=1000, ge=1, le=1000) 
+    startingToken: Optional[str] = None
+    showArchived: Optional[bool] = False
+
+class UpdateAssetRequestModel(BaseModel, extra=Extra.ignore):
+    """Request model for updating an asset"""
+    assetName: Optional[str] = Field(None, min_length=1, max_length=256, pattern=object_name_pattern)
+    description: Optional[str] = Field(None, min_length=4, max_length=256)
+    isDistributable: Optional[bool] = None
+    tags: Optional[List[str]] = None
+    
+    @root_validator
+    def validate_fields(cls, values):
+        # Validate tags if provided
+        if values.get('tags') is not None:
+            logger.info("Validating tags")
+            (valid, message) = validate({
+                'tags': {
+                    'value': values.get('tags'), 
+                    'validator': 'STRING_256_ARRAY',
+                    'optional': True
+                }
+            })
+            if not valid:
+                logger.error(message)
+                raise ValueError(message)
+        
+        # Ensure at least one field is provided for update
+        if not any(values.get(field) is not None for field in ['assetName', 'description', 'isDistributable', 'tags']):
+            raise ValueError("At least one field must be provided for update")
+            
+        return values
+
+class ArchiveAssetRequestModel(BaseModel, extra=Extra.ignore):
+    """Request model for archiving an asset (soft delete)"""
+    confirmArchive: bool = Field(default=False)
+    reason: Optional[str] = Field(None, max_length=256)  # Optional reason for archiving
+
+class DeleteAssetRequestModel(BaseModel, extra=Extra.ignore):
+    """Request model for permanently deleting an asset"""
+    confirmPermanentDelete: bool = Field(default=False)  # Stronger confirmation required
+    reason: Optional[str] = Field(None, max_length=256)  # Optional reason for deletion
+    
+    @validator('confirmPermanentDelete')
+    def validate_confirmation(cls, v):
+        """Ensure confirmation is provided for permanent deletion"""
+        if not v:
+            raise ValueError("confirmPermanentDelete must be true for permanent deletion")
+        return v
+
+class AssetResponseModel(BaseModel, extra=Extra.ignore):
+    """Response model for asset data"""
+    databaseId: str
+    assetId: str
+    assetName: str
+    description: str
+    isDistributable: bool
+    tags: Optional[List[str]] = []
+    assetType: Optional[str] = None
+    status: Optional[str] = "active" #Used for determining archived vs non-archived (active)
+    currentVersion: Optional[CurrentVersionModel] = None
+    assetLocation: Optional[AssetLocationModel] = None
+    previewLocation: Optional[AssetPreviewLocationModel] = None
+    archivedAt: Optional[str] = None
+    archivedBy: Optional[str] = None
+    archivedReason: Optional[str] = None
+
+class AssetOperationResponseModel(BaseModel, extra=Extra.ignore):
+    """Response model for asset operations (update, archive, delete)"""
+    success: bool
+    message: str
+    assetId: str
+    operation: Literal["archive", "delete", "update"]
+    timestamp: str
+
+######################## Asset Versions API Models ##########################
+class AssetFileVersionItemModel(BaseModel, extra=Extra.ignore):
+    """Model for a file in an asset version"""
+    relativeKey: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
+    versionId: str  # S3 version ID
+    isArchived: bool = False
+
+class CreateAssetVersionRequestModel(BaseModel, extra=Extra.ignore):
+    """Request model for creating a new asset version"""
+    useLatestFiles: bool = False  # If true, use latest files in S3 bucket
+    files: Optional[List[AssetFileVersionItemModel]] = None  # List of files and their S3 versions
+    comment: str = Field(min_length=1, max_length=256, strip_whitespace=True)  # Required comment for the version
+    
+    @root_validator
+    def validate_fields(cls, values):
+        # If not using latest files, ensure file list is provided
+        if not values.get('useLatestFiles') and (not values.get('files') or len(values.get('files')) == 0):
+            message = "Either useLatestFiles must be true or a list of files must be provided"
+            logger.error(message)
+            raise ValueError(message)
+            
+        # If using latest files, file list should be empty
+        if values.get('useLatestFiles') and values.get('files') and len(values.get('files')) > 0:
+            message = "When useLatestFiles is true, files list should not be provided"
+            logger.error(message)
+            raise ValueError(message)
+            
+        # Check for duplicate keys if files provided
+        if values.get('files'):
+            keys = [file.relativeKey for file in values.get('files')]
+            if len(keys) != len(set(keys)):
+                message = "Duplicate relative keys are not allowed"
+                logger.error(message)
+                raise ValueError(message)
+                
+        return values
+
+class RevertAssetVersionRequestModel(BaseModel, extra=Extra.ignore):
+    """Request model for reverting to a previous asset version"""
+    assetVersionId: str = Field(min_length=1, strip_whitespace=True)  # The version ID to revert to
+    comment: Optional[str] = Field(None, max_length=256)  # Optional comment for the new version
+
+class GetAssetVersionRequestModel(BaseModel, extra=Extra.ignore):
+    """Request model for getting a specific asset version"""
+    assetVersionId: str = Field(min_length=1, strip_whitespace=True)  # The version ID to get
+
+class GetAssetVersionsRequestModel(BaseModel, extra=Extra.ignore):
+    """Request model for listing asset versions"""
+    maxItems: Optional[int] = Field(default=100, ge=1, le=1000)
+    pageSize: Optional[int] = Field(default=100, ge=1, le=1000)
+    startingToken: Optional[str] = None
+
+class AssetVersionFileModel(BaseModel, extra=Extra.ignore):
+    """Model for a file in an asset version response"""
+    relativeKey: str
+    versionId: str
+    isPermanentlyDeleted: bool = False  # Whether the file version was permanently deleted
+    isLatestVersionArchived: bool = False  # Whether the latest version of this file is archived
+    size: Optional[int] = None
+    lastModified: Optional[str] = None
+    etag: Optional[str] = None
+
+class AssetVersionResponseModel(BaseModel, extra=Extra.ignore):
+    """Response model for a specific asset version"""
+    assetId: str
+    assetVersionId: str
+    versionNumber: str
+    dateCreated: str
+    comment: Optional[str] = None
+    files: List[AssetVersionFileModel] = []
+    createdBy: Optional[str] = None
+
+class AssetVersionsListResponseModel(BaseModel, extra=Extra.ignore):
+    """Response model for listing asset versions"""
+    versions: List[AssetVersionListItemModel] = []  # List of properly typed version items
+    nextToken: Optional[str] = None
+
+class AssetVersionOperationResponseModel(BaseModel, extra=Extra.ignore):
+    """Response model for asset version operations (create, revert)"""
+    success: bool
+    message: str
+    assetId: str
+    assetVersionId: str
+    versionNumber: str
+    operation: Literal["create", "revert"]
+    timestamp: str
+    skippedFiles: Optional[List[str]] = None  # Files that couldn't be processed
+
+######################## Download Asset API Models ##########################
+class DownloadAssetRequestModel(BaseModel, extra=Extra.ignore):
+    """Request model for downloading asset files or previews"""
+    downloadType: Literal["assetFile", "assetPreview"]
+    key: Optional[str] = Field(None, min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
+    versionId: Optional[str] = None  # For assetFile only, get specific version
+    
+    @root_validator
+    def validate_fields(cls, values):
+        download_type = values.get('downloadType')
+        version_id = values.get('versionId')
+        
+        # Version ID only allowed for assetFile downloads
+        if download_type == "assetPreview" and version_id:
+            raise ValueError("versionId is not allowed for assetPreview downloads")
+            
+        return values
+
+class DownloadAssetResponseModel(BaseModel, extra=Extra.ignore):
+    """Response model for asset download"""
+    downloadUrl: str
+    expiresIn: int = 86400  # URL expiration in seconds (24 hours)
+    downloadType: Literal["assetFile", "assetPreview"]
+    versionId: Optional[str] = None
+    message: str = "Download URL generated successfully"
 
 ######################## DynamoDB Table Models ##########################
 class AssetUploadTableModel(BaseModel, extra=Extra.ignore):

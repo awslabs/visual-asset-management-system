@@ -1,5 +1,5 @@
 import { createContext, useReducer } from "react";
-import { AssetDetail } from "../pages/AssetUpload";
+import { AssetDetail } from "../pages/AssetUpload/AssetUpload";
 
 export interface AssetDetailAction {
     type: string;

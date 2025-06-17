@@ -412,7 +412,6 @@ def test_delete_asset_success(mock_update_asset_count, mock_s3, mock_dynamodb,
             'assetName': 'Test Asset',
             'assetType': 'model/gltf-binary',
             'assetLocation': {'Key': 'test-key'},
-            'isMultiFile': False,
             'tags': ['tag1', 'tag2']
         }
     }

@@ -114,22 +114,6 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                     S: "route__path",
                                 },
                                 id: {
-                                    S: `2_${roleNameIDClean}_web_paths`,
-                                },
-                                operator: {
-                                    S: "starts_with",
-                                },
-                                value: {
-                                    S: "/comments",
-                                },
-                            },
-                        },
-                        {
-                            M: {
-                                field: {
-                                    S: "route__path",
-                                },
-                                id: {
                                     S: `3_${roleNameIDClean}_web_paths`,
                                 },
                                 operator: {

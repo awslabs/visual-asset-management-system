@@ -62,6 +62,7 @@ export function buildCreateAssetFunction(
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             ASSET_BUCKET_NAME_DEFAULT: storageResources.s3.assetBucket.bucketName,
+            ASSET_VERSIONS_STORAGE_TABLE_NAME: storageResources.dynamo.assetVersionsStorageTable.tableName,
         },
     });
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
@@ -72,6 +73,7 @@ export function buildCreateAssetFunction(
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetVersionsStorageTable.grantReadWriteData(fun);
     storageResources.s3.assetBucket.grantReadWrite(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -121,6 +123,10 @@ export function buildAssetService(
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+            ASSET_UPLOAD_TABLE_NAME: storageResources.dynamo.assetUploadsStorageTable.tableName,
+            ASSET_LINKS_STORAGE_TABLE_NAME: storageResources.dynamo.assetLinksStorageTable.tableName,
+            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
+            ASSET_VERSIONS_STORAGE_TABLE_NAME: storageResources.dynamo.assetVersionsStorageTable.tableName,
         },
     });
     storageResources.dynamo.assetStorageTable.grantReadWriteData(assetService);
@@ -130,6 +136,16 @@ export function buildAssetService(
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(assetService);
     storageResources.dynamo.userRolesStorageTable.grantReadData(assetService);
     storageResources.dynamo.rolesStorageTable.grantReadData(assetService);
+    
+    // Add permissions for additional tables needed for delete/archive operations
+    storageResources.dynamo.assetUploadsStorageTable.grantReadWriteData(assetService);
+    storageResources.dynamo.assetLinksStorageTable.grantReadWriteData(assetService);
+    storageResources.dynamo.metadataStorageTable.grantReadWriteData(assetService);
+    storageResources.dynamo.assetVersionsStorageTable.grantReadWriteData(assetService);
+    
+    // Grant delete permissions for S3 objects
+    storageResources.s3.assetBucket.grantDelete(assetService);
+    
     kmsKeyLambdaPermissionAddToResourcePolicy(assetService, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(assetService, config);
 
@@ -142,6 +158,7 @@ export function buildAssetFiles(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
+    sendEmailFunction: lambda.Function,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -168,15 +185,18 @@ export function buildAssetFiles(
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
+            S3_ASSET_AUXILIARY_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+            SEND_EMAIL_FUNCTION_NAME: sendEmailFunction.functionName,
         },
     });
     storageResources.dynamo.assetStorageTable.grantReadWriteData(assetService);
-    storageResources.dynamo.databaseStorageTable.grantReadWriteData(assetService);
-    storageResources.s3.assetBucket.grantRead(assetService);
+    storageResources.s3.assetBucket.grantReadWrite(assetService);
+    storageResources.s3.assetAuxiliaryBucket.grantReadWrite(assetService)
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(assetService);
     storageResources.dynamo.userRolesStorageTable.grantReadData(assetService);
     storageResources.dynamo.rolesStorageTable.grantReadData(assetService);
+    sendEmailFunction.grantInvoke(assetService);
     kmsKeyLambdaPermissionAddToResourcePolicy(assetService, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(assetService, config);
 
@@ -433,7 +453,7 @@ export function buildDownloadAssetFunction(
     return downloadAssetFunction;
 }
 
-export function buildRevertAssetFunction(
+export function buildAssetVersionsFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
@@ -441,8 +461,8 @@ export function buildRevertAssetFunction(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const name = "revertAsset";
-    const revertAssetFunction = new lambda.Function(scope, name, {
+    const name = "assetVersions";
+    const assetVersionsFunction = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.assets.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -457,29 +477,35 @@ export function buildRevertAssetFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
+
         environment: {
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            ASSET_VERSIONS_STORAGE_TABLE_NAME: storageResources.dynamo.assetVersionsStorageTable.tableName,
+            ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME: storageResources.dynamo.assetFileVersionsStorageTable.tableName,
+            S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
-    storageResources.s3.assetBucket.grantReadWrite(revertAssetFunction);
-    storageResources.dynamo.databaseStorageTable.grantReadData(revertAssetFunction);
-    storageResources.dynamo.assetStorageTable.grantReadWriteData(revertAssetFunction);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(revertAssetFunction);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(revertAssetFunction);
-    storageResources.dynamo.rolesStorageTable.grantReadData(revertAssetFunction);
-    kmsKeyLambdaPermissionAddToResourcePolicy(
-        revertAssetFunction,
-        storageResources.encryption.kmsKey
-    );
-    globalLambdaEnvironmentsAndPermissions(revertAssetFunction, config);
+    
+    // Grant permissions to DynamoDB tables
+    storageResources.dynamo.assetStorageTable.grantReadWriteData(assetVersionsFunction);
+    storageResources.dynamo.assetVersionsStorageTable.grantReadWriteData(assetVersionsFunction);
+    storageResources.dynamo.assetFileVersionsStorageTable.grantReadWriteData(assetVersionsFunction);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(assetVersionsFunction);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(assetVersionsFunction);
+    storageResources.dynamo.rolesStorageTable.grantReadData(assetVersionsFunction);
+    
+    // Grant permissions to S3 bucket
+    storageResources.s3.assetBucket.grantReadWrite(assetVersionsFunction);
+    
+    kmsKeyLambdaPermissionAddToResourcePolicy(assetVersionsFunction, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(assetVersionsFunction, config);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
-    return revertAssetFunction;
+
+    return assetVersionsFunction;
 }
 
 export function buildIngestAssetFunction(

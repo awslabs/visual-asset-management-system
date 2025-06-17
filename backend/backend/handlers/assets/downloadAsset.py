@@ -1,223 +1,397 @@
-#  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-#  SPDX-License-Identifier: Apache-2.0
+# Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
 
 import os
 import boto3
 import json
-from boto3.dynamodb.conditions import Key, Attr
-from boto3.dynamodb.types import TypeDeserializer
+from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 from botocore.exceptions import ClientError
+from aws_lambda_powertools.utilities.typing import LambdaContext
+from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from common.s3 import validateS3AssetExtensionsAndContentType
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.assetsV3 import (
+    DownloadAssetRequestModel, DownloadAssetResponseModel
+)
 
-claims_and_roles = {}
-logger = safeLogger(service_name="DownloadAsset")
-dynamodb = boto3.resource('dynamodb')
-
-main_rest_response = STANDARD_JSON_RESPONSE
-asset_Database = None
-asset_bucket_name_default = None
-timeout = 1800
-unitTest = {
-    "body": {
-        "databaseId": "Unit_Test"
-    }
-}
-unitTest['body'] = json.dumps(unitTest['body'])
-
-try:
-    asset_Database = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_bucket_name_default = os.environ["S3_ASSET_STORAGE_BUCKET"]
-    region = os.environ['AWS_REGION']
-    timeout = int(os.environ['CRED_TOKEN_TIMEOUT_SECONDS'])
-    #s3Endpoint = os.environ['S3_ENDPOINT']
-except:
-    logger.exception("Failed Loading Environment Variables")
-    main_rest_response['body'] = json.dumps(
-        {"message": "Failed Loading Environment Variables"})
-
-#s3_config = Config(signature_version='s3v4')
-#s3_client = boto3.client('s3', region_name=region, endpoint_url=s3Endpoint, config=s3_config)
+# Configure AWS clients
+region = os.environ['AWS_REGION']
 s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'})
-s3_client = boto3.client('s3', region_name=region, config=s3_config)
+s3 = boto3.client('s3', region_name=region, config=s3_config)
+dynamodb = boto3.resource('dynamodb')
+logger = safeLogger(service_name="DownloadAsset")
 
+# Constants
+TIMEOUT_SECONDS = 86400  # URL expiration in seconds (24 hours)
+PREVIEW_PREFIX = 'previews/'
 
-def get_Assets(databaseId, assetId):
-    #deserializer = TypeDeserializer()
-    table = dynamodb.Table(asset_Database)
-    db_response = table.query(
-        KeyConditionExpression=Key('databaseId').eq(
-            databaseId) & Key('assetId').eq(assetId),
-        ScanIndexForward=False
-    )
-    items = []
-    for item in db_response['Items']:
-        #USE COMMENTED OUT CODE WHEN USING: dynamodb client w/ paginator, not resource w/ table
-        # deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
+# Load environment variables
+try:
+    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    asset_bucket_name_default = os.environ["S3_ASSET_STORAGE_BUCKET"]
+except Exception as e:
+    logger.exception("Failed loading environment variables")
+    raise e
 
-        # # Add Casbin Enforcer to check if the current user has permissions to GET the asset:
-        # deserialized_document.update({
-        #     "object__type": "asset"
-        # })
-        # if len(claims_and_roles["tokens"]) > 0:
-        #     casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        #     if casbin_enforcer.enforce(deserialized_document, "GET"):
-        #         items.append(deserialized_document)
+# Initialize DynamoDB tables
+asset_table = dynamodb.Table(asset_storage_table_name)
 
-        # Add Casbin Enforcer to check if the current user has permissions to GET the asset:
-        item.update({
-            "object__type": "asset"
-        })
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if casbin_enforcer.enforce(item, "GET"):
-                items.append(item)
+#######################
+# Utility Functions
+#######################
 
-    return items
-
-
-def get_File(databaseId, assetId, key, version):
-    items = get_Assets(databaseId, assetId)
-    if not items and len(items) == 0:
-        return "Error: Asset not found or not authorized to view the assets"
-    item = items[0]
-
-    #Override key with data from tables instead if not provided (base asset file)
-    if(key is None or key is ""):
-        key = item['assetLocation']['Key']
-
-    asset_bucket = item.get('assetLocation', {}).get('Bucket', asset_bucket_name_default)
-
-    isDistributable = item['isDistributable']
-    if isinstance(isDistributable, bool):
-        if not isDistributable:
-            return "Error: Asset not distributable"
-    else:
-        # invalid type of isDistributable is treated as asset not distributable
-        logger.error("isDistributable invalid type")
-        return "Error: Asset not distributable"
-
-    #Validate for malicious content type
-    if not validateS3AssetExtensionsAndContentType(asset_bucket_name_default, key):
-        return "Error: Unallowed file extention or content type in asset file. Unable to download file."
-
-    if version is None or version == "" or (version != "" and (version == "Latest" or version == item['currentVersion']['Version'])):
-        return s3_client.generate_presigned_url('get_object', Params={
-            'Bucket': asset_bucket,
-            'Key': key
-        }, ExpiresIn=timeout)
-    else:
-        # versions = item['versions']
-        # for i in versions:
-        #     if i['Version'] == version:
-        return s3_client.generate_presigned_url('get_object', Params={
-            'Bucket': asset_bucket,
-            'Key': key,
-            'VersionId': version
-        }, ExpiresIn=timeout)
-        #return "Error: Asset not found or not authorized to view the assets"
-
-
-def lambda_handler(event, context):
-    global claims_and_roles
-    response = STANDARD_JSON_RESPONSE
-    claims_and_roles = request_to_claims(event)
-    logger.info(event)
-
-    if isinstance(event['body'], str):
-        event['body'] = json.loads(event['body'])
-
-    pathParameters = event.get('pathParameters', {})
-    queryParameters = event.get('queryStringParameters', {})
-
-    if 'assetId' not in pathParameters or 'databaseId' not in pathParameters:
-        message = "DatabaseId or assetId not in API Call Path"
-        response['body'] = json.dumps({"message": message})
-        response['statusCode'] = 400
-        logger.error(response)
-        return response
+def get_asset_details(databaseId, assetId):
+    """Get asset details from DynamoDB"""
     try:
-        logger.info("Validating parameters")
+        response = asset_table.query(
+            KeyConditionExpression=Key('databaseId').eq(databaseId) & Key('assetId').eq(assetId),
+            ScanIndexForward=False
+        )
+        
+        if not response.get('Items'):
+            return None
+            
+        # Return the first (most recent) item
+        return response['Items'][0]
+    except Exception as e:
+        logger.exception(f"Error getting asset details: {e}")
+        raise VAMSGeneralErrorResponse(f"Error retrieving asset: {str(e)}")
+
+def is_file_archived(metadata):
+    """Determine if file is archived based on S3 metadata
+    
+    Args:
+        metadata: The S3 object metadata
+        
+    Returns:
+        True if file is archived, False otherwise
+    """
+    vams_status = metadata.get('Metadata', {}).get('vams-status', '')
+    storage_class = metadata.get('StorageClass', 'STANDARD')
+    
+    # File is archived if:
+    # 1. Has vams-status=archived or deleted metadata, OR
+    # 2. Storage class is GLACIER/DEEP_ARCHIVE
+    return (vams_status in ['archived', 'deleted'] or 
+            storage_class in ['GLACIER', 'DEEP_ARCHIVE'])
+
+def is_delete_marker(bucket, key, version_id=None):
+    """Check if a specific version is a delete marker
+    
+    Args:
+        bucket: S3 bucket name
+        key: S3 object key
+        version_id: Optional version ID to check
+        
+    Returns:
+        True if version is a delete marker, False otherwise
+    """
+    try:
+        # If no version ID provided, check if the latest version is a delete marker
+        if not version_id:
+            response = s3.list_object_versions(
+                Bucket=bucket,
+                Prefix=key,
+                MaxKeys=1
+            )
+            
+            delete_markers = response.get('DeleteMarkers', [])
+            if delete_markers and delete_markers[0].get('IsLatest', False):
+                return True
+            return False
+            
+        # If version ID provided, check if it's a delete marker
+        response = s3.list_object_versions(
+            Bucket=bucket,
+            Prefix=key,
+            MaxKeys=100  # Increase this if needed to find the specific version
+        )
+        
+        # Check delete markers
+        for marker in response.get('DeleteMarkers', []):
+            if marker.get('VersionId') == version_id:
+                return True
+                
+        return False
+    except Exception as e:
+        logger.warning(f"Error checking delete marker: {e}")
+        return False
+
+def check_s3_object_exists(bucket, key, version_id=None):
+    """Check if S3 object exists
+    
+    Args:
+        bucket: S3 bucket name
+        key: S3 object key
+        version_id: Optional version ID to check
+        
+    Returns:
+        True if object exists, False otherwise
+    """
+    try:
+        params = {'Bucket': bucket, 'Key': key}
+        if version_id:
+            params['VersionId'] = version_id
+            
+        s3.head_object(**params)
+        return True
+    except ClientError as e:
+        if e.response['Error']['Code'] == '404':
+            return False
+        logger.warning(f"Error checking if object exists: {e}")
+        raise
+        
+def normalize_s3_path(base_path, relative_path):
+    """
+    Normalize S3 path to ensure there's only a single slash between components.
+    
+    Args:
+        base_path: The base path (prefix)
+        relative_path: The relative path to append
+        
+    Returns:
+        Normalized path with a single slash between components
+    """
+    # Remove trailing slashes from base_path
+    base_path = base_path.rstrip('/')
+    # Remove leading slashes from relative_path
+    relative_path = relative_path.lstrip('/')
+    # Join with a single slash
+    return f"{base_path}/{relative_path}"
+
+#######################
+# Core Download Logic
+#######################
+
+def download_asset_file(databaseId, assetId, request_model):
+    """Generate download URL for asset file
+    
+    Args:
+        databaseId: Database ID
+        assetId: Asset ID
+        request_model: DownloadAssetRequestModel instance
+        
+    Returns:
+        DownloadAssetResponseModel instance
+    """
+    # Get asset details
+    asset = get_asset_details(databaseId, assetId)
+    if not asset:
+        raise VAMSGeneralErrorResponse(f"Asset {assetId} not found in database {databaseId}")
+        
+    # Check if asset is distributable
+    if not asset.get('isDistributable', False):
+        raise VAMSGeneralErrorResponse("Asset not distributable")
+        
+    # Get asset location
+    asset_location = asset.get('assetLocation')
+    if not asset_location:
+        raise VAMSGeneralErrorResponse("Asset location not found")
+        
+    # Determine bucket and key
+    asset_bucket = asset_location.get('Bucket', asset_bucket_name_default)
+    asset_base_key = asset_location.get('Key')
+    
+    # Determine final S3 key
+    if request_model.key:
+        # Check if the key already starts with the asset base key to avoid duplication
+        if request_model.key.startswith(asset_base_key):
+            # Key already includes the base path, use it as-is
+            final_key = request_model.key
+        else:
+            # Key is relative, combine with base path
+            final_key = normalize_s3_path(asset_base_key, request_model.key)
+    else:
+        # If no key provided, use base key directly
+        final_key = asset_base_key
+    
+    # Validate file extension and content type
+    if not validateS3AssetExtensionsAndContentType(asset_bucket, final_key):
+        raise VAMSGeneralErrorResponse("Unallowed file extension or content type in asset file")
+    
+    # Check if file exists
+    if not check_s3_object_exists(asset_bucket, final_key):
+        raise VAMSGeneralErrorResponse("File not found in S3")
+    
+    # Handle version ID
+    version_id = request_model.versionId
+    
+    # Check if version is a delete marker
+    if version_id and is_delete_marker(asset_bucket, final_key, version_id):
+        # Use 410 Gone for archived/deleted versions
+        raise VAMSGeneralErrorResponse("File version has been archived and cannot be downloaded", status_code=410)
+    
+    # Generate presigned URL
+    try:
+        params = {
+            'Bucket': asset_bucket,
+            'Key': final_key
+        }
+        
+        if version_id:
+            params['VersionId'] = version_id
+            
+        url = s3.generate_presigned_url(
+            'get_object',
+            Params=params,
+            ExpiresIn=TIMEOUT_SECONDS
+        )
+        
+        # Return response model
+        return DownloadAssetResponseModel(
+            downloadUrl=url,
+            expiresIn=TIMEOUT_SECONDS,
+            downloadType="assetFile",
+            versionId=version_id
+        )
+    except Exception as e:
+        logger.exception(f"Error generating presigned URL: {e}")
+        raise VAMSGeneralErrorResponse(f"Error generating download URL: {str(e)}")
+
+def download_asset_preview(databaseId, assetId, request_model):
+    """Generate download URL for asset preview
+    
+    Args:
+        databaseId: Database ID
+        assetId: Asset ID
+        request_model: DownloadAssetRequestModel instance
+        
+    Returns:
+        DownloadAssetResponseModel instance
+    """
+    # Get asset details
+    asset = get_asset_details(databaseId, assetId)
+    if not asset:
+        raise VAMSGeneralErrorResponse(f"Asset {assetId} not found in database {databaseId}")
+        
+    # Check if asset is distributable
+    if not asset.get('isDistributable', False):
+        raise VAMSGeneralErrorResponse("Asset not distributable")
+        
+    # Get preview location
+    preview_location = asset.get('previewLocation')
+    if not preview_location:
+        raise VAMSGeneralErrorResponse("Asset preview location not found")
+        
+    # Determine bucket and key
+    preview_bucket = preview_location.get('Bucket', asset_bucket_name_default)
+    preview_key = preview_location.get('Key')
+    
+    # Validate file extension and content type
+    if not validateS3AssetExtensionsAndContentType(preview_bucket, preview_key):
+        raise VAMSGeneralErrorResponse("Unallowed file extension or content type in preview file")
+    
+    # Check if preview file exists in S3
+    if not check_s3_object_exists(preview_bucket, preview_key):
+        raise VAMSGeneralErrorResponse("Preview file not found in S3")
+    
+    # Generate presigned URL
+    try:
+        url = s3.generate_presigned_url(
+            'get_object',
+            Params={
+                'Bucket': preview_bucket,
+                'Key': preview_key
+            },
+            ExpiresIn=TIMEOUT_SECONDS
+        )
+        
+        # Return response model
+        return DownloadAssetResponseModel(
+            downloadUrl=url,
+            expiresIn=TIMEOUT_SECONDS,
+            downloadType="assetPreview"
+        )
+    except Exception as e:
+        logger.exception(f"Error generating presigned URL: {e}")
+        raise VAMSGeneralErrorResponse(f"Error generating download URL: {str(e)}")
+
+#######################
+# Lambda Handler
+#######################
+
+def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    """Lambda handler for asset download API"""
+    claims_and_roles = request_to_claims(event)
+    
+    try:
+        # Parse request body
+        if isinstance(event.get('body'), str):
+            event['body'] = json.loads(event['body'])
+        
+        # Get path parameters
+        path_parameters = event.get('pathParameters', {})
+        if not path_parameters or 'databaseId' not in path_parameters or 'assetId' not in path_parameters:
+            return validation_error(body={'message': "Missing databaseId or assetId in path parameters"})
+            
+        database_id = path_parameters['databaseId']
+        asset_id = path_parameters['assetId']
+        
+        # Validate path parameters
         (valid, message) = validate({
             'databaseId': {
-                'value': pathParameters['databaseId'],
+                'value': database_id,
                 'validator': 'ID'
             },
             'assetId': {
-                'value': pathParameters['assetId'],
+                'value': asset_id,
                 'validator': 'ASSET_ID'
-            },
-            'assetPathKey': {
-                'value': event['body']['key'],
-                'validator': 'ASSET_PATH'
             }
         })
+        
         if not valid:
-            logger.exception(message)
-            response['body'] = json.dumps({"message": message})
-            response['statusCode'] = 400
-            return response
-
-
-        #Split object key by path and return the first value (the asset ID)
-        asset_idFromKeyPath = event['body']['key'].split("/")[0]
-
-        #If we are downloading a preview file, go down the path chain by 1
-        if(asset_idFromKeyPath == "previews"):
-            asset_idFromKeyPath = event['body']['key'].split("/")[1]
-
-        #Check if the asset ID is the same as the asset ID from the path
-        if asset_idFromKeyPath != pathParameters['assetId']:
-            response['body'] = json.dumps({"message": "Asset ID from path does not match the asset ID"})
-            response['statusCode'] = 400
-            return response
-
-        method_allowed_on_api = False
+            logger.error(message)
+            return validation_error(body={'message': message})
+        
+        # Parse request model
+        try:
+            request_model = parse(event['body'], model=DownloadAssetRequestModel)
+        except ValidationError as v:
+            logger.error(f"Validation error: {v}")
+            return validation_error(body={'message': str(v)})
+        
+        # Check authorization
+        asset = get_asset_details(database_id, asset_id)
+        if not asset:
+            return validation_error(body={'message': f"Asset {asset_id} not found"})
+        
+        asset["object__type"] = "asset"
+        
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if casbin_enforcer.enforceAPI(event):
-                method_allowed_on_api = True
-
-        if method_allowed_on_api:
-            logger.info("Getting Assets")
-
-            key = event['body']['key']
-
-            version = ""
-            if 'version' in event['body'] and event['body']['version'] is not None:
-                version = event['body']['version']
-                logger.info("Version Provided: " + version)
-
-            url = get_File(pathParameters['databaseId'], pathParameters['assetId'], key, version)
-            response['statusCode'] = 200
-
-            if url == "Error: Asset not found or not authorized to view the assets":
-                response['statusCode'] = 404
-            elif url == "Error: Asset not distributable":
-                response['statusCode'] = 401
-            elif url == "Error: Unallowed file extention or content type in asset file. Unable to download file.":
-                response['statusCode'] = 401
-            response['body'] = json.dumps({"message": url})
-
-            logger.info(response)
-            return response
-        else:
-            response['statusCode'] = 403
-            response['body'] = json.dumps({"message": "Not Authorized"})
-            return response
-    except (ClientError, Exception) as e:
-        response['statusCode'] = 500
-        logger.exception(e)
-        response['body'] = json.dumps({"message": "Internal Server Error"})
-
-        return response
-
-
-if __name__ == "__main__":
-    test_response = lambda_handler(None, None)
-    logger.info(test_response)
+            if not (casbin_enforcer.enforce(asset, "GET") and casbin_enforcer.enforceAPI(event)):
+                return authorization_error()
+        
+        # Process download request based on type
+        try:
+            if request_model.downloadType == "assetFile":
+                response = download_asset_file(database_id, asset_id, request_model)
+            else:  # assetPreview
+                response = download_asset_preview(database_id, asset_id, request_model)
+                
+            return success(body=response.dict())
+        except VAMSGeneralErrorResponse as e:
+            # Extract status code if provided
+            status_code = getattr(e, 'status_code', 400)
+            return general_error(status_code=status_code, body={'message': str(e)})
+            
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except ValueError as v:
+        logger.exception(f"Value error: {v}")
+        return validation_error(body={'message': str(v)})
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        # Extract status code if provided
+        status_code = getattr(v, 'status_code', 400)
+        return general_error(status_code=status_code, body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Internal error: {e}")
+        return internal_error()

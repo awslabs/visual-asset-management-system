@@ -149,12 +149,12 @@ Below are the web routes possible as part of a `GET` method type. Requests for t
 -   `/auth/subscriptions`
 -   `/auth/tags`
 -   `/auth/userroles`
--   `/comments`
 -   `/databases`
 -   `/databases/:databaseId/assets`
 -   `/databases/:databaseId/assets/:assetId`
 -   `/databases/:databaseId/assets/:assetId/file`
 -   `/databases/:databaseId/assets/:assetId/uploads`
+-   `/databases/:databaseId/assets/:assetId/download`
 -   `/databases/:databaseId/pipelines`
 -   `/databases/:databaseId/workflows`
 -   `/databases/:databaseId/workflows/:workflowId`
@@ -207,19 +207,42 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Database` (databaseId) - DELETE (api: DELETE)
 -   `/database/{databaseId}/assets` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
--   `/database/{databaseId}/assets/{assetId}` - GET/PUT/DELETE
+-   `/database/{databaseId}/assets/{assetId}` - GET/PUT
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   `/database/{databaseId}/assets/{assetId}/createFolder` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: POST)
 -   `/database/{databaseId}/assets/{assetId}/listFiles` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
+-   `/database/{databaseId}/assets/{assetId}/fileInfo` - GET
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
+-   `/database/{databaseId}/assets/{assetId}/moveFile` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/copyFile` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/archiveFile` - DELETE
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
+-   `/database/{databaseId}/assets/{assetId}/unarchiveFile` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/deleteFile` - DELETE
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
+-   `/database/{databaseId}/assets/{assetId}/archiveAsset` - DELETE
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
+-   `/database/{databaseId}/assets/{assetId}/deleteAsset` - DELETE
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   `/database/{databaseId}/assets/{assetId}/columns` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/database/{databaseId}/assets/{assetId}/metadata` - GET
--   `/database/{databaseId}/assets/{assetId}/revert` - POST
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/createVersion` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/revertAssetVersion/{assetVersionId}` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/getVersions` - GET
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
+-   `/database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}` - GET
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/database/{databaseId}/assets/{assetId}/download` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: POST)
 -   `/database/{databaseId}/assets/{assetId}/workflows/{workflowId}` - POST

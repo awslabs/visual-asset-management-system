@@ -7,7 +7,7 @@ import { NonCancelableCustomEvent } from "@cloudscape-design/components/interfac
 import { StatusIndicatorProps } from "@cloudscape-design/components/status-indicator";
 
 import { Metadata } from "../../components/single/Metadata";
-import { AssetDetail } from "../AssetUpload";
+import { AssetDetail } from "./AssetUpload";
 import { FileUploadTableItem } from "./FileUploadTable";
 import { CompleteUploadResponse, CompleteFileUpload, UploadPartResult } from "../../services/AssetUploadService";
 import { generateUUID } from "../../common/utils/utils";
@@ -391,7 +391,8 @@ export default function onSubmit({
     return async (detail: NonCancelableCustomEvent<{}>) => {
         setFreezeWizardButtons(true);
         
-        if (assetDetail.Asset && assetDetail.assetId && assetDetail.databaseId) {
+        // Check if we have required asset details (assetId and databaseId are required)
+        if (assetDetail.assetId && assetDetail.databaseId) {
             
             // Initialize with empty status
             setExecStatus({});
@@ -451,7 +452,7 @@ export default function onSubmit({
                 window.onbeforeunload = null;
             };
         } else {
-            console.log("Asset detail not right");
+            console.log("Asset detail not right - missing required fields");
             console.log(assetDetail);
             setFreezeWizardButtons(false);
         }
