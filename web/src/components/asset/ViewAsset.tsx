@@ -279,6 +279,7 @@ export default function ViewAsset() {
               databaseId={databaseId || ""}
               assetLinks={assetLinks}
               onLinksUpdated={(links: any) => setAssetLinks(links)}
+              noOpenSearch={useNoOpenSearch}
             />
 
             {/* Metadata */}

@@ -77,6 +77,32 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
             },
         });
     };
+    
+    // Helper function for multi-file download
+    const handleMultiFileDownload = () => {
+        // Filter selected items to only include files (not folders)
+        const downloadableFiles = selectedItems.filter(item => {
+            const itemIsFolder = item.isFolder !== undefined 
+                ? item.isFolder 
+                : (item.subTree.length > 0 || item.keyPrefix.endsWith('/'));
+            return !itemIsFolder;
+        });
+        
+        // Navigate to download page with selected files
+        navigate(`/databases/${databaseId}/assets/${assetId}/download`, {
+            state: {
+                fileTree: {
+                    name: "Selected Files",
+                    displayName: "Selected Files",
+                    relativePath: "/",
+                    keyPrefix: "/",
+                    level: 0,
+                    expanded: true,
+                    subTree: downloadableFiles,
+                }
+            },
+        });
+    };
 
     // Multi-selection display
     if (isMultiSelect) {
@@ -173,19 +199,6 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     ) : (
                                         // All files are non-archived
                                         <>
-                                            <Button 
-                                                iconName="external" 
-                                                variant={"primary"}
-                                                onClick={handleMultiFileView}
-                                            >
-                                                View Asset Files
-                                            </Button>
-                                            <Button 
-                                                iconName="copy" 
-                                                onClick={() => setShowMoveFilesModal(true)}
-                                            >
-                                                Move/Copy Files
-                                            </Button>
                                             {canDelete && (
                                                 <Button 
                                                     iconName="remove" 
@@ -194,6 +207,25 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                     Delete Files
                                                 </Button>
                                             )}
+                                            <Button 
+                                                iconName="copy" 
+                                                onClick={() => setShowMoveFilesModal(true)}
+                                            >
+                                                Move/Copy Files
+                                            </Button>
+                                            <Button 
+                                                iconName="download" 
+                                                onClick={handleMultiFileDownload}
+                                            >
+                                                Download Files
+                                            </Button>
+                                            <Button 
+                                                iconName="external" 
+                                                variant={"primary"}
+                                                onClick={handleMultiFileView}
+                                            >
+                                                View Asset Files
+                                            </Button>
                                         </>
                                     )}
                                 </>

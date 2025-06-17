@@ -43,7 +43,7 @@
         "maplibre-gl": "^3.0.0",
         "maplibre-gl-js-amplify": "^3.0.5",
         "moment": "^2.29.4",
-        "online-3d-viewer": "^0.12.0",
+        "online-3d-viewer": "0.16.0",
         "papaparse": "^5.4.1",
         "patch-package": "^6.4.7",
         "postcss": "^8.4.31",

@@ -55,7 +55,8 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
 -   **Web** New tabbed design for Viewing Asset
     -   Moved comments page for assets to now be a tab under view assets
 -   Assets as a whole now support both permanent deletion and archiving. 
--   Note: currently unarchiving an asset as a whole doesns't exist yet
+    -   Note: currently unarchiving an asset as a whole doesns't exist yet
+-   Turned off the wireframe view for the 3DOnlineViewer for viewing models
 
 ### Chores
 

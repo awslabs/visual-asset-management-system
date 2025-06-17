@@ -273,8 +273,6 @@ export default function ViewFile() {
                             newViewerOptions.push({ text: "Image", id: "image" });
                         } else if (defaultViewType === "html") {
                             newViewerOptions.push({ text: "HTML", id: "html" });
-                        } else if (defaultViewType === "folder") {
-                            newViewerOptions.push({ text: "Folder", id: "folder" });
                         }
                     }
 

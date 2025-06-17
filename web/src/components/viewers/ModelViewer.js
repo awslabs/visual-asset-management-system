@@ -34,7 +34,7 @@ export default function ModelViewer(props) {
                                 backgroundColor: new OV.RGBAColor(182, 182, 182, 182),
                                 defaultColor: new OV.RGBColor(200, 200, 200),
                                 edgeSettings: new OV.EdgeSettings(
-                                    true,
+                                    false,
                                     new OV.RGBColor(0, 0, 255),
                                     1
                                 ),
@@ -86,7 +86,7 @@ export default function ModelViewer(props) {
                             backgroundColor: new OV.RGBAColor(182, 182, 182, 182),
                             defaultColor: new OV.RGBColor(200, 200, 200),
                             edgeSettings: new OV.EdgeSettings(
-                                true,
+                                false,
                                 new OV.RGBColor(0, 0, 255),
                                 1
                             ),

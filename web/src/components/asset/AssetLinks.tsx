@@ -33,6 +33,7 @@ interface AssetLinksProps {
   databaseId: string;
   assetLinks: any;
   onLinksUpdated: (links: any) => void;
+  noOpenSearch?: boolean; // Add prop to control OpenSearch usage
 }
 
 export const AssetLinks: React.FC<AssetLinksProps> = ({
@@ -40,6 +41,7 @@ export const AssetLinks: React.FC<AssetLinksProps> = ({
   databaseId,
   assetLinks,
   onLinksUpdated,
+  noOpenSearch = false, // Default to false if not provided
 }) => {
   const { showMessage } = useStatusMessage();
   const [showLinkModal, setShowLinkModal] = useState(false);
@@ -61,14 +63,14 @@ export const AssetLinks: React.FC<AssetLinksProps> = ({
   const [modalDisable, setModalDisable] = useState(false);
   const [showLinkAlert, setShowLinkAlert] = useState(false);
   const [linkAlertMsg, setLinkAlertMsg] = useState("");
-  const [useNoOpenSearch] = useState(false); // Default to false, can be updated based on config
+  // Use the prop instead of a local state
 
   // Handle entity search
   const handleEntitySearch = async () => {
     try {
       if (searchedEntity) {
         let result;
-        if (!useNoOpenSearch) {
+        if (!noOpenSearch) {
           // Use OpenSearch API
           const body = {
             tokens: [],
@@ -258,7 +260,7 @@ export const AssetLinks: React.FC<AssetLinksProps> = ({
 
   // Format search results
   const assetItems = Array.isArray(searchResult)
-    ? !useNoOpenSearch
+    ? !noOpenSearch
       ? searchResult.map((result: any) => ({
           // Search API results
           assetName: result._source.str_assetname || "",
