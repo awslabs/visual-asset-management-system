@@ -14,6 +14,9 @@ import AssetUploadWorkflow from "./AssetUploadWorkflow";
 import { Metadata } from "../../components/single/Metadata";
 import { CompleteUploadResponse } from "../../services/AssetUploadService";
 
+// Maximum preview file size (5MB)
+const MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024;
+
 // Constants
 const previewFileFormatsStr = previewFileFormats.join(", ");
 
@@ -84,6 +87,7 @@ export default function ModifyAssetsUploadsPage() {
     const [fileItems, setFileItems] = useState<FileUploadTableItem[]>(assetDetail.Asset || []);
     const [metadata, setMetadata] = useState<Metadata>({});
     const [previewFile, setPreviewFile] = useState<File | null>(null);
+    const [previewFileError, setPreviewFileError] = useState<string | undefined>(undefined);
     const [folderPath, setFolderPath] = useState<string>("");
     const [keyPrefix, setKeyPrefix] = useState<string>("");
     
@@ -146,8 +150,18 @@ export default function ModifyAssetsUploadsPage() {
         setFileItems(selectedItems);
     };
 
-    // Handle preview file selection
+    // Handle preview file selection with size validation
     const handlePreviewFileSelection = (file: File | null) => {
+        if (file && file.size > MAX_PREVIEW_FILE_SIZE) {
+            setPreviewFileError("Preview file exceeds maximum allowed size of 5MB");
+            // Don't update the state with the oversized file
+            return;
+        }
+        
+        // Clear any previous error
+        setPreviewFileError(undefined);
+        
+        // Update the state with the valid file
         setPreviewFile(file);
     };
 
@@ -170,6 +184,10 @@ export default function ModifyAssetsUploadsPage() {
 
     // Start upload process
     const startUpload = () => {
+        // Don't proceed if there's a preview file error
+        if (previewFileError) {
+            return;
+        }
         setShowUploadWorkflow(true);
     };
 
@@ -265,6 +283,8 @@ export default function ModifyAssetsUploadsPage() {
                                                     setFile={handlePreviewFileSelection}
                                                     fileFormats={previewFileFormatsStr}
                                                     file={previewFile || undefined}
+                                                    errorText={previewFileError}
+                                                    description={`File types: ${previewFileFormatsStr}. Maximum allowed size: 5MB.`}
                                                     data-testid="preview-file"
                                                 />
                                             )}
@@ -284,7 +304,7 @@ export default function ModifyAssetsUploadsPage() {
                                                 <Button 
                                                     variant="primary" 
                                                     onClick={startUpload}
-                                                    disabled={fileItems.length === 0 && (isRootPath ? !previewFile : true)}
+                                                    disabled={(fileItems.length === 0 && (isRootPath ? !previewFile : true)) || !!previewFileError}
                                                 >
                                                     Finalize and Upload
                                                 </Button>

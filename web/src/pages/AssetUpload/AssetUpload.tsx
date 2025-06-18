@@ -1197,6 +1197,9 @@ const getFilesFromFileHandles = async (fileHandles: any[]) => {
     return fileUploadTableItems;
 };
 
+// Maximum preview file size (5MB)
+const MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024;
+
 const AssetFileInfo = ({
     setFileUploadTableItems,
     setValid,
@@ -1211,6 +1214,7 @@ const AssetFileInfo = ({
     const [selectionMode, setSelectionMode] = useState<"folder" | "files" | "both">(
         assetDetailState.isMultiFile ? "folder" : "files"
     );
+    const [previewFileError, setPreviewFileError] = useState<string | undefined>(undefined);
 
     useEffect(() => {
         // Always set as valid since files are now optional for asset creation
@@ -1235,6 +1239,24 @@ const AssetFileInfo = ({
                 payload: reindexedFiles 
             });
         }
+    };
+
+    // Function to handle preview file selection with size validation
+    const handlePreviewFileSelection = (file: File | null) => {
+        if (file && file.size > MAX_PREVIEW_FILE_SIZE) {
+            setPreviewFileError("Preview file exceeds maximum allowed size of 5MB");
+            // Don't update the state with the oversized file
+            return;
+        }
+        
+        // Clear any previous error
+        setPreviewFileError(undefined);
+        
+        // Update the state with the valid file
+        assetDetailDispatch({ 
+            type: "UPDATE_ASSET_PREVIEW", 
+            payload: file 
+        });
     };
 
     return (
@@ -1305,11 +1327,11 @@ const AssetFileInfo = ({
                     <FileUpload
                         label="Preview (Optional)"
                         disabled={false}
-                        setFile={(file) => {
-                            assetDetailDispatch({ type: "UPDATE_ASSET_PREVIEW", payload: file });
-                        }}
+                        setFile={handlePreviewFileSelection}
                         fileFormats={previewFileFormatsStr}
                         file={assetDetailState.Preview || undefined}
+                        errorText={previewFileError}
+                        description={`File types: ${previewFileFormatsStr}. Maximum allowed size: 5MB.`}
                         data-testid="preview-file"
                     />
                 </Grid>

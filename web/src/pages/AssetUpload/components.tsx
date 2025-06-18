@@ -20,6 +20,7 @@ function getLang() {
 class FileUploadProps {
     label?: string;
     errorText?: string;
+    description?: string;
     fileFormats!: string;
     setFile!: (file: File | null) => void;
     file: File | undefined;
@@ -33,11 +34,12 @@ export const FileUpload = ({
     setFile,
     file,
     label,
+    description,
 }: FileUploadProps) => {
     const inputRef = useRef<HTMLInputElement>(null);
 
     return (
-        <FormField errorText={errorText} label={label} description={"File types: " + fileFormats}>
+        <FormField errorText={errorText} label={label} description={description || ("File types: " + fileFormats)}>
             <input
                 ref={inputRef}
                 type="file"

@@ -59,6 +59,7 @@ UPLOAD_EXPIRATION_DAYS = 7  # TTL for upload records and S3 multipart uploads
 TEMPORARY_UPLOAD_PREFIX = 'temp-uploads/'  # Prefix for temporary uploads
 PREVIEW_PREFIX = 'previews/'
 MAX_PART_SIZE = 150 * 1024 * 1024  # 150MB per part
+MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
 
 # Load environment variables
 try:
@@ -400,6 +401,10 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
             raise ValidationError(f"File {file.relativeKey} has an unsupported file extension")
         
+        # Validate file size for preview files
+        if uploadType == "assetPreview" and file.file_size > MAX_PREVIEW_FILE_SIZE:
+            raise ValidationError(f"Preview file {file.relativeKey} exceeds maximum allowed size of 5MB")
+        
         # Determine final S3 key based on upload type
         if uploadType == "assetFile":
             # Get the asset's base key from assetLocation
@@ -545,10 +550,21 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             
             # Verify the file exists in S3
             try:
-                s3.head_object(
+                head_response = s3.head_object(
                     Bucket=asset_bucket_name_default,
                     Key=file.tempKey
                 )
+                
+                # Check file size for preview files
+                if uploadType == "assetPreview" and head_response.get('ContentLength', 0) > MAX_PREVIEW_FILE_SIZE:
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3="external",
+                        success=False,
+                        error=f"Preview file {file.relativeKey} exceeds maximum allowed size of 5MB"
+                    ))
+                    has_failures = True
+                    continue
             except Exception as e:
                 file_results.append(FileCompletionResult(
                     relativeKey=file.relativeKey,
@@ -828,6 +844,20 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                         uploadIdS3=file.uploadIdS3,
                         success=False,
                         error=f"Upload ID mismatch. Expected {uploadId}, got {s3_upload_id}"
+                    ))
+                    has_failures = True
+                    continue
+                
+                # Check file size for preview files
+                if uploadType == "assetPreview" and head_response.get('ContentLength', 0) > MAX_PREVIEW_FILE_SIZE:
+                    # Delete the uploaded file since it exceeds the size limit
+                    delete_s3_object(asset_bucket_name_default, temp_s3_key)
+                    
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3=file.uploadIdS3,
+                        success=False,
+                        error=f"Preview file {file.relativeKey} exceeds maximum allowed size of 5MB"
                     ))
                     has_failures = True
                     continue

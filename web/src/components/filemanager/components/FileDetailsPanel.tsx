@@ -1,4 +1,4 @@
-import React, { useContext, useState } from "react";
+import React, { useContext, useState, useEffect } from "react";
 import {
     Box,
     Button,
@@ -6,10 +6,11 @@ import {
     Icon,
     SpaceBetween,
     Link,
+    Modal,
 } from "@cloudscape-design/components";
 import { useNavigate, useParams } from "react-router";
 import { AssetDetailContext, AssetDetailContextType } from "../../../context/AssetDetailContext";
-import { createFolder } from "../../../services/APIService";
+import { createFolder, fetchAsset } from "../../../services/APIService";
 import { FileInfoPanelProps, FileManagerContextType } from "../types/FileManagerTypes";
 import { formatFileSize, formatDate, hasFolderContent, downloadFile } from "../utils/FileManagerUtils";
 import { CreateFolderModal } from "../modals/CreateFolderModal";
@@ -18,6 +19,7 @@ import UnarchiveFileModal from "../../modals/UnarchiveFileModal";
 import { MoveFilesModal } from "../modals/MoveFilesModal";
 import { FileVersionsModal } from "../modals/FileVersionsModal";
 import AssetPreviewThumbnail from "./AssetPreviewThumbnail";
+import PreviewModal from "./PreviewModal";
 import "./FileDetailsPanel.css";
 
 // Import the context from FileTreeView
@@ -29,9 +31,36 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const navigate = useNavigate();
     const { databaseId, assetId } = useParams();
     const { state: assetDetailState } = useContext(AssetDetailContext) as AssetDetailContextType;
+    const [asset, setAsset] = useState<any>(null);
     const selectedItem = state.selectedItem;
     const selectedItems = state.selectedItems;
     const isMultiSelect = state.multiSelectMode && selectedItems.length > 1;
+    
+    // Fetch asset data directly
+    useEffect(() => {
+        const fetchAssetData = async () => {
+            if (!databaseId || !assetId) return;
+            
+            try {
+                const item = await fetchAsset({ 
+                    databaseId, 
+                    assetId, 
+                    showArchived: true 
+                });
+                
+                console.log("FileDetailsPanel - API Response:", item);
+                console.log("FileDetailsPanel - API Response previewLocation:", item?.previewLocation);
+                
+                if (item !== false) {
+                    setAsset(item);
+                }
+            } catch (error) {
+                console.error("Error fetching asset in FileDetailsPanel:", error);
+            }
+        };
+        
+        fetchAssetData();
+    }, [databaseId, assetId]);
     
     const isFolder = selectedItem?.isFolder !== undefined 
         ? selectedItem.isFolder 
@@ -389,6 +418,15 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 }}
             />
             
+            {/* Preview Modal */}
+            <PreviewModal 
+                visible={showPreviewModal}
+                onDismiss={() => setShowPreviewModal(false)}
+                assetId={assetId || ""}
+                databaseId={databaseId || ""}
+                previewKey={asset?.previewLocation?.Key}
+            />
+            
             {/* File Versions Modal - only show for files, not folders */}
             {!isFolder && selectedItem.versionId && (
                 <FileVersionsModal
@@ -524,7 +562,14 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         <AssetPreviewThumbnail
                             assetId={assetId || ""}
                             databaseId={databaseId || ""}
-                            previewKey={assetDetailState?.previewLocation?.Key || (assetDetailState?.previewLocation as any)?.key}
+                            previewKey={
+                                // Try to get previewKey from direct asset first, then fall back to assetDetailState
+                                (asset?.previewLocation?.Key) || 
+                                (asset?.previewLocation as any)?.key ||
+                                assetDetailState?.previewLocation?.Key || 
+                                (assetDetailState?.previewLocation as any)?.key ||
+                                (typeof assetDetailState?.previewLocation === 'string' ? assetDetailState?.previewLocation : undefined)
+                            }
                             onOpenFullPreview={() => setShowPreviewModal(true)}
                         />
                     </div>
