@@ -575,6 +575,7 @@ export function apiBuilder(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
+        sendEmailFunction,
         config,
         vpc,
         subnets
@@ -772,6 +773,7 @@ export function apiBuilder(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
+        sendEmailFunction,
         config,
         vpc,
         subnets

@@ -34,24 +34,16 @@ s3_config = Config(
     signature_version='s3v4', 
     s3={'addressing_style': 'path'},
     retries={
-        'max_attempts': 10,
-        'mode': 'adaptive'
-    }
-)
-
-# Retry configuration for other AWS clients
-retry_config = Config(
-    retries={
-        'max_attempts': 10,
+        'max_attempts': 5,
         'mode': 'adaptive'
     }
 )
 
 s3 = boto3.client('s3', region_name=region, config=s3_config)
 s3_resource = boto3.resource('s3', region_name=region, config=s3_config)
-lambda_client = boto3.client('lambda', config=retry_config)
-dynamodb = boto3.resource('dynamodb', config=retry_config)
-dynamodb_client = boto3.client('dynamodb', config=retry_config)
+lambda_client = boto3.client('lambda', config=s3_config)
+dynamodb = boto3.resource('dynamodb', config=s3_config)
+dynamodb_client = boto3.client('dynamodb', config=s3_config)
 logger = safeLogger(service_name="FileIngestion")
 
 # Constants
@@ -310,23 +302,35 @@ def delete_s3_object(bucket, key):
         logger.exception(f"Error deleting S3 object {key}: {e}")
         return False
 
-def normalize_s3_path(base_path, file_path):
+def normalize_s3_path(asset_base_key, file_path):
     """
-    Normalize S3 path to ensure there's only a single slash between components.
+    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
     
     Args:
-        base_path: The base path (prefix)
-        file_path: The file path to append
+        asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
+        file_path: The file path from the request (may or may not include the base key)
         
     Returns:
-        Normalized path with a single slash between components
+        The properly resolved S3 key without duplication
     """
-    # Remove trailing slashes from base_path
-    base_path = base_path.rstrip('/')
-    # Remove leading slashes from file_path
-    file_path = file_path.lstrip('/')
-    # Join with a single slash
-    return f"{base_path}/{file_path}"
+    # Normalize the asset base key to ensure it ends with '/'
+    if asset_base_key and not asset_base_key.endswith('/'):
+        asset_base_key = asset_base_key + '/'
+    
+    # Remove leading slash from file path if present
+    if file_path.startswith('/'):
+        file_path = file_path[1:]
+    
+    # Check if file_path already starts with the asset_base_key
+    if file_path.startswith(asset_base_key):
+        # File path already contains the base key, use as-is
+        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
+        return file_path
+    else:
+        # File path doesn't contain base key, combine them
+        resolved_path = asset_base_key + file_path
+        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
+        return resolved_path
 
 def create_folder(databaseId: str, assetId: str, request_model: CreateFolderRequestModel, claims_and_roles):
     """Create a folder in S3 for the specified asset"""
@@ -411,7 +415,9 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
             asset_base_key = asset.get('assetLocation', {}).get('Key', f"{assetId}/")
             final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
         else:  # assetPreview
-            final_s3_key = f"{PREVIEW_PREFIX}{assetId}/{file.relativeKey}"
+            #We only want the filename and none of the path if there is a path
+            filename = os.path.basename(file.relativeKey)
+            final_s3_key = f"{PREVIEW_PREFIX}{assetId}/{filename}"
             
         # Determine temporary S3 key by adding temp prefix to final key
         temp_s3_key = f"{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
@@ -546,7 +552,9 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 asset_base_key = asset.get('assetLocation', {}).get('Key', f"{assetId}/")
                 final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
             else:  # assetPreview
-                final_s3_key = f"{PREVIEW_PREFIX}{assetId}/{file.relativeKey}"
+                #We only want the filename and none of the path if there is a path
+                filename = os.path.basename(file.relativeKey)
+                final_s3_key = f"{PREVIEW_PREFIX}{assetId}/{filename}"
             
             # Verify the file exists in S3
             try:
@@ -772,7 +780,9 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                 asset_base_key = asset.get('assetLocation', {}).get('Key', f"{assetId}/")
                 final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
             else:  # assetPreview
-                final_s3_key = f"{PREVIEW_PREFIX}{assetId}/{file.relativeKey}"
+                #We only want the filename and none of the path if there is a path
+                filename = os.path.basename(file.relativeKey)
+                final_s3_key = f"{PREVIEW_PREFIX}{assetId}/{filename}"
                 
             temp_s3_key = f"{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
             

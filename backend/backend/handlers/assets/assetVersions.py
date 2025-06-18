@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 from boto3.dynamodb.conditions import Key
+from botocore.config import Config
 from botocore.exceptions import ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
@@ -24,12 +25,20 @@ from models.assetsV3 import (
     AssetVersionListItemModel
 )
 
+retry_config = Config(
+    retries={
+        'max_attempts': 5,
+        'mode': 'adaptive'
+    }
+)
+
 # Configure AWS clients
 region = os.environ.get('AWS_REGION', 'us-east-1')
-dynamodb = boto3.resource('dynamodb')
-dynamodb_client = boto3.client('dynamodb')
-s3_client = boto3.client('s3')
-s3_resource = boto3.resource('s3')
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+dynamodb_client = boto3.client('dynamodb', config=retry_config)
+s3_client = boto3.client('s3', config=retry_config)
+s3_resource = boto3.resource('s3', config=retry_config)
+lambda_client = boto3.client('lambda', config=retry_config)
 logger = safeLogger(service_name="AssetVersions")
 
 # Global variables for claims and roles
@@ -42,6 +51,7 @@ try:
     asset_versions_table_name = os.environ.get("ASSET_VERSIONS_STORAGE_TABLE_NAME")
     bucket_name_default = os.environ["S3_ASSET_STORAGE_BUCKET"]
     asset_aux_bucket_name = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
+    send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -54,6 +64,20 @@ asset_versions_table = dynamodb.Table(asset_versions_table_name)
 #######################
 # Utility Functions
 #######################
+
+def send_subscription_email(asset_id):
+    """Send email notifications to subscribers when an asset is updated"""
+    try:
+        payload = {
+            'asset_id': asset_id,
+        }
+        lambda_client.invoke(
+            FunctionName=send_email_function_name,
+            InvocationType='Event',
+            Payload=json.dumps(payload)
+        )
+    except Exception as e:
+        logger.exception(f"Error invoking send_email Lambda function: {e}")
 
 def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, claims_and_roles: Dict) -> Dict:
     """Get asset and verify permissions for the specified operation

@@ -94,6 +94,7 @@ export function buildAssetService(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
+    sendEmailFunction:  lambda.Function,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -128,7 +129,8 @@ export function buildAssetService(
             METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
             ASSET_VERSIONS_STORAGE_TABLE_NAME: storageResources.dynamo.assetVersionsStorageTable.tableName,
             ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME: storageResources.dynamo.assetFileVersionsStorageTable.tableName,
-            COMMENT_STORAGE_TABLE_NAME: storageResources.dynamo.commentStorageTable.tableName
+            COMMENT_STORAGE_TABLE_NAME: storageResources.dynamo.commentStorageTable.tableName,
+            SEND_EMAIL_FUNCTION_NAME: sendEmailFunction.functionName
         },
     });
     storageResources.dynamo.assetStorageTable.grantReadWriteData(assetService);
@@ -145,6 +147,7 @@ export function buildAssetService(
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadWriteData(assetService);
     storageResources.dynamo.commentStorageTable.grantReadWriteData(assetService);
     storageResources.s3.assetBucket.grantReadWrite(assetService);
+    sendEmailFunction.grantInvoke(assetService);
     
     kmsKeyLambdaPermissionAddToResourcePolicy(assetService, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(assetService, config);
@@ -251,6 +254,7 @@ export function buildUploadFileFunction(
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    sendEmailFunction.grantInvoke(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(
         fun,
         storageResources.encryption.kmsKey
@@ -258,7 +262,6 @@ export function buildUploadFileFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
-    sendEmailFunction.grantInvoke(fun);
     return fun;
 }
 
@@ -461,6 +464,7 @@ export function buildAssetVersionsFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
+    sendEmailFunction:  lambda.Function,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -491,6 +495,7 @@ export function buildAssetVersionsFunction(
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             S3_ASSET_AUXILIARY_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
+            SEND_EMAIL_FUNCTION_NAME: sendEmailFunction.functionName,
         },
     });
     
@@ -503,7 +508,7 @@ export function buildAssetVersionsFunction(
     storageResources.dynamo.rolesStorageTable.grantReadData(assetVersionsFunction);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(assetVersionsFunction);
     storageResources.s3.assetBucket.grantReadWrite(assetVersionsFunction);
-    
+    sendEmailFunction.grantInvoke(assetVersionsFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(assetVersionsFunction, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(assetVersionsFunction, config);
 

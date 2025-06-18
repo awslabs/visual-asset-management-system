@@ -35,7 +35,7 @@ region = os.environ.get('AWS_REGION', 'us-east-1')
 # Standardized retry configuration for all AWS clients
 retry_config = Config(
     retries={
-        'max_attempts': 10,
+        'max_attempts': 5,
         'mode': 'adaptive'
     }
 )

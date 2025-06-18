@@ -84,11 +84,6 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
     try {
         // Filter out problematic entries
         const filteredFileKeys = fileKeys.filter(fileKey => {
-            // Skip entries that are just the asset folder (empty fileName and relativePath)
-            if (fileKey.fileName === "" && fileKey.relativePath === "") {
-                return false;
-            }
-            
             // Skip entries with double slashes in the key (these are artifacts)
             if (fileKey.key.includes('//')) {
                 console.warn("Skipping entry with double slashes:", fileKey);
@@ -103,11 +98,24 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
         // Track all created paths to avoid duplicates
         const createdPaths = new Set<string>();
         
+        // Track folder paths that need version information
+        const folderPathsToUpdate = new Map<string, FileKey>();
+        
         // First, separate folders and files
         const folders: FileKey[] = [];
         const files: FileKey[] = [];
         
+        // Find the root folder entry if it exists (empty fileName and relativePath "/")
+        let rootFolderEntry: FileKey | undefined;
+        
         filteredFileKeys.forEach(fileKey => {
+            // Check if this is the root folder entry
+            if (fileKey.fileName === "" && (fileKey.relativePath === "" || fileKey.relativePath === "/")) {
+                rootFolderEntry = fileKey;
+                // Don't add it to the folders array, we'll handle it specially
+                return;
+            }
+            
             // Improved folder detection logic
             const isFolder = fileKey.isFolder || fileKey.key.endsWith('/') || 
                              (fileKey.fileName === "" && fileKey.relativePath.endsWith('/'));
@@ -117,6 +125,11 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
                     ...fileKey,
                     isFolder: true // Ensure isFolder is set correctly
                 });
+                
+                // Store folder information for later updating
+                const normalizedPath = fileKey.relativePath.endsWith('/') ? 
+                    fileKey.relativePath : fileKey.relativePath + '/';
+                folderPathsToUpdate.set(normalizedPath, fileKey);
             } else {
                 files.push(fileKey);
             }
@@ -125,51 +138,198 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
         console.log("Folders to process:", folders.length);
         console.log("Files to process:", files.length);
         
-        // Process folders first - this ensures the folder structure is in place before adding files
+        // If we found a root folder entry, just mark the root path as created
+        // but don't update the root node with version information (as requested)
+        if (rootFolderEntry) {
+            // Only update the keyPrefix, but not the version information
+            root.keyPrefix = rootFolderEntry.key;
+            
+            console.log("Found root folder entry, but not updating version info on root node");
+            
+            // Mark the root path as created
+            createdPaths.add("/");
+        }
+        
+        // STEP 1: Process files first (and create folder paths as needed)
+        for (const fileKey of files) {
+            const relativePath = fileKey.relativePath;
+            
+            // Skip if we've already created this path (shouldn't happen for files, but just in case)
+            if (createdPaths.has(relativePath)) {
+                continue;
+            }
+            
+            // Skip if this is a root folder entry (should have been handled already)
+            if (relativePath === "/" || relativePath === "") {
+                continue;
+            }
+            
+            // For root level files
+            if (!relativePath.includes('/') || relativePath.startsWith('/') && relativePath.lastIndexOf('/') === 0) {
+                // Create node for root level file
+                root.subTree.push({
+                    name: fileKey.fileName,
+                    displayName: fileKey.fileName,
+                    relativePath: relativePath,
+                    keyPrefix: fileKey.key,
+                    level: 1,
+                    expanded: false,
+                    subTree: [],
+                    isFolder: false,
+                    size: fileKey.size,
+                    dateCreatedCurrentVersion: fileKey.dateCreatedCurrentVersion,
+                    versionId: fileKey.versionId,
+                    isArchived: fileKey.isArchived,
+                    currentAssetVersionFileVersionMismatch: fileKey.currentAssetVersionFileVersionMismatch
+                });
+                
+                console.log("Added root level file:", relativePath);
+            } else {
+                // For nested files, find or create parent directories
+                // First, ensure the path is properly formatted
+                const cleanPath = relativePath.startsWith('/') ? relativePath.substring(1) : relativePath;
+                const pathParts = cleanPath.split('/');
+                
+                // Build the path step by step to ensure all parent folders are created
+                let currentPath = "";
+                let currentNode = root;
+                
+                for (let i = 0; i < pathParts.length - 1; i++) {
+                    const part = pathParts[i];
+                    if (!part) continue; // Skip empty parts
+                    
+                    // Update the current path
+                    currentPath = currentPath ? `${currentPath}/${part}` : part;
+                    const folderPath = `/${currentPath}/`;
+                    
+                    // Check if this folder already exists
+                    let folderNode = currentNode.subTree.find(item => 
+                        item.relativePath === folderPath || 
+                        item.name === part && item.isFolder);
+                    
+                    if (!folderNode) {
+                        // Create the folder node
+                        folderNode = {
+                            name: part,
+                            displayName: part,
+                            relativePath: folderPath,
+                            keyPrefix: part,
+                            level: currentNode.level + 1,
+                            expanded: false,
+                            subTree: [],
+                            isFolder: true
+                        };
+                        
+                        currentNode.subTree.push(folderNode);
+                        console.log(`Created folder: ${folderPath}`);
+                        
+                        // Mark this path as created
+                        createdPaths.add(folderPath);
+                    }
+                    
+                    // Move to the next level
+                    currentNode = folderNode;
+                }
+                
+                // Now add the file to the final parent node
+                currentNode.subTree.push({
+                    name: fileKey.fileName,
+                    displayName: fileKey.fileName,
+                    relativePath: relativePath,
+                    keyPrefix: fileKey.key,
+                    level: currentNode.level + 1,
+                    expanded: false,
+                    subTree: [],
+                    isFolder: false,
+                    size: fileKey.size,
+                    dateCreatedCurrentVersion: fileKey.dateCreatedCurrentVersion,
+                    versionId: fileKey.versionId,
+                    isArchived: fileKey.isArchived,
+                    currentAssetVersionFileVersionMismatch: fileKey.currentAssetVersionFileVersionMismatch
+                });
+                
+                console.log("Added nested file:", relativePath);
+            }
+            
+            // Mark this path as created
+            createdPaths.add(relativePath);
+        }
+        
+        // STEP 2: Process versioned folders and update existing folder nodes
         for (const folderKey of folders) {
             const relativePath = folderKey.relativePath;
             
             // Ensure relativePath ends with a slash for folders
             const normalizedPath = relativePath.endsWith('/') ? relativePath : relativePath + '/';
             
-            // Skip if we've already created this path
+            // Skip the root folder as we've already handled it
+            if (normalizedPath === '/' || normalizedPath === '') {
+                continue;
+            }
+            
+            // Check if this folder path was already created during file processing
             if (createdPaths.has(normalizedPath)) {
+                // Update existing folder with version information
+                const existingFolder = getRootByPath(root, normalizedPath);
+                if (existingFolder) {
+                    // Update the existing folder with version information
+                    existingFolder.dateCreatedCurrentVersion = folderKey.dateCreatedCurrentVersion;
+                    existingFolder.versionId = folderKey.versionId;
+                    existingFolder.isArchived = folderKey.isArchived;
+                    existingFolder.currentAssetVersionFileVersionMismatch = folderKey.currentAssetVersionFileVersionMismatch;
+                    existingFolder.keyPrefix = folderKey.key; // Update the key prefix to match the versioned folder
+                    
+                    console.log("Updated existing folder with version info:", normalizedPath);
+                }
                 continue;
             }
             
             // Extract folder name from path or use fileName
-            const folderName = folderKey.fileName || 
-                              (normalizedPath.split('/').filter(Boolean).pop() || '');
+            let folderName = folderKey.fileName;
+            if (!folderName || folderName.trim() === '') {
+                // Extract the folder name from the path
+                const pathParts = normalizedPath.split('/').filter(Boolean);
+                folderName = pathParts[pathParts.length - 1] || '';
+            }
             
-            // For root level folders
-            if (normalizedPath === '/' || normalizedPath.split('/').filter(Boolean).length === 1) {
-                    // Create node for root level folder
-                    root.subTree.push({
-                        name: folderName,
-                        displayName: folderName,
-                        relativePath: normalizedPath,
-                        keyPrefix: folderKey.key,
-                        level: 1,
-                        expanded: false,
-                        subTree: [],
-                        isFolder: true,
-                        size: folderKey.size,
-                        dateCreatedCurrentVersion: folderKey.dateCreatedCurrentVersion,
-                        versionId: folderKey.versionId,
-                        isArchived: folderKey.isArchived,
-                        currentAssetVersionFileVersionMismatch: folderKey.currentAssetVersionFileVersionMismatch
-                    });
+            // For root level folders (directly under the root)
+            if (normalizedPath.split('/').filter(Boolean).length === 1) {
+                // Create node for root level folder
+                root.subTree.push({
+                    name: folderName,
+                    displayName: folderName,
+                    relativePath: normalizedPath,
+                    keyPrefix: folderKey.key,
+                    level: 1,
+                    expanded: false,
+                    subTree: [],
+                    isFolder: true,
+                    size: folderKey.size,
+                    dateCreatedCurrentVersion: folderKey.dateCreatedCurrentVersion,
+                    versionId: folderKey.versionId,
+                    isArchived: folderKey.isArchived,
+                    currentAssetVersionFileVersionMismatch: folderKey.currentAssetVersionFileVersionMismatch
+                });
                 
                 console.log("Added root level folder:", normalizedPath);
             } else {
                 // For nested folders
-                const parentDir = getParentDirectory(normalizedPath);
-                let parentNode = getRootByPath(root, parentDir + "/");
+                const parentDir = getParentDirectory(normalizedPath.slice(0, -1)); // Remove trailing slash for getParentDirectory
+                const parentPath = parentDir + "/";
+                let parentNode = getRootByPath(root, parentPath);
                 
                 if (!parentNode) {
                     // Create parent directories if they don't exist
                     console.log("Creating parent directories for:", normalizedPath);
                     parentNode = addDirectories(root, parentDir);
+                    
+                    // Mark parent directories as created
+                    let currentPath = parentDir;
+                    while (currentPath) {
+                        createdPaths.add(currentPath + '/');
+                        currentPath = getParentDirectory(currentPath);
+                        if (currentPath === '') break;
+                    }
                 }
                 
                 // Check if this folder already exists in the parent's subtree
@@ -202,76 +362,40 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
             createdPaths.add(normalizedPath);
         }
         
-        // Then process files
-        for (const fileKey of files) {
-            const relativePath = fileKey.relativePath;
-            
-            // Skip if we've already created this path (shouldn't happen for files, but just in case)
-            if (createdPaths.has(relativePath)) {
-                continue;
+        // STEP 3: Update any remaining folder paths that were created during file processing
+        // but need version information from the folderPathsToUpdate map
+        folderPathsToUpdate.forEach((folderKey, normalizedPath) => {
+            // Skip the root folder as we've already handled it
+            if (normalizedPath === '/' || normalizedPath === '') {
+                return;
             }
             
-            // For root level files
-            if (!relativePath.includes('/') || relativePath.startsWith('/') && relativePath.lastIndexOf('/') === 0) {
-                // Create node for root level file
-                root.subTree.push({
-                    name: fileKey.fileName,
-                    displayName: fileKey.fileName,
-                    relativePath: relativePath,
-                    keyPrefix: fileKey.key,
-                    level: 1,
-                    expanded: false,
-                    subTree: [],
-                    isFolder: false,
-                    size: fileKey.size,
-                    dateCreatedCurrentVersion: fileKey.dateCreatedCurrentVersion,
-                    versionId: fileKey.versionId,
-                    isArchived: fileKey.isArchived,
-                    currentAssetVersionFileVersionMismatch: fileKey.currentAssetVersionFileVersionMismatch
-                });
-                
-                console.log("Added root level file:", relativePath);
-            } else {
-                // For nested files, find or create parent directories
-                const parentDir = getParentDirectory(relativePath);
-                let parentNode = getRootByPath(root, parentDir + "/");
-                
-                if (!parentNode) {
-                    // Create parent directories if they don't exist
-                    console.log("Creating parent directories for file:", relativePath);
-                    parentNode = addDirectories(root, parentDir);
+            if (createdPaths.has(normalizedPath)) {
+                const existingFolder = getRootByPath(root, normalizedPath);
+                if (existingFolder && !existingFolder.versionId) {
+                    // Update the existing folder with version information
+                    existingFolder.dateCreatedCurrentVersion = folderKey.dateCreatedCurrentVersion;
+                    existingFolder.versionId = folderKey.versionId;
+                    existingFolder.isArchived = folderKey.isArchived;
+                    existingFolder.currentAssetVersionFileVersionMismatch = folderKey.currentAssetVersionFileVersionMismatch;
+                    existingFolder.keyPrefix = folderKey.key; // Update the key prefix to match the versioned folder
                     
-                    // Mark parent directories as created
-                    let currentPath = parentDir;
-                    while (currentPath) {
-                        createdPaths.add(currentPath + '/');
-                        currentPath = getParentDirectory(currentPath);
-                        if (currentPath === '') break;
-                    }
+                    console.log("Updated folder with version info in final pass:", normalizedPath);
                 }
-                
-                // Add the file to its parent
-                parentNode.subTree.push({
-                    name: fileKey.fileName,
-                    displayName: fileKey.fileName,
-                    relativePath: relativePath,
-                    keyPrefix: fileKey.key,
-                    level: parentNode.level + 1,
-                    expanded: false,
-                    subTree: [],
-                    isFolder: false,
-                    size: fileKey.size,
-                    dateCreatedCurrentVersion: fileKey.dateCreatedCurrentVersion,
-                    versionId: fileKey.versionId,
-                    isArchived: fileKey.isArchived,
-                    currentAssetVersionFileVersionMismatch: fileKey.currentAssetVersionFileVersionMismatch
-                });
-                
-                console.log("Added nested file:", relativePath);
             }
+        });
+        
+        // STEP 4: Final check to remove any duplicate root entries
+        // Sometimes a blank folder with path "/" can appear in the tree
+        const duplicateRootEntries = root.subTree.filter(item => 
+            item.relativePath === "/" || item.relativePath === "");
+        
+        if (duplicateRootEntries.length > 0) {
+            console.log("Found duplicate root entries to remove:", duplicateRootEntries.length);
             
-            // Mark this path as created
-            createdPaths.add(relativePath);
+            // Remove duplicate root entries from the tree
+            root.subTree = root.subTree.filter(item => 
+                item.relativePath !== "/" && item.relativePath !== "");
         }
         
         console.log("File tree construction complete");
