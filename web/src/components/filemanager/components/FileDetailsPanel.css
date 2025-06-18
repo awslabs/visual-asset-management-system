@@ -100,12 +100,23 @@
 }
 
 .archived-file-label {
+    background-color: #d13212;
+    color: #ffffff;
+    font-weight: bold;
+    padding: 2px 8px;
+    border-radius: 4px;
+    display: inline-block;
+    margin-bottom: 4px;
+    font-size: 12px;
+}
+
+.not-included-label {
     background-color: #ffc107;
     color: #212529;
     font-weight: bold;
     padding: 2px 8px;
     border-radius: 4px;
     display: inline-block;
-    margin-bottom: 4px;
+    margin-top: 4px;
     font-size: 12px;
 }

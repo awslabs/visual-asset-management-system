@@ -43,6 +43,7 @@ interface FileInfo {
     versionId?: string;
     size?: number;
     dateCreatedCurrentVersion?: string;
+    isArchived?: boolean;
 }
 
 interface ViewFileState {
@@ -53,6 +54,7 @@ interface ViewFileState {
     versionId?: string;
     size?: number;
     dateCreatedCurrentVersion?: string;
+    isArchived?: boolean;
     
     // Multi-file mode (new functionality)
     files?: FileInfo[];
@@ -161,8 +163,14 @@ export default function ViewFile() {
         isDirectory: state?.isDirectory || false,
         versionId: state?.versionId,
         size: state?.size,
-        dateCreatedCurrentVersion: state?.dateCreatedCurrentVersion
+        dateCreatedCurrentVersion: state?.dateCreatedCurrentVersion,
+        isArchived: state?.isArchived
     };
+    
+    // Check if any files are archived
+    const hasArchivedFiles = isMultiFileMode 
+        ? currentFiles.some(file => file.isArchived) 
+        : singleFileInfo?.isArchived === true;
 
     const [reload, setReload] = useState(true);
     const [viewType, setViewType] = useState<string | null>(null);
@@ -303,12 +311,6 @@ export default function ViewFile() {
         return singleFileInfo?.filename || asset?.assetName || "";
     };
 
-    // Handle version view - refresh the page with new version
-    const handleVersionView = (versionId: string) => {
-        // Refresh the page to show the new version
-        window.location.reload();
-    };
-
     // Handle version revert - refresh the page to show updated file
     const handleVersionRevert = () => {
         // Refresh the page to show the reverted file
@@ -348,8 +350,8 @@ export default function ViewFile() {
                                 )}
                             </div>
 
-                            {/* Visualizer - show for both single and multi-file modes, but not for directories */}
-                            {(!isMultiFileMode ? !singleFileInfo?.isDirectory : true) && (
+                            {/* Visualizer - show for both single and multi-file modes, but not for directories or archived files */}
+                            {(!isMultiFileMode ? !singleFileInfo?.isDirectory : true) && !hasArchivedFiles && (
                                 <div id="view-edit-asset-right-column" className={viewerMode}>
                                     <SpaceBetween direction="vertical" size="m">
                                         <Container
@@ -390,6 +392,17 @@ export default function ViewFile() {
                                 </div>
                             )}
                             
+                            {/* Show message when files are archived */}
+                            {hasArchivedFiles && (
+                                <Container>
+                                    <Box padding="m" textAlign="center">
+                                        <div style={{ color: '#666', fontSize: '16px' }}>
+                                            Visualizer is not available for archived files.
+                                        </div>
+                                    </Box>
+                                </Container>
+                            )}
+                            
                             {/* Show file list for multi-file mode - moved below visualizer */}
                             {isMultiFileMode && (
                                 <Container header={<Header variant="h3">Selected Files</Header>}>
@@ -410,8 +423,8 @@ export default function ViewFile() {
                                 </Container>
                             )}
                             
-                            {/* Metadata - only show for single file mode */}
-                            {!isMultiFileMode && (
+                            {/* Metadata - only show for single file mode and non-archived files */}
+                            {!isMultiFileMode && !hasArchivedFiles && (
                                 <ErrorBoundary
                                     fallback={
                                         <div>
@@ -428,6 +441,17 @@ export default function ViewFile() {
                                 </ErrorBoundary>
                             )}
                             
+                            {/* Show message when files are archived in single file mode */}
+                            {!isMultiFileMode && hasArchivedFiles && (
+                                <Container header={<Header variant="h3">Metadata</Header>}>
+                                    <Box padding="m" textAlign="center">
+                                        <div style={{ color: '#666', fontSize: '16px' }}>
+                                            Metadata is not available for archived files.
+                                        </div>
+                                    </Box>
+                                </Container>
+                            )}
+                            
             {/* File Versions Container - only show for single file mode and non-directories */}
             {!isMultiFileMode && singleFileInfo && !singleFileInfo.isDirectory && singleFileInfo.versionId && (
                 <Container header={<Header variant="h3">File Versions</Header>}>
@@ -437,7 +461,6 @@ export default function ViewFile() {
                         filePath={singleFileInfo.key}
                         fileName={singleFileInfo.filename}
                         currentVersionId={singleFileInfo.versionId}
-                        onVersionView={handleVersionView}
                         onVersionRevert={handleVersionRevert}
                         displayMode="container"
                         visible={true}

@@ -127,6 +127,8 @@ export function buildAssetService(
             ASSET_LINKS_STORAGE_TABLE_NAME: storageResources.dynamo.assetLinksStorageTable.tableName,
             METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
             ASSET_VERSIONS_STORAGE_TABLE_NAME: storageResources.dynamo.assetVersionsStorageTable.tableName,
+            ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME: storageResources.dynamo.assetFileVersionsStorageTable.tableName,
+            COMMENT_STORAGE_TABLE_NAME: storageResources.dynamo.commentStorageTable.tableName
         },
     });
     storageResources.dynamo.assetStorageTable.grantReadWriteData(assetService);
@@ -136,15 +138,13 @@ export function buildAssetService(
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(assetService);
     storageResources.dynamo.userRolesStorageTable.grantReadData(assetService);
     storageResources.dynamo.rolesStorageTable.grantReadData(assetService);
-    
-    // Add permissions for additional tables needed for delete/archive operations
     storageResources.dynamo.assetUploadsStorageTable.grantReadWriteData(assetService);
     storageResources.dynamo.assetLinksStorageTable.grantReadWriteData(assetService);
     storageResources.dynamo.metadataStorageTable.grantReadWriteData(assetService);
     storageResources.dynamo.assetVersionsStorageTable.grantReadWriteData(assetService);
-    
-    // Grant delete permissions for S3 objects
-    storageResources.s3.assetBucket.grantDelete(assetService);
+    storageResources.dynamo.assetFileVersionsStorageTable.grantReadWriteData(assetService);
+    storageResources.dynamo.commentStorageTable.grantReadWriteData(assetService);
+    storageResources.s3.assetBucket.grantReadWrite(assetService);
     
     kmsKeyLambdaPermissionAddToResourcePolicy(assetService, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(assetService, config);
@@ -182,6 +182,7 @@ export function buildAssetFiles(
 
         environment: {
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME: storageResources.dynamo.assetFileVersionsStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
@@ -193,6 +194,7 @@ export function buildAssetFiles(
     storageResources.dynamo.assetStorageTable.grantReadWriteData(assetService);
     storageResources.s3.assetBucket.grantReadWrite(assetService);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(assetService)
+    storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(assetService);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(assetService);
     storageResources.dynamo.userRolesStorageTable.grantReadData(assetService);
     storageResources.dynamo.rolesStorageTable.grantReadData(assetService);
@@ -232,6 +234,7 @@ export function buildUploadFileFunction(
                 : undefined,
         environment: {
             S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
+            S3_ASSET_AUXILIARY_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             ASSET_UPLOAD_TABLE_NAME: storageResources.dynamo.assetUploadsStorageTable.tableName,
             SEND_EMAIL_FUNCTION_NAME: sendEmailFunction.functionName,
@@ -242,6 +245,7 @@ export function buildUploadFileFunction(
     });
 
     storageResources.s3.assetBucket.grantReadWrite(fun);
+    storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun)
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetUploadsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
@@ -486,6 +490,7 @@ export function buildAssetVersionsFunction(
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+            S3_ASSET_AUXILIARY_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
         },
     });
     
@@ -496,8 +501,7 @@ export function buildAssetVersionsFunction(
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(assetVersionsFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(assetVersionsFunction);
     storageResources.dynamo.rolesStorageTable.grantReadData(assetVersionsFunction);
-    
-    // Grant permissions to S3 bucket
+    storageResources.s3.assetAuxiliaryBucket.grantReadWrite(assetVersionsFunction);
     storageResources.s3.assetBucket.grantReadWrite(assetVersionsFunction);
     
     kmsKeyLambdaPermissionAddToResourcePolicy(assetVersionsFunction, storageResources.encryption.kmsKey);

@@ -603,11 +603,11 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
     const assetFileVersionsStorageTable = new dynamodb.Table(scope, "AssetFileVersionsStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
-            name: "assetId",
+            name: "assetId:assetVersionId",
             type: dynamodb.AttributeType.STRING,
         },
         sortKey: {
-            name: "assetVersionId",
+            name: "fileKey",
             type: dynamodb.AttributeType.STRING,
         },
     });

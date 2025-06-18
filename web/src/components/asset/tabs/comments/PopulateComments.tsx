@@ -6,6 +6,16 @@
 import React from "react";
 import VersionComments from "./VersionComments";
 
+// Define the type for showMessage prop
+type ShowMessageFunction = (props: {
+  message: React.ReactNode;
+  type: "error" | "warning" | "success" | "info";
+  dismissible?: boolean;
+  autoDismiss?: boolean;
+  dismissTimeout?: number;
+  onDismiss?: () => void;
+}) => void;
+
 interface CommentType {
   assetId: string;
   "assetVersionId:commentId": string;
@@ -44,10 +54,11 @@ interface PopulateCommentsProps {
   asset: AssetType;
   allComments: CommentType[];
   setReload: (reload: boolean) => void;
+  showMessage: ShowMessageFunction;
 }
 
 export default function PopulateComments(props: PopulateCommentsProps) {
-  const { loading, showLoading, userId, asset, allComments, setReload } = props;
+  const { loading, showLoading, userId, asset, allComments, setReload, showMessage } = props;
 
   // Sort the comments so that the most recent comment appears at the bottom of the list
   allComments.sort(function (a: CommentType, b: CommentType) {
@@ -119,6 +130,7 @@ export default function PopulateComments(props: PopulateCommentsProps) {
                 defaultExpanded={allVersions.length - 1 === index}
                 version={version}
                 comments={comments}
+                showMessage={showMessage}
               />
             );
           });

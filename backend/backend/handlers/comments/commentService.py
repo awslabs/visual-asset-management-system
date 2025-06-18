@@ -166,7 +166,7 @@ def get_single_comment(assetId: str, assetVersionIdAndCommentId: str, showDelete
     return response.get("Item", {})
 
 
-def delete_comment(assetId: str, assetVersionIdAndCommentId: str, event: dict) -> dict:
+def delete_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, event: dict) -> dict:
     """
     Deletes a specific comment from the database (actually just adds #deleted tag)
     :param assetId: id of the asset the comment is attached to
@@ -183,12 +183,11 @@ def delete_comment(assetId: str, assetVersionIdAndCommentId: str, event: dict) -
         logger.info(item)
 
         logger.info("Verifying user")
-        api_call_user_id = event["requestContext"]["authorizer"]["jwt"]["claims"]["sub"]
         comment_user_id = item["commentOwnerID"]
-        if api_call_user_id != comment_user_id:
-            logger.warning("invalid user")
-            response["statusCode"] = 401
-            response["message"] = "Unauthorized"
+        if userId != comment_user_id:
+            logger.warning("invalid user - ownerID mismatch with caller")
+            response["statusCode"] = 403
+            response["message"] = "Unauthorized - only the creator of the comment can delete it"
             return response
 
         logger.info("Deleting comment")
@@ -360,12 +359,29 @@ def delete_handler(response: dict, pathParameters: dict, event: dict) -> dict:
 
     logger.info("Validating parameters")
     split_arr = pathParameters["assetVersionId:commentId"].split(":")
+
+    #if split_arr length is not 2, generate a validation error
+    if len(split_arr) != 2:
+        message = "Invalid assetVersionId:commentId format"
+        response["body"] = json.dumps({"message": message})
+        response["statusCode"] = 400
+        return response
+
     (valid, message) = validate(
         {
-            "assetId": {"value": pathParameters["assetId"], "validator": "ID"},
-            "commentId": {"value": split_arr[1], "validator": "ID"},
+            "assetId": 
+            {
+                "value": pathParameters["assetId"], 
+                "validator": "ASSET_ID"
+            },
+            "commentId": 
+            {
+                "value": split_arr[1], 
+                "validator": "ID"
+                },
         }
     )
+
     if not valid:
         logger.warning(message)
         response["body"] = json.dumps({"message": message})
@@ -386,10 +402,16 @@ def delete_handler(response: dict, pathParameters: dict, event: dict) -> dict:
             method_allowed_on_api = True
 
     if method_allowed_on_api:
+
+        #Get user ID of person making request
+        userId = claims_and_roles.get("tokens", ["system"])[0]
+
         logger.info(
             f"Deleting comment for assetId: {pathParameters['assetId']} and versionId:commentId: {pathParameters['assetVersionId:commentId']}",
         )
-        result = delete_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], event)
+
+        result = delete_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], userId, event)
+        
         response["body"] = json.dumps({"message": result["message"]})
         response["statusCode"] = result["statusCode"]
         return response

@@ -156,7 +156,8 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
                         size: folderKey.size,
                         dateCreatedCurrentVersion: folderKey.dateCreatedCurrentVersion,
                         versionId: folderKey.versionId,
-                        isArchived: folderKey.isArchived
+                        isArchived: folderKey.isArchived,
+                        currentAssetVersionFileVersionMismatch: folderKey.currentAssetVersionFileVersionMismatch
                     });
                 
                 console.log("Added root level folder:", normalizedPath);
@@ -189,7 +190,8 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
                         size: folderKey.size,
                         dateCreatedCurrentVersion: folderKey.dateCreatedCurrentVersion,
                         versionId: folderKey.versionId,
-                        isArchived: folderKey.isArchived
+                        isArchived: folderKey.isArchived,
+                        currentAssetVersionFileVersionMismatch: folderKey.currentAssetVersionFileVersionMismatch
                     });
                     
                     console.log("Added nested folder:", normalizedPath);
@@ -224,7 +226,8 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
                     size: fileKey.size,
                     dateCreatedCurrentVersion: fileKey.dateCreatedCurrentVersion,
                     versionId: fileKey.versionId,
-                    isArchived: fileKey.isArchived
+                    isArchived: fileKey.isArchived,
+                    currentAssetVersionFileVersionMismatch: fileKey.currentAssetVersionFileVersionMismatch
                 });
                 
                 console.log("Added root level file:", relativePath);
@@ -260,7 +263,8 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
                     size: fileKey.size,
                     dateCreatedCurrentVersion: fileKey.dateCreatedCurrentVersion,
                     versionId: fileKey.versionId,
-                    isArchived: fileKey.isArchived
+                    isArchived: fileKey.isArchived,
+                    currentAssetVersionFileVersionMismatch: fileKey.currentAssetVersionFileVersionMismatch
                 });
                 
                 console.log("Added nested file:", relativePath);

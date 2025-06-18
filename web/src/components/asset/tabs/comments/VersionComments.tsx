@@ -15,6 +15,16 @@ import {
 } from "@cloudscape-design/components";
 import JoditEditor from "jodit-react";
 
+// Define the type for showMessage prop
+type ShowMessageFunction = (props: {
+  message: React.ReactNode;
+  type: "error" | "warning" | "success" | "info";
+  dismissible?: boolean;
+  autoDismiss?: boolean;
+  dismissTimeout?: number;
+  onDismiss?: () => void;
+}) => void;
+
 interface CommentType {
   assetId: string;
   "assetVersionId:commentId": string;
@@ -39,10 +49,11 @@ interface VersionCommentsProps {
     description: string;
   };
   comments: CommentType[];
+  showMessage: ShowMessageFunction;
 }
 
 export default function VersionComments(props: VersionCommentsProps) {
-  const { loading, showLoading, userId, setReload, defaultExpanded, version, comments } = props;
+  const { loading, showLoading, userId, setReload, defaultExpanded, version, comments, showMessage } = props;
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [visible, setVisible] = useState(false);
   const [editVisible, setEditVisible] = useState(false);
@@ -105,7 +116,11 @@ export default function VersionComments(props: VersionCommentsProps) {
   const handleDeleteComment = async () => {
     if (!commentToDelete) return;
 
-    const [assetId, assetVersionIdAndCommentId] = commentToDelete.split(":");
+    console.log("Deleting Comment-- "+ commentToDelete);
+    const [assetId, assetVersionId, CommentId] = commentToDelete.split(":");
+
+    let assetVersionIdAndCommentId = assetVersionId + ":" + CommentId
+
     showLoading(true);
 
     try {
@@ -114,13 +129,25 @@ export default function VersionComments(props: VersionCommentsProps) {
         `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
         {}
       );
+      showMessage({
+        type: "success",
+        message: "Comment deleted successfully",
+        dismissible: true,
+        autoDismiss: true,
+      });
       setVisible(false);
       setReload(true);
     } catch (e: any) {
-      console.log("delete comment error");
-      if (e.response && e.response.status === 403) {
-        localStorage.setItem("status", "403");
-      }
+      console.log("delete comment error", e);
+      const errorMessage = e.response?.status === 403 
+        ? "Unable to delete comment. You don't have permission to perform this action."
+        : `Unable to delete comment: ${e.message || "Unknown error"}`;
+      
+      showMessage({
+        type: "error",
+        message: errorMessage,
+        dismissible: true,
+      });
       setVisible(false);
       setReload(true);
     }
@@ -142,13 +169,25 @@ export default function VersionComments(props: VersionCommentsProps) {
           },
         }
       );
+      showMessage({
+        type: "success",
+        message: "Comment updated successfully",
+        dismissible: true,
+        autoDismiss: true,
+      });
       setEditVisible(false);
       setReload(true);
     } catch (e: any) {
-      console.log("edit comment error");
-      if (e.response && e.response.status === 403) {
-        localStorage.setItem("status", "403post");
-      }
+      console.log("edit comment error", e);
+      const errorMessage = e.response?.status === 403 
+        ? "Unable to edit comment. You don't have permission to perform this action."
+        : `Unable to edit comment: ${e.message || "Unknown error"}`;
+      
+      showMessage({
+        type: "error",
+        message: errorMessage,
+        dismissible: true,
+      });
       setEditVisible(false);
       setReload(true);
     }

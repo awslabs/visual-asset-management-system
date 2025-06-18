@@ -142,11 +142,29 @@
 .archived-label {
     margin-left: 6px;
     font-size: 10px;
-    background-color: #ffc107;
-    color: #212529;
+    background-color: #d13212;
+    color: #ffffff;
     padding: 1px 4px;
     border-radius: 3px;
     font-weight: bold;
     display: inline-block;
     vertical-align: middle;
+}
+
+.archived-icon {
+    margin-left: 4px;
+    color: #d13212;
+    display: inline-flex;
+    align-items: center;
+    vertical-align: middle;
+    font-size: 14px;
+}
+
+.not-included-icon {
+    margin-left: 4px;
+    color: #ffc107;
+    display: inline-flex;
+    align-items: center;
+    vertical-align: middle;
+    font-size: 14px;
 }

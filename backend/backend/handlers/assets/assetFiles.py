@@ -6,6 +6,7 @@ import boto3
 import json
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -42,7 +43,8 @@ logger = safeLogger(service_name="AssetFiles")
 
 # Load environment variables
 try:
-    asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    asset_database_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    asset_version_files_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"] 
     asset_bucket_name_default = os.environ["S3_ASSET_STORAGE_BUCKET"]
     asset_aux_bucket_name = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
 except Exception as e:
@@ -50,7 +52,8 @@ except Exception as e:
     raise e
 
 # Initialize DynamoDB tables
-asset_table = dynamodb.Table(asset_database)
+asset_table = dynamodb.Table(asset_database_table_name)
+asset_version_files_table = dynamodb.Table(asset_version_files_table_name)
 
 #######################
 # Utility Functions
@@ -233,6 +236,122 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
         logger.exception(f"Error copying S3 object from {source_key} to {dest_key}: {e}")
         return False
 
+def delete_assetAuxiliary_files(prefix):
+    """Delete auxiliary files for an asset
+    
+    Args:
+        assetLocation: The asset location object with Key (dict or AssetLocationModel)
+    """
+
+    if not prefix:
+        return
+
+    # Add the folder delimiter to the end of the key if not already
+    if not prefix.endswith('/'):
+        prefix = prefix + '/'
+
+    logger.info(f"Deleting Temporary Auxiliary Assets Files Under Folder Prefix: {asset_aux_bucket_name}:{prefix}")
+
+    try:
+        # Get all assets in assetAuxiliary bucket (unversioned, temporary files for the auxiliary assets) for deletion
+        # Use assetLocation key as root folder key for assetAuxiliaryFiles
+        assetAuxiliaryBucketFilesDeleted = []
+        paginator = s3_client.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=prefix):
+            if 'Contents' in page:
+                for item in page['Contents']:
+                    assetAuxiliaryBucketFilesDeleted.append(item['Key'])
+                    logger.info(f"Deleting auxiliary asset file: {item['Key']}")
+                    s3_client.delete_object(Bucket=asset_aux_bucket_name, Key=item['Key'])
+
+    except Exception as e:
+        logger.exception(f"Error deleting auxiliary files (they may not exist in the first place): {e}")
+
+    return
+
+def move_auxiliary_files(source_key: str, dest_key: str) -> None:
+    """Move auxiliary files from source prefix to destination prefix.
+    Silently logs errors if operations fail.
+    
+    Args:
+        source_key: Source key prefix
+        dest_key: Destination key prefix
+    """
+    try:
+        # List all objects with the source prefix in auxiliary bucket
+        paginator = s3_client.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=source_key):
+            if 'Contents' not in page:
+                # No auxiliary files found, nothing to move
+                return
+                
+            for obj in page.get('Contents', []):
+                source_aux_key = obj['Key']
+                
+                # Calculate the destination key by replacing the source prefix with destination prefix
+                dest_aux_key = source_aux_key.replace(source_key, dest_key, 1)
+                
+                try:
+                    # Copy to new location
+                    s3_resource.meta.client.copy(
+                        CopySource={'Bucket': asset_aux_bucket_name, 'Key': source_aux_key},
+                        Bucket=asset_aux_bucket_name,
+                        Key=dest_aux_key
+                    )
+                    
+                    # Delete from old location
+                    s3_client.delete_object(
+                        Bucket=asset_aux_bucket_name,
+                        Key=source_aux_key
+                    )
+                    
+                    logger.info(f"Successfully moved auxiliary file from {source_aux_key} to {dest_aux_key}")
+                except Exception as e:
+                    # Log error but continue with other files
+                    logger.warning(f"Error moving auxiliary file {source_aux_key} to {dest_aux_key}: {e}")
+                    
+    except Exception as e:
+        # Log error but don't raise exception to caller
+        logger.warning(f"Error processing auxiliary files for move operation: {e}")
+
+def copy_auxiliary_files(source_key: str, dest_key: str) -> None:
+    """Copy auxiliary files from source prefix to destination prefix.
+    Silently logs errors if operations fail.
+    
+    Args:
+        source_key: Source key prefix
+        dest_key: Destination key prefix
+    """
+    try:
+        # List all objects with the source prefix in auxiliary bucket
+        paginator = s3_client.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=source_key):
+            if 'Contents' not in page:
+                # No auxiliary files found, nothing to copy
+                return
+                
+            for obj in page.get('Contents', []):
+                source_aux_key = obj['Key']
+                
+                # Calculate the destination key by replacing the source prefix with destination prefix
+                dest_aux_key = source_aux_key.replace(source_key, dest_key, 1)
+                
+                try:
+                    # Copy to new location
+                    s3_resource.meta.client.copy(
+                        CopySource={'Bucket': asset_aux_bucket_name, 'Key': source_aux_key},
+                        Bucket=asset_aux_bucket_name,
+                        Key=dest_aux_key
+                    )
+                    
+                    logger.info(f"Successfully copied auxiliary file from {source_aux_key} to {dest_aux_key}")
+                except Exception as e:
+                    # Log error but continue with other files
+                    logger.warning(f"Error copying auxiliary file {source_aux_key} to {dest_aux_key}: {e}")
+                    
+    except Exception as e:
+        # Log error but don't raise exception to caller
+        logger.warning(f"Error processing auxiliary files for copy operation: {e}")
 
 def delete_s3_object(bucket: str, key: str) -> bool:
     """Permanently delete an S3 object (current version only)
@@ -553,8 +672,87 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
     
     except ClientError as e:
         logger.exception(f"Error getting S3 object metadata: {e}")
-        if e.response['Error']['Code'] == 'NoSuchKey':
-            raise VAMSGeneralErrorResponse(f"File not found: {key}")
+        if e.response['Error']['Code'] == 'NoSuchKey' or e.response['Error']['Code'] == '404':
+            # Check if the file is archived (has delete markers)
+            try:
+                versions_response = s3_client.list_object_versions(
+                    Bucket=bucket,
+                    Prefix=key,
+                    MaxKeys=100
+                )
+                
+                # Check if the file has any delete markers or versions
+                has_delete_markers = any(marker['Key'] == key for marker in versions_response.get('DeleteMarkers', []))
+                has_versions = any(version['Key'] == key for version in versions_response.get('Versions', []))
+                
+                if has_delete_markers or has_versions:
+                    # File exists but is archived, construct metadata
+                    result = {
+                        'fileName': os.path.basename(key),
+                        'key': key,
+                        'relativePath': '/' + key.split('/', 1)[1] if '/' in key else key,
+                        'isFolder': key.endswith('/'),
+                        'isArchived': True,
+                        'storageClass': 'STANDARD'
+                    }
+                    
+                    # Find the latest version to get additional metadata
+                    latest_version = None
+                    for version in versions_response.get('Versions', []):
+                        if version['Key'] == key:
+                            if latest_version is None or version['LastModified'] > latest_version['LastModified']:
+                                latest_version = version
+                    
+                    # Add size and other metadata if available
+                    if latest_version:
+                        result['size'] = latest_version.get('Size')
+                        result['lastModified'] = latest_version['LastModified'].isoformat()
+                        result['etag'] = latest_version.get('ETag', '').strip('"')
+                    
+                    # Include version history if requested
+                    if include_versions:
+                        versions = []
+                        
+                        # Add regular versions
+                        for version in versions_response.get('Versions', []):
+                            if version['Key'] == key:
+                                version_info = {
+                                    'versionId': version['VersionId'],
+                                    'lastModified': version['LastModified'].isoformat(),
+                                    'size': version['Size'],
+                                    'isLatest': version['IsLatest'],
+                                    'storageClass': version.get('StorageClass', 'STANDARD'),
+                                    'etag': version.get('ETag', '').strip('"'),
+                                    'isArchived': False
+                                }
+                                versions.append(version_info)
+                        
+                        # Add delete markers
+                        for marker in versions_response.get('DeleteMarkers', []):
+                            if marker['Key'] == key:
+                                version_info = {
+                                    'versionId': marker['VersionId'],
+                                    'lastModified': marker['LastModified'].isoformat(),
+                                    'isLatest': marker['IsLatest'],
+                                    'storageClass': 'STANDARD',
+                                    'isArchived': True,
+                                    'size': 0  # Add default size for delete markers
+                                }
+                                versions.append(version_info)
+                        
+                        # Sort versions by date (newest first)
+                        versions.sort(key=lambda x: x['lastModified'], reverse=True)
+                        result['versions'] = versions
+                    
+                    return result
+                else:
+                    # File truly doesn't exist
+                    raise VAMSGeneralErrorResponse(f"File not found: {key}")
+            except Exception as inner_e:
+                if isinstance(inner_e, VAMSGeneralErrorResponse):
+                    raise inner_e
+                logger.exception(f"Error checking archive status: {inner_e}")
+                raise VAMSGeneralErrorResponse(f"Error retrieving file metadata: {str(e)}")
         raise VAMSGeneralErrorResponse(f"Error retrieving file metadata: {str(e)}")
 
 def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: Dict, include_archived: bool = False) -> Dict:
@@ -732,6 +930,60 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
     logger.info(f"Found {len(result['items'])} files in the path")
     return result
 
+def get_asset_file_versions(assetId: str, assetVersionId: str, relativeFileKey: Optional[str]) -> Optional[Dict]:
+    """Get file versions for a specific asset version
+    
+    Args:
+        assetId: The asset ID
+        assetVersionId: The asset version ID
+        
+    Returns:
+        Dictionary with file versions or None if not found
+    """
+    try:
+        # Create partition key in the format {assetId}:{assetversionId}
+        partition_key = f"{assetId}:{assetVersionId}"
+        
+        # Query all records with the same partition key
+        if relativeFileKey:
+            response = asset_version_files_table.query(
+                KeyConditionExpression=Key('assetId:assetVersionId').eq(partition_key) & Key('fileKey').eq(relativeFileKey)
+            )
+        else:
+            response = asset_version_files_table.query(
+                KeyConditionExpression=Key('assetId:assetVersionId').eq(partition_key)
+            )
+        
+        items = response.get('Items', [])
+        
+        # If no items found, return None
+        if not items:
+            return None
+        
+        # Reconstruct the file versions structure
+        files = []
+        for item in items:
+            file_info = {
+                'relativeKey': item.get('fileKey'),
+                'versionId': item.get('versionId'),
+                'size': item.get('size'),
+                'lastModified': item.get('lastModified'),
+                'etag': item.get('etag')
+            }
+            files.append(file_info)
+        
+        # Return in the original format for backward compatibility
+        return {
+            'assetId': assetId,
+            'assetVersionId': assetVersionId,
+            'files': files,
+            'createdAt': items[0].get('createdAt') if items else datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        logger.exception(f"Error getting asset file versions: {e}")
+        return None
+
 #######################
 # API Handler Functions
 #######################
@@ -810,6 +1062,9 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     if is_prefix:
         # Delete all files under prefix including all versions
         deleted_keys = delete_s3_prefix_all_versions(bucket, full_key)
+
+        #Delete aux files under prefix if they exist
+        delete_assetAuxiliary_files(full_key)
         
         # Convert full keys to relative paths
         for key in deleted_keys:
@@ -819,6 +1074,9 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     else:
         # Delete single file including all versions
         success = delete_s3_object_all_versions(bucket, full_key)
+
+        #Delete aux files if they exist
+        delete_assetAuxiliary_files(full_key)
         
         if not success:
             raise VAMSGeneralErrorResponse(f"Failed to delete file: {file_path}")
@@ -1078,6 +1336,9 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     if not success:
         raise VAMSGeneralErrorResponse(f"Failed to copy file from {source_path} to {dest_path}")
     
+    # Copy auxiliary files if they exist
+    copy_auxiliary_files(source_key, dest_key)
+    
     # Return response
     affected_files = [dest_path]
     return FileOperationResponseModel(
@@ -1131,6 +1392,9 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     
     if not success:
         raise VAMSGeneralErrorResponse(f"Failed to move file from {source_path} to {dest_path}")
+    
+    # Move auxiliary files if they exist
+    move_auxiliary_files(source_key, dest_key)
     
     # Return response
     affected_files = [source_path, dest_path]
@@ -1212,6 +1476,9 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
     except Exception as e:
         logger.exception(f"Error reverting file version: {e}")
         raise VAMSGeneralErrorResponse(f"Failed to revert file version: {str(e)}")
+
+    #Delete aux files for asset as they don't match anymore with the version. 
+    delete_assetAuxiliary_files(full_key)
     
     # Return response
     affected_files = [file_path]
@@ -1247,6 +1514,37 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
     
     # Get object metadata
     metadata = get_s3_object_metadata(bucket, full_key, include_versions)
+    
+    #Check for Asset Version Mismatch
+    # Get current asset version ID if available and versions are requested and not a folder
+    if include_versions and 'versions' in metadata and metadata.get("isFolder", False) and asset.get('currentVersionId'):
+        current_version_id = asset.get('currentVersionId', '0')
+        
+        if current_version_id:
+            # Get the relative path without leading slash for comparison
+            relative_path = file_path.lstrip('/')
+            
+            # Get file version for the current asset version
+            asset_file_versions = get_asset_file_versions(assetId, current_version_id, relative_path)
+            
+            # Find the matching version record
+            matching_version = None
+            if asset_file_versions and asset_file_versions.get('files'):
+                # Should only be one record since we filtered by relativeFileKey
+                if len(asset_file_versions.get('files')) > 0:
+                    matching_version = asset_file_versions.get('files')[0]
+            
+            # Check each version and set mismatch flag for the current version
+            for version in metadata['versions']:
+                if version['isLatest']:
+                    # If file is archived, it's automatically a mismatch
+                    if version['isArchived']:
+                        version['currentAssetVersionFileVersionMismatch'] = True
+                    # Otherwise check if it matches the version in asset file versions
+                    elif matching_version and matching_version.get('versionId') == version['versionId']:
+                        version['currentAssetVersionFileVersionMismatch'] = False
+                    else:
+                        version['currentAssetVersionFileVersionMismatch'] = True
     
     # Return response model
     return FileInfoResponseModel(**metadata)
@@ -1290,6 +1588,49 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
     file_items = []
     for item in result.get('items', []):
         file_items.append(AssetFileItemModel(**item))
+    
+    ##Check for Asset Version Mismatch
+    # Get current asset version ID if available
+    current_version_id = None
+    if asset.get('currentVersionId'):
+        current_version_id = asset.get('currentVersionId', '0')
+    
+    # If we have a current version, check file versions against asset version files
+    if current_version_id:
+        # Get all file versions for the current asset version
+        asset_file_versions = get_asset_file_versions(assetId, current_version_id, None)
+        
+        # Create a lookup dictionary for faster matching
+        file_version_lookup = {}
+        if asset_file_versions and asset_file_versions.get('files'):
+            for file_version in asset_file_versions.get('files'):
+                relative_key = file_version.get('relativeKey')
+                if relative_key:
+                    file_version_lookup[relative_key] = file_version
+        
+        # Check each file against the asset version files
+        for file_item in file_items:
+
+            #Separate Folder assets are not included ever in asset versions
+            if file_item.isFolder:
+                continue
+
+            # If file is archived, it's automatically a mismatch
+            if file_item.isArchived:
+                file_item.currentAssetVersionFileVersionMismatch = True
+                continue
+            
+            # Get the relative path without leading slash for comparison
+            relative_path = file_item.relativePath.lstrip('/')
+            
+            # Find matching record in asset file versions
+            matching_version = file_version_lookup.get(relative_path)
+            
+            # Set mismatch flag
+            if matching_version and matching_version.get('versionId') == file_item.versionId:
+                file_item.currentAssetVersionFileVersionMismatch = False
+            else:
+                file_item.currentAssetVersionFileVersionMismatch = True
     
     return ListAssetFilesResponseModel(
         items=file_items,

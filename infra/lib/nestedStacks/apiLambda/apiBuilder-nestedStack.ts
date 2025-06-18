@@ -748,7 +748,7 @@ export function apiBuilder(
         subnets
     );
     attachFunctionToApi(scope, streamAuxiliaryPreviewAssetFunction, {
-        routePath: "/auxiliaryPreviewAssets/stream/{proxy+}",
+        routePath: "/auxiliaryPreviewAssets/stream/{assetId}/{proxy+}",
         method: apigwv2.HttpMethod.GET,
         api: api,
     });

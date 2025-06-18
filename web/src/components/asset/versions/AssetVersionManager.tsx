@@ -43,6 +43,7 @@ export interface FileVersion {
     versionId: string;
     isPermanentlyDeleted: boolean;
     isLatestVersionArchived: boolean;
+    isArchived?: boolean;
     size?: number;
     lastModified?: string;
     etag?: string;

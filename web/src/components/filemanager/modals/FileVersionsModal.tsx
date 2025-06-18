@@ -23,7 +23,6 @@ interface FileVersionsModalProps {
     filePath: string;
     fileName: string;
     currentVersionId?: string; // For ViewFile context
-    onVersionView?: (versionId: string) => void;
     onVersionRevert?: () => void; // Refresh callback
 }
 
@@ -90,30 +89,10 @@ export const FileVersionsModal: React.FC<FileVersionsModalProps> = ({
     filePath,
     fileName,
     currentVersionId,
-    onVersionView,
     onVersionRevert
 }) => {
     const navigate = useNavigate();
     
-    // Handle version view with modal dismissal
-    const handleVersionView = (versionId: string) => {
-        if (onVersionView) {
-            // For ViewFile context - call the callback and close modal
-            onVersionView(versionId);
-            onDismiss();
-        } else {
-            // For EnhancedFileManager context - navigate to ViewFile with proper state
-            navigate(`/databases/${databaseId}/assets/${assetId}/file`, {
-                state: {
-                    filename: fileName,
-                    key: filePath,
-                    isDirectory: false,
-                    versionId: versionId
-                }
-            });
-            onDismiss();
-        }
-    };
 
     return (
         <Modal
@@ -135,7 +114,6 @@ export const FileVersionsModal: React.FC<FileVersionsModalProps> = ({
                 filePath={filePath}
                 fileName={fileName}
                 currentVersionId={currentVersionId}
-                onVersionView={handleVersionView}
                 onVersionRevert={onVersionRevert}
                 displayMode="modal"
                 visible={visible}

@@ -41,6 +41,7 @@ try:
     asset_file_versions_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"]
     asset_versions_table_name = os.environ.get("ASSET_VERSIONS_STORAGE_TABLE_NAME")
     bucket_name_default = os.environ["S3_ASSET_STORAGE_BUCKET"]
+    asset_aux_bucket_name = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
@@ -189,6 +190,39 @@ def does_file_version_exist(bucket: str, key: str, version_id: str) -> bool:
     except Exception as e:
         logger.warning(f"Error checking if file version exists for {key} version {version_id}: {e}")
         return False
+    
+def delete_assetAuxiliary_files(prefix):
+    """Delete auxiliary files for an asset
+    
+    Args:
+        assetLocation: The asset location object with Key (dict or AssetLocationModel)
+    """
+
+    if not prefix:
+        return
+
+    # Add the folder delimiter to the end of the key if not already
+    if not prefix.endswith('/'):
+        prefix = prefix + '/'
+
+    logger.info(f"Deleting Temporary Auxiliary Assets Files Under Folder Prefix: {asset_aux_bucket_name}:{prefix}")
+
+    try:
+        # Get all assets in assetAuxiliary bucket (unversioned, temporary files for the auxiliary assets) for deletion
+        # Use assetLocation key as root folder key for assetAuxiliaryFiles
+        assetAuxiliaryBucketFilesDeleted = []
+        paginator = s3_client.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=prefix):
+            if 'Contents' in page:
+                for item in page['Contents']:
+                    assetAuxiliaryBucketFilesDeleted.append(item['Key'])
+                    logger.info(f"Deleting auxiliary asset file: {item['Key']}")
+                    s3_client.delete_object(Bucket=asset_aux_bucket_name, Key=item['Key'])
+
+    except Exception as e:
+        logger.exception(f"Error deleting auxiliary files (they may not exist in the first place): {e}")
+
+    return
 
 def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool = False) -> List[Dict]:
     """List all files in an S3 bucket prefix with their version information
@@ -330,36 +364,6 @@ def copy_s3_object_version(source_bucket: str, source_key: str, source_version_i
         logger.exception(f"Error copying S3 object version: {e}")
         return None
 
-def archive_s3_object(bucket: str, key: str, databaseId: str, assetId: str) -> bool:
-    """Archive an S3 object using Glacier storage class
-    
-    Args:
-        bucket: The S3 bucket
-        key: The S3 object key
-        databaseId: The database ID
-        assetId: The asset ID
-        
-    Returns:
-        True if successful, False otherwise
-    """
-    try:
-        # Copy the object to itself with new storage class and metadata
-        s3_client.copy_object(
-            CopySource={'Bucket': bucket, 'Key': key},
-            Bucket=bucket,
-            Key=key,
-            MetadataDirective='REPLACE',
-            Metadata={
-                'assetid': assetId,
-                'databaseid': databaseId,
-                'vams-status': 'archived',
-            },
-            StorageClass='GLACIER'
-        )
-        return True
-    except Exception as e:
-        logger.exception(f"Error archiving S3 object {key}: {e}")
-        return False
 
 def save_asset_file_versions(assetId: str, assetVersionId: str, files: List[Dict]) -> bool:
     """Save file version mappings to DynamoDB
@@ -373,16 +377,30 @@ def save_asset_file_versions(assetId: str, assetVersionId: str, files: List[Dict
         True if successful, False otherwise
     """
     try:
-        # Create item for DynamoDB
-        item = {
-            'assetId': assetId,
-            'assetVersionId': assetVersionId,
-            'files': files,
-            'createdAt': datetime.utcnow().isoformat()
-        }
+        # Create partition key in the format {assetId}:{assetVersionId}
+        partition_key = f"{assetId}:{assetVersionId}"
+        created_at = datetime.utcnow().isoformat()
         
-        # Save to DynamoDB
-        asset_file_versions_table.put_item(Item=item)
+        # Create individual records for each file
+        with asset_file_versions_table.batch_writer() as batch:
+            for file in files:
+                # Use the file's relativeKey as the sort key
+                file_key = file['relativeKey']
+                
+                # Create item for DynamoDB
+                item = {
+                    'assetId:assetVersionId': partition_key,
+                    'fileKey': file_key,
+                    'versionId': file.get('versionId'),
+                    'size': file.get('size'),
+                    'lastModified': file.get('lastModified'),
+                    'etag': file.get('etag'),
+                    'createdAt': created_at
+                }
+                
+                # Save to DynamoDB
+                batch.put_item(Item=item)
+                
         return True
         
     except Exception as e:
@@ -400,14 +418,39 @@ def get_asset_file_versions(assetId: str, assetVersionId: str) -> Optional[Dict]
         Dictionary with file versions or None if not found
     """
     try:
-        response = asset_file_versions_table.get_item(
-            Key={
-                'assetId': assetId,
-                'assetVersionId': assetVersionId
-            }
+        # Create partition key in the format {assetId}:{assetVersionId}
+        partition_key = f"{assetId}:{assetVersionId}"
+        
+        # Query all records with the same partition key
+        response = asset_file_versions_table.query(
+            KeyConditionExpression=Key('assetId:assetVersionId').eq(partition_key)
         )
         
-        return response.get('Item')
+        items = response.get('Items', [])
+        
+        # If no items found, return None
+        if not items:
+            return None
+        
+        # Reconstruct the file versions structure
+        files = []
+        for item in items:
+            file_info = {
+                'relativeKey': item.get('fileKey'),
+                'versionId': item.get('versionId'),
+                'size': item.get('size'),
+                'lastModified': item.get('lastModified'),
+                'etag': item.get('etag')
+            }
+            files.append(file_info)
+        
+        # Return in the original format for backward compatibility
+        return {
+            'assetId': assetId,
+            'assetVersionId': assetVersionId,
+            'files': files,
+            'createdAt': items[0].get('createdAt') if items else datetime.utcnow().isoformat()
+        }
         
     except Exception as e:
         logger.exception(f"Error getting asset file versions: {e}")
@@ -424,17 +467,17 @@ def get_asset_version_file_count(assetId: str, assetVersionId: str) -> int:
         Number of files that are not permanently deleted
     """
     try:
-        # Get file versions from DynamoDB
-        file_versions = get_asset_file_versions(assetId, assetVersionId)
+        # Create partition key in the format {assetId}:{assetVersionId}
+        partition_key = f"{assetId}:{assetVersionId}"
         
-        if not file_versions or not file_versions.get('files'):
-            return 0
+        # Query to count records with the same partition key
+        response = asset_file_versions_table.query(
+            KeyConditionExpression=Key('assetId:assetVersionId').eq(partition_key),
+            Select='COUNT'
+        )
         
-        # Count all files (asset version files should never be archived, so no need to check isArchived)
-        # Only exclude files that don't exist in the file versions record
-        available_files = file_versions.get('files', [])
-        
-        return len(available_files)
+        # Return the count
+        return response.get('Count', 0)
         
     except Exception as e:
         logger.exception(f"Error getting asset version file count: {e}")
@@ -610,12 +653,12 @@ def update_asset_version_metadata(asset: Dict, new_version_number: str, comment:
     asset_id = asset['assetId']
     new_version_id = f"v{new_version_number}"
     
-    # Mark previous current version as not current
+    # Mark previous current version as not current in asset versions table
     current_version_id = asset.get('currentVersionId')
     if current_version_id:
         mark_version_as_current(asset_id, new_version_id)
     
-    # Save new version metadata to asset versions table
+    # Save new version metadata to asset versions table (which also sets current version)
     success = save_asset_version_metadata(
         asset_id,
         new_version_id,
@@ -626,7 +669,7 @@ def update_asset_version_metadata(asset: Dict, new_version_number: str, comment:
     )
     
 
-    # Update asset's current version reference
+    # Update asset's tables current version reference
     update_current_version_reference(asset, new_version_id)
     return asset
 
@@ -655,9 +698,18 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
     bucket, prefix = get_asset_s3_location(asset)
     
     # Determine next version number
-    current_version = int(asset.get('currentVersion', {}).get('Version', '0'))
-    new_version = str(current_version + 1)
-    new_version_id = f"v{new_version}"
+    current_version = int(asset.get('currentVersionId', '0'))
+
+    #strip out all letters from current version. If the stripped version cannot be converted to an integer, assume the currentVersionId is 0.
+    try:
+        current_version = int(str(current_version).replace('v', ''))
+        logger.info(f"Current version: {current_version}")
+    except Exception as e:
+        current_version = 0
+        logger.info(f"Could not parse existing version number, setting current to: {current_version}")
+    
+    new_version = current_version + 1
+    new_version_id = f"{new_version}"
     
     # Get files based on request
     files_to_version = []
@@ -672,14 +724,13 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
             files_to_version.append({
                 'relativeKey': file['relativeKey'],
                 'versionId': file['versionId'],
-                'isArchived': file['isArchived'],
                 'size': file['size'],
                 'lastModified': file['lastModified'],
                 'etag': file['etag']
             })
             
     else:
-        # Validate provided files
+        # Validate provided files (not archived for the version provided and not permanently deleted)
         invalid_files = validate_s3_files_exist(bucket, prefix, request_model.files)
         
         # Add valid files to version
@@ -697,7 +748,6 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
                     files_to_version.append({
                         'relativeKey': file.relativeKey,
                         'versionId': file.versionId,
-                        'isArchived': file.isArchived,
                         'size': response.get('ContentLength'),
                         'lastModified': response.get('LastModified').isoformat(),
                         'etag': response.get('ETag', '').strip('"')
@@ -783,11 +833,13 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
         )
         
         if new_version_id:
+            #Delete the aux files since they are most likely wrong with the version revert
+            delete_assetAuxiliary_files(full_key)
+
             # Add to files to version
             files_to_version.append({
                 'relativeKey': relative_key,
                 'versionId': new_version_id,
-                'isArchived': file.get('isArchived', False),
                 'size': file.get('size'),
                 'lastModified': datetime.utcnow().isoformat(),
                 'etag': file.get('etag')
@@ -795,13 +847,6 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
         else:
             # Skip files that couldn't be copied
             skipped_files.append(relative_key)
-    
-    # Archive files that exist now but weren't in the target version
-    target_keys = {file['relativeKey'] for file in target_version.get('files', [])}
-    for key, file in current_files_by_key.items():
-        if key not in target_keys and not file.get('isArchived', False):
-            full_key = prefix + key.lstrip('/')
-            archive_s3_object(bucket, full_key, databaseId, assetId)
     
     # Ensure we have at least one file
     if not files_to_version:

@@ -77,7 +77,17 @@ function TreeItem({ item }: TreeItemProps) {
                 
                 <span className="tree-item-name">
                     {item.displayName}
-                    {item.isArchived && <span className="archived-label">Archived</span>}
+                    {item.isArchived && (
+                        <span className="archived-icon" title="Archived">
+                            <Icon name="status-negative" />
+                        </span>
+                    )}
+                    {/* Only show warning icon for files (not folders or top node) */}
+                    {item.currentAssetVersionFileVersionMismatch && !isFolder && item.level > 0 && (
+                        <span className="not-included-icon" title="Not included in Asset Version">
+                            <Icon name="status-warning" />
+                        </span>
+                    )}
                 </span>
             </div>
             
@@ -128,7 +138,17 @@ function SearchResults({}: SearchResultsProps) {
                         </span>
                 <span className="search-result-name">
                     {item.displayName}
-                    {item.isArchived && <span className="archived-label">Archived</span>}
+                    {item.isArchived && (
+                        <span className="archived-icon" title="Archived">
+                            <Icon name="status-negative" />
+                        </span>
+                    )}
+                    {/* Only show warning icon for files (not folders or top node) */}
+                    {item.currentAssetVersionFileVersionMismatch && !isFolder && item.level > 0 && (
+                        <span className="not-included-icon" title="Not included in Asset Version">
+                            <Icon name="status-warning" />
+                        </span>
+                    )}
                 </span>
                         <span className="search-result-path">
                             {item.relativePath}

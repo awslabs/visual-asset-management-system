@@ -267,7 +267,7 @@ def create_initial_version_record(asset_id, version_number, description, created
     """Create initial version record in the asset versions table"""
     try:
         versions_table = dynamodb.Table(asset_versions_table_name)
-        version_id = f"v{version_number}"
+        version_id = f"{version_number}"
         now = datetime.utcnow().isoformat()
         
         version_record = {

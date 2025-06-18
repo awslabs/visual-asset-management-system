@@ -24,7 +24,7 @@ try:
 except Exception as e:
     logger.exception("Failed Loading Error Functions")
 
-bucket_name_asset = None
+bucket_name_asset_default = None
 bucket_name_assetAuxiliary = None
 
 try:
@@ -32,7 +32,7 @@ try:
     pipeline_Database = os.environ["PIPELINE_STORAGE_TABLE_NAME"]
     workflow_database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
     workflow_execution_database = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_NAME"]
-    bucket_name_asset = os.environ["S3_ASSET_STORAGE_BUCKET"]
+    bucket_name_asset_default = os.environ["S3_ASSET_STORAGE_BUCKET"]
     bucket_name_assetAuxiliary = os.environ["S3_ASSETAUXILIARY_STORAGE_BUCKET"]
     metadata_read_function = os.environ['METADATA_READ_LAMBDA_FUNCTION_NAME']
 except:
@@ -52,17 +52,53 @@ def _metadata_lambda(payload): return client.invoke(FunctionName=metadata_read_f
                                            InvocationType='RequestResponse', Payload=json.dumps(payload).encode('utf-8'))
 
 
+def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
+    """
+    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
+    
+    Args:
+        asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
+        file_path: The file path from the request (may or may not include the base key)
+        
+    Returns:
+        The properly resolved S3 key without duplication
+    """
+    # Normalize the asset base key to ensure it ends with '/'
+    if asset_base_key and not asset_base_key.endswith('/'):
+        asset_base_key = asset_base_key + '/'
+    
+    # Remove leading slash from file path if present
+    if file_path.startswith('/'):
+        file_path = file_path[1:]
+    
+    # Check if file_path already starts with the asset_base_key
+    if file_path.startswith(asset_base_key):
+        # File path already contains the base key, use as-is
+        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
+        return file_path
+    else:
+        # File path doesn't contain base key, combine them
+        resolved_path = asset_base_key + file_path
+        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
+        return resolved_path
+
 def get_asset_metadata(databaseId, assetId, keyPrefix, event):
     try:
         l_payload = {
             "pathParameters": {
                 "databaseId": databaseId,
                 "assetId": assetId
-            },
-            "queryStringParameters": {
-                "prefix": keyPrefix
             }
         }
+
+        #If keyprefix doesn't end-with a /, add additional data to get the files specific metadata too
+        if not keyPrefix.endswith("/"):
+            l_payload.update({
+                "queryStringParameters": {
+                "prefix": keyPrefix
+            }
+            })
+        
         l_payload.update({
             "requestContext": {
                 "http": {
@@ -72,6 +108,7 @@ def get_asset_metadata(databaseId, assetId, keyPrefix, event):
                 "authorizer": event['requestContext']['authorizer']
             }
         })
+
         logger.info("Fetching metadata:")
         logger.info(l_payload)
         metadata_response = _metadata_lambda(l_payload)
@@ -94,7 +131,7 @@ def get_asset_metadata(databaseId, assetId, keyPrefix, event):
         return {}
 
 
-def launchWorkflow(inputAssetFileKey, workflow_arn, asset_id, workflow_id, database_id, executingUserName, executingRequestContext, inputMetadata = {}):
+def launchWorkflow(inputAssetBucket, inputAssetFileKey, workflow_arn, asset_id, workflow_id, database_id, executingUserName, executingRequestContext, inputMetadata = {}):
 
     logger.info("Launching workflow with arn: "+workflow_arn)
 
@@ -103,7 +140,7 @@ def launchWorkflow(inputAssetFileKey, workflow_arn, asset_id, workflow_id, datab
 
     response = sfn_client.start_execution(
         stateMachineArn=workflow_arn,
-        input=json.dumps({'bucketAsset': bucket_name_asset, 'bucketAssetAuxiliary': bucket_name_assetAuxiliary, 'inputAssetFileKey': inputAssetFileKey, 'databaseId': database_id,
+        input=json.dumps({'bucketAsset': inputAssetBucket, 'bucketAssetAuxiliary': bucket_name_assetAuxiliary, 'inputAssetFileKey': inputAssetFileKey, 'databaseId': database_id,
                           'assetId': asset_id, 'inputMetadata': json.dumps(inputMetadata),
                           'workflowId': workflow_id, 'executingUserName': executingUserName, 'executingRequestContext': executingRequestContext})
     )
@@ -361,13 +398,14 @@ def lambda_handler(event, context):
                             #TODO: Implement additional user input fields on execute (from a new UX popup?)
                             
                             # Determine which file key to use
-                            # If fileKey is provided in request body, use it, otherwise use asset's primary file key
+                            # If fileKey is provided in request body, use it, otherwise use asset's base prefix key
                             file_key = asset['assetLocation']['Key']
+                            asset_bucket = asset['assetLocation'].get('Bucket', bucket_name_asset_default)
                             if request_body and 'fileKey' in request_body:
-                                file_key = request_body['fileKey']
+                                file_key = resolve_asset_file_path(file_key, request_body['fileKey'])
                                 logger.info(f"Using file key from request: {file_key}")
                             else:
-                                logger.info(f"Using asset's primary file key: {file_key}")
+                                logger.info(f"Using asset's base prefix key (no particular file): {file_key}")
                             
                             metadataResponse = get_asset_metadata(pathParams['databaseId'], pathParams['assetId'], file_key, event)
                             metadata = metadataResponse.get("metadata", {})
@@ -389,7 +427,7 @@ def lambda_handler(event, context):
                             }
 
                             logger.info("Launching Workflow:")
-                            executionId = launchWorkflow(file_key, workflow['workflow_arn'],
+                            executionId = launchWorkflow(asset_bucket, file_key, workflow['workflow_arn'],
                                                          pathParams['assetId'], workflow['workflowId'],
                                                          pathParams['databaseId'], executingUserName, executingRequestContext, inputMetadata)
                             response["statusCode"] = 200

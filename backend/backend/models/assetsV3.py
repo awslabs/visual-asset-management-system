@@ -312,6 +312,7 @@ class AssetFileItemModel(BaseModel, extra=Extra.ignore):
     versionId: str
     storageClass: Optional[str] = None  # To identify archived files
     isArchived: bool = False  # Computed field based on metadata
+    currentAssetVersionFileVersionMismatch: bool = False  # Indicates if file version doesn't match asset version
 
 class ListAssetFilesRequestModel(BaseModel, extra=Extra.ignore):
     """Query parameters for listing asset files"""
@@ -340,6 +341,7 @@ class FileVersionModel(BaseModel, extra=Extra.ignore):
     storageClass: str = 'STANDARD'
     etag: Optional[str] = None
     isArchived: bool = False
+    currentAssetVersionFileVersionMismatch: Optional[bool] = None  # Indicates if file version doesn't match asset version
 
 class FileInfoResponseModel(BaseModel, extra=Extra.ignore):
     """Response model for detailed file information"""

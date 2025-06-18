@@ -81,12 +81,18 @@ export default function ViewAsset() {
           showArchived: true 
         });
         
-        if (item !== false) {
+        if (item !== false && item !== undefined && typeof item !== 'string') {
           setAsset(item);
         } else if (typeof item === 'string' && item.includes('not found')) {
           setApiError("Asset not found. The requested asset may have been deleted or you may not have permission to access it.");
           setShowApiError(true);
           setApiErrorType("error");
+        } else {
+          // Handle other API failure cases
+          setApiError("Failed to load asset data. The server returned an invalid response.");
+          setShowApiError(true);
+          setApiErrorType("error");
+          console.error("Invalid asset data returned:", item);
         }
       } catch (error) {
         console.error("Error fetching asset:", error);
@@ -95,48 +101,51 @@ export default function ViewAsset() {
         setApiErrorType("error");
       }
 
-      // Load from localforage if available
-      try {
-        const value: any = await localforage.getItem(assetId);
-        if (value && value.Asset) {
-          dispatch({
-            type: "SET_ASSET_DETAIL",
-            payload: {
-              isMultiFile: value.isMultiFile,
-              assetId: assetId,
-              assetName: value.assetName,
-              databaseId: databaseId,
-              description: value.description,
-              key: value.key || value.assetLocation["Key"],
-              assetLocation: {
-                Key: value.key || value.assetLocation["Key"],
+      // Only attempt to load from localforage or set asset details if we don't have an API error
+      if (!showApiError) {
+        // Load from localforage if available
+        try {
+          const value: any = await localforage.getItem(assetId);
+          if (value && value.Asset) {
+            dispatch({
+              type: "SET_ASSET_DETAIL",
+              payload: {
+                isMultiFile: value.isMultiFile,
+                assetId: assetId,
+                assetName: value.assetName,
+                databaseId: databaseId,
+                description: value.description,
+                key: value.key || value.assetLocation["Key"],
+                assetLocation: {
+                  Key: value.key || value.assetLocation["Key"],
+                },
+                assetType: value.assetType,
+                isDistributable: value.isDistributable,
+                Asset: value.Asset,
               },
-              assetType: value.assetType,
-              isDistributable: value.isDistributable,
-              Asset: value.Asset,
-            },
-          });
-        } else if (asset && asset.assetId) {
-          dispatch({
-            type: "SET_ASSET_DETAIL",
-            payload: {
-              isMultiFile: asset.isMultiFile,
-              assetId: assetId,
-              assetName: asset.assetName,
-              databaseId: databaseId,
-              description: asset.description,
-              key: asset.key || (asset.assetLocation && asset.assetLocation["Key"]),
-              assetLocation: {
-                Key: asset.key || (asset.assetLocation && asset.assetLocation["Key"]),
+            });
+          } else if (asset && asset.assetId) {
+            dispatch({
+              type: "SET_ASSET_DETAIL",
+              payload: {
+                isMultiFile: asset.isMultiFile,
+                assetId: assetId,
+                assetName: asset.assetName,
+                databaseId: databaseId,
+                description: asset.description,
+                key: asset.key || (asset.assetLocation && asset.assetLocation["Key"]),
+                assetLocation: {
+                  Key: asset.key || (asset.assetLocation && asset.assetLocation["Key"]),
+                },
+                assetType: asset.assetType,
+                isDistributable: asset.isDistributable,
+                Asset: [],
               },
-              assetType: asset.assetType,
-              isDistributable: asset.isDistributable,
-              Asset: [],
-            },
-          });
+            });
+          }
+        } catch (error) {
+          console.error("Error loading from localforage:", error);
         }
-      } catch (error) {
-        console.error("Error loading from localforage:", error);
       }
     };
 
@@ -146,7 +155,8 @@ export default function ViewAsset() {
   // Fetch asset files
   useEffect(() => {
     const fetchFiles = async () => {
-      if (!asset?.assetId) return;
+      // Don't attempt to fetch files if we already have an API error or if asset ID is missing
+      if (!asset?.assetId || showApiError) return;
       
       setLoadingAssetFiles(true);
       try {
@@ -182,7 +192,8 @@ export default function ViewAsset() {
   // Fetch asset links
   useEffect(() => {
     const fetchLinks = async () => {
-      if (!assetId) return;
+      // Don't attempt to fetch links if we already have an API error or if asset ID is missing
+      if (!assetId || showApiError) return;
       
       try {
         const res = await fetchAssetLinks({ assetId });
@@ -252,42 +263,49 @@ export default function ViewAsset() {
 
             {/* Asset Header */}
             <Header variant="h1">
-              {asset?.assetName} {asset?.status === 'archived' && <span style={{ color: '#888' }}>(Archived)</span>}
+              {showApiError ? "Asset Information Unavailable" : 
+                `${asset?.assetName || ""}${asset?.status === 'archived' ? ' (Archived)' : ''}`
+              }
             </Header>
 
-            {/* Asset Details Pane */}
-            <AssetDetailsPane
-              asset={asset}
-              databaseId={databaseId || ""}
-              onOpenUpdateAsset={handleOpenUpdateAsset}
-              onOpenDeleteModal={handleOpenDeleteModal}
-            />
+            {/* Only render asset details and related components if there's no API error */}
+            {!showApiError && (
+              <>
+                {/* Asset Details Pane */}
+                <AssetDetailsPane
+                  asset={asset}
+                  databaseId={databaseId || ""}
+                  onOpenUpdateAsset={handleOpenUpdateAsset}
+                  onOpenDeleteModal={handleOpenDeleteModal}
+                />
 
-            {/* Tabbed Container */}
-            <TabbedContainer
-              assetName={asset?.assetName || ""}
-              assetFiles={assetFiles}
-              assetId={assetId || ""}
-              databaseId={databaseId || ""}
-              loadingFiles={loadingAssetFiles}
-              onExecuteWorkflow={handleExecuteWorkflow}
-            />
+                {/* Tabbed Container */}
+                <TabbedContainer
+                  assetName={asset?.assetName || ""}
+                  assetFiles={assetFiles}
+                  assetId={assetId || ""}
+                  databaseId={databaseId || ""}
+                  loadingFiles={loadingAssetFiles}
+                  onExecuteWorkflow={handleExecuteWorkflow}
+                />
 
-            {/* Asset Links */}
-            <AssetLinks
-              assetId={assetId || ""}
-              databaseId={databaseId || ""}
-              assetLinks={assetLinks}
-              onLinksUpdated={(links: any) => setAssetLinks(links)}
-              noOpenSearch={useNoOpenSearch}
-            />
+                {/* Asset Links */}
+                <AssetLinks
+                  assetId={assetId || ""}
+                  databaseId={databaseId || ""}
+                  assetLinks={assetLinks}
+                  onLinksUpdated={(links: any) => setAssetLinks(links)}
+                  noOpenSearch={useNoOpenSearch}
+                />
 
-            {/* Metadata */}
-            <ErrorBoundary componentName="Metadata">
-              {databaseId && assetId && (
-                <ControlledMetadata databaseId={databaseId} assetId={assetId} />
-              )}
-            </ErrorBoundary>
+                {/* Metadata */}
+                <ErrorBoundary componentName="Metadata">
+                  {databaseId && assetId && (
+                    <ControlledMetadata databaseId={databaseId} assetId={assetId} />
+                  )}
+                </ErrorBoundary>
+              </>
+            )}
           </SpaceBetween>
         </Box>
 

@@ -45,7 +45,8 @@ export const FileVersionsList: React.FC = () => {
                 isDirectory: false,
                 versionId: file.versionId,
                 size: file.size,
-                dateCreatedCurrentVersion: file.lastModified
+                dateCreatedCurrentVersion: file.lastModified,
+                isArchived: file.isArchived
             }
         });
     };

@@ -216,7 +216,8 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
                 isDirectory: false,
                 versionId: file.versionId,
                 size: file.size,
-                dateCreatedCurrentVersion: file.lastModified
+                dateCreatedCurrentVersion: file.lastModified,
+                isArchived: file.isArchived
             }
         });
     };
@@ -624,7 +625,8 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
                 isDirectory: false,
                 versionId: file.versionId,
                 size: file.size,
-                dateCreatedCurrentVersion: file.lastModified
+                dateCreatedCurrentVersion: file.lastModified,
+                isArchived: file.isArchived
             }
         });
     };

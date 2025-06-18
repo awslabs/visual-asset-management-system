@@ -184,7 +184,7 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   `/asset-links` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
--   `/auxiliaryPreviewAssets/stream/{proxy+}` - GET
+-   `/auxiliaryPreviewAssets/stream/{assetId}/{proxy+}` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/auth/constraints` - GET
 -   `/auth/constraints/{constraintId}` - GET/PUT/POST/DELETE

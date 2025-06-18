@@ -55,14 +55,6 @@ def _lambda_create_metadata(payload): return client.invoke(FunctionName=create_m
 def _lambda_file_ingestion(payload): return client.invoke(FunctionName=file_upload_function,
                                            InvocationType='RequestResponse', Payload=json.dumps(payload).encode('utf-8'))
 
-# def getS3MetaData(key, asset):
-#     # VersionId and ContentLength (bytes)
-#     resp = s3c.head_object(Bucket=bucket_name, Key=key)
-#     asset['currentVersion']['S3Version'] = resp['VersionId']
-#     asset['currentVersion']['FileSize'] = str(
-#         resp['ContentLength']/1000000)+'MB'
-#     return asset
-
 def attach_execution_assets(assets, execution_id, database_id, asset_id, workflow_id):
     logger.info("Attaching assets to execution")
 

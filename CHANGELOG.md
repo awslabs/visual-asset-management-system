@@ -50,6 +50,7 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
     -   Added permanent file deletion with safety confirmation to prevent accidental data loss
     -   All file operations update asset version history for complete audit trail
     -   Implemented proper error handling and validation for all file operations
+    -   Asset files and versions will now show a flag for archived and if the asset is part of the assets current version files' version
 -   **Web** All new asset versioning capability and version comparisons
 -   Displayed as Versions tab under Asset Viewer and labels throughout (such as on file versions) to show files versions included in the current asset version (or mismatched)
 -   **Web** New tabbed design for Viewing Asset
@@ -57,10 +58,16 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
 -   Assets as a whole now support both permanent deletion and archiving. 
     -   Note: currently unarchiving an asset as a whole doesns't exist yet
 -   Turned off the wireframe view for the 3DOnlineViewer for viewing models
+-   Disabled for now the ability to see/view assets in Workflow Editor and the ability to Execute Workflows from Workflow Editor. (doesn't fit the current functionality implementation)
+-   Updated API and associated viewers/files for aux asset streaming endpoint from /auxiliaryPreviewAssets/stream/{proxy+} to /auxiliaryPreviewAssets/stream/{assetId}/{proxy+}
+    -   Added additional validation checks to make sure users only stream assets that belong to the asset ID provided
+
+### Bug Fixes
+-   Fixed various bugs with asset comments with editing and deleting
 
 ### Chores
-
-### Chores
+-   Updated auxilliary asset handling and handling to match the new asset location keys and handling
+-   Updated workflow execution to handle new new asset location keys, bucket, and handling
 
 ## [2.2.0] (2025-05-31)
 

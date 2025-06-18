@@ -12,6 +12,8 @@ import JoditEditor from "jodit-react";
 import LoadingIcons from "react-loading-icons";
 import PopulateComments from "./comments/PopulateComments";
 import "./comments/Comments.css";
+import ErrorBoundary from "../../common/ErrorBoundary";
+import { useStatusMessage } from "../../common/StatusMessage";
 
 interface CommentsTabProps {
   assetId: string;
@@ -27,9 +29,9 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
   const [allComments, setAllComments] = useState<Array<any>>([]);
   const [userId, setUserId] = useState<string>("");
   const [content, setContent] = useState<string>("");
-  const [showAlert, setShowAlert] = useState(false);
-  const [alertMsg, setAlertMsg] = useState("");
   const [asset, setAsset] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+  const { showMessage } = useStatusMessage();
   const editor = useRef(null);
   const listInnerRef = useRef(null);
 
@@ -88,23 +90,7 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
   // Load comments when the tab becomes active or when reload is triggered
   useEffect(() => {
     if (isActive || reload) {
-      const status = localStorage.getItem("status");
-      if (status === "403post") {
-        setShowAlert(true);
-        setAlertMsg("Unable to edit comment. Error: Request failed with status code 403");
-        setTimeout(() => {
-          setShowAlert(false);
-        }, 10000);
-        localStorage.setItem("status", "");
-      }
-      if (status === "403") {
-        setShowAlert(true);
-        setAlertMsg("Unable to delete comment. Error: Request failed with status code 403");
-        setTimeout(() => {
-          setShowAlert(false);
-        }, 10000);
-        localStorage.setItem("status", "");
-      }
+      setError(null);
 
       const getUserId = async () => {
         try {
@@ -128,9 +114,22 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
               setReload(false);
               setDisplayItemsWhileLoading(false);
               setAllComments(items.filter((item) => item.assetId.indexOf("#deleted") === -1));
+            } else if (typeof items === 'string' && items.includes('not found')) {
+              setError("Comments data not found. The requested asset may have been deleted or you may not have permission to access it.");
+              showMessage({
+                type: "error",
+                message: "Comments data not found. The requested asset may have been deleted or you may not have permission to access it.",
+                dismissible: true,
+              });
             }
-          } catch (error) {
+          } catch (error: any) {
             console.error("Error fetching comments:", error);
+            setError(`Failed to load comments: ${error.message || "Unknown error"}`);
+            showMessage({
+              type: "error",
+              message: `Failed to load comments: ${error.message || "Unknown error"}`,
+              dismissible: true,
+            });
           } finally {
             setLoading(false);
             setShowLoadingIcon(false);
@@ -142,10 +141,16 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
       const fetchAsset = async () => {
         if (assetId && databaseId) {
           try {
-            const response = await API.get("api", `database/${databaseId}/assets/${assetId}`, {});
+          const response = await API.get("api", `database/${databaseId}/assets/${assetId}`, {});
             setAsset(response);
-          } catch (error) {
+          } catch (error: any) {
             console.error("Error fetching asset:", error);
+            setError(`Failed to load asset data: ${error.message || "Unknown error"}`);
+            showMessage({
+              type: "error",
+              message: `Failed to load asset data: ${error.message || "Unknown error"}`,
+              dismissible: true,
+            });
           }
         }
       };
@@ -224,16 +229,24 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
         }
       );
       console.log(response);
+      showMessage({
+        type: "success",
+        message: "Comment added successfully",
+        dismissible: true,
+        autoDismiss: true,
+      });
     } catch (e: any) {
-      console.log("create comment error");
-      if (e.response && e.response.status === 403) {
-        setShowLoadingIcon(false);
-        setShowAlert(true);
-        setAlertMsg("Unable to add comment. Error: Request failed with status code 403");
-        setTimeout(() => {
-          setShowAlert(false);
-        }, 10000);
-      }
+      console.log("create comment error", e);
+      setShowLoadingIcon(false);
+      const errorMessage = e.response?.status === 403 
+        ? "Unable to add comment. You don't have permission to perform this action."
+        : `Unable to add comment: ${e.message || "Unknown error"}`;
+      
+      showMessage({
+        type: "error",
+        message: errorMessage,
+        dismissible: true,
+      });
     } finally {
       setReload(true);
     }
@@ -244,9 +257,24 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
     setLoading(true);
   };
 
+  // If there's an error, show it
+  if (error && !loading) {
+    return (
+      <ErrorBoundary componentName="Comments">
+        <Box padding={{ top: "m", horizontal: "l" }}>
+          <div className="error-message">
+            {error}
+            <Button onClick={() => setReload(true)}>Retry</Button>
+          </div>
+        </Box>
+      </ErrorBoundary>
+    );
+  }
+
   return (
-    <Box padding={{ top: "m", horizontal: "l" }}>
-      <div className="commentSectionDiv">
+    <ErrorBoundary componentName="Comments">
+      <Box padding={{ top: "m", horizontal: "l" }}>
+        <div className="commentSectionDiv">
         <table className="commentSectionTable commentSectionTableBorder">
           <tbody>
             <tr className="commentSectionAssetsContainerTable">
@@ -263,23 +291,12 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
                       asset={asset}
                       allComments={allComments}
                       setReload={setReload}
+                      showMessage={showMessage}
                     />
                   )}
                 </div>
               </td>
             </tr>
-            {showAlert && (
-              <tr>
-                <Alert
-                  statusIconAriaLabel="Error"
-                  type="error"
-                  dismissible={true}
-                  onDismiss={() => setShowAlert(false)}
-                >
-                  {alertMsg}
-                </Alert>
-              </tr>
-            )}
             <tr>
               <td className="commentSectionTableBorder">
                 <div>
@@ -312,6 +329,7 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
         </table>
       </div>
     </Box>
+    </ErrorBoundary>
   );
 };
 

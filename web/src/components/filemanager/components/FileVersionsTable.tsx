@@ -27,6 +27,7 @@ interface FileVersion {
     storageClass: string;
     etag?: string;
     isArchived: boolean;
+    currentAssetVersionFileVersionMismatch?: boolean;
 }
 
 interface FileVersionsTableProps {
@@ -35,7 +36,6 @@ interface FileVersionsTableProps {
     filePath: string;
     fileName: string;
     currentVersionId?: string; // For ViewFile context
-    onVersionView?: (versionId: string) => void;
     onVersionRevert?: () => void; // Refresh callback
     displayMode?: 'modal' | 'container'; // Display context
     visible?: boolean; // For modal context
@@ -123,7 +123,6 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
     filePath,
     fileName,
     currentVersionId,
-    onVersionView,
     onVersionRevert,
     displayMode = 'container',
     visible = true
@@ -203,20 +202,21 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
 
     // Handle view version
     const handleViewVersion = (versionId: string) => {
-        if (onVersionView) {
-            // Call the callback (which may be from modal or ViewFile context)
-            onVersionView(versionId);
-        } else {
-            // For EnhancedFileManager context without callback - navigate directly
-            navigate(`/databases/${databaseId}/assets/${assetId}/file`, {
-                state: {
-                    filename: fileName,
-                    key: filePath,
-                    isDirectory: false,
-                    versionId: versionId
-                }
-            });
-        }
+
+        // Find the version to get its isArchived status
+        const version = versions.find(v => v.versionId === versionId);
+        
+        // For EnhancedFileManager context without callback - navigate directly
+        navigate(`/databases/${databaseId}/assets/${assetId}/file`, {
+            state: {
+                filename: fileName,
+                key: filePath,
+                isDirectory: false,
+                versionId: versionId,
+                isArchived: version?.isArchived
+            }
+        });
+
     };
 
     // Handle revert version
@@ -282,7 +282,12 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                     )}
                     {item.isArchived && (
                         <span style={{ marginLeft: '12px' }}>
-                            <StatusIndicator type="warning">Archived</StatusIndicator>
+                            <StatusIndicator type="error">Archived</StatusIndicator>
+                        </span>
+                    )}
+                    {item.currentAssetVersionFileVersionMismatch && (
+                        <span style={{ marginLeft: '12px' }}>
+                            <StatusIndicator type="warning">Not Included in Asset Version</StatusIndicator>
                         </span>
                     )}
                 </div>

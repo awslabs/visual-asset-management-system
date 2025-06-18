@@ -23,7 +23,7 @@ import { useNavigate } from "react-router";
 import { useParams } from "react-router";
 import CreatePipeline from "./CreatePipeline";
 import WorkflowPipelineSelector from "../selectors/WorkflowPipelineSelector";
-import AssetSelector from "../selectors/AssetSelector";
+//import AssetSelector from "../selectors/AssetSelector";
 import { Cache } from "aws-amplify";
 import { fetchDatabaseWorkflows, saveWorkflow, runWorkflow } from "../../services/APIService";
 import { WorkflowContext } from "../../context/WorkflowContex";
@@ -181,28 +181,28 @@ export default function CreateUpdateWorkflow(props) {
         setSaving(false);
     };
 
-    const handleExecuteWorkflow = async (event) => {
-        event.preventDefault();
-        setSaving(true);
-        // reset all workflow-related error messages when either save or run workflow is executed
-        clearWorkflowErrors();
-        setActiveTab("asset");
-        const result = await runWorkflow({
-            databaseId: databaseId,
-            assetId: asset?.value,
-            workflowId: workflowId,
-            isGlobalWorkflow: isGlobalWorkflow
-        });
-        if (result !== false && Array.isArray(result)) {
-            if (result[0] === false) {
-                setRunWorkflowError(`Unable to run workflow. Error: ${result[1]}`);
-            } else {
-                navigate(result[1]);
-                setSaving(false);
-            }
-        }
-        setSaving(false);
-    };
+    // const handleExecuteWorkflow = async (event) => {
+    //     event.preventDefault();
+    //     setSaving(true);
+    //     // reset all workflow-related error messages when either save or run workflow is executed
+    //     clearWorkflowErrors();
+    //     setActiveTab("asset");
+    //     const result = await runWorkflow({
+    //         databaseId: databaseId,
+    //         assetId: asset?.value,
+    //         workflowId: workflowId,
+    //         isGlobalWorkflow: isGlobalWorkflow
+    //     });
+    //     if (result !== false && Array.isArray(result)) {
+    //         if (result[0] === false) {
+    //             setRunWorkflowError(`Unable to run workflow. Error: ${result[1]}`);
+    //         } else {
+    //             navigate(result[1]);
+    //             setSaving(false);
+    //         }
+    //     }
+    //     setSaving(false);
+    // };
 
     return (
         <WorkflowContext.Provider
@@ -263,9 +263,9 @@ export default function CreateUpdateWorkflow(props) {
                                 actions={
                                     <SpaceBetween direction="horizontal" size="xs">
                                         <Button onClick={handleSaveWorkflow}>Save</Button>
-                                        <Button onClick={handleExecuteWorkflow} variant="primary">
+                                        {/* <Button onClick={handleExecuteWorkflow} variant="primary">
                                             Run Workflow
-                                        </Button>
+                                        </Button> */}
                                     </SpaceBetween>
                                 }
                             >
@@ -426,18 +426,18 @@ export default function CreateUpdateWorkflow(props) {
                                                     </Form>
                                                 ),
                                             },
-                                            {
-                                                label: `Source ${Synonyms.Asset}`,
-                                                id: "asset",
-                                                content: (
-                                                    <Form
-                                                        errorText={runWorkflowError}
-                                                        style={{ padding: "5px 20px" }}
-                                                    >
-                                                        <AssetSelector database={databaseId} />
-                                                    </Form>
-                                                ),
-                                            },
+                                            // {
+                                            //     label: `Source ${Synonyms.Asset}`,
+                                            //     id: "asset",
+                                            //     content: (
+                                            //         <Form
+                                            //             errorText={runWorkflowError}
+                                            //             style={{ padding: "5px 20px" }}
+                                            //         >
+                                            //             <AssetSelector database={databaseId} />
+                                            //         </Form>
+                                            //     ),
+                                            // },
                                         ]}
                                     />
                                 </div>

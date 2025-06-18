@@ -11,14 +11,15 @@ const Potree = window.Potree;
 
 export default function PointCloudViewer(props) {
     const engineElement = useRef(null);
-    const { assetKey } = props;
+    const { assetId, relativeFileKey } = props;
     const [loaded, setLoaded] = useState(false);
     const [showNoAssetMessage, setShowNoAssetMessage] = useState(false);
     const [config] = useState(Cache.getItem("config"));
 
     useEffect(() => {
         const loadAsset = async () => {
-            let url = `${config.api}auxiliaryPreviewAssets/stream/${assetKey}/pipelines/preview/PotreeViewer/metadata.json`;
+            let fileKey = relativeFileKey + '/preview/PotreeViewer/metadata.json'
+            let url = `${config.api}auxiliaryPreviewAssets/stream/${assetId}/${fileKey}`;
 
             const authHeader = {
                 Authorization: `Bearer ${Auth.Credentials.Auth.user.signInUserSession.idToken.jwtToken}`,
@@ -65,11 +66,11 @@ export default function PointCloudViewer(props) {
                     });
             }, 100);
         };
-        if (!loaded && assetKey !== "") {
+        if (!loaded && relativeFileKey !== "" && assetId !== "") {
             loadAsset();
             setLoaded(true);
         }
-    }, [config, loaded, assetKey, showNoAssetMessage]);
+    }, [config, loaded, relativeFileKey, assetId, showNoAssetMessage]);
 
     return (
         <div style={{ position: "relative", height: "100%" }} id="potree-root">

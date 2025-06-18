@@ -58,6 +58,8 @@ try:
     asset_links_table_name = os.environ.get("ASSET_LINKS_STORAGE_TABLE_NAME")
     metadata_table_name = os.environ.get("METADATA_STORAGE_TABLE_NAME")
     asset_versions_table_name = os.environ.get("ASSET_VERSIONS_STORAGE_TABLE_NAME")
+    asset_versions_files_table_name = os.environ.get("ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME")
+    comment_table_name = os.environ.get("COMMENT_STORAGE_TABLE_NAME")
     
 except Exception as e:
     logger.exception("Failed loading environment variables")
@@ -69,6 +71,9 @@ db_table = dynamodb.Table(db_database)
 asset_upload_table = dynamodb.Table(asset_upload_table_name) if asset_upload_table_name else None
 asset_links_table = dynamodb.Table(asset_links_table_name) if asset_links_table_name else None
 metadata_table = dynamodb.Table(metadata_table_name) if metadata_table_name else None
+versions_table = dynamodb.Table(asset_versions_table_name) if asset_versions_table_name else None
+comment_table = dynamodb.Table(comment_table_name) if comment_table_name else None
+asset_versions_files_table = dynamodb.Table(asset_versions_files_table_name) if asset_versions_files_table_name else None
 
 #######################
 # Version Functions
@@ -87,7 +92,6 @@ def get_current_version_info(asset):
         return None
     
     try:
-        versions_table = dynamodb.Table(asset_versions_table_name)
         response = versions_table.get_item(
             Key={
                 'assetId': asset['assetId'],
@@ -625,7 +629,6 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
         # Archive asset files in S3
         if "assetLocation" in asset:
             archive_multi_assetFiles(asset['assetLocation'])
-            delete_assetAuxiliary_files(asset['assetLocation'])
 
         # Archive preview if exists
         if "previewLocation" in asset:
@@ -705,13 +708,13 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
             "dynamodb_tables": []
         }
         
-        # 1. Delete all S3 objects
+        # 1. Delete all S3 objects (assets files and preview)
         if "assetLocation" in asset and "Key" in asset["assetLocation"]:
             prefix = asset["assetLocation"]["Key"]
             if prefix:
                 # Get bucket from assetLocation or use default
                 bucket = asset["assetLocation"].get('Bucket', asset_bucket_name_default)
-                logger.info(f"Deleting S3 objects and all versions with prefix {prefix} from bucket {bucket}")
+                logger.info(f"Deleting S3 asset objects and all versions with prefix {prefix} from bucket {bucket}")
                 
                 # Delete all objects and all versions with this prefix
                 deleted_keys = delete_s3_prefix_all_versions(bucket, prefix)
@@ -719,6 +722,17 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
                 
                 # Also delete any auxiliary files
                 delete_assetAuxiliary_files(asset["assetLocation"])
+
+        if "previewLocation" in asset and "Key" in asset["previewLocation"]:
+            prefix = asset["previewLocation"]["Key"]
+            if prefix:
+                # Get bucket from assetLocation or use default
+                bucket = asset["previewLocation"].get('Bucket', asset_bucket_name_default)
+                logger.info(f"Deleting S3 preview objects and all versions with prefix {prefix} from bucket {bucket}")
+                
+                # Delete all objects and all versions with this prefix
+                deleted_keys = delete_s3_prefix_all_versions(bucket, prefix)
+                deleted_items["s3_objects"].extend(deleted_keys)
         
         # 2. Delete from asset table (both active and archived locations)
         # First try the original database ID
@@ -773,7 +787,64 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
             except Exception as e:
                 logger.warning(f"Error deleting asset uploads: {e}")
         
-        # 6. Update asset count
+        # 6. Delete from comments table if available
+        if comment_table:
+            try:
+                # Query to find all comments for this asset
+                response = comment_table.query(
+                    KeyConditionExpression=Key('assetId').eq(assetId)
+                )
+                
+                for item in response.get('Items', []):
+                    if 'assetVersionId:commentId' in item:
+                        comment_table.delete_item(Key={
+                            'assetId': assetId,
+                            'assetVersionId:commentId': item['assetVersionId:commentId']
+                        })
+                        deleted_items["dynamodb_tables"].append(f"{comment_table_name} (assetId={assetId}, assetVersionId:commentId={item['assetVersionId:commentId']})")
+            except Exception as e:
+                logger.warning(f"Error deleting asset comments: {e}")
+        
+        # 7. Delete from asset file versions table if available
+        if versions_table and asset_versions_files_table:
+            try:
+                # First get all version IDs for this asset
+                response = versions_table.query(
+                    KeyConditionExpression=Key('assetId').eq(assetId)
+                )
+                
+                # For each version, delete the corresponding file versions
+                for version_item in response.get('Items', []):
+                    if 'assetVersionId' in version_item:
+                        asset_version_id = version_item['assetVersionId']
+                        partition_key = f"{assetId}:{asset_version_id}"
+                        
+                        # Query to find all file versions for this asset version
+                        file_response = asset_versions_files_table.query(
+                            KeyConditionExpression=Key('assetId:assetVersionId').eq(partition_key)
+                        )
+                        
+                        # Delete each file version
+                        for file_item in file_response.get('Items', []):
+                            if 'fileKey' in file_item:
+                                asset_versions_files_table.delete_item(Key={
+                                    'assetId:assetVersionId': partition_key,
+                                    'fileKey': file_item['fileKey']
+                                })
+                                deleted_items["dynamodb_tables"].append(f"{asset_versions_files_table_name} (assetId:assetVersionId={partition_key}, fileKey={file_item['fileKey']})")
+                
+                # Delete from versions table after getting all version IDs
+                for version_item in response.get('Items', []):
+                    if 'assetVersionId' in version_item:
+                        versions_table.delete_item(Key={
+                            'assetId': assetId,
+                            'assetVersionId': version_item['assetVersionId']
+                        })
+                        deleted_items["dynamodb_tables"].append(f"{asset_versions_table_name} (assetId={assetId}, assetVersionId={version_item['assetVersionId']})")
+            except Exception as e:
+                logger.warning(f"Error deleting asset file versions: {e}")
+        
+        # 8. Update asset count
         update_asset_count(db_database, asset_database, {}, original_db_id)
         
         # Return success response

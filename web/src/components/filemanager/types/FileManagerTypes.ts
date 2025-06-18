@@ -10,6 +10,7 @@ export interface FileKey {
     versionId: string;
     storageClass?: string;
     isArchived: boolean;
+    currentAssetVersionFileVersionMismatch?: boolean;
 }
 
 export interface FileTree {
@@ -25,6 +26,7 @@ export interface FileTree {
     dateCreatedCurrentVersion?: string;
     versionId?: string;
     isArchived?: boolean;
+    currentAssetVersionFileVersionMismatch?: boolean;
 }
 
 export interface FileManagerStateValues {

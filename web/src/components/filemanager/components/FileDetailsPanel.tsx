@@ -101,7 +101,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     isDirectory: false,
                     versionId: file.versionId,
                     size: file.size,
-                    dateCreatedCurrentVersion: file.dateCreatedCurrentVersion
+                    dateCreatedCurrentVersion: file.dateCreatedCurrentVersion,
+                    isArchived: file.isArchived
                 }))
             },
         });
@@ -312,7 +313,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 isDirectory: isFolder,
                 size: selectedItem.size,
                 dateCreatedCurrentVersion: selectedItem.dateCreatedCurrentVersion,
-                versionId: selectedItem.versionId
+                versionId: selectedItem.versionId,
+                isArchived: selectedItem.isArchived
             },
         });
     };
@@ -593,16 +595,22 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     <div className="file-info-item">
                         <div className="file-info-label">Latest Version:</div>
                         <div className="file-info-value">
-                            {selectedItem.versionId}
-                            {!isFolder && (
-                                <span style={{ marginLeft: '8px' }}>
-                                    <Link
-                                        onFollow={() => setShowFileVersionsModal(true)}
-                                        fontSize="body-s"
-                                    >
-                                        (versions)
-                                    </Link>
-                                </span>
+                            <div>
+                                {selectedItem.versionId}
+                                {!isFolder && (
+                                    <span style={{ marginLeft: '8px' }}>
+                                        <Link
+                                            onFollow={() => setShowFileVersionsModal(true)}
+                                            fontSize="body-s"
+                                        >
+                                            (versions)
+                                        </Link>
+                                    </span>
+                                )}
+                            </div>
+                            {/* Only show label for files (not folders or top node) */}
+                            {selectedItem.currentAssetVersionFileVersionMismatch && !isFolder && selectedItem.relativePath !== "/" && (
+                                <div className="not-included-label">Not Included in Asset Version</div>
                             )}
                         </div>
                     </div>
