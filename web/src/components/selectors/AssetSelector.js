@@ -36,7 +36,7 @@ const AssetSelector = (props) => {
     useEffect(() => {
         const getData = async () => {
             let items;
-            if (database) {
+            if (database !== "GLOBAL") {
                 items = await fetchDatabaseAssets({ databaseId: database });
             } else {
                 items = await fetchAllAssets();

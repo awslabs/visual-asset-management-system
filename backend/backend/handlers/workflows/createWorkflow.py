@@ -343,6 +343,12 @@ def lambda_handler(event, context):
             for pipeline in event['body']['specifiedPipelines']['functions']:
                 logger.info("pipeline in workflow creation: ")
                 logger.info(pipeline)
+                # Check that if user is creating a global workflow, included pipeline should also be global
+                if event['body']['databaseId'] == "GLOBAL":
+                    if pipeline['databaseId'] != "GLOBAL":
+                        response['statusCode'] = 400
+                        response['body'] = json.dumps({"message": "Only global pipelines are allowed in global workflows."})
+                        return response
                 # Add Casbin Enforcer to check if the current user has permissions to GET the pipeline:
                 pipeline_allowed = False
                 pipeline.update({

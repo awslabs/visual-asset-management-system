@@ -38,8 +38,8 @@ export default function CreateUpdateWorkflow(props) {
     // Get parameters from URL
     const { databaseId: urlDatabaseId, workflowId } = useParams();
     
-    // If this is a global workflow, use empty string as databaseId
-    const databaseId = isGlobalWorkflow ? "" : urlDatabaseId;
+    // If this is a global workflow, use "GLOBAL" as databaseId
+    const databaseId = isGlobalWorkflow ? "GLOBAL" : urlDatabaseId;
     const navigate = useNavigate();
     const [reload, setReload] = useState(true);
     const [loaded, setLoaded] = useState(!workflowId);

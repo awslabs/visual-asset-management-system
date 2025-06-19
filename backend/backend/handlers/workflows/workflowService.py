@@ -218,7 +218,11 @@ def get_handler(event, response, pathParameters, queryParameters, showDeleted):
                 return response
 
             logger.info("Listing Workflows for Database: "+pathParameters['databaseId'])
-            result = get_workflows(pathParameters['databaseId'], queryParameters, showDeleted)
+            # if global workflow, adjust databaseId pathParameter
+            if pathParameters['databaseId'] == "global":
+                result = get_workflows("GLOBAL", queryParameters, showDeleted)
+            else:
+                result = get_workflows(pathParameters['databaseId'], queryParameters, showDeleted)
             response['body'] = json.dumps({"message": result['message']})
             response['statusCode'] = result['statusCode']
             logger.info(response)
@@ -257,7 +261,11 @@ def get_handler(event, response, pathParameters, queryParameters, showDeleted):
             return response
 
         logger.info("Getting Workflow: "+pathParameters['workflowId'])
-        result = get_workflow(pathParameters['databaseId'], pathParameters['workflowId'], showDeleted)
+        # if global workflow, adjust databaseId pathParameter
+        if pathParameters['databaseId'] == "global":
+            result = get_workflow("GLOBAL", pathParameters['workflowId'], showDeleted)
+        else:
+            result = get_workflow(pathParameters['databaseId'], pathParameters['workflowId'], showDeleted)
         response['body'] = json.dumps({"message": result['message']})
         response['statusCode'] = result['statusCode']
         logger.info(response)
@@ -297,7 +305,11 @@ def delete_handler(event, response, pathParameters):
         return response
 
     logger.info("Deleting Workflow: "+pathParameters['workflowId'])
-    result = delete_workflow(pathParameters['databaseId'], pathParameters['workflowId'])
+     # if global workflow, adjust databaseId pathParameter
+    if pathParameters['databaseId'] == "global":
+        result = delete_workflow("GLOBAL", pathParameters['workflowId'])
+    else:
+        result = delete_workflow(pathParameters['databaseId'], pathParameters['workflowId'])
     response['body'] = json.dumps({"message": result['message']})
     response['statusCode'] = result['statusCode']
     logger.info(response)

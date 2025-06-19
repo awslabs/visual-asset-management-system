@@ -292,7 +292,11 @@ def lambda_handler(event, context):
                 method_allowed_on_api = True
 
         if method_allowed_on_api:
-            assetResponse = get_asset(pathParams['databaseId'], pathParams['assetId'])
+            # If global workflow, adjust path parameter
+            if pathParams['databaseId'] == "global":
+                assetResponse = get_asset("GLOBAL", pathParams['assetId'])
+            else:
+                assetResponse = get_asset(pathParams['databaseId'], pathParams['assetId'])
             logger.info(assetResponse)
             if bool(assetResponse):
                 asset = assetResponse[0]
@@ -310,7 +314,11 @@ def lambda_handler(event, context):
                         asset_allowed = True
                         executingUserName = claims_and_roles["tokens"][0]
                 if asset_allowed:
-                    workflowResponse = get_workflow(pathParams['databaseId'], pathParams['workflowId'])
+                    # If global workflow, adjust path parameter
+                    if pathParams['databaseId'] == "global":
+                        workflowResponse = get_workflow("GLOBAL", pathParams['workflowId'])
+                    else:
+                        workflowResponse = get_workflow(pathParams['databaseId'], pathParams['workflowId'])
                     logger.info(workflowResponse)
                     if bool(workflowResponse):
                         workflow = workflowResponse[0]
@@ -325,7 +333,11 @@ def lambda_handler(event, context):
                                 workflow_allowed = True
 
                         if workflow_allowed:
-                            (status, pipelineName) = validate_pipelines(pathParams['databaseId'], workflow)
+                            # If global workflow, adjust path parameter
+                            if pathParams['databaseId'] == "global":
+                                (status, pipelineName) = validate_pipelines("GLOBAL", workflow)
+                            else:
+                                (status, pipelineName) = validate_pipelines(pathParams['databaseId'], workflow)
                             if not status:
                                 logger.error("Not all pipelines are enabled/accessible")
                                 response['statusCode'] = 400
@@ -344,7 +356,11 @@ def lambda_handler(event, context):
 
                             ##Formulate pipeline input metadata for VAMS
                             #TODO: Implement additional user input fields on execute (from a new UX popup?)
-                            metadataResponse = get_asset_metadata(pathParams['databaseId'], pathParams['assetId'], asset['assetLocation']['Key'], event)
+                            # If global workflow, adjust path parameter
+                            if pathParams['databaseId'] == "global":
+                                metadataResponse = get_asset_metadata("GLOBAL", pathParams['assetId'], asset['assetLocation']['Key'], event)
+                            else:
+                                metadataResponse = get_asset_metadata(pathParams['databaseId'], pathParams['assetId'], asset['assetLocation']['Key'], event)
                             metadata = metadataResponse.get("metadata", {})
 
                             #remove databaseId/assetId from metadata if exists
@@ -363,11 +379,16 @@ def lambda_handler(event, context):
                                 #"User": {}
                             }
 
-                            logger.info("Launching Workflow:"
-                                        )
-                            executionId = launchWorkflow(asset['assetLocation']['Key'], workflow['workflow_arn'],
-                                                         pathParams['assetId'], workflow['workflowId'],
-                                                         pathParams['databaseId'], executingUserName, executingRequestContext, inputMetadata)
+                            logger.info("Launching Workflow:")
+                            # If global workflow, adjust path parameter
+                            if pathParams['databaseId'] == "global":
+                                executionId = launchWorkflow(asset['assetLocation']['Key'], workflow['workflow_arn'],
+                                                            pathParams['assetId'], workflow['workflowId'],
+                                                            "GLOBAL", executingUserName, executingRequestContext, inputMetadata)
+                            else: 
+                                executionId = launchWorkflow(asset['assetLocation']['Key'], workflow['workflow_arn'],
+                                                            pathParams['assetId'], workflow['workflowId'],
+                                                            pathParams['databaseId'], executingUserName, executingRequestContext, inputMetadata)
                             response["statusCode"] = 200
                             response['body'] = json.dumps({'message': executionId})
                             return response

@@ -24,16 +24,16 @@ useEffect(() => {
     const getData = async () => {
         let items = [];
         
-        // If database is empty string (Global workflow), only fetch global pipelines
-        if (database === "") {
-            const globalItems = await fetchDatabasePipelines({ databaseId: "" });
+        // If database is "GLOBAL" (Global workflow), only fetch global pipelines
+        if (database === "GLOBAL") {
+            const globalItems = await fetchDatabasePipelines({ databaseId: "GLOBAL" });
             if (globalItems !== false && Array.isArray(globalItems)) {
                 items = globalItems;
             }
         } else {
             // For database-specific workflows, fetch both database-specific and global pipelines
             const databaseItems = await fetchDatabasePipelines({ databaseId: database });
-            const globalItems = await fetchDatabasePipelines({ databaseId: "" });
+            const globalItems = await fetchDatabasePipelines({ databaseId: "GLOBAL" });
             
             if (databaseItems !== false && Array.isArray(databaseItems)) {
                 items = [...databaseItems];
@@ -76,7 +76,7 @@ useEffect(() => {
                 setWorkflowPipelines(newPipelines);
                 setActiveTab("pipelines");
             }}
-            placeholder={<>Select pipeline from {database === "" ? "Global" : database} database.</>}
+            placeholder={<>Select pipeline from {database === "GLOBAL" ? "Global" : database} database.</>}
             options={allItems.map((item) => {
                 return {
                     label: item.pipelineId,

@@ -175,7 +175,7 @@ export default function CreatePipeline({
             initOutputType = { label: type?.label, value: type?.value };
             // Handle the case where databaseId is empty string (Global)
             initDatabase = initState.databaseId === ""
-                ? { label: "Global", value: "" }
+                ? { label: "Global", value: "GLOBAL" }
                 : { label: initState.databaseId, value: initState.databaseId };
             let obj = JSON.parse(initState.userProvidedResource);
             initLambdaName = obj.resourceId;
@@ -237,9 +237,9 @@ export default function CreatePipeline({
 
     // eslint-disable-next-line no-mixed-operators
     const createOrUpdate = (initState && initState.pipelineId && "Update") || "Create";
-    const [selectedOptions, setSelectedOptions] = useState<MultiselectProps.Option[]>([]);
-    const [groupOptions, setGroupOptions] = useState<MultiselectProps.Option[]>([]);
-    const [loadingGroups, setLoadingGroups] = useState(true);
+    // const [selectedOptions, setSelectedOptions] = useState<MultiselectProps.Option[]>([]);
+    // const [groupOptions, setGroupOptions] = useState<MultiselectProps.Option[]>([]);
+    // const [loadingGroups, setLoadingGroups] = useState(true);
     const [inProgress, setInProgress] = useState(false);
     const [formError, setFormError] = useState("");
     const [openWorkflowModal, setOpenWorkflowModal] = useState(false);
@@ -259,7 +259,7 @@ export default function CreatePipeline({
         inputParameters: "",
         ...initState,
     });
-    const [pipelineId, setPipelineId] = useState("");
+    // const [pipelineId, setPipelineId] = useState("");
 
     return (
         <div>

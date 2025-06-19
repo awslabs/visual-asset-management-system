@@ -158,7 +158,6 @@ def delete_pipeline(databaseId, pipelineId):
     table = dynamodb.Table(pipeline_database)
     if "#deleted" in databaseId:
         return response
-
     db_response = table.get_item(Key={'databaseId': databaseId, 'pipelineId': pipelineId})
     pipeline = db_response.get("Item", {})
 
@@ -223,7 +222,11 @@ def get_handler(event, response, pathParameters, queryParameters, showDeleted):
                 response['statusCode'] = 400
                 return response
             logger.info("Listing Pipelines for Database: " + pathParameters['databaseId'])
-            result = get_pipelines(pathParameters['databaseId'], queryParameters, showDeleted)
+            # if global database, adjust path parameter for databaseId
+            if pathParameters['databaseId'] == "global":
+                result = get_pipelines("GLOBAL", queryParameters, showDeleted)
+            else:
+                result = get_pipelines(pathParameters['databaseId'], queryParameters, showDeleted)
             response['body'] = json.dumps({"message": result['message']})
             response['statusCode'] = result['statusCode']
             logger.info(response)
@@ -290,7 +293,11 @@ def delete_handler(event, response, pathParameters, queryParameters):
             return response
 
     logger.info("Deleting Pipeline: "+pathParameters['pipelineId'])
-    result = delete_pipeline(pathParameters['databaseId'], pathParameters['pipelineId'])
+    # if global database, adjust path parameter for databaseId
+    if pathParameters['databaseId'] == "global":
+        result = delete_pipeline("GLOBAL", pathParameters['pipelineId'])
+    else:
+        result = delete_pipeline(pathParameters['databaseId'], pathParameters['pipelineId'])
     response['body'] = json.dumps({"message": result['message']})
     response['statusCode'] = result['statusCode']
     logger.info(response)

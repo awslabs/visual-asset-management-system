@@ -28,7 +28,7 @@ const DatabaseSelector = (props) => {
         <Select
             {...props}
             options={[
-                { label: "Global", value: "" },
+                { label: "Global", value: "GLOBAL" },
                 ...allItems.map((item) => {
                     return {
                         label: item.databaseId,
