@@ -263,25 +263,21 @@ def create_prefix_folder(bucket, prefix):
         logger.exception(f"Error creating prefix folder: {e}")
         return False
 
-def create_initial_version_record(asset_id, version_number, description, created_by='system'):
+def create_initial_version_record(asset_id, version_id, description, created_by='system'):
     """Create initial version record in the asset versions table"""
     try:
         versions_table = dynamodb.Table(asset_versions_table_name)
-        version_id = f"{version_number}"
+        version_id = f"{version_id}"
         now = datetime.utcnow().isoformat()
         
         version_record = {
             'assetId': asset_id,
             'assetVersionId': version_id,
-            'versionNumber': version_number,
             'dateCreated': now,
-            'comment': f'Initial asset creation - Version {version_number} (No Files)',
+            'comment': f'Initial asset creation - Version {version_id} (No Files)',
             'description': description,
-            'createdBy': created_by,
             'specifiedPipelines': [],
-            'isCurrentVersion': True,
-            'files': [],  # No files initially
-            'createdAt': now
+            'createdBy': created_by,
         }
         
         versions_table.put_item(Item=version_record)

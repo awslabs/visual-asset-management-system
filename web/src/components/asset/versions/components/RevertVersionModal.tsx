@@ -51,7 +51,7 @@ export const RevertVersionModal: React.FC<RevertVersionModalProps> = ({
             const [success, response] = await revertAssetVersion({
                 databaseId,
                 assetId,
-                assetVersionId: `v${version.Version}`,
+                assetVersionId: `${version.Version}`,
                 comment
             });
             
@@ -93,6 +93,7 @@ export const RevertVersionModal: React.FC<RevertVersionModalProps> = ({
                             variant="primary"
                             onClick={handleRevert}
                             loading={loading}
+                            disabled={loading || !comment.trim()}
                         >
                             Revert
                         </Button>
@@ -136,13 +137,15 @@ export const RevertVersionModal: React.FC<RevertVersionModalProps> = ({
                 </Box>
                 
                 <FormField
-                    label="Revert Comment"
-                    description="Add a comment to describe this revert operation (optional)"
+                    label="Revert Comment *"
+                    description="Add a comment to describe this revert operation (required)"
+                    errorText={!comment.trim() ? "Comment is required" : undefined}
                 >
                     <Textarea
                         value={comment}
                         onChange={({ detail }) => setComment(detail.value)}
                         placeholder="Enter a comment for the revert operation"
+                        invalid={!comment.trim()}
                     />
                 </FormField>
             </SpaceBetween>

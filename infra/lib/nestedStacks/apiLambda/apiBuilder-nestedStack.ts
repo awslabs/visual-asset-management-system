@@ -946,7 +946,13 @@ export function apiBuilder(
         subnets
     );
     attachFunctionToApi(scope, listWorkflowExecutionsFunction, {
-        routePath: "/database/{databaseId}/assets/{assetId}/workflows/{workflowId}/executions",
+        routePath: "/database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}",
+        method: apigwv2.HttpMethod.GET,
+        api: api,
+    });
+
+    attachFunctionToApi(scope, listWorkflowExecutionsFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/workflows/executions",
         method: apigwv2.HttpMethod.GET,
         api: api,
     });

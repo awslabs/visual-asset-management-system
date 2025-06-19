@@ -15,7 +15,7 @@ const isFile = (file) => {
 };
 
 export default function WorkflowSelectorWithModal(props) {
-    const { databaseId, assetId, setOpen, open, assetFiles = [] } = props;
+    const { databaseId, assetId, setOpen, open, assetFiles = [], onWorkflowExecuted } = props;
     const [reload, setReload] = useState(true);
     const [allItems, setAllItems] = useState([]);
     const [workflowId, setWorkflowId] = useState(null);
@@ -70,8 +70,10 @@ export default function WorkflowSelectorWithModal(props) {
             if (result[0] === false) {
                 // TODO: error handling
             } else {
-                //navigate (result[1]);
-                window.location.reload(true);
+                // Instead of reloading the entire page, call the onWorkflowExecuted callback if provided
+                if (typeof onWorkflowExecuted === 'function') {
+                    onWorkflowExecuted();
+                }
             }
         }
         handleClose();

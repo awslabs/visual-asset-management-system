@@ -207,7 +207,8 @@ def get_handler(event, response, pathParameters, queryParameters, showDeleted):
             (valid, message) = validate({
                 'databaseId': {
                     'value': pathParameters['databaseId'],
-                    'validator': 'ID'
+                    'validator': 'ID',
+                    'allowGlobalKeyword': True
                 }
             })
 
@@ -242,7 +243,8 @@ def get_handler(event, response, pathParameters, queryParameters, showDeleted):
         (valid, message) = validate({
             'databaseId': {
                 'value': pathParameters['databaseId'],
-                'validator': 'ID'
+                'validator': 'ID',
+                'allowGlobalKeyword': True
             },
             'workflowId': {
                 'value': pathParameters['workflowId'],
@@ -282,7 +284,8 @@ def delete_handler(event, response, pathParameters):
     (valid, message) = validate({
         'databaseId': {
             'value': pathParameters['databaseId'],
-            'validator': 'ID'
+            'validator': 'ID',
+            'allowGlobalKeyword': True
         },
         'workflowId': {
             'value': pathParameters['workflowId'],

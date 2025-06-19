@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { Button, Container, Header, SpaceBetween } from "@cloudscape-design/components";
 import ErrorBoundary from "../../common/ErrorBoundary";
 import { LoadingSpinner } from "../../common/LoadingSpinner";
@@ -18,6 +18,7 @@ interface WorkflowTabProps {
   assetId: string;
   isActive: boolean;
   onExecuteWorkflow: () => void;
+  refreshTrigger?: number; // When this value changes, the tab will refresh
 }
 
 export const WorkflowTab: React.FC<WorkflowTabProps> = ({
@@ -25,91 +26,190 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
   assetId,
   isActive,
   onExecuteWorkflow,
+  refreshTrigger,
 }) => {
   const navigate = useNavigate();
   const { showMessage } = useStatusMessage();
   const [loading, setLoading] = useState(true);
   const [allItems, setAllItems] = useState<any[]>([]);
   const [reload, setReload] = useState(true);
+  const [backgroundRefresh, setBackgroundRefresh] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasIncompleteJobs, setHasIncompleteJobs] = useState(false);
+  const refreshTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const initialLoadDoneRef = useRef<boolean>(false);
 
   const WorkflowHeaderControls = () => {
       return (
-          <>
-              <div
-                  style={{
-                      width: "calc(100% - 40px)",
-                      textAlign: "right",
-                      position: "absolute",
-                  }}
-              >
+          <div
+              style={{
+                  position: "absolute",
+                  right: "20px",
+                  top: "10px",
+                  zIndex: 1
+              }}
+          >
+              <SpaceBetween direction="horizontal" size="xs">
                   <Button 
-                  variant={"primary"}
-                  onClick={() => onExecuteWorkflow()}>Execute Workflow</Button>
-              </div>
-          </>
+                      iconName="refresh"
+                      onClick={() => setReload(true)}>
+                      Refresh
+                  </Button>
+                  <Button 
+                      variant={"primary"}
+                      onClick={() => {
+                          // Call the parent's onExecuteWorkflow function
+                          onExecuteWorkflow();
+                          // Set hasIncompleteJobs to true to start the auto-refresh timer
+                          setHasIncompleteJobs(true);
+                          // Trigger an immediate refresh
+                          setReload(true);
+                      }}>Execute Workflow</Button>
+              </SpaceBetween>
+          </div>
       );
   };
 
+  // Trigger a refresh when refreshTrigger changes
+  useEffect(() => {
+    if (refreshTrigger !== undefined) {
+      setReload(true);
+    }
+  }, [refreshTrigger]);
+
   // Fetch workflows and executions when the tab is active or when reload is triggered
   useEffect(() => {
-    // Only fetch data when the tab is active or when we need to reload
-    if (!isActive && !reload) return;
+    // Only fetch data when the tab is active or when we need to reload or background refresh
+    if (!isActive && !reload && !backgroundRefresh) return;
+    
+    // Prevent duplicate API calls when the component mounts and the tab is active
+    if (isActive && !reload && !backgroundRefresh && initialLoadDoneRef.current) return;
+    
+    // Mark that we've done the initial load for this tab activation
+    if (isActive) {
+      initialLoadDoneRef.current = true;
+    }
 
     const getData = async () => {
-      setLoading(true);
+      // Only show loading spinner for full reloads, not background refreshes
+      if (!backgroundRefresh) {
+        setLoading(true);
+      }
       setError(null);
       
       try {
-        const items = await fetchDatabaseWorkflows({ databaseId });
+        // For background refreshes, we only need to fetch executions, not workflows
+        let workflows;
+        if (backgroundRefresh && allItems.length > 0) {
+          // Extract existing workflows from allItems
+          workflows = allItems.filter(item => !item.parentId);
+        } else {
+          // Fetch all workflows for the database for initial or manual refreshes
+          workflows = await fetchDatabaseWorkflows({ databaseId });
+        }
         
-        if (items !== false && Array.isArray(items)) {
+        if (workflows !== false && Array.isArray(workflows)) {
           const newRows = [];
           
-          for (let i = 0; i < items.length; i++) {
-            const newParentRow = Object.assign({}, items[i]);
-            newParentRow.name = newParentRow?.workflowId;
-            newRows.push(newParentRow);
+          // Create a map to organize executions by workflow
+          const workflowMap = new Map();
+          
+          // Fetch all executions for the asset in a single call
+          try {
+            const executions = await fetchWorkflowExecutions({
+              databaseId,
+              assetId
+              // workflowId is not specified, so it will default to '' and fetch all executions
+            });
             
-            const workflowId = newParentRow?.workflowId;
-            try {
-              const subItems = await fetchWorkflowExecutions({
-                databaseId,
-                assetId,
-                workflowId,
-              });
+            let hasRunningJobs = false;
+            
+            // Handle the new API response format
+            // The executions are now in response.message.Items
+            const executionItems = Array.isArray(executions) ? executions : 
+                                  (executions && executions.message && Array.isArray(executions.message.Items)) ? 
+                                  executions.message.Items : [];
+            
+            console.log("Fetched executions:", executionItems);
+            
+            // Group executions by their workflow ID
+            for (let j = 0; j < executionItems.length; j++) {
+              const execution = executionItems[j];
               
-              if (subItems !== false && Array.isArray(subItems)) {
-                for (let j = 0; j < subItems.length; j++) {
-                  const newParentRowChild = Object.assign({}, subItems[j]);
-                  newParentRowChild.parentId = workflowId;
-                  newParentRowChild.name = newParentRowChild.executionId;
-                  
-                  if (newParentRowChild.stopDate === "") {
-                    newParentRowChild.stopDate = "N/A";
-                  }
-                  
-                  newRows.push(newParentRowChild);
-                }
+              // In the new format, workflowId is directly included in each execution
+              const workflowId = String(execution.workflowId || "");
+              
+              console.log(`Execution ${j}:`, execution);
+              console.log(`Execution ${j} workflowId:`, workflowId);
+              
+              if (!workflowMap.has(workflowId)) {
+                workflowMap.set(workflowId, []);
               }
-            } catch (execError) {
-              console.error("Error fetching workflow executions:", execError);
+              
+              const newParentRowChild = Object.assign({}, execution);
+              
+              // Set the parentId to match with the workflow
+              newParentRowChild.parentId = workflowId;
+              newParentRowChild.name = newParentRowChild.executionId;
+              
+              if (newParentRowChild.stopDate === "") {
+                newParentRowChild.stopDate = "N/A";
+              }
+              
+              // Check if this job is still running
+              if (newParentRowChild.executionStatus !== "SUCCEEDED" && 
+                  newParentRowChild.executionStatus !== "FAILED" &&
+                  newParentRowChild.executionStatus !== "CANCELED") {
+                hasRunningJobs = true;
+              }
+              
+              workflowMap.get(workflowId).push(newParentRowChild);
             }
+            
+            // Now add workflows and their executions in the correct order
+            for (let i = 0; i < workflows.length; i++) {
+              const workflow = workflows[i];
+              // Make sure workflowId is a string
+              const workflowId = String(workflow.workflowId || "");
+              
+              console.log(`Workflow ${i}:`, workflow);
+              console.log(`Workflow ${i} workflowId:`, workflowId);
+              
+              // Add the workflow parent row
+              const newParentRow = Object.assign({}, workflow);
+              newParentRow.name = workflowId;
+              newRows.push(newParentRow);
+              
+              // Add all executions for this workflow
+              const workflowExecutions = workflowMap.get(workflowId) || [];
+              console.log(`Executions for workflow ${workflowId}:`, workflowExecutions);
+              newRows.push(...workflowExecutions);
+            }
+            
+            console.log("Final newRows:", newRows);
+            
+            // Update state to track if we have incomplete jobs
+            setHasIncompleteJobs(hasRunningJobs);
+          } catch (execError) {
+            console.error("Error fetching workflow executions:", execError);
           }
           
           setAllItems(newRows);
           setLoading(false);
           setReload(false);
-        } else if (typeof items === 'string' && items.includes('not found')) {
+          setBackgroundRefresh(false);
+        } else if (typeof workflows === 'string' && workflows.includes('not found')) {
           setError("Workflow data not found. The requested asset may have been deleted or you may not have permission to access it.");
           setLoading(false);
           setReload(false);
+          setBackgroundRefresh(false);
         }
       } catch (error: any) {
         console.error("Error fetching workflows:", error);
         setError(`Failed to load workflow data: ${error.message || "Unknown error"}`);
         setLoading(false);
         setReload(false);
+        setBackgroundRefresh(false);
         
         showMessage({
           type: "error",
@@ -120,7 +220,39 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
     };
 
     getData();
-  }, [isActive, reload, databaseId, assetId, showMessage]);
+  }, [isActive, reload, backgroundRefresh, databaseId, assetId, showMessage]);
+  
+  // Reset the initialLoadDone flag when the tab becomes inactive
+  useEffect(() => {
+    if (!isActive) {
+      initialLoadDoneRef.current = false;
+    }
+  }, [isActive]);
+
+  // Set up auto-refresh timer when tab is active and there are incomplete jobs
+  useEffect(() => {
+    // Clear any existing timer
+    if (refreshTimerRef.current) {
+      clearInterval(refreshTimerRef.current);
+      refreshTimerRef.current = null;
+    }
+    
+    // If tab is active and there are incomplete jobs, set up a timer to refresh
+    if (isActive && hasIncompleteJobs) {
+      refreshTimerRef.current = setInterval(() => {
+        // Use background refresh to avoid showing the loading spinner
+        setBackgroundRefresh(true);
+      }, 10000); // Refresh every 10 seconds
+    }
+    
+    // Cleanup function to clear the timer when component unmounts or dependencies change
+    return () => {
+      if (refreshTimerRef.current) {
+        clearInterval(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+    };
+  }, [isActive, hasIncompleteJobs]);
 
   // If there's an error, show it
   if (error) {
@@ -147,7 +279,7 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
           listDefinition={WorkflowExecutionListDefinition}
           databaseId={databaseId}
           setReload={setReload}
-          parentId={"workflowId"}
+          parentId={"parentId"}
           //@ts-ignore
           HeaderControls={WorkflowHeaderControls}
         />

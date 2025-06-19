@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useContext } from 'react';
+import React, { useContext, useState, useEffect } from 'react';
 import {
+    Alert,
     Box,
     Button,
     Container,
@@ -13,7 +14,8 @@ import {
     Spinner,
     Table,
     Link,
-    Badge
+    Badge,
+    ProgressBar
 } from '@cloudscape-design/components';
 import { useNavigate, useParams } from 'react-router';
 import { AssetVersionContext, FileVersion } from '../AssetVersionManager';
@@ -36,8 +38,41 @@ export const FileVersionsList: React.FC = () => {
         selectedVersionDetails
     } = context;
     
+    // Debug logs to trace data flow
+    console.log('FileVersionsList - selectedVersion:', selectedVersion);
+    console.log('FileVersionsList - selectedVersionDetails:', selectedVersionDetails);
+    console.log('FileVersionsList - files:', selectedVersionDetails?.files);
+    
+    // Ensure we maintain the selected version reference and prevent unnecessary re-renders
+    const [lastRenderedVersionId, setLastRenderedVersionId] = useState<string | null>(null);
+    
+    useEffect(() => {
+        if (selectedVersion) {
+            console.log('FileVersionsList - Selected version:', selectedVersion.Version);
+            
+            // Track the last rendered version to detect unnecessary re-renders
+            if (lastRenderedVersionId !== selectedVersion.Version) {
+                console.log('FileVersionsList - New version detected, updating lastRenderedVersionId');
+                setLastRenderedVersionId(selectedVersion.Version);
+            }
+        } else {
+            setLastRenderedVersionId(null);
+        }
+    }, [selectedVersion, lastRenderedVersionId]);
+    
+    // State for error handling and download progress
+    const [downloadError, setDownloadError] = useState<string | null>(null);
+    const [downloadingFile, setDownloadingFile] = useState<string | null>(null);
+    const [downloadProgress, setDownloadProgress] = useState<{[key: string]: number}>({});
+    const [downloadStatus, setDownloadStatus] = useState<{[key: string]: string}>({});
+    
     // Handle view file
     const handleViewFile = (file: FileVersion) => {
+        // Don't allow viewing permanently deleted files
+        if (file.isPermanentlyDeleted) {
+            return;
+        }
+        
         navigate(`/databases/${databaseId}/assets/${assetId}/file`, {
             state: {
                 filename: file.relativeKey.split('/').pop() || file.relativeKey,
@@ -51,9 +86,19 @@ export const FileVersionsList: React.FC = () => {
         });
     };
     
-    // Handle download file
+    // Handle download file with progress tracking
     const handleDownloadFile = async (file: FileVersion) => {
+        // Don't allow downloading permanently deleted files
+        if (file.isPermanentlyDeleted) {
+            return;
+        }
+        
         try {
+            setDownloadingFile(file.relativeKey);
+            setDownloadError(null);
+            setDownloadProgress(prev => ({ ...prev, [file.relativeKey]: 0 }));
+            setDownloadStatus(prev => ({ ...prev, [file.relativeKey]: 'downloading' }));
+            
             const response = await downloadAsset({
                 assetId: assetId!,
                 databaseId: databaseId!,
@@ -63,14 +108,74 @@ export const FileVersionsList: React.FC = () => {
             });
             
             if (response !== false && Array.isArray(response) && response[0] !== false) {
+                // Create a download link
                 const link = document.createElement('a');
                 link.href = response[1];
-                link.click();
+                
+                // Track download progress if browser supports it
+                if (window.XMLHttpRequest) {
+                    const xhr = new XMLHttpRequest();
+                    xhr.open('GET', response[1], true);
+                    xhr.responseType = 'blob';
+                    
+                    xhr.onprogress = (event) => {
+                        if (event.lengthComputable) {
+                            const progress = Math.round((event.loaded / event.total) * 100);
+                            setDownloadProgress(prev => ({ ...prev, [file.relativeKey]: progress }));
+                        }
+                    };
+                    
+                    xhr.onload = () => {
+                        if (xhr.status === 200) {
+                            // Create a blob URL and trigger download
+                            const blob = new Blob([xhr.response]);
+                            const url = window.URL.createObjectURL(blob);
+                            link.href = url;
+                            link.download = file.relativeKey.split('/').pop() || file.relativeKey;
+                            link.click();
+                            window.URL.revokeObjectURL(url);
+                            
+                            // Mark as complete
+                            setDownloadProgress(prev => ({ ...prev, [file.relativeKey]: 100 }));
+                            setDownloadStatus(prev => ({ ...prev, [file.relativeKey]: 'complete' }));
+                            setTimeout(() => {
+                                setDownloadingFile(null);
+                            }, 1000);
+                        } else {
+                            setDownloadError(`Failed to download file: ${file.relativeKey} (Status: ${xhr.status})`);
+                            setDownloadStatus(prev => ({ ...prev, [file.relativeKey]: 'error' }));
+                            setDownloadingFile(null);
+                        }
+                    };
+                    
+                    xhr.onerror = () => {
+                        setDownloadError(`Network error while downloading file: ${file.relativeKey}`);
+                        setDownloadStatus(prev => ({ ...prev, [file.relativeKey]: 'error' }));
+                        setDownloadingFile(null);
+                    };
+                    
+                    xhr.send();
+                } else {
+                    // Fallback for browsers that don't support XMLHttpRequest
+                    link.download = file.relativeKey.split('/').pop() || file.relativeKey;
+                    link.click();
+                    setDownloadProgress(prev => ({ ...prev, [file.relativeKey]: 100 }));
+                    setDownloadStatus(prev => ({ ...prev, [file.relativeKey]: 'complete' }));
+                    setTimeout(() => {
+                        setDownloadingFile(null);
+                    }, 1000);
+                }
             } else {
+                setDownloadError(`Failed to download file: ${file.relativeKey}`);
+                setDownloadStatus(prev => ({ ...prev, [file.relativeKey]: 'error' }));
                 console.error('Failed to download file');
+                setDownloadingFile(null);
             }
         } catch (err) {
+            setDownloadError(`Error downloading file: ${err instanceof Error ? err.message : 'Unknown error'}`);
+            setDownloadStatus(prev => ({ ...prev, [file.relativeKey]: 'error' }));
             console.error('Error downloading file:', err);
+            setDownloadingFile(null);
         }
     };
     
@@ -104,9 +209,20 @@ export const FileVersionsList: React.FC = () => {
                 const fileName = item.relativeKey.split('/').pop() || item.relativeKey;
                 return (
                     <Box>
-                        <div>{fileName}</div>
-                        {item.isPermanentlyDeleted && <Badge color="red">Permanently Deleted</Badge>}
-                        {item.isLatestVersionArchived && <Badge color="grey">Latest Version Archived</Badge>}
+                        <div style={{ 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: '8px',
+                            opacity: item.isPermanentlyDeleted ? 0.6 : 1
+                        }}>
+                            <span>{fileName}</span>
+                            {item.isPermanentlyDeleted && (
+                                <Badge color="red">Permanently Deleted</Badge>
+                            )}
+                            {item.isLatestVersionArchived && !item.isPermanentlyDeleted && (
+                                <Badge color="grey">Latest Version Archived</Badge>
+                            )}
+                        </div>
                     </Box>
                 );
             },
@@ -115,13 +231,30 @@ export const FileVersionsList: React.FC = () => {
         {
             id: 'path',
             header: 'Path',
-            cell: (item: FileVersion) => item.relativeKey,
+            cell: (item: FileVersion) => (
+                <Box>
+                    <div style={{ 
+                        opacity: item.isPermanentlyDeleted ? 0.6 : 1,
+                        fontFamily: 'monospace',
+                        fontSize: '0.9em',
+                        wordBreak: 'break-all'
+                    }}>
+                        {item.relativeKey}
+                    </div>
+                </Box>
+            ),
             sortingField: 'relativeKey'
         },
         {
             id: 'size',
             header: 'Size',
-            cell: (item: FileVersion) => formatFileSize(item.size),
+            cell: (item: FileVersion) => (
+                <Box>
+                    <div style={{ opacity: item.isPermanentlyDeleted ? 0.6 : 1 }}>
+                        {formatFileSize(item.size)}
+                    </div>
+                </Box>
+            ),
             sortingField: 'size'
         },
         {
@@ -151,6 +284,65 @@ export const FileVersionsList: React.FC = () => {
                     return <Box>File permanently deleted</Box>;
                 }
                 
+                // Show download progress if file is being downloaded
+                if (downloadingFile === item.relativeKey) {
+                    return (
+                        <SpaceBetween direction="vertical" size="xs">
+                            <SpaceBetween direction="horizontal" size="xs">
+                                <Button
+                                    onClick={() => handleViewFile(item)}
+                                    disabled={true}
+                                >
+                                    View File
+                                </Button>
+                                <Button
+                                    iconName="download"
+                                    loading={true}
+                                    disabled={true}
+                                >
+                                    Downloading...
+                                </Button>
+                            </SpaceBetween>
+                            <ProgressBar 
+                                value={downloadProgress[item.relativeKey] || 0}
+                                label={`${downloadProgress[item.relativeKey] || 0}%`}
+                                description={downloadStatus[item.relativeKey] === 'error' ? 'Error' : 'Downloading...'}
+                                status={downloadStatus[item.relativeKey] === 'error' ? 'error' : 'in-progress'}
+                            />
+                        </SpaceBetween>
+                    );
+                }
+                
+                // Show completed download status briefly
+                if (downloadStatus[item.relativeKey] === 'complete' && downloadProgress[item.relativeKey] === 100) {
+                    return (
+                        <SpaceBetween direction="vertical" size="xs">
+                            <SpaceBetween direction="horizontal" size="xs">
+                                <Button
+                                    onClick={() => handleViewFile(item)}
+                                    disabled={false}
+                                >
+                                    View File
+                                </Button>
+                                <Button
+                                    onClick={() => handleDownloadFile(item)}
+                                    iconName="download"
+                                    disabled={false}
+                                >
+                                    Download File
+                                </Button>
+                            </SpaceBetween>
+                            <ProgressBar 
+                                value={100}
+                                label="100%"
+                                description="Download complete"
+                                status="success"
+                            />
+                        </SpaceBetween>
+                    );
+                }
+                
+                // Default view
                 return (
                     <SpaceBetween direction="horizontal" size="xs">
                         <Button
@@ -162,6 +354,7 @@ export const FileVersionsList: React.FC = () => {
                         <Button
                             onClick={() => handleDownloadFile(item)}
                             iconName="download"
+                            loading={downloadingFile === item.relativeKey}
                             disabled={item.isPermanentlyDeleted}
                         >
                             Download File
@@ -174,6 +367,7 @@ export const FileVersionsList: React.FC = () => {
     
     // Render loading state - only show spinner if actually loading
     if (loading && !selectedVersionDetails) {
+        console.log('FileVersionsList - Loading state, no selectedVersionDetails');
         return (
             <Container header={<Header variant="h3">Associated Files</Header>}>
                 <Box textAlign="center" padding="l">
@@ -186,6 +380,19 @@ export const FileVersionsList: React.FC = () => {
     
     // If we have a selected version but no details yet, and not loading, show no files message
     if (selectedVersion && !selectedVersionDetails && !loading) {
+        console.log('FileVersionsList - Selected version but no details, not loading');
+        return (
+            <Container header={<Header variant="h3">Associated Files</Header>}>
+                <Box textAlign="center" padding="l">
+                    <div>No files associated with this asset version</div>
+                </Box>
+            </Container>
+        );
+    }
+    
+    // If we have selectedVersionDetails but no files array or empty files array
+    if (selectedVersionDetails && (!selectedVersionDetails.files || selectedVersionDetails.files.length === 0)) {
+        console.log('FileVersionsList - selectedVersionDetails exists but no files or empty files array');
         return (
             <Container header={<Header variant="h3">Associated Files</Header>}>
                 <Box textAlign="center" padding="l">
@@ -208,6 +415,11 @@ export const FileVersionsList: React.FC = () => {
                 </Header>
             }
         >
+            {downloadError && (
+                <Alert type="error" dismissible onDismiss={() => setDownloadError(null)}>
+                    {downloadError}
+                </Alert>
+            )}
             <Table
                 columnDefinitions={columns}
                 items={selectedVersionDetails?.files || []}
@@ -218,20 +430,52 @@ export const FileVersionsList: React.FC = () => {
                         <div>No files associated with this asset version</div>
                     </Box>
                 }
-                header={
-                    <Box padding="s">
+            header={
+                <Box padding="s">
+                    <SpaceBetween direction="vertical" size="xs">
                         <SpaceBetween direction="horizontal" size="xs">
                             <div>
                                 <strong>Total files:</strong> {selectedVersionDetails?.files?.length || 0}
                             </div>
-                            {selectedVersionDetails?.comment && (
-                                <div>
-                                    <strong>Version comment:</strong> {selectedVersionDetails.comment}
-                                </div>
-                            )}
+                            <div>
+                                <strong>Created by:</strong> {selectedVersionDetails?.createdBy || 'System'}
+                            </div>
+                            <div>
+                                <strong>Created on:</strong> {formatDate(selectedVersionDetails?.dateCreated)}
+                            </div>
                         </SpaceBetween>
-                    </Box>
-                }
+                        {selectedVersionDetails?.comment && (
+                            <div>
+                                <strong>Version comment:</strong> {selectedVersionDetails.comment}
+                            </div>
+                        )}
+                        {selectedVersionDetails?.files && (
+                            <div>
+                                <strong>File status:</strong>{' '}
+                                <span style={{ marginRight: '12px' }}>
+                                    <Badge color="green">
+                                        {selectedVersionDetails.files.filter(f => !f.isPermanentlyDeleted && !f.isLatestVersionArchived).length} Available
+                                    </Badge>
+                                </span>
+                                {selectedVersionDetails.files.some(f => f.isLatestVersionArchived && !f.isPermanentlyDeleted) && (
+                                    <span style={{ marginRight: '12px' }}>
+                                        <Badge color="grey">
+                                            {selectedVersionDetails.files.filter(f => f.isLatestVersionArchived && !f.isPermanentlyDeleted).length} Archived
+                                        </Badge>
+                                    </span>
+                                )}
+                                {selectedVersionDetails.files.some(f => f.isPermanentlyDeleted) && (
+                                    <span>
+                                        <Badge color="red">
+                                            {selectedVersionDetails.files.filter(f => f.isPermanentlyDeleted).length} Permanently Deleted
+                                        </Badge>
+                                    </span>
+                                )}
+                            </div>
+                        )}
+                    </SpaceBetween>
+                </Box>
+            }
             />
         </Container>
     );

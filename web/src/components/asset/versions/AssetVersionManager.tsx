@@ -15,16 +15,19 @@ import {
     Spinner,
     Table,
     Modal,
-    Link
+    Link,
+    SegmentedControl,
+    Toggle,
+    ColumnLayout
 } from '@cloudscape-design/components';
 import { useParams } from 'react-router';
-import { fetchAssetVersions } from '../../../services/AssetVersionService';
+import { fetchAssetVersions, fetchAssetS3Files } from '../../../services/AssetVersionService';
 import { AssetVersionList } from './components/AssetVersionList';
 import { FileVersionsList } from './components/FileVersionsList';
 import { CreateAssetVersionModal } from './components/CreateAssetVersionModal';
 import { RevertVersionModal } from './components/RevertVersionModal';
 import { useAssetVersions } from './hooks/useAssetVersions';
-import { EnhancedAssetVersionComparison } from './AssetVersionComparison';
+import AssetVersionComparison, { EnhancedAssetVersionComparison } from './AssetVersionComparison';
 
 // TypeScript interfaces
 export interface AssetVersion {
@@ -52,7 +55,6 @@ export interface FileVersion {
 export interface AssetVersionDetails {
     assetId: string;
     assetVersionId: string;
-    versionNumber: string;
     dateCreated: string;
     comment?: string;
     files: FileVersion[];
@@ -70,12 +72,31 @@ interface AssetVersionContextType {
     currentPage: number;
     pageSize: number;
     setCurrentPage: (page: number) => void;
+    setPageSize: (size: number) => void;
     setSelectedVersion: (version: AssetVersion | null) => void;
     refreshVersions: () => void;
     compareMode: boolean;
     setCompareMode: (mode: boolean) => void;
     versionToCompare: AssetVersion | null;
     setVersionToCompare: (version: AssetVersion | null) => void;
+    compareWithCurrent?: boolean;
+    setCompareWithCurrent?: (compare: boolean) => void;
+    currentFiles?: any[];
+    handleCompareWithCurrent?: () => void;
+    // New properties for enhanced functionality
+    showArchivedFiles: boolean;
+    setShowArchivedFiles: (show: boolean) => void;
+    showMismatchedOnly: boolean;
+    setShowMismatchedOnly: (show: boolean) => void;
+    versionsForComparison: AssetVersion[];
+    setVersionsForComparison: (versions: AssetVersion[]) => void;
+    handleVersionSelectionForComparison: (version: AssetVersion) => void;
+    startComparison: () => void;
+    startComparisonWithCurrent: () => void;
+    clearComparisonSelections: () => void;
+    // Filtering properties
+    filterText: string;
+    setFilterText: (text: string) => void;
 }
 
 export const AssetVersionContext = createContext<AssetVersionContextType | undefined>(undefined);
@@ -91,6 +112,16 @@ export const AssetVersionManager: React.FC = () => {
     // State for comparison mode
     const [compareMode, setCompareMode] = useState(false);
     const [versionToCompare, setVersionToCompare] = useState<AssetVersion | null>(null);
+    const [compareWithCurrent, setCompareWithCurrent] = useState(false);
+    const [currentFiles, setCurrentFiles] = useState<any[]>([]);
+    
+    // New state for enhanced functionality
+    const [showArchivedFiles, setShowArchivedFiles] = useState(false);
+    const [showMismatchedOnly, setShowMismatchedOnly] = useState(false);
+    const [versionsForComparison, setVersionsForComparison] = useState<AssetVersion[]>([]);
+    const [comparisonError, setComparisonError] = useState<string | null>(null);
+    const [showComparisonOptions, setShowComparisonOptions] = useState(false);
+    const [comparisonType, setComparisonType] = useState<'two-versions' | 'with-current'>('two-versions');
     
     // Use the custom hook for asset versions
     const {
@@ -103,10 +134,23 @@ export const AssetVersionManager: React.FC = () => {
         currentPage,
         pageSize,
         setCurrentPage,
+        setPageSize,
         setSelectedVersion,
         refreshVersions,
-        loadVersionDetails
+        loadVersionDetails,
+        filterText,
+        setFilterText
     } = useAssetVersions(databaseId!, assetId!);
+    
+    // Debug effect to track re-renders
+    useEffect(() => {
+        console.log('AssetVersionManager - Component re-rendered');
+    }, []);
+    
+    // Debug effect to track selectedVersion changes
+    useEffect(() => {
+        console.log('AssetVersionManager - selectedVersion changed:', selectedVersion?.Version);
+    }, [selectedVersion]);
     
     // Handle revert version
     const handleRevertVersion = (version: AssetVersion) => {
@@ -116,19 +160,135 @@ export const AssetVersionManager: React.FC = () => {
     
     // Handle version selection for comparison
     const handleCompareSelect = (version: AssetVersion) => {
+        console.log('AssetVersionManager - handleCompareSelect called with version:', version);
+        
         if (compareMode) {
             if (versionToCompare) {
                 // If we already have a version to compare, compare with this one
-                // Navigate to comparison view or show comparison component
-                // For now, just log
-                console.log(`Compare ${versionToCompare.Version} with ${version.Version}`);
+                console.log('AssetVersionManager - Already have versionToCompare, setting selectedVersion');
+                setSelectedVersion(version);
+                setCompareWithCurrent(false);
             } else {
                 // Select this version for comparison
+                console.log('AssetVersionManager - Setting versionToCompare');
                 setVersionToCompare(version);
             }
         } else {
-            // Normal selection
-            setSelectedVersion(version);
+            // Normal selection - ensure we're not resetting the selection if it's the same version
+            console.log('AssetVersionManager - Normal selection, setting selectedVersion');
+            
+            // Store the version in a local variable to ensure it's not lost during state updates
+            const versionToSelect = version;
+            
+            // Use a callback to ensure we have the latest state
+            setSelectedVersion((currentSelectedVersion) => {
+                // If it's the same version, keep the reference to avoid unnecessary re-renders
+                if (currentSelectedVersion && currentSelectedVersion.Version === versionToSelect.Version) {
+                    return currentSelectedVersion;
+                }
+                return versionToSelect;
+            });
+        }
+    };
+    
+    // Toggle comparison options panel
+    const toggleComparisonOptions = () => {
+        setShowComparisonOptions(!showComparisonOptions);
+        if (!showComparisonOptions) {
+            // Clear any previous selections when opening the panel
+            setVersionsForComparison([]);
+            setComparisonError(null);
+            // Reset comparison type to default when opening panel
+            setComparisonType('two-versions');
+        }
+    };
+    
+    // Enhanced version selection for comparison
+    const handleVersionSelectionForComparison = (version: AssetVersion) => {
+        // Check if version is already selected
+        const alreadySelected = versionsForComparison.some(v => v.Version === version.Version);
+        
+        if (alreadySelected) {
+            // Remove from selection
+            setVersionsForComparison(versionsForComparison.filter(v => v.Version !== version.Version));
+        } else if (comparisonType === 'with-current') {
+            // For comparison with current, only allow one selection
+            setVersionsForComparison([version]);
+        } else if (versionsForComparison.length < 2) {
+            // Add to selection (max 2)
+            setVersionsForComparison([...versionsForComparison, version]);
+        } else {
+            // Replace the second version
+            setVersionsForComparison([versionsForComparison[0], version]);
+        }
+    };
+    
+    // Start comparison between two selected versions
+    const startComparison = () => {
+        if (comparisonType === 'two-versions') {
+            if (versionsForComparison.length === 2) {
+                setVersionToCompare(versionsForComparison[0]);
+                setSelectedVersion(versionsForComparison[1]);
+                setCompareMode(true);
+                setCompareWithCurrent(false);
+                setShowComparisonOptions(false);
+            } else {
+                setComparisonError('Please select two versions to compare');
+                setTimeout(() => setComparisonError(null), 5000); // Auto-dismiss after 5 seconds
+            }
+        } else {
+            if (versionsForComparison.length > 0) {
+                setVersionToCompare(versionsForComparison[0]);
+                setCompareMode(true);
+                setCompareWithCurrent(true);
+                handleCompareWithCurrent();
+                setShowComparisonOptions(false);
+            } else {
+                setComparisonError('Please select a version to compare with current files');
+                setTimeout(() => setComparisonError(null), 5000); // Auto-dismiss after 5 seconds
+            }
+        }
+    };
+    
+    // Start comparison with current files
+    const startComparisonWithCurrent = () => {
+        if (versionsForComparison.length > 0) {
+            setVersionToCompare(versionsForComparison[0]);
+            setCompareMode(true);
+            setCompareWithCurrent(true);
+            handleCompareWithCurrent();
+            setShowComparisonOptions(false);
+        } else {
+            setComparisonError('Please select a version to compare with current files');
+            setTimeout(() => setComparisonError(null), 5000); // Auto-dismiss after 5 seconds
+        }
+    };
+    
+    // Clear comparison selections
+    const clearComparisonSelections = () => {
+        setVersionsForComparison([]);
+    };
+    
+    // Handle compare with current files
+    const handleCompareWithCurrent = async () => {
+        if (!versionToCompare || !databaseId || !assetId) return;
+        
+        try {
+            // Load current files
+            const [success, files] = await fetchAssetS3Files({
+                databaseId,
+                assetId,
+                includeArchived: false
+            });
+            
+            if (success && files) {
+                setCurrentFiles(files);
+                setCompareWithCurrent(true);
+            } else {
+                console.error('Failed to load current files for comparison');
+            }
+        } catch (error) {
+            console.error('Error loading current files:', error);
         }
     };
     
@@ -138,9 +298,11 @@ export const AssetVersionManager: React.FC = () => {
         if (!compareMode) {
             // Entering compare mode
             setVersionToCompare(null);
+            setCompareWithCurrent(false);
         } else {
             // Exiting compare mode
             setVersionToCompare(null);
+            setCompareWithCurrent(false);
         }
     };
     
@@ -155,12 +317,31 @@ export const AssetVersionManager: React.FC = () => {
         currentPage,
         pageSize,
         setCurrentPage,
+        setPageSize,
         setSelectedVersion,
         refreshVersions,
         compareMode,
         setCompareMode,
         versionToCompare,
-        setVersionToCompare
+        setVersionToCompare,
+        compareWithCurrent,
+        setCompareWithCurrent,
+        currentFiles,
+        handleCompareWithCurrent,
+        // New properties for enhanced functionality
+        showArchivedFiles,
+        setShowArchivedFiles,
+        showMismatchedOnly,
+        setShowMismatchedOnly,
+        versionsForComparison,
+        setVersionsForComparison,
+        handleVersionSelectionForComparison,
+        startComparison,
+        startComparisonWithCurrent,
+        clearComparisonSelections,
+        // Filtering properties
+        filterText,
+        setFilterText
     };
     
     return (
@@ -171,12 +352,30 @@ export const AssetVersionManager: React.FC = () => {
                         variant="h2"
                         actions={
                             <SpaceBetween direction="horizontal" size="xs">
-                                <Button
-                                    onClick={toggleCompareMode}
-                                    variant={compareMode ? "primary" : "normal"}
-                                >
-                                    {compareMode ? "Exit Compare Mode" : "Compare Versions"}
-                                </Button>
+                                {compareMode && versionToCompare && (
+                                    <Button
+                                        onClick={handleCompareWithCurrent}
+                                        variant={compareWithCurrent ? "primary" : "normal"}
+                                    >
+                                        Compare with Current Files
+                                    </Button>
+                                )}
+                                {compareMode ? (
+                                    <Button
+                                        onClick={toggleCompareMode}
+                                        variant="primary"
+                                    >
+                                        Exit Compare Mode
+                                    </Button>
+                                ) : (
+                                    <Button
+                                        onClick={toggleComparisonOptions}
+                                        variant={showComparisonOptions ? "primary" : "normal"}
+                                        iconName="copy"
+                                    >
+                                        Compare Versions
+                                    </Button>
+                                )}
                                 <Button
                                     onClick={() => setShowCreateModal(true)}
                                     variant="primary"
@@ -196,6 +395,123 @@ export const AssetVersionManager: React.FC = () => {
                             {error}
                         </Alert>
                     )}
+                    {comparisonError && (
+                        <Alert type="error" dismissible onDismiss={() => setComparisonError(null)}>
+                            {comparisonError}
+                        </Alert>
+                    )}
+                    
+                    {/* Comparison Options Panel */}
+                    {showComparisonOptions && !compareMode && (
+                        <Container
+                            header={<Header variant="h3">Version Comparison Options</Header>}
+                        >
+                            <SpaceBetween direction="vertical" size="l">
+                                <SegmentedControl
+                                    selectedId={comparisonType}
+                                    onChange={({ detail }) => {
+                                        const newType = detail.selectedId as 'two-versions' | 'with-current';
+                                        setComparisonType(newType);
+                                        // Reset selections when changing comparison type
+                                        setVersionsForComparison([]);
+                                    }}
+                                    options={[
+                                        { text: 'Compare Two Versions', id: 'two-versions' },
+                                        { text: 'Compare with Current Files', id: 'with-current' }
+                                    ]}
+                                />
+                                
+                                <ColumnLayout columns={2}>
+                                    <div>
+                                        <SpaceBetween direction="vertical" size="s">
+                                            <Box variant="h4">Selected Versions</Box>
+                                            {versionsForComparison.length === 0 ? (
+                                                <Box>No versions selected. Select versions from the list below.</Box>
+                                            ) : (
+                                                <SpaceBetween direction="vertical" size="xs">
+                                                    {versionsForComparison.map((version, index) => (
+                                                        <Box key={version.Version}>
+                                                            <div style={{ 
+                                                                display: 'flex', 
+                                                                alignItems: 'center', 
+                                                                gap: '8px',
+                                                                padding: '4px 8px',
+                                                                backgroundColor: '#f2f8fd',
+                                                                borderRadius: '4px',
+                                                                border: '1px solid #d1e4f8'
+                                                            }}>
+                                                                <span style={{ fontWeight: 'bold' }}>
+                                                                    {comparisonType === 'two-versions' ? `${index + 1}.` : ''} Version {version.Version}
+                                                                </span>
+                                                                <span>({new Date(version.DateModified).toLocaleDateString()})</span>
+                                                                <Button
+                                                                    iconName="close"
+                                                                    variant="icon"
+                                                                    onClick={() => setVersionsForComparison(
+                                                                        versionsForComparison.filter(v => v.Version !== version.Version)
+                                                                    )}
+                                                                    ariaLabel={`Remove version ${version.Version} from selection`}
+                                                                />
+                                                            </div>
+                                                        </Box>
+                                                    ))}
+                                                </SpaceBetween>
+                                            )}
+                                            
+                                            {versionsForComparison.length > 0 && (
+                                                <Button
+                                                    onClick={clearComparisonSelections}
+                                                    variant="link"
+                                                >
+                                                    Clear Selection
+                                                </Button>
+                                            )}
+                                        </SpaceBetween>
+                                    </div>
+                                    
+                                    <div>
+                                        <SpaceBetween direction="vertical" size="s">
+                                            <Box variant="h4">Instructions</Box>
+                                            {comparisonType === 'two-versions' ? (
+                                                <Box>
+                                                    <p>Select two versions from the list below to compare their files.</p>
+                                                    <p>The comparison will show:</p>
+                                                    <ul>
+                                                        <li><span style={{ color: '#037f0c' }}>Added files</span> - Files present in the second version but not in the first</li>
+                                                        <li><span style={{ color: '#d91515' }}>Removed files</span> - Files present in the first version but not in the second</li>
+                                                        <li><span style={{ color: '#0972d3' }}>Modified files</span> - Files present in both versions but with different content</li>
+                                                        <li><span style={{ color: '#5f6b7a' }}>Unchanged files</span> - Files identical in both versions</li>
+                                                    </ul>
+                                                </Box>
+                                            ) : (
+                                                <Box>
+                                                    <p>Select one version from the list below to compare with the current files.</p>
+                                                    <p>This will show what has changed since the selected version, including:</p>
+                                                    <ul>
+                                                        <li><span style={{ color: '#037f0c' }}>Added files</span> - New files added since the selected version</li>
+                                                        <li><span style={{ color: '#d91515' }}>Removed files</span> - Files that existed in the selected version but are no longer present</li>
+                                                        <li><span style={{ color: '#0972d3' }}>Modified files</span> - Files that have been changed since the selected version</li>
+                                                        <li><span style={{ color: '#5f6b7a' }}>Unchanged files</span> - Files that remain the same</li>
+                                                    </ul>
+                                                </Box>
+                                            )}
+                                            
+                                            <Button
+                                                onClick={startComparison}
+                                                variant="primary"
+                                                disabled={
+                                                    (comparisonType === 'two-versions' && versionsForComparison.length !== 2) ||
+                                                    (comparisonType === 'with-current' && versionsForComparison.length === 0)
+                                                }
+                                            >
+                                                Start Comparison
+                                            </Button>
+                                        </SpaceBetween>
+                                    </div>
+                                </ColumnLayout>
+                            </SpaceBetween>
+                        </Container>
+                    )}
                     
                     {/* Asset Versions List */}
                     <AssetVersionList 
@@ -209,13 +525,25 @@ export const AssetVersionManager: React.FC = () => {
                     )}
                     
                     {/* Comparison View - only show when in compare mode and a version is selected for comparison */}
-                    {compareMode && versionToCompare && selectedVersion && (
-                        <EnhancedAssetVersionComparison 
-                            onClose={() => {
-                                setCompareMode(false);
-                                setVersionToCompare(null);
-                            }}
-                        />
+                    {compareMode && versionToCompare && (
+                        compareWithCurrent ? (
+                            <AssetVersionComparison 
+                                databaseId={databaseId!}
+                                assetId={assetId!}
+                                version1={versionToCompare}
+                                compareWithCurrent={true}
+                                onClose={() => {
+                                    setCompareWithCurrent(false);
+                                }}
+                            />
+                        ) : selectedVersion && (
+                            <EnhancedAssetVersionComparison 
+                                onClose={() => {
+                                    setCompareMode(false);
+                                    setVersionToCompare(null);
+                                }}
+                            />
+                        )
                     )}
                 </SpaceBetween>
                 

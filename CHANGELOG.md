@@ -61,13 +61,18 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
 -   Disabled for now the ability to see/view assets in Workflow Editor and the ability to Execute Workflows from Workflow Editor. (doesn't fit the current functionality implementation)
 -   Updated API and associated viewers/files for aux asset streaming endpoint from /auxiliaryPreviewAssets/stream/{proxy+} to /auxiliaryPreviewAssets/stream/{assetId}/{proxy+}
     -   Added additional validation checks to make sure users only stream assets that belong to the asset ID provided
+-   Subscription emails for assets will now trigger any time a asset itself changes or versions, or one of its files changes
 
 ### Bug Fixes
 -   Fixed various bugs with asset comments with editing and deleting
 
 ### Chores
+-   Added more input variables for use in pipeline lambdas called such as bucketAssetAuxiliary, bucketAsset, and inputAssetFileKey. This is in additional to the predetemined "easy" paths setup for pipeline use. 
+-   Added more error checks / outer workflow abort procedures for workflows/pipelines in use-case pipelines
 -   Updated auxilliary asset handling and handling to match the new asset location keys and handling
 -   Updated workflow execution to handle new new asset location keys, bucket, and handling
+-   Created new dynamoDB workflow executions table (old one will remain as deprecated to not lose data) to store better format for lambda storage and retrieval
+-   Modified workflow executions API to '/database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}' and also added '/database/{databaseId}/assets/{assetId}/workflows/executions/' to get all executions for an asset
 
 ## [2.2.0] (2025-05-31)
 

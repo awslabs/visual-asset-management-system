@@ -153,15 +153,15 @@ def launchWorkflow(inputAssetBucket, inputAssetFileKey, workflow_arn, asset_id, 
     table = dynamodb.Table(workflow_execution_database)
     table.put_item(
         Item={
-            'pk': f'{asset_id}-{workflow_id}',
-            'sk': executionId,
-            'database_id': database_id,
-            'asset_id': asset_id,
-            'workflow_id': workflow_id,
+            'assetId': asset_id,
+            'workflowId': workflow_id,
+            'executionId': executionId,
+            'databaseId': database_id,
             'workflow_arn': workflow_arn,
             'execution_arn': response['executionArn'],
-            'execution_id': executionId,
-            'assets': []
+            'startDate': "",
+            'stopDate': "",
+            'executionStatus': "NEW"
         }
     )
     return executionId
@@ -208,12 +208,17 @@ def validate_pipelines(databaseId, workflow):
 
 def get_workflow_executions(assetId, workflowId):
         logger.info("Getting current executions")
-        pk = f'{assetId}-{workflowId}'
+
+        if workflowId == '':
+            keyExpression = Key('assetId').eq(assetId)
+        else:
+            keyExpression = Key('assetId').eq(assetId) & Key('workflowId').eq(workflowId)
 
         paginator = dynamodb.meta.client.get_paginator('query')
         page_iterator = paginator.paginate(
             TableName=workflow_execution_database,
-            KeyConditionExpression=Key('pk').eq(pk),
+            IndexName='WorkflowIdGSI',
+            KeyConditionExpression=keyExpression,
             ScanIndexForward=False,
             PaginationConfig={
                 'MaxItems': 500,
@@ -229,7 +234,8 @@ def get_workflow_executions(assetId, workflowId):
             nextToken = page_iterator['NextToken']
             page_iterator = paginator.paginate(
                 TableName=workflow_execution_database,
-                KeyConditionExpression=Key('pk').eq(pk),
+                IndexName='WorkflowIdGSI',
+                KeyConditionExpression=keyExpression,
                 ScanIndexForward=False,
                 PaginationConfig={
                     'MaxItems': 500,
@@ -248,13 +254,13 @@ def get_workflow_executions(assetId, workflowId):
             try:
                 workflow_arn = item['workflow_arn']
                 execution_arn = workflow_arn.replace("stateMachine", "execution")
-                execution_arn = execution_arn + ":" + item['execution_id']
+                execution_arn = execution_arn + ":" + item['executionId']
 
                 startDate = item.get('startDate', "")
                 stopDate = item.get('stopDate', "")
 
                 #If our table doesn't have a stopDate on a execution, continue to look for a running execution
-                if not stopDate:
+                if not stopDate or stopDate == "":
                     logger.info("Fetching SFN execution information")
                     execution = sfn_client.describe_execution(
                         executionArn=execution_arn
@@ -270,6 +276,7 @@ def get_workflow_executions(assetId, workflowId):
                     if not stopDate:
                         logger.info("Adding to results: " + execution['name'])
                         result["Items"].append({
+                            'workflowId': item['workflowId'],
                             'executionId': execution['name'],
                             'executionStatus': execution['status'],
                             'startDate': startDate,
@@ -279,6 +286,7 @@ def get_workflow_executions(assetId, workflowId):
                 logger.exception(e)
                 logger.info("Continuing with trying to fetch exceutions...")
 
+        logger.info(f"Returning existing execution results: {result}")
         return result
 
 

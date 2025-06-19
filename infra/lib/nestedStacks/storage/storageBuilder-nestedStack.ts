@@ -46,7 +46,6 @@ export interface storageResources {
         authEntitiesStorageTable: dynamodb.Table;
         commentStorageTable: dynamodb.Table;
         databaseStorageTable: dynamodb.Table;
-        jobStorageTable: dynamodb.Table;
         metadataSchemaStorageTable: dynamodb.Table;
         metadataStorageTable: dynamodb.Table;
         pipelineStorageTable: dynamodb.Table;
@@ -56,7 +55,7 @@ export interface storageResources {
         tagTypeStorageTable: dynamodb.Table;
         userRolesStorageTable: dynamodb.Table;
         userStorageTable: dynamodb.Table;
-        workflowExecutionStorageTable: dynamodb.Table;
+        workflowExecutionsStorageTable: dynamodb.Table;
         workflowStorageTable: dynamodb.Table;
     };
 }
@@ -414,18 +413,6 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         },
     });
 
-    const jobStorageTable = new dynamodb.Table(scope, "JobStorageTable", {
-        ...dynamodbDefaultProps,
-        partitionKey: {
-            name: "jobId",
-            type: dynamodb.AttributeType.STRING,
-        },
-        sortKey: {
-            name: "databaseId",
-            type: dynamodb.AttributeType.STRING,
-        },
-    });
-
     const pipelineStorageTable = new dynamodb.Table(scope, "PipelineStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
@@ -450,21 +437,46 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         },
     });
 
-    const workflowExecutionStorageTable = new dynamodb.Table(
+    const workflowExecutionsStorageTable = new dynamodb.Table(
         scope,
-        "WorkflowExecutionStorageTable",
+        "WorkflowExecutionsStorageTable",
         {
             ...dynamodbDefaultProps,
             partitionKey: {
-                name: "pk",
+                name: "assetId",
                 type: dynamodb.AttributeType.STRING,
             },
             sortKey: {
-                name: "sk",
+                name: "executionId",
                 type: dynamodb.AttributeType.STRING,
             },
         }
     );
+
+    workflowExecutionsStorageTable.addGlobalSecondaryIndex({
+        indexName: "WorkflowIdGSI",
+        partitionKey: {
+            name: "assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "workflowId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    workflowExecutionsStorageTable.addGlobalSecondaryIndex({
+        indexName: "ExecutionIdGSI",
+        partitionKey: {
+            name: "workflowId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "executionId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
 
     const metadataStorageTable = new dynamodb.Table(scope, "MetadataStorageTable", {
         ...dynamodbDefaultProps,
@@ -684,11 +696,10 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
             assetFileVersionsStorageTable: assetFileVersionsStorageTable,
             assetVersionsStorageTable: assetVersionsStorageTable,
             commentStorageTable: commentStorageTable,
-            jobStorageTable: jobStorageTable,
             pipelineStorageTable: pipelineStorageTable,
             databaseStorageTable: databaseStorageTable,
             workflowStorageTable: workflowStorageTable,
-            workflowExecutionStorageTable: workflowExecutionStorageTable,
+            workflowExecutionsStorageTable: workflowExecutionsStorageTable,
             metadataStorageTable: metadataStorageTable,
             authEntitiesStorageTable: authEntitiesTable,
             metadataSchemaStorageTable: metadataSchemaStorageTable,

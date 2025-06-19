@@ -872,17 +872,23 @@ export const fetchAllWorkflows = async (api = API) => {
  * Returns array of all workflow executions the current user can access for the given databaseId & assetId, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchWorkflowExecutions = async ({ databaseId, assetId, workflowId, isGlobalWorkflow = false }, api = API) => {
+export const fetchWorkflowExecutions = async ({ databaseId, assetId, workflowId = '', isGlobalWorkflow = false }, api = API) => {
     try {
         let response;
         let endpoint;
+
+        // Use a different variable name to avoid redeclaration
+        let dbId = databaseId;
+        if (isGlobalWorkflow) {
+            dbId = "GLOBAL";
+        }
         
-        if (assetId && workflowId) {
+        if (assetId) {
             // Determine the endpoint based on whether it's a global workflow
-            if (isGlobalWorkflow) {
-                endpoint = `database/global/assets/${assetId}/workflows/${workflowId}/executions`;
+            if (workflowId == '') {
+                endpoint = `database/${dbId}/assets/${assetId}/workflows/executions`;
             } else {
-                endpoint = `database/${databaseId}/assets/${assetId}/workflows/${workflowId}/executions`;
+                endpoint = `database/${dbId}/assets/${assetId}/workflows/executions/${workflowId}`;
             }
             
             response = await api.get("api", endpoint, {});
@@ -999,42 +1005,6 @@ export const createFolder = async ({ databaseId, assetId, relativeKey }, api = A
     }
 };
 
-/**
- * Returns detailed file information including version history for a specific file
- * @returns {Promise<boolean|{message}|any>}
- */
-export const getFileVersions = async ({ databaseId, assetId, filePath }, api = API) => {
-    try {
-        if (!databaseId || !assetId || !filePath) {
-            return [false, "Missing required parameters"];
-        }
-
-        const response = await api.get(
-            "api",
-            `database/${databaseId}/assets/${assetId}/fileInfo`,
-            {
-                queryStringParameters: {
-                    filePath: filePath,
-                    includeVersions: 'true'
-                }
-            }
-        );
-
-        // Handle both old format (response.message) and new format (direct response)
-        if (response.message) {
-            // Old API format with message wrapper
-            return [true, response.message];
-        } else if (response && (response.versions || response.fileName)) {
-            // New API format - response contains the data directly
-            return [true, response];
-        } else {
-            return [false, "No response received"];
-        }
-    } catch (error) {
-        console.log("Error fetching file versions:", error);
-        return [false, error?.message || "Failed to fetch file versions"];
-    }
-};
 
 /**
  * Reverts a file to a specific version by creating a new current version with the contents of the specified version

@@ -11,7 +11,7 @@ import { API } from "aws-amplify";
  * @param {string} params.databaseId - Database ID
  * @param {string} params.assetId - Asset ID
  * @param {number} params.maxItems - Maximum items per page (optional)
- * @param {string} params.startingToken - Pagination token (optional)
+ * @param {string|null} params.startingToken - Pagination token (optional)
  * @returns {Promise<boolean|{message}|any>}
  */
 export const fetchAssetVersions = async ({ databaseId, assetId, maxItems = 100, startingToken = null }, api = API) => {
@@ -103,9 +103,25 @@ export const fetchAssetVersion = async ({ databaseId, assetId, assetVersionId },
             {}
         );
 
-        if (response.message) {
+        console.log("fetchAssetVersion raw response:", JSON.stringify(response, null, 2));
+
+        // Handle direct response format (no message wrapper)
+        if (response && response.files !== undefined) {
+            console.log("Direct response with files property detected");
+            return [true, response];
+        }
+        // Handle response with message wrapper
+        else if (response && response.message) {
+            console.log("Response with message wrapper detected");
             return [true, response.message];
-        } else {
+        } 
+        // Handle empty response
+        else if (response && Object.keys(response).length > 0) {
+            console.log("Response exists but doesn't match expected format, returning as-is");
+            return [true, response];
+        }
+        else {
+            console.error("No valid response received:", response);
             return [false, "No response received"];
         }
     } catch (error) {
@@ -331,5 +347,195 @@ export const fetchAssetS3Files = async ({ databaseId, assetId, includeArchived =
     } catch (error) {
         console.error("Error fetching asset S3 files:", error);
         return [false, error?.message || "Failed to fetch asset files"];
+    }
+};
+
+/**
+ * Compares two asset versions or an asset version with current files
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {string} params.version1Id - First version ID
+ * @param {string} [params.version2Id] - Second version ID (optional)
+ * @param {boolean} [params.compareWithCurrent=false] - Whether to compare with current files (optional)
+ * @returns {Promise<boolean|{message}|any>}
+ */
+export const compareAssetVersions = async ({ databaseId, assetId, version1Id, version2Id, compareWithCurrent = false }, api = API) => {
+    try {
+        if (!databaseId || !assetId || !version1Id) {
+            return [false, "Required parameters missing"];
+        }
+
+        // Fetch first version
+        const [success1, version1] = await fetchAssetVersion({
+            databaseId,
+            assetId,
+            assetVersionId: version1Id
+        }, api);
+
+        if (!success1 || !version1) {
+            return [false, "Failed to fetch first version"];
+        }
+
+        let version2 = null;
+
+        if (compareWithCurrent) {
+            // Fetch current files
+            const [successCurrent, currentFiles] = await fetchAssetS3Files({
+                databaseId,
+                assetId,
+                includeArchived: false
+            }, api);
+
+            if (!successCurrent) {
+                return [false, "Failed to fetch current files"];
+            }
+
+            // Convert S3Files to FileVersion format for comparison
+            version2 = {
+                files: currentFiles.map(file => ({
+                    relativeKey: file.relativePath || file.key,
+                    versionId: file.versionId,
+                    size: file.size,
+                    lastModified: file.dateCreatedCurrentVersion,
+                    etag: file.etag,
+                    isArchived: file.isArchived,
+                    isPermanentlyDeleted: false
+                }))
+            };
+        } else if (version2Id) {
+            // Fetch second version
+            const [success2, v2] = await fetchAssetVersion({
+                databaseId,
+                assetId,
+                assetVersionId: version2Id
+            }, api);
+
+            if (!success2 || !v2) {
+                return [false, "Failed to fetch second version"];
+            }
+
+            version2 = v2;
+        } else {
+            return [false, "Either version2Id or compareWithCurrent must be provided"];
+        }
+
+        // Generate comparison
+        const comparison = generateComparison(version1, version2);
+        return [true, comparison];
+    } catch (error) {
+        console.error("Error comparing versions:", error);
+        return [false, error?.message || "Failed to compare versions"];
+    }
+};
+
+/**
+ * Helper function to generate comparison between two versions
+ * @param {Object} version1 - First version
+ * @param {Object} version2 - Second version
+ * @returns {Object} Comparison result
+ */
+function generateComparison(version1, version2) {
+    // Map files by relative key for easier comparison
+    const files1Map = new Map(version1.files.map(f => [f.relativeKey, f]));
+    const files2Map = new Map(version2.files.map(f => [f.relativeKey, f]));
+    
+    // Get all unique keys
+    const allKeys = new Set([...files1Map.keys(), ...files2Map.keys()]);
+    
+    // Generate comparison for each file
+    const fileComparisons = [];
+    for (const key of allKeys) {
+        const file1 = files1Map.get(key);
+        const file2 = files2Map.get(key);
+        
+        let status;
+        if (!file1 && file2) {
+            status = 'added';
+        } else if (file1 && !file2) {
+            status = 'removed';
+        } else if (file1 && file2) {
+            if (file1.versionId !== file2.versionId || 
+                file1.size !== file2.size || 
+                file1.etag !== file2.etag) {
+                status = 'modified';
+            } else {
+                status = 'unchanged';
+            }
+        }
+        
+        fileComparisons.push({
+            relativeKey: key,
+            status,
+            version1File: file1,
+            version2File: file2
+        });
+    }
+    
+    // Sort by status and name
+    const statusOrder = { 'added': 1, 'removed': 2, 'modified': 3, 'unchanged': 4 };
+    fileComparisons.sort((a, b) => {
+        const statusDiff = statusOrder[a.status] - statusOrder[b.status];
+        if (statusDiff !== 0) return statusDiff;
+        return a.relativeKey.localeCompare(b.relativeKey);
+    });
+    
+    // Generate summary
+    const summary = {
+        added: fileComparisons.filter(f => f.status === 'added').length,
+        removed: fileComparisons.filter(f => f.status === 'removed').length,
+        modified: fileComparisons.filter(f => f.status === 'modified').length,
+        unchanged: fileComparisons.filter(f => f.status === 'unchanged').length,
+        total: fileComparisons.length
+    };
+    
+    return {
+        version1: version1,
+        version2: version2,
+        fileComparisons,
+        summary
+    };
+}
+
+/**
+ * Fetches file versions for a specific file
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {string} params.filePath - File path
+ * @returns {Promise<boolean|{message}|any>}
+ */
+export const fetchFileVersions = async ({ databaseId, assetId, filePath }, api = API) => {
+    try {
+        if (!databaseId || !assetId || !filePath) {
+            return [false, "Database ID, Asset ID, and File Path are required"];
+        }
+
+        const response = await api.get(
+            "api",
+            `database/${databaseId}/assets/${assetId}/fileInfo`,
+            {
+                queryStringParameters: {
+                    filePath: filePath,
+                    includeVersions: "true"
+                }
+            }
+        );
+
+        if (response && response.versions) {
+            return [true, response];
+        } else if (response && response.message) {
+            // Handle message wrapper
+            if (response.message.versions) {
+                return [true, response.message];
+            } else {
+                return [false, "No versions found in response"];
+            }
+        } else {
+            return [false, "No response received"];
+        }
+    } catch (error) {
+        console.error("Error fetching file versions:", error);
+        return [false, error?.message || "Failed to fetch file versions"];
     }
 };

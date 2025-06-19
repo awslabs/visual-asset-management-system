@@ -635,7 +635,7 @@ class CreateAssetVersionRequestModel(BaseModel, extra=Extra.ignore):
 class RevertAssetVersionRequestModel(BaseModel, extra=Extra.ignore):
     """Request model for reverting to a previous asset version"""
     assetVersionId: str = Field(min_length=1, strip_whitespace=True)  # The version ID to revert to
-    comment: Optional[str] = Field(None, max_length=256)  # Optional comment for the new version
+    comment: str = Field(min_length=1, max_length=256, strip_whitespace=True)  # comment for the new version
 
 class GetAssetVersionRequestModel(BaseModel, extra=Extra.ignore):
     """Request model for getting a specific asset version"""
@@ -661,7 +661,6 @@ class AssetVersionResponseModel(BaseModel, extra=Extra.ignore):
     """Response model for a specific asset version"""
     assetId: str
     assetVersionId: str
-    versionNumber: str
     dateCreated: str
     comment: Optional[str] = None
     files: List[AssetVersionFileModel] = []
@@ -678,7 +677,6 @@ class AssetVersionOperationResponseModel(BaseModel, extra=Extra.ignore):
     message: str
     assetId: str
     assetVersionId: str
-    versionNumber: str
     operation: Literal["create", "revert"]
     timestamp: str
     skippedFiles: Optional[List[str]] = None  # Files that couldn't be processed

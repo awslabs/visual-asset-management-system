@@ -265,6 +265,13 @@ def validate(values):
                 optional = True
             if not isinstance(v['optional'], bool):
                 raise Exception("The optional field in validator for " + k + " field must be of type bool")
+            
+        allowGlobalKeyword = False
+        if 'allowGlobalKeyword' in v:
+            if isinstance(v['allowGlobalKeyword'], bool) and v['allowGlobalKeyword'] == True:
+                allowGlobalKeyword = True
+            if not isinstance(v['allowGlobalKeyword'], bool):
+                raise Exception("The allowGlobalKeyword field in validator for " + k + " field must be of type bool")
 
         #Empty checks across types. If optional, return success. Otherwise error on empty. 
         if v['value'] is None:
@@ -282,6 +289,17 @@ def validate(values):
                 return (True, "")
             else:
                 return (False, k + " is a required field.")
+            
+        #Check and allow for global keyword (initially case insensitive)
+        if isinstance(v['value'], str):
+            if allowGlobalKeyword and v['value'].lower().strip() == 'global':
+                #additional check to make sure final value is capitalized or not
+                if v['value'] == 'GLOBAL':
+                    return (True, "")
+                else:
+                    return (False, k + " is invalid. GLOBAL must be capitalized for this field is used.")
+            elif not allowGlobalKeyword and v['value'].lower().strip()  == 'global':
+                return (False, k + " is invalid. GLOBAL is not allowed for this field.")
             
         #Check input types first. If not string or array for respective validator, error.
         if isinstance(v['value'], dict):

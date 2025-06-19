@@ -107,14 +107,14 @@ export function buildListWorkflowExecutionsFunction(
                 : undefined,
         environment: {
             WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
-                storageResources.dynamo.workflowExecutionStorageTable.tableName,
+                storageResources.dynamo.workflowExecutionsStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
-    storageResources.dynamo.workflowExecutionStorageTable.grantReadWriteData(
+    storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(
         listAllWorkflowsFunction
     ); //Needs write permission to update execution status after a SFN fetch
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(listAllWorkflowsFunction);
@@ -255,7 +255,7 @@ export function buildRunWorkflowFunction(
             PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
-                storageResources.dynamo.workflowExecutionStorageTable.tableName,
+                storageResources.dynamo.workflowExecutionsStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
@@ -267,7 +267,7 @@ export function buildRunWorkflowFunction(
     storageResources.dynamo.workflowStorageTable.grantReadData(runWorkflowFunction);
     storageResources.dynamo.pipelineStorageTable.grantReadData(runWorkflowFunction);
     storageResources.dynamo.assetStorageTable.grantReadData(runWorkflowFunction);
-    storageResources.dynamo.workflowExecutionStorageTable.grantReadWriteData(runWorkflowFunction);
+    storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(runWorkflowFunction);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(runWorkflowFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(runWorkflowFunction);
     storageResources.s3.assetBucket.grantReadWrite(runWorkflowFunction);
@@ -326,7 +326,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
-                storageResources.dynamo.workflowExecutionStorageTable.tableName,
+                storageResources.dynamo.workflowExecutionsStorageTable.tableName,
             FILE_UPLOAD_LAMBDA_FUNCTION_NAME: fileUploadLambdaFunction.functionName,
             READ_METADATA_LAMBDA_FUNCTION_NAME: readMetadataLambdaFunction.functionName,
             CREATE_METADATA_LAMBDA_FUNCTION_NAME: createMetadataLambdaFunction.functionName,
@@ -345,7 +345,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
         processWorkflowExecutionOutputFunction
     );
     storageResources.dynamo.assetStorageTable.grantReadData(processWorkflowExecutionOutputFunction);
-    storageResources.dynamo.workflowExecutionStorageTable.grantReadWriteData(
+    storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(
         processWorkflowExecutionOutputFunction
     );
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(

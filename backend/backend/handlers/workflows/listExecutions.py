@@ -45,12 +45,18 @@ def get_executions(asset_id, workflow_id, query_params):
 
     if asset_of_workflow_allowed:
         logger.info("Listing executions")
-        pk = f'{asset_id}-{workflow_id}'
 
         paginator = dynamodb.meta.client.get_paginator('query')
+
+        if workflow_id == '':
+            keyExpression = Key('assetId').eq(asset_id)
+        else:
+            keyExpression = Key('assetId').eq(asset_id) & Key('workflowId').eq(workflow_id)
+
         page_iterator = paginator.paginate(
             TableName=workflow_execution_database,
-            KeyConditionExpression=Key('pk').eq(pk),
+            IndexName='WorkflowIdGSI',
+            KeyConditionExpression=keyExpression,
             ScanIndexForward=False,
             PaginationConfig={
                 'MaxItems': int(query_params['maxItems']),
@@ -74,16 +80,15 @@ def get_executions(asset_id, workflow_id, query_params):
                 if len(claims_and_roles["tokens"]) > 0:
                     casbin_enforcer = CasbinEnforcer(claims_and_roles)
                     if casbin_enforcer.enforce(item, "GET"):
-                        assets = item.get('assets', [])
                         workflow_arn = item['workflow_arn']
                         execution_arn = workflow_arn.replace("stateMachine", "execution")
-                        execution_arn = execution_arn + ":" + item['execution_id']
+                        execution_arn = execution_arn + ":" + item['executionId']
                         logger.info(execution_arn)
 
                         startDate = item.get('startDate', "")
                         stopDate = item.get('stopDate', "")
                         executionStatus = item.get('executionStatus', "")
-                        executionId = item['execution_id']
+                        executionId = item['executionId']
 
                         #If we don't have start/stop information, this means we could still have a running process (or now stopped).
                         # Fetch it from step functions.
@@ -107,27 +112,24 @@ def get_executions(asset_id, workflow_id, query_params):
                                 table = dynamodb.Table(workflow_execution_database)
                                 table.put_item(
                                     Item={
-                                        'pk': f'{asset_id}-{workflow_id}',
-                                        'sk': item['execution_id'],
-                                        'database_id': asset_of_workflow.get("databaseId"),
-                                        'asset_id': asset_id,
-                                        'workflow_id': workflow_id,
+                                        'assetId': f'{asset_id}',
+                                        'workflowId': item['workflowId'],
+                                        'executionId': item['executionId'],
+                                        'databaseId': asset_of_workflow.get("databaseId"),
                                         'workflow_arn': workflow_arn,
                                         'execution_arn': execution_arn,
-                                        'execution_id': item['execution_id'],
                                         'startDate': startDate,
                                         'stopDate': stopDate,
                                         'executionStatus': execution['status'],
-                                        'assets': []
                                     }
                                 )
 
                         result["Items"].append({
+                            'workflowId': item['workflowId'],
                             'executionId': executionId,
                             'executionStatus': executionStatus,
                             'startDate': startDate,
                             'stopDate': stopDate,
-                            'Items': assets
                         })
             except Exception as e:
                 logger.exception(e)
@@ -158,13 +160,17 @@ def lambda_handler(event, context):
     #Set 50 maxitems/page size to avoid performance issues with state machine API call throttling
     validate_pagination_info(queryParameters, 50)
 
+    #Workflow ID not required in path parameters (get all workflow executions for asset)
+    workflowId = pathParams.get('workflowId', '')
+
     try:
 
         logger.info("Validating Parameters")
         (valid, message) = validate({
             'workflowId': {
-                'value': pathParams.get('workflowId', ''),
-                'validator': 'ID'
+                'value': workflowId,
+                'validator': 'ID',
+                'optional': True
             },
             'assetId': {
                 'value': pathParams.get('assetId', ''),
@@ -187,7 +193,7 @@ def lambda_handler(event, context):
 
         if method_allowed_on_api:
             logger.info("Listing Workflow Executions")
-            result = get_executions(pathParams['assetId'], pathParams['workflowId'], queryParameters)
+            result = get_executions(pathParams['assetId'], workflowId, queryParameters)
             response['body'] = json.dumps({"message": result['message']})
             response['statusCode'] = result['statusCode']
             logger.info(response)

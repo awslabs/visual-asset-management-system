@@ -55,31 +55,31 @@ def _lambda_create_metadata(payload): return client.invoke(FunctionName=create_m
 def _lambda_file_ingestion(payload): return client.invoke(FunctionName=file_upload_function,
                                            InvocationType='RequestResponse', Payload=json.dumps(payload).encode('utf-8'))
 
-def attach_execution_assets(assets, execution_id, database_id, asset_id, workflow_id):
-    logger.info("Attaching assets to execution")
+# def attach_execution_assets(assets, execution_id, database_id, asset_id, workflow_id):
+#     logger.info("Attaching assets to execution")
 
-    asset_table = dynamodb.Table(asset_Database)
-    all_assets = assets
+#     asset_table = dynamodb.Table(asset_Database)
+#     all_assets = assets
 
-    source_assets = asset_table.query(
-        KeyConditionExpression=Key('databaseId').eq(database_id) & Key('assetId').begins_with(
-            asset_id))
-    logger.info("Source assets: ")
-    logger.info(source_assets)
-    if source_assets['Items']:
-        all_assets.append(source_assets['Items'][0])
+#     source_assets = asset_table.query(
+#         KeyConditionExpression=Key('databaseId').eq(database_id) & Key('assetId').begins_with(
+#             asset_id))
+#     logger.info("Source assets: ")
+#     logger.info(source_assets)
+#     if source_assets['Items']:
+#         all_assets.append(source_assets['Items'][0])
 
-    table = dynamodb.Table(workflow_execution_database)
-    pk = f'{asset_id}-{workflow_id}'
+#     table = dynamodb.Table(workflow_execution_database)
+#     pk = f'{asset_id}-{workflow_id}'
 
-    table.update_item(
-        Key={'pk': pk, 'sk': execution_id},
-        UpdateExpression='SET #attr1 = :val1',
-        ExpressionAttributeNames={'#attr1': 'assets'},
-        ExpressionAttributeValues={':val1': all_assets}
-    )
+#     table.update_item(
+#         Key={'pk': pk, 'sk': execution_id},
+#         UpdateExpression='SET #attr1 = :val1',
+#         ExpressionAttributeNames={'#attr1': 'assets'},
+#         ExpressionAttributeValues={':val1': all_assets}
+#     )
 
-    return
+#     return
 
 
 def verify_get_path_objects(bucketName: str, pathPrefix: str):
@@ -563,23 +563,23 @@ def lambda_handler(event, context):
                                 requestContext
                             )
                             
-                            if result and "assetType" in result:
-                                # Create a simplified asset object for attachment
-                                asset = {
-                                    "databaseId": event['databaseId'],
-                                    "assetId": event['assetId'],
-                                    "assetType": result["assetType"],
-                                    "version": result["version"],
-                                    "pipeline": event.get('pipeline', ''),
-                                    "executionId": event.get('executionId', '')
-                                }
-                                assets.append(asset)
-                                logger.info("Asset file upload completed successfully")
-                            else:
-                                logger.error("Asset file upload failed or returned incomplete data")
+                            # if result and "assetType" in result:
+                            #     # Create a simplified asset object for attachment
+                            #     asset = {
+                            #         "databaseId": event['databaseId'],
+                            #         "assetId": event['assetId'],
+                            #         "assetType": result["assetType"],
+                            #         "version": result["version"],
+                            #         "pipeline": event.get('pipeline', ''),
+                            #         "executionId": event.get('executionId', '')
+                            #     }
+                            #     assets.append(asset)
+                            #     logger.info("Asset file upload completed successfully")
+                            # else:
+                            #     logger.error("Asset file upload failed or returned incomplete data")
                                 
-                            # Attach assets to execution record
-                            attach_execution_assets(assets, event['executionId'], event['databaseId'], event['assetId'], event['workflowId'])
+                            # # Attach assets to execution record
+                            # attach_execution_assets(assets, event['executionId'], event['databaseId'], event['assetId'], event['workflowId'])
                         except Exception as e:
                             logger.exception(f"Error processing asset file upload: {e}")
                     else:

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useReducer, useState } from "react";
+import React, { useEffect, useReducer, useState, useCallback } from "react";
 import {
   Alert,
   Box,
@@ -230,6 +230,14 @@ export default function ViewAsset() {
     setWorkflowOpen(true);
   };
 
+  // State to trigger workflow tab refresh
+  const [workflowRefreshTrigger, setWorkflowRefreshTrigger] = useState(0);
+  
+  // Function to refresh the workflow tab
+  const refreshWorkflowTab = useCallback(() => {
+    setWorkflowRefreshTrigger(prev => prev + 1);
+  }, []);
+
   return (
     <AssetDetailContext.Provider value={{ state, dispatch }}>
       <StatusMessageProvider>
@@ -287,6 +295,7 @@ export default function ViewAsset() {
                   databaseId={databaseId || ""}
                   loadingFiles={loadingAssetFiles}
                   onExecuteWorkflow={handleExecuteWorkflow}
+                  onWorkflowExecuted={refreshWorkflowTab}
                 />
 
                 {/* Asset Links */}
@@ -328,6 +337,7 @@ export default function ViewAsset() {
           open={workflowOpen}
           setOpen={setWorkflowOpen}
           assetFiles={assetFiles}
+          onWorkflowExecuted={refreshWorkflowTab}
         />
 
         <AssetDeleteModal

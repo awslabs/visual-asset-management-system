@@ -15,7 +15,8 @@ import {
     Alert,
     Spinner
 } from '@cloudscape-design/components';
-import { getFileVersions, downloadAsset, revertFileVersion } from '../../../services/APIService';
+import { downloadAsset, revertFileVersion } from '../../../services/APIService';
+import { fetchFileVersions } from '../../../services/AssetVersionService';
 import { useNavigate } from 'react-router';
 
 // TypeScript interfaces
@@ -156,7 +157,7 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
         setError(null);
         
         try {
-            const [success, response] = await getFileVersions({
+            const [success, response] = await fetchFileVersions({
                 databaseId,
                 assetId,
                 filePath

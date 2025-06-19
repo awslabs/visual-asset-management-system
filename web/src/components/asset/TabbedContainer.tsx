@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Suspense, useState } from "react";
+import React, { Suspense, useState, useCallback } from "react";
 import { Container, Header, Tabs } from "@cloudscape-design/components";
 import ErrorBoundary from "../common/ErrorBoundary";
 import { LoadingSpinner } from "../common/LoadingSpinner";
@@ -22,6 +22,7 @@ interface TabbedContainerProps {
   databaseId: string;
   loadingFiles: boolean;
   onExecuteWorkflow: () => void;
+  onWorkflowExecuted?: () => void; // Callback when workflow execution is complete
 }
 
 export const TabbedContainer: React.FC<TabbedContainerProps> = ({
@@ -31,8 +32,18 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
   databaseId,
   loadingFiles,
   onExecuteWorkflow,
+  onWorkflowExecuted,
 }) => {
   const [activeTabId, setActiveTabId] = useState("file-manager");
+  const [workflowRefreshTrigger, setWorkflowRefreshTrigger] = useState(0);
+  
+  // Function to refresh the workflow tab
+  const refreshWorkflowTab = useCallback(() => {
+    setWorkflowRefreshTrigger(prev => prev + 1);
+    if (onWorkflowExecuted) {
+      onWorkflowExecuted();
+    }
+  }, [onWorkflowExecuted]);
 
   return (
     <ErrorBoundary componentName="Tabbed Container">
@@ -67,6 +78,7 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                     assetId={assetId}
                     isActive={activeTabId === "workflows"}
                     onExecuteWorkflow={onExecuteWorkflow}
+                    refreshTrigger={workflowRefreshTrigger}
                   />
                 </Suspense>
               ),

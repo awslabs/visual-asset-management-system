@@ -214,7 +214,8 @@ def get_handler(event, response, pathParameters, queryParameters, showDeleted):
             (valid, message) = validate({
                 'databaseId': {
                     'value': pathParameters['databaseId'],
-                    'validator': 'ID'
+                    'validator': 'ID',
+                    'allowGlobalKeyword': True
                 },
             })
             if not valid:
@@ -247,7 +248,8 @@ def get_handler(event, response, pathParameters, queryParameters, showDeleted):
         (valid, message) = validate({
             'databaseId': {
                 'value': pathParameters['databaseId'],
-                'validator': 'ID'
+                'validator': 'ID',
+                'allowGlobalKeyword': True
             },
             'pipelineId': {
                 'value': pathParameters['pipelineId'],
@@ -280,7 +282,8 @@ def delete_handler(event, response, pathParameters, queryParameters):
         (valid, message) = validate({
             parameter: {
                 'value': pathParameters[parameter],
-                'validator': 'ID'
+                'validator': 'ID',
+                'allowGlobalKeyword': True
             }
         })
         if not valid:

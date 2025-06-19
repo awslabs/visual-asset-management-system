@@ -34,22 +34,16 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
                 if (!item.name) {
                     return <></>;
                 }
-                if (!item.workflowId) {
-                    if (
-                        !item.Items ||
-                        !Array.isArray(item.Items) ||
-                        !Array.isArray(item.Items[0]) ||
-                        item.Items[0].length === 0
-                    ) {
-                        return <>Execution ID:</>;
-                    }
-                    return <>outputs:</>;
+                // If this is a workflow (has no parentId), make it a link
+                if (!item.parentId) {
+                    return (
+                        <Link href={`#/databases/${item?.databaseId}/workflows/${item?.name}`}>
+                            {props.children}
+                        </Link>
+                    );
                 }
-                return (
-                    <Link href={`#/databases/${item?.databaseId}/workflows/${item?.name}`}>
-                        {props.children}
-                    </Link>
-                );
+                // If this is an execution (has parentId), don't make it a link
+                return <>{props.children}</>;
             },
             sortingField: "assetName",
         }),

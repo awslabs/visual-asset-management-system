@@ -274,8 +274,12 @@ def create_lambda_step(pipeline, input_s3_asset_file_uri, output_s3_asset_files_
             "outputS3AssetFilesPath.$": output_s3_asset_files_uri,
             "outputS3AssetPreviewPath.$": output_s3_asset_preview_uri,
             "outputS3AssetMetadataPath.$": output_s3_asset_metadata_uri,
-            "outputType": pipeline["outputType"],
             "inputOutputS3AssetAuxiliaryFilesPath.$": inputOutput_s3_assetAuxiliary_files_uri,
+            "bucketAssetAuxiliary.$": "$.bucketAssetAuxiliary",
+            "bucketAsset.$": "$.bucketAsset",
+            "inputAssetFileKey.$": "$.inputAssetFileKey",
+            "outputType": pipeline["outputType"],
+            
             "inputMetadata.$": "$.inputMetadata",
             "inputParameters": inputParameters,
             "executingUserName.$": "$.executingUserName",
@@ -378,7 +382,8 @@ def lambda_handler(event, context):
             (valid, message) = validate({
                 'databaseId': {
                     'value': event['body']['databaseId'],
-                    'validator': 'ID'
+                    'validator': 'ID',
+                    'allowGlobalKeyword': True
                 },
                 'pipelineId': {
                     'value': pipelineArray,

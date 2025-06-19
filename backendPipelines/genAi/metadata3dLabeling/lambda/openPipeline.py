@@ -17,6 +17,16 @@ sfn = boto3.client(
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
 
+external_sfn_task_token = ""
+
+def abort_external_workflow(error):
+    if (external_sfn_task_token != None and external_sfn_task_token != ""):
+        sfn.send_task_failure(
+            taskToken=external_sfn_task_token,
+            error='Pipeline Failure: ' + error,
+            cause='See AWS cloudwatch logs for error cause.'
+        )
+
 
 def lambda_handler(event, context):
     """
@@ -58,6 +68,7 @@ def lambda_handler(event, context):
 
     # Check to make sure we are working with the right file types (if not, exit)
     if (extension.lower() not in ALLOWED_INPUT_FILEEXTENSIONS):
+        abort_external_workflow("Pipeline cannot process file type provided")
         return {
             'statusCode': 400,
             'body': {
@@ -105,6 +116,7 @@ def lambda_handler(event, context):
             }
         })
     except Exception as e:
+        abort_external_workflow("Internal Server Error")
         logger.exception(e)
         responses.append({
             'statusCode': 500,

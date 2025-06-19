@@ -42,6 +42,7 @@ retry_config = Config(
 
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
+lambda_client = boto3.client('lambda', config=retry_config)
 s3 = boto3.client('s3', config=retry_config)
 logger = safeLogger(service_name="AssetService")
 
@@ -60,6 +61,7 @@ try:
     asset_versions_table_name = os.environ.get("ASSET_VERSIONS_STORAGE_TABLE_NAME")
     asset_versions_files_table_name = os.environ.get("ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME")
     comment_table_name = os.environ.get("COMMENT_STORAGE_TABLE_NAME")
+    send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
     
 except Exception as e:
     logger.exception("Failed loading environment variables")
@@ -78,6 +80,20 @@ asset_versions_files_table = dynamodb.Table(asset_versions_files_table_name) if 
 #######################
 # Version Functions
 #######################
+
+def send_subscription_email(asset_id):
+    """Send email notifications to subscribers when an asset is updated"""
+    try:
+        payload = {
+            'asset_id': asset_id,
+        }
+        lambda_client.invoke(
+            FunctionName=send_email_function_name,
+            InvocationType='Event',
+            Payload=json.dumps(payload)
+        )
+    except Exception as e:
+        logger.exception(f"Error invoking send_email Lambda function: {e}")
 
 def get_current_version_info(asset):
     """Get current version information from asset versions table
@@ -103,7 +119,7 @@ def get_current_version_info(asset):
             version_item = response['Item']
             # Create CurrentVersionModel instance
             return CurrentVersionModel(
-                Version=version_item.get('versionNumber', '0'),
+                Version=version_item.get('assetVersionId', '0'),
                 DateModified=version_item.get('dateCreated', ''),
                 Comment=version_item.get('comment', ''),
                 description=version_item.get('description', ''),
@@ -583,6 +599,9 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
         # Create response
         timestamp = datetime.utcnow().isoformat()
         
+        #send email for asset file change
+        send_subscription_email(assetId)
+
         return AssetOperationResponseModel(
             success=True,
             message="Asset updated successfully",
@@ -657,6 +676,9 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
         
         # Update asset count
         update_asset_count(db_database, asset_database, {}, databaseId)
+
+        #send email for asset file change
+        send_subscription_email(assetId)
         
         # Return success response
         return AssetOperationResponseModel(
@@ -707,6 +729,9 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
             "s3_objects": [],
             "dynamodb_tables": []
         }
+
+        #send email for asset file change
+        send_subscription_email(assetId)
         
         # 1. Delete all S3 objects (assets files and preview)
         if "assetLocation" in asset and "Key" in asset["assetLocation"]:

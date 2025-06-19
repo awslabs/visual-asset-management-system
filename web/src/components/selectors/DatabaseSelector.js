@@ -8,6 +8,7 @@ import { fetchAllDatabases } from "../../services/APIService";
 import { Select } from "@cloudscape-design/components";
 
 const DatabaseSelector = (props) => {
+    const { showGlobal = false, ...restProps } = props;
     const [reload, setReload] = useState(true);
     const [allItems, setAllItems] = useState([]);
 
@@ -26,9 +27,9 @@ const DatabaseSelector = (props) => {
 
     return (
         <Select
-            {...props}
+            {...restProps}
             options={[
-                { label: "Global", value: "" },
+                ...(showGlobal ? [{ label: "Global", value: "" }] : []),
                 ...allItems.map((item) => {
                     return {
                         label: item.databaseId,

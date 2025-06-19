@@ -469,6 +469,7 @@ def get_asset_file_versions(assetId: str, assetVersionId: str) -> Optional[Dict]
             files.append(file_info)
         
         # Return in the original format for backward compatibility
+        logger.info(f"Returning asset file versions: {files}")
         return {
             'assetId': assetId,
             'assetVersionId': assetVersionId,
@@ -507,7 +508,7 @@ def get_asset_version_file_count(assetId: str, assetVersionId: str) -> int:
         logger.exception(f"Error getting asset version file count: {e}")
         return 0
 
-def save_asset_version_metadata(assetId: str, assetVersionId: str, version_number: str, 
+def save_asset_version_metadata(assetId: str, assetVersionId: str,
                                comment: str, description: str, created_by: str) -> bool:
     """Save asset version metadata to the asset versions table
     
@@ -529,14 +530,11 @@ def save_asset_version_metadata(assetId: str, assetVersionId: str, version_numbe
         version_record = {
             'assetId': assetId,
             'assetVersionId': assetVersionId,
-            'versionNumber': version_number,
             'dateCreated': now,
             'comment': comment,
             'description': description,
-            'createdBy': created_by,
-            'isCurrentVersion': True,  # This will be updated when new versions are created
             'specifiedPipelines': [],
-            'createdAt': now
+            'createdBy': created_by,
         }
         
         # Save to asset versions table
@@ -589,7 +587,7 @@ def get_all_asset_versions(assetId: str) -> List[Dict]:
         versions = response.get('Items', [])
         
         # Sort by version number (descending)
-        versions.sort(key=lambda x: int(x.get('versionNumber', '0')), reverse=True)
+        versions.sort(key=lambda x: int(x.get('assetVersionId', '0').replace('v', '')), reverse=True)
         
         return versions
         
@@ -597,19 +595,19 @@ def get_all_asset_versions(assetId: str) -> List[Dict]:
         logger.exception(f"Error getting all asset versions: {e}")
         return []
 
-def update_current_version_reference(asset: Dict, new_version_id: str) -> bool:
+def update_current_version_reference(asset: Dict, new_assetVersionId: str) -> bool:
     """Update the asset's currentVersionId reference
     
     Args:
         asset: The asset dictionary
-        new_version_id: The new current version ID
+        new_assetVersionId: The new current asset version ID
         
     Returns:
         True if successful, False otherwise
     """
     try:
         # Update only the currentVersionId field
-        asset['currentVersionId'] = new_version_id
+        asset['currentVersionId'] = new_assetVersionId
         
         # Remove legacy version fields if they exist
         if 'currentVersion' in asset:
@@ -625,12 +623,12 @@ def update_current_version_reference(asset: Dict, new_version_id: str) -> bool:
         logger.exception(f"Error updating current version reference: {e}")
         return False
 
-def mark_version_as_current(assetId: str, new_current_version_id: str) -> bool:
+def mark_version_as_current(assetId: str, new_assetVersionId: str) -> bool:
     """Mark a version as current and unmark previous current version
     
     Args:
         assetId: The asset ID
-        new_current_version_id: The version ID to mark as current
+        new_assetVersionId: The version ID to mark as current
         
     Returns:
         True if successful, False otherwise
@@ -642,7 +640,7 @@ def mark_version_as_current(assetId: str, new_current_version_id: str) -> bool:
         # Update isCurrentVersion flag for all versions
         for version in versions:
             version_id = version['assetVersionId']
-            is_current = (version_id == new_current_version_id)
+            is_current = (version_id == new_assetVersionId)
             
             # Update the version record
             asset_versions_table.update_item(
@@ -662,12 +660,12 @@ def mark_version_as_current(assetId: str, new_current_version_id: str) -> bool:
         logger.exception(f"Error marking version as current: {e}")
         return False
 
-def update_asset_version_metadata(asset: Dict, new_version_number: str, comment: Optional[str] = None, created_by: str = 'system') -> Dict:
-    """Update asset's version tracking metadata using new asset versions table
+def update_asset_version_metadata(asset: Dict, new_assetVersionId: str, comment: Optional[str] = None, created_by: str = 'system') -> Dict:
+    """Update asset's version tracking metadata using asset versions table
     
     Args:
         asset: The asset dictionary
-        new_version_number: The new version number
+        new_assetVersionId: The new asset version number
         comment: Optional comment for the version
         created_by: Username who created the version
         
@@ -675,26 +673,24 @@ def update_asset_version_metadata(asset: Dict, new_version_number: str, comment:
         Updated asset dictionary
     """
     asset_id = asset['assetId']
-    new_version_id = f"v{new_version_number}"
     
     # Mark previous current version as not current in asset versions table
     current_version_id = asset.get('currentVersionId')
     if current_version_id:
-        mark_version_as_current(asset_id, new_version_id)
+        mark_version_as_current(asset_id, new_assetVersionId)
     
     # Save new version metadata to asset versions table (which also sets current version)
     success = save_asset_version_metadata(
         asset_id,
-        new_version_id,
-        new_version_number,
-        comment if comment else f"Version {new_version_number}",
+        new_assetVersionId,
+        comment if comment else f"Version {new_assetVersionId}",
         asset.get('description', ''),
         created_by
     )
     
 
     # Update asset's tables current version reference
-    update_current_version_reference(asset, new_version_id)
+    update_current_version_reference(asset, new_assetVersionId)
     return asset
 
 
@@ -722,7 +718,7 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
     bucket, prefix = get_asset_s3_location(asset)
     
     # Determine next version number
-    current_version = int(asset.get('currentVersionId', '0'))
+    current_version = asset.get('currentVersionId', '0')
 
     #strip out all letters from current version. If the stripped version cannot be converted to an integer, assume the currentVersionId is 0.
     try:
@@ -730,10 +726,10 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
         logger.info(f"Current version: {current_version}")
     except Exception as e:
         current_version = 0
-        logger.info(f"Could not parse existing version number, setting current to: {current_version}")
+        logger.warning(f"Could not parse existing version number, setting current to: {current_version}")
     
     new_version = current_version + 1
-    new_version_id = f"{new_version}"
+    new_assetVersionId = f"{new_version}"
     
     # Get files based on request
     files_to_version = []
@@ -788,12 +784,15 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
         raise VAMSGeneralErrorResponse("No valid files found for versioning")
     
     # Save file versions to DynamoDB
-    if not save_asset_file_versions(assetId, new_version_id, files_to_version):
+    if not save_asset_file_versions(assetId, new_assetVersionId, files_to_version):
         raise VAMSGeneralErrorResponse("Failed to save file versions")
     
     # Update asset version metadata
     username = claims_and_roles.get("tokens", ["system"])[0]
-    updated_asset = update_asset_version_metadata(asset, new_version, request_model.comment, username)
+    updated_asset = update_asset_version_metadata(asset, new_assetVersionId, request_model.comment, username)
+
+    #Send email for new version
+    send_subscription_email(assetId)
     
     # Return response
     now = datetime.utcnow().isoformat()
@@ -801,8 +800,7 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
         success=True,
         message=f"Successfully created version {new_version} with {len(files_to_version)} files",
         assetId=assetId,
-        assetVersionId=new_version_id,
-        versionNumber=new_version,
+        assetVersionId=new_assetVersionId,
         operation="create",
         timestamp=now,
         skippedFiles=skipped_files if skipped_files else None
@@ -837,9 +835,18 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
     current_files_by_key = {file['relativeKey']: file for file in current_files}
     
     # Determine next version number
-    current_version = int(asset.get('currentVersion', {}).get('Version', '0'))
-    new_version = str(current_version + 1)
-    new_version_id = f"v{new_version}"
+    current_version = asset.get('currentVersionId', '0')
+
+    #strip out all letters from current version. If the stripped version cannot be converted to an integer, assume the currentVersionId is 0.
+    try:
+        current_version = int(str(current_version).replace('v', ''))
+        logger.info(f"Current version: {current_version}")
+    except Exception as e:
+        current_version = 0
+        logger.warning(f"Could not parse existing version number, setting current to: {current_version}")
+    
+    new_version = current_version + 1
+    new_assetVersionId = f"{new_version}"
     
     # Process files
     files_to_version = []
@@ -877,7 +884,7 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
         raise VAMSGeneralErrorResponse("No files could be reverted")
     
     # Save file versions to DynamoDB
-    if not save_asset_file_versions(assetId, new_version_id, files_to_version):
+    if not save_asset_file_versions(assetId, new_assetVersionId, files_to_version):
         raise VAMSGeneralErrorResponse("Failed to save file versions")
     
     #Get user of request
@@ -885,7 +892,10 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
 
     # Update asset version metadata
     comment = request_model.comment if request_model.comment else f"Reverted to version {request_model.assetVersionId}"
-    updated_asset = update_asset_version_metadata(asset, new_version, comment, username)
+    updated_asset = update_asset_version_metadata(asset, new_assetVersionId, comment, username)
+
+    #Send email for asset version change
+    send_subscription_email(assetId)
     
     # Return response
     now = datetime.utcnow().isoformat()
@@ -893,8 +903,7 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
         success=True,
         message=f"Successfully reverted to version {request_model.assetVersionId} with {len(files_to_version)} files",
         assetId=assetId,
-        assetVersionId=new_version_id,
-        versionNumber=new_version,
+        assetVersionId=new_assetVersionId,
         operation="revert",
         timestamp=now,
         skippedFiles=skipped_files if skipped_files else None
@@ -923,10 +932,10 @@ def get_asset_versions(databaseId: str, assetId: str, query_params: Dict,
     for version in all_versions:
         try:
             # Get file count for this version
-            file_count = get_asset_version_file_count(assetId, version.get('assetVersionId', f"v{version.get('versionNumber', '0')}"))
+            file_count = get_asset_version_file_count(assetId, version.get('assetVersionId'))
             
             version_item = AssetVersionListItemModel(
-                Version=version.get('versionNumber', '0'),
+                Version=version.get('assetVersionId', '0'),
                 DateModified=version.get('dateCreated', ''),
                 Comment=version.get('comment', ''),
                 description=version.get('description', ''),
@@ -937,7 +946,7 @@ def get_asset_versions(databaseId: str, assetId: str, query_params: Dict,
             )
             versions.append(version_item)
         except Exception as e:
-            logger.warning(f"Error creating version model for version {version.get('versionNumber', 'unknown')}: {e}")
+            logger.warning(f"Error returning asset response model for version {version.get('assetVersionId', 'unknown')}: {e}")
             # Skip invalid versions
             continue
     
@@ -986,21 +995,13 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
     
     # Get version information from asset
     version_info = None
-    version_number = None
     version_id = request_model.assetVersionId
-    
-    # Normalize version ID format
-    if version_id.startswith('v'):
-        version_number = version_id[1:]
-    else:
-        version_number = version_id
-        version_id = f"v{version_number}"
     
     # Try to get from new asset versions table
     version_metadata = get_asset_version_metadata(assetId, version_id)
     if version_metadata:
         version_info = {
-            'Version': version_metadata.get('versionNumber', version_number),
+            'Version': version_metadata.get('assetVersionId', version_id),
             'DateModified': version_metadata.get('dateCreated', ''),
             'Comment': version_metadata.get('comment', ''),
             'description': version_metadata.get('description', ''),
@@ -1014,7 +1015,7 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
     file_versions = get_asset_file_versions(assetId, version_id)
     
     if not file_versions:
-        # For older versions that might not have entries in the file versions table
+        # For asset versions that might not have entries in the file versions table
         file_versions = {'files': []}
     
     # Get asset location for checking file existence
@@ -1050,7 +1051,6 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
     return AssetVersionResponseModel(
         assetId=assetId,
         assetVersionId=version_id,
-        versionNumber=version_number,
         dateCreated=version_info.get('DateModified', ''),
         comment=version_info.get('Comment', ''),
         files=files,

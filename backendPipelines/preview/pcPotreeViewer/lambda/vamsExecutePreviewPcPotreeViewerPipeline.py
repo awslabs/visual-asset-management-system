@@ -95,7 +95,7 @@ def lambda_handler(event, context):
 
         logger.info(data)
 
-        inputOutputS3AssetAuxiliaryFilesPath = f"s3://{data['bucketAssetAuxiliary']}/{data['inputS3AssetFilePath']}/preview/PotreeViewer" #override to proper preview location output
+        inputOutputS3AssetAuxiliaryFilesPath = f"s3://{data['bucketAssetAuxiliary']}/{data['inputAssetFileKey']}/preview/PotreeViewer" #override to proper preview location output
 
         # Starts excution of pipeline   
         execute_pipeline(data['inputS3AssetFilePath'], '', '', '', inputOutputS3AssetAuxiliaryFilesPath

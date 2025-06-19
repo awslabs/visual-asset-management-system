@@ -1098,6 +1098,9 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
             raise VAMSGeneralErrorResponse(f"Failed to delete file: {file_path}")
         
         affected_files.append(file_path)
+
+    #send email for asset file change
+    send_subscription_email(assetId)
     
     # Return response
     return FileOperationResponseModel(
@@ -1179,6 +1182,9 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
             raise VAMSGeneralErrorResponse(f"Failed to archive file: {file_path}")
         
         affected_files.append(file_path)
+
+    #send email for asset file change
+    send_subscription_email(assetId)
     
     # Return response
     return FileOperationResponseModel(
@@ -1280,6 +1286,9 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
         )
         
         new_version_id = copy_response.get('VersionId', 'null')
+
+        #send email for asset file change
+        send_subscription_email(assetId)
         
         # Return response
         return FileOperationResponseModel(
@@ -1354,6 +1363,9 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     
     # Copy auxiliary files if they exist
     copy_auxiliary_files(source_key, dest_key)
+
+    #send email for asset file change
+    send_subscription_email(dest_asset_id)
     
     # Return response
     affected_files = [dest_path]
@@ -1411,6 +1423,9 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     
     # Move auxiliary files if they exist
     move_auxiliary_files(source_key, dest_key)
+
+    #send email for asset file change
+    send_subscription_email(assetId)
     
     # Return response
     affected_files = [source_path, dest_path]
@@ -1495,6 +1510,9 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
 
     #Delete aux files for asset as they don't match anymore with the version. 
     delete_assetAuxiliary_files(full_key)
+
+    #send email for asset file change
+    send_subscription_email(assetId)
     
     # Return response
     affected_files = [file_path]

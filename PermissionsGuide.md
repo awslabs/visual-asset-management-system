@@ -249,7 +249,10 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
 -   -   `Workflow` (databaseId, workflowId) - POST (api: POST)
 -   -   `Pipeline` (databaseId, pipelineId, pipelineType, pipelineExecutionType) - POST (api: POST)
--   `/database/{databaseId}/assets/{assetId}/workflows/{workflowId}/executions` - GET
+-   `/database/{databaseId}/assets/{assetId}/workflows/executions` - GET
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
+-   -   `Workflow` (databaseId, workflowId) - GET (api: GET)
+-   `/database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   -   `Workflow` (databaseId, workflowId) - GET (api: GET)
 -   `/database/{databaseId}/pipelines` - GET
