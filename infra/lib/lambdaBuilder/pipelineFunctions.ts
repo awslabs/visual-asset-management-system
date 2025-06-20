@@ -140,7 +140,7 @@ export function buildCreatePipelineFunction(
 
 function createRoleToAttachToLambdaPipelines(
     scope: Construct,
-    assetBucket: s3.Bucket,
+    assetBucket: s3.IBucket,
     kmsKey?: kms.IKey
 ) {
     const newPipelineLambdaRole = new iam.Role(scope, "lambdaPipelineRole", {

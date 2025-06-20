@@ -26,8 +26,8 @@ import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/secu
 export function buildSnsExecutePcPotreeViewerPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    assetBucket: s3.Bucket,
-    assetAuxiliaryBucket: s3.Bucket,
+    assetBucket: s3.IBucket,
+    assetAuxiliaryBucket: s3.IBucket,
     openPipelineLambdaFunction: lambda.IFunction,
     config: Config.Config,
     vpc: ec2.IVpc,
@@ -74,8 +74,8 @@ export function buildSnsExecutePcPotreeViewerPipelineFunction(
 export function buildVamsExecutePcPotreeViewerPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    assetBucket: s3.Bucket,
-    assetAuxiliaryBucket: s3.Bucket,
+    assetBucket: s3.IBucket,
+    assetAuxiliaryBucket: s3.IBucket,
     openPipelineLambdaFunction: lambda.IFunction,
     config: Config.Config,
     vpc: ec2.IVpc,
@@ -121,8 +121,8 @@ export function buildVamsExecutePcPotreeViewerPipelineFunction(
 export function buildOpenPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    assetBucket: s3.Bucket,
-    assetAuxiliaryBucket: s3.Bucket,
+    assetBucket: s3.IBucket,
+    assetAuxiliaryBucket: s3.IBucket,
     pipelineStateMachine: sfn.StateMachine,
     allowedPipelineInputExtensions: string,
     config: Config.Config,
@@ -220,8 +220,8 @@ export function buildConstructPipelineFunction(
 export function buildPipelineEndFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    assetBucket: s3.Bucket,
-    assetAuxiliaryBucket: s3.Bucket,
+    assetBucket: s3.IBucket,
+    assetAuxiliaryBucket: s3.IBucket,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],

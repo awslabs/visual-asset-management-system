@@ -365,7 +365,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
 
 export function buildWorkflowRole(
     scope: Construct,
-    assetStorageBucket: s3.Bucket,
+    assetStorageBucket: s3.IBucket,
     processWorkflowExecutionOutputFunction: lambda.Function,
     kmsKey?: kms.IKey
 ): iam.Role {

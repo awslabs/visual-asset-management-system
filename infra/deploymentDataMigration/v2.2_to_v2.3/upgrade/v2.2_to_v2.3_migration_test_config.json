@@ -1,0 +1,16 @@
+{
+    "assets_table_name": "TestAssetsTable",
+    "asset_versions_table_name": "TestAssetVersionsTable",
+    "asset_bucket_name": "test-asset-bucket",
+    "aws_profile": "test-profile",
+    "aws_region": "us-east-1",
+    "log_level": "DEBUG",
+    "batch_size": 10,
+    "dry_run": true,
+    "comments": [
+        "This is a sample test configuration file for the VAMS v2.2 to v2.3 migration script.",
+        "Use this configuration for testing the migration before running it on production data.",
+        "The dry_run flag is set to true to prevent making any changes to the tables.",
+        "Set dry_run to false when you're ready to run the actual migration."
+    ]
+}

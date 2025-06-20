@@ -61,11 +61,12 @@ asset_version_files_table = dynamodb.Table(asset_version_files_table_name)
 # Utility Functions
 #######################
 
-def send_subscription_email(asset_id):
+def send_subscription_email(database_id, asset_id):
     """Send email notifications to subscribers when an asset is updated"""
     try:
         payload = {
-            'asset_id': asset_id,
+            'databaseId': database_id,
+            'assetId': asset_id,
         }
         lambda_client.invoke(
             FunctionName=send_email_function_name,
@@ -96,7 +97,7 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         asset = response.get('Item', {})
         
         if not asset:
-            raise VAMSGeneralErrorResponse(f"Asset {assetId} not found in database {databaseId}")
+            raise VAMSGeneralErrorResponse(f"Asset {assetId} not found in database {databaseId}. Note: Files cannot be moved cross-database.")
         
         # Check permissions
         asset["object__type"] = "asset"
@@ -1100,7 +1101,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         affected_files.append(file_path)
 
     #send email for asset file change
-    send_subscription_email(assetId)
+    send_subscription_email(databaseId, assetId)
     
     # Return response
     return FileOperationResponseModel(
@@ -1184,7 +1185,7 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
         affected_files.append(file_path)
 
     #send email for asset file change
-    send_subscription_email(assetId)
+    send_subscription_email(databaseId, assetId)
     
     # Return response
     return FileOperationResponseModel(
@@ -1288,7 +1289,7 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
         new_version_id = copy_response.get('VersionId', 'null')
 
         #send email for asset file change
-        send_subscription_email(assetId)
+        send_subscription_email(databaseId, assetId)
         
         # Return response
         return FileOperationResponseModel(
@@ -1365,7 +1366,7 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     copy_auxiliary_files(source_key, dest_key)
 
     #send email for asset file change
-    send_subscription_email(dest_asset_id)
+    send_subscription_email(databaseId, dest_asset_id)
     
     # Return response
     affected_files = [dest_path]
@@ -1425,7 +1426,7 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     move_auxiliary_files(source_key, dest_key)
 
     #send email for asset file change
-    send_subscription_email(assetId)
+    send_subscription_email(databaseId, assetId)
     
     # Return response
     affected_files = [source_path, dest_path]
@@ -1512,7 +1513,7 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
     delete_assetAuxiliary_files(full_key)
 
     #send email for asset file change
-    send_subscription_email(assetId)
+    send_subscription_email(databaseId, assetId)
     
     # Return response
     affected_files = [file_path]

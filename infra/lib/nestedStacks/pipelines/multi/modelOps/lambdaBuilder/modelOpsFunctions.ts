@@ -21,8 +21,8 @@ import * as ServiceHelper from "../../../../../helper/service-helper";
 export function buildVamsExecuteModelOpsFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    assetBucket: s3.Bucket,
-    assetAuxiliaryBucket: s3.Bucket,
+    assetBucket: s3.IBucket,
+    assetAuxiliaryBucket: s3.IBucket,
     openPipelineLambdaFunction: lambda.IFunction,
     config: Config.Config,
     vpc: ec2.IVpc,
@@ -63,8 +63,8 @@ export function buildVamsExecuteModelOpsFunction(
 export function buildOpenPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    assetBucket: s3.Bucket,
-    assetAuxiliaryBucket: s3.Bucket,
+    assetBucket: s3.IBucket,
+    assetAuxiliaryBucket: s3.IBucket,
     pipelineStateMachine: sfn.StateMachine,
     allowedPipelineInputExtensions: string,
     config: Config.Config,
@@ -115,7 +115,7 @@ export function buildConstructPipelineFunction(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
     pipelineSecurityGroups: ec2.ISecurityGroup[],
-    assetAuxiliaryBucket: s3.Bucket,
+    assetAuxiliaryBucket: s3.IBucket,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "constructPipeline";
@@ -163,8 +163,8 @@ export function buildConstructPipelineFunction(
 export function buildPipelineEndFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    assetBucket: s3.Bucket,
-    assetAuxiliaryBucket: s3.Bucket,
+    assetBucket: s3.IBucket,
+    assetAuxiliaryBucket: s3.IBucket,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],

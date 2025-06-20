@@ -73,6 +73,7 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
 -   Updated workflow execution to handle new new asset location keys, bucket, and handling
 -   Created new dynamoDB workflow executions table (old one will remain as deprecated to not lose data) to store better format for lambda storage and retrieval
 -   Modified workflow executions API to '/database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}' and also added '/database/{databaseId}/assets/{assetId}/workflows/executions/' to get all executions for an asset
+-   Subscription SNS topics now store databaseId along with assetId in the topic name to prevent future conflicts
 
 ## [2.2.0] (2025-05-31)
 

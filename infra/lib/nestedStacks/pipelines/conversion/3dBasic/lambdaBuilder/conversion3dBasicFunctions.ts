@@ -23,8 +23,8 @@ import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/secu
 
 export function buildVamsExecute3dBasicConversionPipelineFunction(
     scope: Construct,
-    assetBucket: s3.Bucket,
-    assetAuxiliaryBucket: s3.Bucket,
+    assetBucket: s3.IBucket,
+    assetAuxiliaryBucket: s3.IBucket,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],

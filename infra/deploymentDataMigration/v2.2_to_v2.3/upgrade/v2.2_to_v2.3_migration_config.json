@@ -1,0 +1,16 @@
+{
+    "assets_table_name": "YOUR_ASSETS_TABLE_NAME",
+    "asset_versions_table_name": "YOUR_ASSET_VERSIONS_TABLE_NAME",
+    "asset_bucket_name": "YOUR_ASSET_BUCKET_NAME",
+    "aws_profile": "YOUR_AWS_PROFILE",
+    "aws_region": "YOUR_AWS_REGION",
+    "log_level": "INFO",
+    "batch_size": 25,
+    "dry_run": false,
+    "comments": [
+        "This is a sample configuration file for the VAMS v2.2 to v2.3 migration script.",
+        "Replace the placeholder values with your actual values before running the script.",
+        "The batch_size parameter controls how many items are processed in each batch.",
+        "Set dry_run to true to perform a test run without making any changes."
+    ]
+}

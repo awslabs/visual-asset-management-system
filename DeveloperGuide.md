@@ -323,18 +323,45 @@ The CDK deployment deploys the VAMS stack into your account. The components that
 
 Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-system/blob/main/VAMS_API.yaml) for details
 
-# Database Schema
+# S3 Buckets
 
-| Table                         | Partition Key | Sort Key   | Attributes                                                                                                                        |
-| ----------------------------- | ------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| AppFeatureEnabledStorageTable | featureName   | n/a        |                                                                                                                                   |
-| AssetStorageTable             | databaseId    | assetId    | assetLocation, assetName, assetType, currentVersion, description, generated_artifacts, isDistributable, previewLocation, versions |
-| JobStorageTable               | jobId         | databaseId |                                                                                                                                   |
-| PipelineStorageTable          | databaseId    | pipelineId | assetType, dateCreated, description, enabled, outputType, pipelineType, pipelineExecutionType                                     |
-| DatabaseStorageTable          | databaseId    | n/a        | assetCount, dateCreated, description                                                                                              |
-| WorkflowStorageTable          | databaseId    | workflowId | dateCreated, description, specifiedPipelines, workflow_arn                                                                        |
-| WorkflowExecutionStorageTable | pk            | sk         | asset_id, database_id, execution_arn, execution_id, workflow_arn, workflow_id, assets                                             |
-| MetadataStorageTable          | databaseId    | assetId    | Varies with user provided attributes                                                                                              |
+| Bucket                   | Description                                                                                                                                                                                |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| accessLogsBucket         | For storing access logs from other S3 buckets                                                                                                                                              |
+| assetBucket              | Primary bucket for asset storage                                                                                                                                                           |
+| assetAuxiliaryBucket     | For auto-generated auxiliary working objects associated with asset storage (includes auto-generated previews, visualizer files, temporary storage for pipelines)                            |
+| artefactsBucket          | For storing artefacts                                                                                                                                                                      |
+| assetStagingBucket       | (Optional) For bucket migration staging                                                                                                                                                    |
+| webAppAccessLogsBucket   | For storing web app access logs                                                                                                                                                            |
+| webAppBucket             | For hosting the web application (static content)                                                                                                                                            |
+
+
+# DynamoDB Database Tables and Schema
+
+## Tables
+
+| Table                         | Partition Key         | Sort Key              | Attributes                                                                                                                        |
+| ----------------------------- | --------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| AppFeatureEnabledStorageTable | featureName           | n/a                   |                                                                                                                                   |
+| AssetStorageTable             | databaseId            | assetId               | assetLocation, assetName, assetType, currentVersion, description, generated_artifacts, isDistributable, previewLocation, versions, tags, status |
+| AssetLinksStorageTable        | assetIdFrom           | assetIdTo             |                                                                                                                                   |
+| AssetFileVersionsStorageTable | assetId:assetVersionId| fileKey               |                                                                                                                                   |
+| AssetVersionsStorageTable     | assetId               | assetVersionId        | dateCreated, comment, description, specifiedPipelines, createdBy                                                                  |
+| AssetUploadsStorageTable      | uploadId              | assetId               | databaseId                                                                                                                        |
+| AuthEntitiesStorageTable      | entityType            | sk                    |                                                                                                                                   |
+| CommentStorageTable           | assetId               | assetVersionId:commentId |                                                                                                                                |
+| DatabaseStorageTable          | databaseId            | n/a                   | assetCount, dateCreated, description                                                                                              |
+| MetadataStorageTable          | databaseId            | assetId               | Varies with user provided attributes                                                                                              |
+| MetadataSchemaStorageTable    | databaseId            | field                 |                                                                                                                                   |
+| PipelineStorageTable          | databaseId            | pipelineId            | assetType, dateCreated, description, enabled, outputType, pipelineType, pipelineExecutionType, inputParameters                    |
+| RolesStorageTable             | roleName              | n/a                   |                                                                                                                                   |
+| SubscriptionsStorageTable     | eventName             | entityName_entityId   |                                                                                                                                   |
+| TagStorageTable               | tagName               | n/a                   |                                                                                                                                   |
+| TagTypeStorageTable           | tagTypeName           | n/a                   |                                                                                                                                   |
+| UserRolesStorageTable         | userId                | roleName              |                                                                                                                                   |
+| UserStorageTable              | userId                | n/a                   | email                                                                                                                             |
+| WorkflowStorageTable          | databaseId            | workflowId            | dateCreated, description, specifiedPipelines, workflow_arn                                                                        |
+| WorkflowExecutionStorageTable | assetId               | executionId           | workflowId, databaseId, workflow_arn, execution_arn, startDate, stopDate, executionStatus                                         |
 
 ## AssetStorageTable
 
@@ -393,6 +420,55 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 | executionStatus | String    | Execution final status (if blank, still running)                                |
 | assets          | List, Map | List of Maps of asset objects (see AssetStorageTable for attribute definitions) |
 
+### Global Secondary Indexes
+
+| Index Name      | Partition Key | Sort Key     | Description                                                |
+| --------------- | ------------- | ------------ | ---------------------------------------------------------- |
+| WorkflowIdGSI   | assetId       | workflowId   | For querying executions by asset and workflow              |
+| ExecutionIdGSI  | workflowId    | executionId  | For querying executions by workflow                        |
+
+## AssetLinksStorageTable
+
+| Field       | Data Type | Description                                  |
+| ----------- | --------- | -------------------------------------------- |
+| assetIdFrom | String    | Source asset ID in the relationship          |
+| assetIdTo   | String    | Target asset ID in the relationship          |
+
+### Global Secondary Indexes
+
+| Index Name    | Partition Key | Sort Key | Description                                |
+| ------------- | ------------- | ------- | ------------------------------------------ |
+| AssetIdFromGSI| assetIdFrom   | n/a     | For querying all outgoing links from asset |
+| AssetIdToGSI  | assetIdTo     | n/a     | For querying all incoming links to asset   |
+
+## AssetUploadsStorageTable
+
+| Field      | Data Type | Description                                  |
+| ---------- | --------- | -------------------------------------------- |
+| uploadId   | String    | Unique identifier for the upload             |
+| assetId    | String    | Asset identifier                             |
+| databaseId | String    | Database to which the asset belongs          |
+
+### Global Secondary Indexes
+
+| Index Name    | Partition Key | Sort Key | Description                                |
+| ------------- | ------------- | ------- | ------------------------------------------ |
+| AssetIdGSI    | assetId       | uploadId | For querying uploads by asset              |
+| DatabaseIdGSI | databaseId    | uploadId | For querying uploads by database           |
+
+## SubscriptionsStorageTable
+
+| Field            | Data Type | Description                                  |
+| ---------------- | --------- | -------------------------------------------- |
+| eventName        | String    | Name of the event to subscribe to            |
+| entityName_entityId | String | Combined entity name and ID                  |
+
+### Global Secondary Indexes
+
+| Index Name                      | Partition Key | Sort Key            | Description                                |
+| ------------------------------- | ------------- | ------------------- | ------------------------------------------ |
+| eventName-entityName_entityId-index | eventName | entityName_entityId | For querying subscriptions by event and entity |
+
 ## MetadataStorageTable
 
 | Field       | Data Type | Description                                  |
@@ -407,8 +483,7 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 | userId | String    | (PK) Main user ID associated with profile |
 | email  | String    | Email belonging to the user               |
 
-Attributes are driven by user input. No predetermined fields aside from the partition and sort key.
-From rel 1.4 onwards, when you add metadata on a file / folder, the s3 key prefix of the file/folder is used as the asset key in the metadata table
+
 
 # Updating Backend
 

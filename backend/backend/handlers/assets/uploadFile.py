@@ -265,11 +265,12 @@ def determine_asset_type(assetId, bucket=None, prefix=None):
         logger.exception(f"Error determining asset type: {e}")
         return None
 
-def send_subscription_email(asset_id):
+def send_subscription_email(database_id, asset_id):
     """Send email notifications to subscribers when an asset is updated"""
     try:
         payload = {
-            'asset_id': asset_id,
+            'databaseId': database_id,
+            'assetId': asset_id,
         }
         lambda_client.invoke(
             FunctionName=send_email_function_name,
@@ -676,7 +677,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
         save_asset_details(asset)
         
         # Send notification to subscribers
-        send_subscription_email(assetId)
+        send_subscription_email(databaseId, assetId)
         
     elif uploadType == "assetPreview" and file_results[0].success:
         # Find the successful preview file
@@ -994,7 +995,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
         save_asset_details(asset)
         
         # Send notification to subscribers
-        send_subscription_email(assetId)
+        send_subscription_email(databaseId, assetId)
         
     elif uploadType == "assetPreview" and file_results[0].success:
         # Find the successful preview file

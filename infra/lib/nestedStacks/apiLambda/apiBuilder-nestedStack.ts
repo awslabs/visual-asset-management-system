@@ -147,7 +147,6 @@ export function apiBuilder(
     const createConfigFunction = buildConfigService(
         scope,
         lambdaCommonBaseLayer,
-        storageResources.s3.assetBucket,
         storageResources.dynamo.appFeatureEnabledStorageTable,
         config,
         vpc,

@@ -81,11 +81,12 @@ asset_versions_files_table = dynamodb.Table(asset_versions_files_table_name) if 
 # Version Functions
 #######################
 
-def send_subscription_email(asset_id):
+def send_subscription_email(database_id, asset_id):
     """Send email notifications to subscribers when an asset is updated"""
     try:
         payload = {
-            'asset_id': asset_id,
+            'databaseId': database_id,
+            'assetId': asset_id,
         }
         lambda_client.invoke(
             FunctionName=send_email_function_name,
@@ -600,7 +601,7 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
         timestamp = datetime.utcnow().isoformat()
         
         #send email for asset file change
-        send_subscription_email(assetId)
+        send_subscription_email(databaseId, assetId)
 
         return AssetOperationResponseModel(
             success=True,
@@ -678,7 +679,7 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
         update_asset_count(db_database, asset_database, {}, databaseId)
 
         #send email for asset file change
-        send_subscription_email(assetId)
+        send_subscription_email(databaseId, assetId)
         
         # Return success response
         return AssetOperationResponseModel(
@@ -731,7 +732,7 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         }
 
         #send email for asset file change
-        send_subscription_email(assetId)
+        send_subscription_email(databaseId, assetId)
         
         # 1. Delete all S3 objects (assets files and preview)
         if "assetLocation" in asset and "Key" in asset["assetLocation"]:

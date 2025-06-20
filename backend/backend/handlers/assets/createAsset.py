@@ -57,10 +57,10 @@ def save_asset_details(asset_data):
         logger.exception(f"Error saving asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error saving asset: {str(e)}")
 
-def create_sns_topic_for_asset(asset_id):
+def create_sns_topic_for_asset(database_id, asset_id):
     """Create an SNS topic for an asset"""
     try:
-        topic_response = sns_client.create_topic(Name=f'AssetTopic-{asset_id}')
+        topic_response = sns_client.create_topic(Name=f'AssetTopic{database_id}-{asset_id}')
         return topic_response['TopicArn']
     except Exception as e:
         logger.exception(f"Error creating SNS topic: {e}")
@@ -397,7 +397,7 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles):
         'isDistributable': request_model.isDistributable,
         'tags': request_model.tags if request_model.tags else [],
         'assetType': 'none',  # No files yet
-        'snsTopic': create_sns_topic_for_asset(assetId),
+        'snsTopic': create_sns_topic_for_asset(databaseId, assetId),
         'currentVersionId': initial_version_id,
         'assetLocation' : {
             'Key': s3_key,

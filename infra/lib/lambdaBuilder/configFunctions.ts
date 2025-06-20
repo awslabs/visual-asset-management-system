@@ -22,7 +22,6 @@ import {
 export function buildConfigService(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    assetStorageBucket: s3.Bucket,
     appFeatureEnabledStorageTable: dynamodb.Table,
     config: Config.Config,
     vpc: ec2.IVpc,
@@ -46,7 +45,6 @@ export function buildConfigService(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            ASSET_STORAGE_BUCKET: assetStorageBucket.bucketName,
             APPFEATUREENABLED_STORAGE_TABLE_NAME: appFeatureEnabledStorageTable.tableName,
         },
     });
