@@ -62,6 +62,7 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
 -   Updated API and associated viewers/files for aux asset streaming endpoint from /auxiliaryPreviewAssets/stream/{proxy+} to /auxiliaryPreviewAssets/stream/{assetId}/{proxy+}
     -   Added additional validation checks to make sure users only stream assets that belong to the asset ID provided
 -   Subscription emails for assets will now trigger any time a asset itself changes or versions, or one of its files changes
+-   Added infra configuration option for basic GovCloud IL6 compliance checks for features/services enabled or disabled. 
 
 ### Bug Fixes
 -   Fixed various bugs with asset comments with editing and deleting
