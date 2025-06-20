@@ -166,24 +166,80 @@ export function getConfig(app: cdk.App): Config {
         config.s3AdditionalBucketPolicyJSON = undefined;
     }
 
-    //If we are govCloud, we always use VPC, ALB deploy, use OpenSearch Provisioned (serverless not available in GovCloud), and disable location service (currently not supported in GovCloud 08-29-2023)
+    //If we are govCloud, check for certain features that are required to be on or off. 
     //Note: FIP not required for use in GovCloud. Some GovCloud endpoints are natively FIPS compliant regardless of this flag to use specific FIPS endpoints.
     //Note: FedRAMP best practices require all Lambdas/OpenSearch behind VPC but not required for GovCloud
     if (config.app.govCloud.enabled) {
+        
         if (
-            !config.app.useGlobalVpc.enabled ||
-            !config.app.useAlb.enabled ||
-            config.app.openSearch.useServerless.enabled ||
-            config.app.useLocationService.enabled
+            !config.app.useGlobalVpc.enabled
         ) {
-            console.warn(
-                "Configuration Warning: Due to GovCloud being enabled, auto-enabling Use Global VPC, Use ALB, Use OpenSearch Provisioned, and disable Use Location Services"
+            throw new Error(
+                "Configuration Error: GovCloud must have useGlobalVpc.enabled set to true"
             );
         }
-        config.app.useGlobalVpc.enabled = true;
-        config.app.useAlb.enabled = true;
-        config.app.openSearch.useServerless.enabled = false;
-        config.app.useLocationService.enabled = false;
+
+        if (
+            !config.app.useAlb.enabled
+        ) {
+            throw new Error(
+                "Configuration Error: GovCloud must have app.useAlb.enabled set to true"
+            );
+        }
+
+        if (
+            config.app.openSearch.useServerless.enabled
+        ) {
+            throw new Error(
+                "Configuration Error: GovCloud must have openSearch.useServerless.enabled set to false"
+            );
+        }
+
+        if (
+            config.app.useLocationService.enabled
+        ) {
+            throw new Error(
+                "Configuration Error: GovCloud must have app.useLocationService.enabled set to false"
+            );
+        }
+
+        //Now check additional IL6 compliance
+        // https://aws.amazon.com/compliance/services-in-scope/DoD_CC_SRG/
+        if (config.app.govCloud.il6Compliant) {
+
+            if (
+                config.app.authProvider.useCognito.enabled
+            ) {
+                throw new Error(
+                    "Configuration Error: GovCloud IL6 must have app.authProvider.useCognito.enabled set to false"
+                );
+            }
+
+            if (
+                config.app.useWaf
+            ) {
+                throw new Error(
+                    "Configuration Error: GovCloud IL6 must have config.app.useWaf set to false"
+                );
+            }
+
+            if (
+                !config.app.useGlobalVpc.useForAllLambdas
+            ) {
+                throw new Error(
+                    "Configuration Error: GovCloud IL6 must have app.useGlobalVpc.useForAllLambdas set to true"
+                );
+            }
+
+            if (
+                !config.app.useKmsCmkEncryption.enabled
+            ) {
+                throw new Error(
+                    "Configuration Error: GovCloud IL6 must have config.app.useKmsCmkEncryption.enabled set to true"
+                );
+            }
+
+        }
     }
 
     //If using ALB, data pipelines , or opensearch provisioned, make sure Global VPC is on as this needs to be in a VPC
@@ -441,6 +497,7 @@ export interface ConfigPublic {
         };
         govCloud: {
             enabled: boolean;
+            il6Compliant: boolean;
         };
         useGlobalVpc: {
             enabled: boolean;

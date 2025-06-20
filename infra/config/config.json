@@ -20,7 +20,8 @@
             "optionalExternalCmkArn": null
         },
         "govCloud": {
-            "enabled": false
+            "enabled": false,
+            "il6Compliant": false
         },
         "useGlobalVpc": {
             "enabled": false,
