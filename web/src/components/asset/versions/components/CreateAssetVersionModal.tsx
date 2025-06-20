@@ -15,12 +15,7 @@ import {
     SegmentedControl,
     Container,
     Header,
-    Spinner,
-    Table,
-    Toggle,
-    Checkbox,
-    Badge,
-    Pagination
+    Spinner
 } from '@cloudscape-design/components';
 import { useParams } from 'react-router';
 import { 
@@ -30,43 +25,25 @@ import {
     fetchAssetVersions,
     fetchFileVersions 
 } from '../../../../services/AssetVersionService';
-import { AssetVersion, FileVersion } from '../AssetVersionManager';
+import { FileVersion } from '../AssetVersionManager';
+import { AvailableFilesContainer } from './AvailableFilesContainer';
+import { SelectedFilesContainer } from './SelectedFilesContainer';
+import { FileVersionsContainer } from './FileVersionsContainer';
+import { BaseVersionSelectionContainer } from './BaseVersionSelectionContainer';
+import { 
+    AssetVersion, 
+    S3File, 
+    SelectedFile, 
+    S3FileVersion, 
+    CreationMode 
+} from './types';
+import { normalizePath, formatFileSize, formatDate } from './utils';
 
 interface CreateAssetVersionModalProps {
     visible: boolean;
     onDismiss: () => void;
     onSuccess: () => void;
 }
-
-interface S3File {
-    fileName: string;
-    key: string;
-    relativePath: string;
-    isFolder: boolean;
-    size?: number;
-    dateCreatedCurrentVersion: string;
-    versionId: string;
-    storageClass?: string;
-    isArchived: boolean;
-    currentAssetVersionFileVersionMismatch?: boolean;
-}
-
-interface SelectedFile {
-    relativeKey: string;
-    versionId: string;
-    isArchived: boolean;
-    isCurrent?: boolean;
-}
-
-interface S3FileVersion {
-    versionId: string;
-    lastModified?: string;
-    size?: number;
-    isArchived: boolean;
-    isLatest?: boolean;
-}
-
-type CreationMode = 'current' | 'select' | 'modify';
 
 export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = ({
     visible,
@@ -81,11 +58,6 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
     const [comment, setComment] = useState<string>('');
     const [creationMode, setCreationMode] = useState<CreationMode>('current');
     
-    // Normalize path to ensure consistent format
-    const normalizePath = (path: string): string => {
-        // Remove leading slash if present
-        return path.startsWith('/') ? path.substring(1) : path;
-    };
     
     // Files state
     const [loadingFiles, setLoadingFiles] = useState<boolean>(false);
@@ -279,19 +251,15 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
         return files;
     }, [s3Files, showMismatchedOnly]);
     
-    // Filter selected files for modify mode
+    // Filter selected files based on toggles
     const filteredSelectedFiles = useMemo(() => {
-        if (!showMismatchedOnly || creationMode !== 'modify') {
+        if (!showMismatchedOnly) {
             return selectedFiles;
         }
         
-        // Find files with version mismatch by comparing with s3Files
-        const mismatchedKeys = s3Files
-            .filter(file => file.currentAssetVersionFileVersionMismatch === true)
-            .map(file => normalizePath(file.relativePath));
-            
-        return selectedFiles.filter(file => mismatchedKeys.includes(normalizePath(file.relativeKey)));
-    }, [selectedFiles, s3Files, showMismatchedOnly, creationMode]);
+        // Filter selected files that have version mismatch
+        return selectedFiles.filter(file => file.versionMismatch === true);
+    }, [selectedFiles, showMismatchedOnly]);
     
     // Create paginated data
     const paginatedVersions = useMemo(() => {
@@ -385,7 +353,8 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
                     relativeKey: normalizedPath,
                     versionId: file.versionId,
                     isArchived: file.isArchived,
-                    isCurrent: true // Mark as current version since it's selected from current files
+                    isCurrent: true, // Mark as current version since it's selected from current files
+                    versionMismatch: file.currentAssetVersionFileVersionMismatch // Set version mismatch flag
                 }
             ]);
         } else {
@@ -502,11 +471,19 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
                             s3File.versionId === file.versionId
                         );
                         
+                        // Find if there's a version mismatch
+                        const matchingS3File = normalizedS3Files.find(s3File => 
+                            s3File.normalizedPath === normalizedPath
+                        );
+                        const versionMismatch = matchingS3File ? 
+                            matchingS3File.currentAssetVersionFileVersionMismatch : false;
+                        
                         return {
                             relativeKey: normalizedPath, // Use normalized path consistently
                             versionId: file.versionId,
                             isArchived: file.isLatestVersionArchived,
-                            isCurrent: !!currentFile // Mark as current if found in s3Files with same version
+                            isCurrent: !!currentFile, // Mark as current if found in s3Files with same version
+                            versionMismatch: versionMismatch // Set version mismatch flag
                         };
                     });
                 
@@ -531,7 +508,9 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
                         ...f, 
                         versionId,
                         // If the version ID is different from the current one, it's not the current version
-                        isCurrent: versionId === file.versionId ? f.isCurrent : false
+                        isCurrent: versionId === file.versionId ? f.isCurrent : false,
+                        // Keep the version mismatch flag
+                        versionMismatch: f.versionMismatch
                       } 
                     : f
             )
@@ -541,26 +520,6 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
         setSelectedFileForVersions(null);
     };
     
-    // Format file size
-    const formatFileSize = (size?: number): string => {
-        if (size === undefined) return 'Unknown';
-        if (size === 0) return '0 B';
-        
-        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-        const i = Math.floor(Math.log(size) / Math.log(1024));
-        return `${(size / Math.pow(1024, i)).toFixed(2)} ${units[i]}`;
-    };
-    
-    // Format date
-    const formatDate = (dateString?: string): string => {
-        if (!dateString) return 'Unknown';
-        try {
-            const date = new Date(dateString);
-            return date.toLocaleString();
-        } catch (e) {
-            return dateString;
-        }
-    };
     
     // Render creation mode content
     const renderCreationModeContent = () => {
@@ -580,256 +539,51 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
             case 'select':
                 return (
                     <SpaceBetween direction="vertical" size="l">
-                        <Container header={<Header variant="h3">Available Files</Header>}>
-                            <SpaceBetween direction="vertical" size="s">
-                                <SpaceBetween direction="horizontal" size="s">
-                                    <Toggle
-                                        onChange={({ detail }) => setShowArchived(detail.checked)}
-                                        checked={showArchived}
-                                    >
-                                        Show archived files
-                                    </Toggle>
-                                    <Toggle
-                                        onChange={({ detail }) => setShowMismatchedOnly(detail.checked)}
-                                        checked={showMismatchedOnly}
-                                    >
-                                        Show only mismatched file versions
-                                    </Toggle>
-                                </SpaceBetween>
-                                
-                                {loadingFiles ? (
-                                    <Box textAlign="center" padding="l">
-                                        <Spinner size="normal" />
-                                        <div>Loading files...</div>
-                                    </Box>
-                                ) : (
-                                    <Table
-                                        columnDefinitions={[
-                                            {
-                                                id: 'select',
-                                                header: 'Select',
-                                                cell: (item: S3File) => (
-                                                    <Checkbox
-                                                        checked={selectedFiles.some(f => f.relativeKey === normalizePath(item.relativePath))}
-                                                        onChange={({ detail }) => handleFileSelection(item, detail.checked)}
-                                                    />
-                                                )
-                                            },
-                                            {
-                                                id: 'fileName',
-                                                header: 'File Name',
-                                                cell: (item: S3File) => (
-                                                    <Box>
-                                                        <div>{item.fileName}</div>
-                                                        {item.currentAssetVersionFileVersionMismatch && (
-                                                            <Badge color="blue">Version Mismatch</Badge>
-                                                        )}
-                                                    </Box>
-                                                )
-                                            },
-                                            {
-                                                id: 'path',
-                                                header: 'Path',
-                                                cell: (item: S3File) => normalizePath(item.relativePath)
-                                            },
-                                            {
-                                                id: 'size',
-                                                header: 'Size',
-                                                cell: (item: S3File) => formatFileSize(item.size)
-                                            },
-                                            {
-                                                id: 'lastModified',
-                                                header: 'Last Modified',
-                                                cell: (item: S3File) => formatDate(item.dateCreatedCurrentVersion)
-                                            },
-                                            {
-                                                id: 'status',
-                                                header: 'Status',
-                                                cell: (item: S3File) => item.isArchived ? 'Archived' : 'Active'
-                                            }
-                                        ]}
-                                        items={paginatedAvailableFiles}
-                                        pagination={
-                                            <Pagination
-                                                currentPageIndex={currentAvailableFilesPage}
-                                                pagesCount={Math.max(1, Math.ceil(filteredS3Files.length / availableFilesPerPage))}
-                                                onChange={({ detail }) => setCurrentAvailableFilesPage(detail.currentPageIndex)}
-                                                ariaLabels={{
-                                                    nextPageLabel: 'Next page',
-                                                    previousPageLabel: 'Previous page',
-                                                    pageLabel: pageNumber => `Page ${pageNumber} of ${Math.max(1, Math.ceil(filteredS3Files.length / availableFilesPerPage))}`
-                                                }}
-                                            />
-                                        }
-                                        empty={
-                                            <Box textAlign="center" padding="l">
-                                                <div>No files found</div>
-                                            </Box>
-                                        }
-                                    />
-                                )}
-                            </SpaceBetween>
-                        </Container>
+                        <AvailableFilesContainer
+                            loadingFiles={loadingFiles}
+                            filteredS3Files={filteredS3Files}
+                            selectedFiles={selectedFiles}
+                            showArchived={showArchived}
+                            showMismatchedOnly={showMismatchedOnly}
+                            setShowArchived={setShowArchived}
+                            setShowMismatchedOnly={setShowMismatchedOnly}
+                            handleFileSelection={handleFileSelection}
+                            normalizePath={normalizePath}
+                            formatFileSize={formatFileSize}
+                            formatDate={formatDate}
+                            currentAvailableFilesPage={currentAvailableFilesPage}
+                            setCurrentAvailableFilesPage={setCurrentAvailableFilesPage}
+                            availableFilesPerPage={availableFilesPerPage}
+                            paginatedAvailableFiles={paginatedAvailableFiles}
+                        />
                         
-                        <Container header={<Header variant="h3">Selected Files</Header>}>
-                            {selectedFiles.length === 0 ? (
-                                <Box textAlign="center" padding="l">
-                                    <div>No files selected</div>
-                                </Box>
-                            ) : (
-                                <Table
-                                    columnDefinitions={[
-                                        {
-                                            id: 'fileName',
-                                            header: 'File Name',
-                                            cell: (item: SelectedFile) => item.relativeKey.split('/').pop() || item.relativeKey
-                                        },
-                                        {
-                                            id: 'path',
-                                            header: 'Path',
-                                            cell: (item: SelectedFile) => item.relativeKey
-                                        },
-                                        {
-                                            id: 'versionId',
-                                            header: 'Version ID',
-                                            cell: (item: SelectedFile) => (
-                                                <Box>
-                                                    <div style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
-                                                        {item.versionId}
-                                                    </div>
-                                                    {item.isCurrent && <Badge color="blue">Current</Badge>}
-                                                </Box>
-                                            )
-                                        },
-                                        {
-                                            id: 'actions',
-                                            header: 'Actions',
-                                            cell: (item: SelectedFile) => (
-                                                <SpaceBetween direction="horizontal" size="xs">
-                                                    <Button
-                                                        onClick={() => setSelectedFileForVersions(item)}
-                                                    >
-                                                        Select Other Version
-                                                    </Button>
-                                                    <Button
-                                                        onClick={() => setSelectedFiles(prev => prev.filter(f => f.relativeKey !== item.relativeKey))}
-                                                    >
-                                                        Remove
-                                                    </Button>
-                                                </SpaceBetween>
-                                            )
-                                        }
-                                    ]}
-                                                items={paginatedSelectedFiles}
-                                                pagination={
-                                                    <Pagination
-                                                        currentPageIndex={currentSelectedFilesPage}
-                                                        pagesCount={Math.max(1, Math.ceil(filteredSelectedFiles.length / selectedFilesPerPage))}
-                                                        onChange={({ detail }) => setCurrentSelectedFilesPage(detail.currentPageIndex)}
-                                                        ariaLabels={{
-                                                            nextPageLabel: 'Next page',
-                                                            previousPageLabel: 'Previous page',
-                                                            pageLabel: pageNumber => `Page ${pageNumber} of ${Math.max(1, Math.ceil(filteredSelectedFiles.length / selectedFilesPerPage))}`
-                                                        }}
-                                                    />
-                                                }
-                                />
-                            )}
-                        </Container>
+                        <SelectedFilesContainer
+                            selectedFiles={selectedFiles}
+                            filteredSelectedFiles={filteredSelectedFiles}
+                            setSelectedFileForVersions={setSelectedFileForVersions}
+                            setSelectedFiles={setSelectedFiles}
+                            currentSelectedFilesPage={currentSelectedFilesPage}
+                            setCurrentSelectedFilesPage={setCurrentSelectedFilesPage}
+                            selectedFilesPerPage={selectedFilesPerPage}
+                            paginatedSelectedFiles={paginatedSelectedFiles}
+                            showMismatchedOnly={showMismatchedOnly}
+                            setShowMismatchedOnly={setShowMismatchedOnly}
+                        />
                         
                         {selectedFileForVersions && (
-                            <Container header={<Header variant="h3">File Versions</Header>}>
-                                <Box>
-                                    <div>
-                                        <strong>File:</strong> {selectedFileForVersions.relativeKey}
-                                    </div>
-                                    <div>
-                                        <strong>Current Version:</strong> {selectedFileForVersions.versionId}
-                                    </div>
-                                </Box>
-                                
-                                {loadingFileVersions ? (
-                                    <Box textAlign="center" padding="l">
-                                        <Spinner size="normal" />
-                                        <div>Loading file versions...</div>
-                                    </Box>
-                                ) : (
-                                    <Table
-                                        columnDefinitions={[
-                                                    {
-                                                        id: 'versionId',
-                                                        header: 'Version ID',
-                                                        cell: (item: S3FileVersion) => (
-                                                            <Box>
-                                                                <div style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
-                                                                    {item.versionId}
-                                                                </div>
-                                                                {item.isLatest && <Badge color="blue">Latest</Badge>}
-                                                            </Box>
-                                                        )
-                                                    },
-                                                    {
-                                                        id: 'lastModified',
-                                                        header: 'Last Modified',
-                                                        cell: (item: S3FileVersion) => formatDate(item.lastModified)
-                                                    },
-                                                    {
-                                                        id: 'size',
-                                                        header: 'Size',
-                                                        cell: (item: S3FileVersion) => formatFileSize(item.size)
-                                                    },
-                                                    {
-                                                        id: 'status',
-                                                        header: 'Status',
-                                                        cell: (item: S3FileVersion) => item.isArchived ? 'Archived' : 'Active'
-                                                    },
-                                                    {
-                                                        id: 'actions',
-                                                        header: 'Actions',
-                                                        cell: (item: S3FileVersion) => (
-                                                    <Button
-                                                        onClick={() => {
-                                                            if (selectedFileForVersions) {
-                                                                handleFileVersionSelection(selectedFileForVersions, item.versionId);
-                                                            }
-                                                        }}
-                                                        disabled={item.isArchived}
-                                                    >
-                                                        Select This Version
-                                                    </Button>
-                                                )
-                                            }
-                                        ]}
-                                        items={paginatedFileVersions}
-                                        pagination={
-                                            <Pagination
-                                                currentPageIndex={currentFileVersionsPage}
-                                                pagesCount={Math.max(1, Math.ceil(fileVersions.length / fileVersionsPerPage))}
-                                                onChange={({ detail }) => setCurrentFileVersionsPage(detail.currentPageIndex)}
-                                                ariaLabels={{
-                                                    nextPageLabel: 'Next page',
-                                                    previousPageLabel: 'Previous page',
-                                                    pageLabel: pageNumber => `Page ${pageNumber} of ${Math.max(1, Math.ceil(fileVersions.length / fileVersionsPerPage))}`
-                                                }}
-                                            />
-                                        }
-                                        empty={
-                                            <Box textAlign="center" padding="l">
-                                                <div>No versions found</div>
-                                            </Box>
-                                        }
-                                    />
-                                )}
-                                
-                                <Box padding="m" textAlign="right">
-                                    <Button
-                                        onClick={() => setSelectedFileForVersions(null)}
-                                        variant="normal"
-                                    >
-                                        Cancel
-                                    </Button>
-                                </Box>
-                            </Container>
+                            <FileVersionsContainer
+                                selectedFileForVersions={selectedFileForVersions}
+                                fileVersions={fileVersions}
+                                loadingFileVersions={loadingFileVersions}
+                                handleFileVersionSelection={handleFileVersionSelection}
+                                setSelectedFileForVersions={setSelectedFileForVersions}
+                                formatFileSize={formatFileSize}
+                                formatDate={formatDate}
+                                currentFileVersionsPage={currentFileVersionsPage}
+                                setCurrentFileVersionsPage={setCurrentFileVersionsPage}
+                                fileVersionsPerPage={fileVersionsPerPage}
+                                paginatedFileVersions={paginatedFileVersions}
+                            />
                         )}
                     </SpaceBetween>
                 );
@@ -837,247 +591,65 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
             case 'modify':
                 return (
                     <SpaceBetween direction="vertical" size="l">
-                        <Container header={<Header variant="h3">Select Base Version</Header>}>
-                            {loadingVersions ? (
-                                <Box textAlign="center" padding="l">
-                                    <Spinner size="normal" />
-                                    <div>Loading asset versions...</div>
-                                </Box>
-                            ) : (
-                                <Table
-                                    columnDefinitions={[
-                                        {
-                                            id: 'version',
-                                            header: 'Version',
-                                            cell: (item: AssetVersion) => (
-                                                <Box>
-                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                        v{item.Version}
-                                                        {item.isCurrent && <Badge color="blue">Current</Badge>}
-                                                    </div>
-                                                </Box>
-                                            )
-                                        },
-                                        {
-                                            id: 'dateModified',
-                                            header: 'Date Created',
-                                            cell: (item: AssetVersion) => formatDate(item.DateModified)
-                                        },
-                                        {
-                                            id: 'createdBy',
-                                            header: 'Created By',
-                                            cell: (item: AssetVersion) => item.createdBy || 'System'
-                                        },
-                                        {
-                                            id: 'comment',
-                                            header: 'Comment',
-                                            cell: (item: AssetVersion) => item.Comment || '-'
-                                        },
-                                        {
-                                            id: 'actions',
-                                            header: 'Actions',
-                                            cell: (item: AssetVersion) => (
-                                                <Button
-                                                    onClick={() => selectVersionAsBase(item)}
-                                                    variant={selectedVersion?.Version === item.Version ? "primary" : "normal"}
-                                                >
-                                                    {selectedVersion?.Version === item.Version ? "Selected" : "Use as Base"}
-                                                </Button>
-                                            )
-                                        }
-                                    ]}
-                                    items={paginatedVersions}
-                                    pagination={
-                                        <Pagination
-                                            currentPageIndex={currentVersionPage}
-                                            pagesCount={Math.max(1, Math.ceil(versions.length / versionsPerPage))}
-                                            onChange={({ detail }) => setCurrentVersionPage(detail.currentPageIndex)}
-                                            ariaLabels={{
-                                                nextPageLabel: 'Next page',
-                                                previousPageLabel: 'Previous page',
-                                                pageLabel: pageNumber => `Page ${pageNumber} of ${Math.max(1, Math.ceil(versions.length / versionsPerPage))}`
-                                            }}
-                                        />
-                                    }
-                                    empty={
-                                        <Box textAlign="center" padding="l">
-                                            <div>No versions found</div>
-                                        </Box>
-                                    }
-                                />
-                            )}
-                        </Container>
+                        <BaseVersionSelectionContainer
+                            versions={versions}
+                            loadingVersions={loadingVersions}
+                            selectedVersion={selectedVersion}
+                            selectVersionAsBase={selectVersionAsBase}
+                            formatDate={formatDate}
+                            currentVersionPage={currentVersionPage}
+                            setCurrentVersionPage={setCurrentVersionPage}
+                            versionsPerPage={versionsPerPage}
+                            paginatedVersions={paginatedVersions}
+                        />
                         
                         {selectedVersion && (
                             <>
-                                <Container header={<Header variant="h3">Selected Files from Version v{selectedVersion.Version}</Header>}>
-                                    <SpaceBetween direction="vertical" size="s">
-                                        <Toggle
-                                            onChange={({ detail }) => setShowMismatchedOnly(detail.checked)}
-                                            checked={showMismatchedOnly}
-                                        >
-                                            Show only mismatched file versions
-                                        </Toggle>
-                                        
-                                        {selectedFiles.length === 0 ? (
-                                            <Box textAlign="center" padding="l">
-                                                <div>No files in this version</div>
-                                            </Box>
-                                        ) : (
-                                            <Table
-                                                columnDefinitions={[
-                                                    {
-                                                        id: 'fileName',
-                                                        header: 'File Name',
-                                                        cell: (item: SelectedFile) => item.relativeKey.split('/').pop() || item.relativeKey
-                                                    },
-                                                    {
-                                                        id: 'path',
-                                                        header: 'Path',
-                                                        cell: (item: SelectedFile) => item.relativeKey
-                                                    },
-                                                    {
-                                                        id: 'versionId',
-                                                        header: 'Version ID',
-                                                        cell: (item: SelectedFile) => (
-                                                            <Box>
-                                                                <div style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
-                                                                    {item.versionId}
-                                                                </div>
-                                                                {item.isCurrent && <Badge color="blue">Current</Badge>}
-                                                            </Box>
-                                                        )
-                                                    },
-                                                    {
-                                                        id: 'actions',
-                                                        header: 'Actions',
-                                                        cell: (item: SelectedFile) => (
-                                                            <SpaceBetween direction="horizontal" size="xs">
-                                                                <Button
-                                                                    onClick={() => setSelectedFileForVersions(item)}
-                                                                >
-                                                                    Select Other Version
-                                                                </Button>
-                                                                <Button
-                                                                    onClick={() => setSelectedFiles(prev => prev.filter(f => f.relativeKey !== item.relativeKey))}
-                                                                >
-                                                                    Remove
-                                                                </Button>
-                                                            </SpaceBetween>
-                                                        )
-                                                    }
-                                                ]}
-                                                items={paginatedSelectedFiles}
-                                                pagination={
-                                                    <Pagination
-                                                        currentPageIndex={currentSelectedFilesPage}
-                                                        pagesCount={Math.max(1, Math.ceil(filteredSelectedFiles.length / selectedFilesPerPage))}
-                                                        onChange={({ detail }) => setCurrentSelectedFilesPage(detail.currentPageIndex)}
-                                                        ariaLabels={{
-                                                            nextPageLabel: 'Next page',
-                                                            previousPageLabel: 'Previous page',
-                                                            pageLabel: pageNumber => `Page ${pageNumber} of ${Math.max(1, Math.ceil(filteredSelectedFiles.length / selectedFilesPerPage))}`
-                                                        }}
-                                                    />
-                                                }
-                                            />
-                                        )}
-                                    </SpaceBetween>
-                                </Container>
+                                <AvailableFilesContainer
+                                    loadingFiles={loadingFiles}
+                                    filteredS3Files={filteredS3Files}
+                                    selectedFiles={selectedFiles}
+                                    showArchived={showArchived}
+                                    showMismatchedOnly={showMismatchedOnly}
+                                    setShowArchived={setShowArchived}
+                                    setShowMismatchedOnly={setShowMismatchedOnly}
+                                    handleFileSelection={handleFileSelection}
+                                    normalizePath={normalizePath}
+                                    formatFileSize={formatFileSize}
+                                    formatDate={formatDate}
+                                    currentAvailableFilesPage={currentAvailableFilesPage}
+                                    setCurrentAvailableFilesPage={setCurrentAvailableFilesPage}
+                                    availableFilesPerPage={availableFilesPerPage}
+                                    paginatedAvailableFiles={paginatedAvailableFiles}
+                                />
+                                
+                                <SelectedFilesContainer
+                                    selectedFiles={selectedFiles}
+                                    filteredSelectedFiles={filteredSelectedFiles}
+                                    setSelectedFileForVersions={setSelectedFileForVersions}
+                                    setSelectedFiles={setSelectedFiles}
+                                    currentSelectedFilesPage={currentSelectedFilesPage}
+                                    setCurrentSelectedFilesPage={setCurrentSelectedFilesPage}
+                                    selectedFilesPerPage={selectedFilesPerPage}
+                                    paginatedSelectedFiles={paginatedSelectedFiles}
+                                    showMismatchedOnly={showMismatchedOnly}
+                                    setShowMismatchedOnly={setShowMismatchedOnly}
+                                />
                                 
                                 {selectedFileForVersions && (
-                                    <Container header={<Header variant="h3">File Versions</Header>}>
-                                        <Box>
-                                            <div>
-                                                <strong>File:</strong> {selectedFileForVersions.relativeKey}
-                                            </div>
-                                            <div>
-                                                <strong>Current Version:</strong> {selectedFileForVersions.versionId}
-                                            </div>
-                                        </Box>
-                                        
-                                        {loadingFileVersions ? (
-                                            <Box textAlign="center" padding="l">
-                                                <Spinner size="normal" />
-                                                <div>Loading file versions...</div>
-                                            </Box>
-                                        ) : (
-                                            <Table
-                                                columnDefinitions={[
-                                                    {
-                                                        id: 'versionId',
-                                                        header: 'Version ID',
-                                                        cell: (item: S3FileVersion) => (
-                                                            <Box>
-                                                                <div style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
-                                                                    {item.versionId}
-                                                                </div>
-                                                                {item.isLatest && <Badge color="blue">Latest</Badge>}
-                                                            </Box>
-                                                        )
-                                                    },
-                                                    {
-                                                        id: 'lastModified',
-                                                        header: 'Last Modified',
-                                                        cell: (item: S3FileVersion) => formatDate(item.lastModified)
-                                                    },
-                                                    {
-                                                        id: 'size',
-                                                        header: 'Size',
-                                                        cell: (item: S3FileVersion) => formatFileSize(item.size)
-                                                    },
-                                                    {
-                                                        id: 'status',
-                                                        header: 'Status',
-                                                        cell: (item: S3FileVersion) => item.isArchived ? 'Archived' : 'Active'
-                                                    },
-                                                    {
-                                                        id: 'actions',
-                                                        header: 'Actions',
-                                                        cell: (item: S3FileVersion) => (
-                                                            <Button
-                                                                onClick={() => {
-                                                                    if (selectedFileForVersions) {
-                                                                        handleFileVersionSelection(selectedFileForVersions, item.versionId);
-                                                                    }
-                                                                }}
-                                                                disabled={item.isArchived}
-                                                            >
-                                                                Select This Version
-                                                            </Button>
-                                                        )
-                                                    }
-                                                ]}
-                                                items={paginatedFileVersions}
-                                                pagination={
-                                                    <Pagination
-                                                        currentPageIndex={currentFileVersionsPage}
-                                                        pagesCount={Math.max(1, Math.ceil(fileVersions.length / fileVersionsPerPage))}
-                                                        onChange={({ detail }) => setCurrentFileVersionsPage(detail.currentPageIndex)}
-                                                        ariaLabels={{
-                                                            nextPageLabel: 'Next page',
-                                                            previousPageLabel: 'Previous page',
-                                                            pageLabel: pageNumber => `Page ${pageNumber} of ${Math.max(1, Math.ceil(fileVersions.length / fileVersionsPerPage))}`
-                                                        }}
-                                                    />
-                                                }
-                                                empty={
-                                                    <Box textAlign="center" padding="l">
-                                                        <div>No versions found</div>
-                                                    </Box>
-                                                }
-                                            />
-                                        )}
-                                        
-                                        <Box padding="m" textAlign="right">
-                                            <Button
-                                                onClick={() => setSelectedFileForVersions(null)}
-                                                variant="normal"
-                                            >
-                                                Cancel
-                                            </Button>
-                                        </Box>
-                                    </Container>
+                                    <FileVersionsContainer
+                                        selectedFileForVersions={selectedFileForVersions}
+                                        fileVersions={fileVersions}
+                                        loadingFileVersions={loadingFileVersions}
+                                        handleFileVersionSelection={handleFileVersionSelection}
+                                        setSelectedFileForVersions={setSelectedFileForVersions}
+                                        formatFileSize={formatFileSize}
+                                        formatDate={formatDate}
+                                        currentFileVersionsPage={currentFileVersionsPage}
+                                        setCurrentFileVersionsPage={setCurrentFileVersionsPage}
+                                        fileVersionsPerPage={fileVersionsPerPage}
+                                        paginatedFileVersions={paginatedFileVersions}
+                                    />
                                 )}
                             </>
                         )}

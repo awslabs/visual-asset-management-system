@@ -510,7 +510,7 @@ def get_asset_version_file_count(assetId: str, assetVersionId: str) -> int:
         return 0
 
 def save_asset_version_metadata(assetId: str, assetVersionId: str,
-                               comment: str, description: str, created_by: str) -> bool:
+                               comment: str, description: str, created_by: str, isCurrent: bool) -> bool:
     """Save asset version metadata to the asset versions table
     
     Args:
@@ -536,6 +536,7 @@ def save_asset_version_metadata(assetId: str, assetVersionId: str,
             'description': description,
             'specifiedPipelines': [],
             'createdBy': created_by,
+            'isCurrentVersion': isCurrent
         }
         
         # Save to asset versions table
@@ -596,7 +597,7 @@ def get_all_asset_versions(assetId: str) -> List[Dict]:
         logger.exception(f"Error getting all asset versions: {e}")
         return []
 
-def update_current_version_reference(asset: Dict, new_assetVersionId: str) -> bool:
+def update_asset_current_version_reference(asset: Dict, new_assetVersionId: str) -> bool:
     """Update the asset's currentVersionId reference
     
     Args:
@@ -624,7 +625,7 @@ def update_current_version_reference(asset: Dict, new_assetVersionId: str) -> bo
         logger.exception(f"Error updating current version reference: {e}")
         return False
 
-def mark_version_as_current(assetId: str, new_assetVersionId: str) -> bool:
+def mark_assetVersion_as_current(assetId: str, new_assetVersionId: str) -> bool:
     """Mark a version as current and unmark previous current version
     
     Args:
@@ -642,18 +643,21 @@ def mark_version_as_current(assetId: str, new_assetVersionId: str) -> bool:
         for version in versions:
             version_id = version['assetVersionId']
             is_current = (version_id == new_assetVersionId)
-            
-            # Update the version record
-            asset_versions_table.update_item(
-                Key={
-                    'assetId': assetId,
-                    'assetVersionId': version_id
-                },
-                UpdateExpression='SET isCurrentVersion = :is_current',
-                ExpressionAttributeValues={
-                    ':is_current': is_current
-                }
-            )
+
+            # Change only the records we need to
+            if is_current != version['isCurrentVersion']:
+
+                # Update the version record
+                asset_versions_table.update_item(
+                    Key={
+                        'assetId': assetId,
+                        'assetVersionId': version_id
+                    },
+                    UpdateExpression='SET isCurrentVersion = :is_current',
+                    ExpressionAttributeValues={
+                        ':is_current': is_current
+                    }
+                )
         
         return True
         
@@ -675,23 +679,22 @@ def update_asset_version_metadata(asset: Dict, new_assetVersionId: str, comment:
     """
     asset_id = asset['assetId']
     
-    # Mark previous current version as not current in asset versions table
-    current_version_id = asset.get('currentVersionId')
-    if current_version_id:
-        mark_version_as_current(asset_id, new_assetVersionId)
-    
     # Save new version metadata to asset versions table (which also sets current version)
     success = save_asset_version_metadata(
         asset_id,
         new_assetVersionId,
         comment if comment else f"Version {new_assetVersionId}",
         asset.get('description', ''),
-        created_by
+        created_by,
+        True
     )
-    
 
+    # Mark previous current version as not current in asset versions table
+    mark_assetVersion_as_current(asset_id, new_assetVersionId)
+    
     # Update asset's tables current version reference
-    update_current_version_reference(asset, new_assetVersionId)
+    update_asset_current_version_reference(asset, new_assetVersionId)
+
     return asset
 
 
