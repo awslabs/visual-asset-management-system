@@ -43,6 +43,7 @@ retry_config = Config(
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
 lambda_client = boto3.client('lambda', config=retry_config)
+sns_client = boto3.client('sns', config=retry_config)
 s3 = boto3.client('s3', config=retry_config)
 logger = safeLogger(service_name="AssetService")
 
@@ -51,9 +52,9 @@ claims_and_roles = {}
 
 # Load environment variables
 try:
+    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
     asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
     db_database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    asset_bucket_name_default = os.environ["S3_ASSET_STORAGE_BUCKET"]
     s3_assetAuxiliary_bucket = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
     asset_upload_table_name = os.environ.get("ASSET_UPLOAD_TABLE_NAME")
     asset_links_table_name = os.environ.get("ASSET_LINKS_STORAGE_TABLE_NAME")
@@ -61,6 +62,7 @@ try:
     asset_versions_table_name = os.environ.get("ASSET_VERSIONS_STORAGE_TABLE_NAME")
     asset_versions_files_table_name = os.environ.get("ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME")
     comment_table_name = os.environ.get("COMMENT_STORAGE_TABLE_NAME")
+    subscription_table_name = os.environ["SUBSCRIPTIONS_STORAGE_TABLE_NAME"]
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
     
 except Exception as e:
@@ -68,6 +70,7 @@ except Exception as e:
     raise e
 
 # Initialize DynamoDB tables
+buckets_table = dynamodb.Table(s3_asset_buckets_table)
 asset_table = dynamodb.Table(asset_database)
 db_table = dynamodb.Table(db_database)
 asset_upload_table = dynamodb.Table(asset_upload_table_name) if asset_upload_table_name else None
@@ -76,10 +79,46 @@ metadata_table = dynamodb.Table(metadata_table_name) if metadata_table_name else
 versions_table = dynamodb.Table(asset_versions_table_name) if asset_versions_table_name else None
 comment_table = dynamodb.Table(comment_table_name) if comment_table_name else None
 asset_versions_files_table = dynamodb.Table(asset_versions_files_table_name) if asset_versions_files_table_name else None
+subscription_table = dynamodb.Table(subscription_table_name) if subscription_table_name else None
 
 #######################
 # Version Functions
 #######################
+
+def get_default_bucket_details(bucketId):
+    """Get default S3 bucket details from database default bucket DynamoDB"""
+    try:
+
+        bucket_response = buckets_table.query(
+            KeyConditionExpression=Key('bucketId').eq(bucketId),
+            Limit=1
+        )
+        # Use the first item from the query results
+        bucket = bucket_response.get("Items", [{}])[0] if bucket_response.get("Items") else {}
+        bucket_id = bucket.get('bucketId')
+        bucket_name = bucket.get('bucketName')
+        base_assets_prefix = bucket.get('baseAssetsPrefix')
+
+        #Check to make sure we have what we need
+        if not bucket_name or not base_assets_prefix:
+            raise VAMSGeneralErrorResponse(f"Error getting database default bucket details: {str(e)}")
+        
+        #Make sure we end in a slash for the path
+        if not base_assets_prefix.endswith('/'):
+            base_assets_prefix += '/'
+
+        # Remove leading slash from file path if present
+        if base_assets_prefix.startswith('/'):
+            base_assets_prefix = base_assets_prefix[1:]
+
+        return {
+            'bucketId': bucket_id,
+            'bucketName': bucket_name,
+            'baseAssetsPrefix': base_assets_prefix
+        }
+    except Exception as e:
+        logger.exception(f"Error getting bucket details: {e}")
+        raise VAMSGeneralErrorResponse(f"Error getting bucket details: {str(e)}")
 
 def send_subscription_email(database_id, asset_id):
     """Send email notifications to subscribers when an asset is updated"""
@@ -200,7 +239,7 @@ def is_file_archived(bucket, key, version_id=None):
         logger.warning(f"Error checking archive status for {key}: {e}")
         return False
 
-def mark_file_as_archived(key, bucket=None):
+def mark_file_as_archived(key, bucket):
     """Mark an S3 object as archived by creating a delete marker
     
     Args:
@@ -211,11 +250,10 @@ def mark_file_as_archived(key, bucket=None):
         The S3 response
     """
     # Use provided bucket or fall back to default
-    bucket_to_use = bucket if bucket else asset_bucket_name_default
     
     # Delete the object to create a delete marker (archives it in versioned bucket)
     return s3.delete_object(
-        Bucket=bucket_to_use,
+        Bucket=bucket,
         Key=key
     )
 
@@ -264,7 +302,7 @@ def delete_assetAuxiliary_files(assetLocation):
 
     return
 
-def archive_multi_assetFiles(location):
+def archive_multi_assetFiles(location, bucket):
     """Archive all files in a multi-file asset
     
     Args:
@@ -288,7 +326,6 @@ def archive_multi_assetFiles(location):
         return
     
     # Get bucket from location or use default
-    bucket = location_model.Bucket if location_model.Bucket else asset_bucket_name_default
     logger.info(f'Archiving folder with multiple files from bucket: {bucket}')
 
     paginator = s3.get_paginator('list_objects_v2')
@@ -312,7 +349,7 @@ def archive_multi_assetFiles(location):
 
     return
 
-def archive_file_preview(location):
+def archive_file_preview(location, bucket):
     """Archive a single file
     
     Args:
@@ -336,7 +373,6 @@ def archive_file_preview(location):
         return
     
     # Get bucket from location or use default
-    bucket = location_model.Bucket if location_model.Bucket else asset_bucket_name_default
     logger.info(f"Archiving item: {bucket}:{key}")
 
     try:
@@ -351,7 +387,7 @@ def archive_file_preview(location):
         logger.exception(f"Error archiving file {key}: {e}")
     return
 
-def delete_s3_objects(prefix, bucket=asset_bucket_name_default):
+def delete_s3_objects(prefix, bucket):
     """Delete all S3 objects with the given prefix
     
     Args:
@@ -377,6 +413,20 @@ def delete_s3_objects(prefix, bucket=asset_bucket_name_default):
                     )
                     deleted_keys.extend([obj['Key'] for obj in objects_to_delete])
                     logger.info(f"Deleted {len(objects_to_delete)} objects from {bucket}")
+        
+        # Delete the prefix folder itself if it still exists
+        try:
+            # Check if the prefix exists as a folder (with trailing slash)
+            folder_key = prefix if prefix.endswith('/') else f"{prefix}/"
+            s3.head_object(Bucket=bucket, Key=folder_key)
+            # If head_object succeeds, the folder exists, so delete it
+            s3.delete_object(Bucket=bucket, Key=folder_key)
+            deleted_keys.append(folder_key)
+            logger.info(f"Deleted prefix folder: {folder_key} from {bucket}")
+        except ClientError as e:
+            # If the folder doesn't exist, that's fine
+            if e.response['Error']['Code'] != 'NoSuchKey':
+                logger.warning(f"Error checking/deleting prefix folder: {e}")
     except Exception as e:
         logger.exception(f"Error deleting S3 objects with prefix {prefix}: {e}")
         raise VAMSGeneralErrorResponse(f"Error deleting S3 objects: {str(e)}")
@@ -575,7 +625,7 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
     if len(claims_and_roles["tokens"]) > 0:
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if not casbin_enforcer.enforce(asset, "PUT"):
-            raise VAMSGeneralErrorResponse("Not authorized to update this asset")
+            raise authorization_error()
     
     # Update the fields
     logger.info(f"Updating asset {assetId} in database {databaseId}")
@@ -640,7 +690,11 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
     if len(claims_and_roles["tokens"]) > 0:
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if not casbin_enforcer.enforce(asset, "DELETE"):
-            raise VAMSGeneralErrorResponse("Not authorized to archive this asset")
+            raise authorization_error()
+        
+    #Get bucket details for asset
+    bucketDetails = get_default_bucket_details(asset['bucketId'])
+    bucket_name = bucketDetails['bucketName']
     
     # Archive S3 files
     logger.info(f"Archiving asset {assetId} in database {databaseId}")
@@ -648,11 +702,11 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
     try:
         # Archive asset files in S3
         if "assetLocation" in asset:
-            archive_multi_assetFiles(asset['assetLocation'])
+            archive_multi_assetFiles(asset['assetLocation'], bucket_name)
 
         # Archive preview if exists
         if "previewLocation" in asset:
-            archive_file_preview(asset['previewLocation'])
+            archive_file_preview(asset['previewLocation'], bucket_name)
         
         # Update asset record with archived status
         now = datetime.utcnow().isoformat()
@@ -719,7 +773,11 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
     if len(claims_and_roles["tokens"]) > 0:
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if not casbin_enforcer.enforce(asset, "DELETE"):
-            raise VAMSGeneralErrorResponse("Not authorized to delete this asset")
+            raise authorization_error()
+    
+    #Get bucket details for asset
+    bucketDetails = get_default_bucket_details(asset['bucketId'])
+    bucket_name = bucketDetails['bucketName']
     
     # Begin deletion process
     logger.info(f"Permanently deleting asset {assetId} from database {databaseId}")
@@ -731,6 +789,32 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
             "dynamodb_tables": []
         }
 
+        # Delete SNS topic if it exists
+        if 'snsTopic' in asset and asset['snsTopic']:
+            try:
+                sns_topic_arn = asset['snsTopic']
+                logger.info(f"Deleting SNS topic: {sns_topic_arn}")
+                sns_client.delete_topic(TopicArn=sns_topic_arn)
+                logger.info(f"Successfully deleted SNS topic: {sns_topic_arn}")
+            except Exception as e:
+                # Log the error but continue with deletion process
+                logger.warning(f"Error deleting SNS topic for asset {assetId}: {e}")
+        
+        # Delete subscription record if it exists
+        if subscription_table:
+            try:
+                # Delete the subscription record where eventName is 'Asset Version Change' and entityName_entityId is 'Asset#{assetId}'
+                subscription_table.delete_item(
+                    Key={
+                        'eventName': 'Asset Version Change',
+                        'entityName_entityId': f'Asset#{assetId}'
+                    }
+                )
+                logger.info(f"Successfully deleted subscription record for asset {assetId}")
+            except Exception as e:
+                # Log the error but continue with deletion process
+                logger.warning(f"Error deleting subscription record for asset {assetId}: {e}")
+
         #send email for asset file change
         send_subscription_email(databaseId, assetId)
         
@@ -739,11 +823,10 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
             prefix = asset["assetLocation"]["Key"]
             if prefix:
                 # Get bucket from assetLocation or use default
-                bucket = asset["assetLocation"].get('Bucket', asset_bucket_name_default)
-                logger.info(f"Deleting S3 asset objects and all versions with prefix {prefix} from bucket {bucket}")
+                logger.info(f"Deleting S3 asset objects and all versions with prefix {prefix} from bucket {bucket_name}")
                 
                 # Delete all objects and all versions with this prefix
-                deleted_keys = delete_s3_prefix_all_versions(bucket, prefix)
+                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix)
                 deleted_items["s3_objects"].extend(deleted_keys)
                 
                 # Also delete any auxiliary files
@@ -753,11 +836,10 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
             prefix = asset["previewLocation"]["Key"]
             if prefix:
                 # Get bucket from assetLocation or use default
-                bucket = asset["previewLocation"].get('Bucket', asset_bucket_name_default)
-                logger.info(f"Deleting S3 preview objects and all versions with prefix {prefix} from bucket {bucket}")
+                logger.info(f"Deleting S3 preview objects and all versions with prefix {prefix} from bucket {bucket_name}")
                 
                 # Delete all objects and all versions with this prefix
-                deleted_keys = delete_s3_prefix_all_versions(bucket, prefix)
+                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix)
                 deleted_items["s3_objects"].extend(deleted_keys)
         
         # 2. Delete from asset table (both active and archived locations)
@@ -943,6 +1025,10 @@ def handle_get_request(event):
                 
                 # Enhance asset with version information
                 enhanced_asset = enhance_asset_with_version_info(asset)
+
+                #Get bucket details for asset
+                bucketDetails = get_default_bucket_details(asset['bucketId'])
+                enhanced_asset["bucketName"] = bucketDetails['bucketName']
                 
                 # Convert to AssetResponseModel for consistent response format
                 try:
@@ -994,6 +1080,11 @@ def handle_get_request(event):
             enhanced_items = []
             for item in assets_result.get('Items', []):
                 enhanced_item = enhance_asset_with_version_info(item)
+
+                #Get bucket details for asset
+                bucketDetails = get_default_bucket_details(enhanced_item['bucketId'])
+                enhanced_item["bucketName"] = bucketDetails['bucketName']
+
                 enhanced_items.append(enhanced_item)
             
             # Convert enhanced items to AssetResponseModel instances
@@ -1043,6 +1134,11 @@ def handle_get_request(event):
             enhanced_items = []
             for item in assets_result.get('Items', []):
                 enhanced_item = enhance_asset_with_version_info(item)
+
+                #Get bucket details for asset
+                bucketDetails = get_default_bucket_details(enhanced_item['bucketId'])
+                enhanced_item["bucketName"] = bucketDetails['bucketName']
+
                 enhanced_items.append(enhanced_item)
             
             # Convert enhanced items to AssetResponseModel instances

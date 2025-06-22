@@ -114,8 +114,8 @@ def get_subscriptions(query_params):
     return response
 
 
-def create_sns_topic(asset_id):
-    topic_response = sns_client.create_topic(Name=f'AssetTopic-{asset_id}')
+def create_sns_topic(asset_id, database_id):
+    topic_response = sns_client.create_topic(Name=f'AssetTopic{database_id}-{asset_id}')
     return topic_response['TopicArn']
 
 
@@ -184,7 +184,7 @@ def create_sns_subscriptions(asset_id, emails):
     asset_sns_topic = asset_obj.get("snsTopic")
 
     if not asset_sns_topic:
-        asset_sns_topic = create_sns_topic(asset_id)
+        asset_sns_topic = create_sns_topic(asset_id, asset_obj["databaseId"])
         add_sns_topic_in_asset(asset_id, asset_obj["databaseId"], asset_sns_topic)
 
     for subscriber in emails:

@@ -14,6 +14,38 @@ logger = safeLogger(service="SnsExecutePreviewPcPotreeViewerPipeline")
 lambda_client = boto3.client('lambda')
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 S3_ASSETAUXILIARY_BUCKET_NAME = os.environ["S3_ASSETAUXILIARY_BUCKET_NAME"]
+S3_ASSET_BUCKET_NAME = os.environ["S3_ASSET_BUCKET_NAME"]
+S3_ASSET_BUCKET_PREFIX = os.environ["S3_ASSET_BUCKET_PREFIX"]
+
+def normalize_s3_path(asset_base_key, file_path):
+    """
+    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
+    
+    Args:
+        asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
+        file_path: The file path from the request (may or may not include the base key)
+        
+    Returns:
+        The properly resolved S3 key without duplication
+    """
+    # Normalize the asset base key to ensure it ends with '/'
+    if asset_base_key and not asset_base_key.endswith('/'):
+        asset_base_key = asset_base_key + '/'
+    
+    # Remove leading slash from file path if present
+    if file_path.startswith('/'):
+        file_path = file_path[1:]
+    
+    # Check if file_path already starts with the asset_base_key
+    if file_path.startswith(asset_base_key):
+        # File path already contains the base key, use as-is
+        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
+        return file_path
+    else:
+        # File path doesn't contain base key, combine them
+        resolved_path = asset_base_key + file_path
+        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
+        return resolved_path
 
 
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path
@@ -113,8 +145,13 @@ def lambda_handler(event, context):
                 logger.info(inputS3AssetFilePath)
                 logger.info(inputOutputS3AssetAuxiliaryFilesPath)
 
+                #If s3_source_bucket and s3_source_key does not start match the environment bucket name and prefix then ignore the file
+                if not (s3_source_bucket == S3_ASSET_BUCKET_NAME and s3_source_key.startswith(S3_ASSET_BUCKET_PREFIX)):
+                    logger.info("Ignoring file as it does not match the environment bucket name and prefix - not part of assets to track")
+                    continue
+
                 #Ignore pipeline and preview files from assets
-                if s3_source_key.startswith("pipeline") or s3_source_key.startswith("preview"):
+                if "pipeline" in s3_source_key or "preview" in s3_source_key or "temp-upload" in s3_source_key:
                     logger.info("Ignoring pipeline and preview files from assets for this use-case pipeline run")
                     continue
 

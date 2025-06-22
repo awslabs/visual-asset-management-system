@@ -59,14 +59,6 @@ export function getConfig(app: cdk.App): Config {
         "-" +
         config.env.region;
 
-    config.app.bucketMigrationStaging.assetBucketName = <string>(app.node.tryGetContext(
-        "staging-bucket"
-    ) || //here to keep backwards compatability
-        app.node.tryGetContext("asset-staging-bucket") ||
-        config.app.bucketMigrationStaging.assetBucketName ||
-        process.env.STAGING_BUCKET || //here to keep backwards compatability
-        process.env.ASSET_STAGING_BUCKET);
-
     config.app.adminEmailAddress = <string>(
         (app.node.tryGetContext("adminEmailAddress") ||
             config.app.adminEmailAddress ||
@@ -77,12 +69,21 @@ export function getConfig(app: cdk.App): Config {
         config.app.adminUserId ||
         process.env.ADMIN_EMAIL_ADDRESS || //user email in this case for ENV backwards compatibility
         process.env.ADMIN_USER_ID);
-    config.app.authProvider.credTokenTimeoutSeconds = <number>(
+
+    config.app.authProvider.useCognito.credTokenTimeoutSeconds = <number>(
         (app.node.tryGetContext("credTokenTimeoutSeconds") ||
-            config.app.authProvider.credTokenTimeoutSeconds ||
+            config.app.authProvider.useCognito.credTokenTimeoutSeconds ||
             process.env.CRED_TOKEN_TIMEOUT_SECONDS ||
             3600)
     );
+
+    config.app.authProvider.presignedUrlTimeoutSeconds = <number>(
+        (app.node.tryGetContext("presignedUrlTimeoutSeconds") ||
+            config.app.authProvider.presignedUrlTimeoutSeconds ||
+            process.env.PRESIGNED_URL_TIMEOUT_SECONDS ||
+            86400)
+    );
+
     config.app.useFips = <boolean>(
         (app.node.tryGetContext("useFips") ||
             config.app.useFips ||
@@ -149,6 +150,10 @@ export function getConfig(app: cdk.App): Config {
 
     if (config.app.useAlb.addAlbS3SpecialVpcEndpoint == undefined) {
         config.app.useAlb.addAlbS3SpecialVpcEndpoint = true;
+    }
+
+    if (config.app.assetBuckets.createNewBucket == undefined) {
+        config.app.assetBuckets.createNewBucket = true;
     }
 
     //Load S3 Policy statements JSON
@@ -261,6 +266,27 @@ export function getConfig(app: cdk.App): Config {
     }
 
     //Any configuration warnings/errors checks
+    if (config.app.assetBuckets.createNewBucket && 
+        (!config.app.assetBuckets.defaultNewBucketSyncDatabaseId ||
+            config.app.assetBuckets.defaultNewBucketSyncDatabaseId == "" ||
+            config.app.assetBuckets.defaultNewBucketSyncDatabaseId == "UNDEFINED"
+        )) {
+
+        throw new Error(
+            "Configuration Error: Must define a app.assetBuckets.defaultNewBucketSyncDatabaseId if app.assetBuckets.createNewBucke is true"
+        );
+    }
+
+    //If we aren't creating a new bucket and aren't adding any external asset buckets throw an error
+    if (!config.app.assetBuckets.createNewBucket &&
+        (!config.app.assetBuckets.externalAssetBuckets
+        )) {
+
+        throw new Error(
+            "Configuration Error: Must define at least a new asset bucket and/or app.assetBuckets.externalAssetBuckets"
+        );
+    }
+
     if (
         config.app.useGlobalVpc.enabled &&
         config.app.useGlobalVpc.optionalExternalVpcId &&
@@ -468,6 +494,12 @@ export function getConfig(app: cdk.App): Config {
 
     return config;
 }
+ 
+export interface ConfigPublicAssetS3Buckets {
+    bucketArn: string;
+    baseAssetsPrefix: string;
+    defaultSyncDatabaseId: string;
+}
 
 //Public config values that should go into a configuration file
 export interface ConfigPublic {
@@ -483,8 +515,10 @@ export interface ConfigPublic {
     //autoDelete: boolean;
     app: {
         baseStackName: string;
-        bucketMigrationStaging: {
-            assetBucketName: string;
+        assetBuckets: {
+            createNewBucket: boolean;
+            defaultNewBucketSyncDatabaseId: string;
+            externalAssetBuckets: [ConfigPublicAssetS3Buckets];
         };
         adminUserId: string;
         adminEmailAddress: string;
@@ -551,11 +585,12 @@ export interface ConfigPublic {
             };
         };
         authProvider: {
-            credTokenTimeoutSeconds: number;
+            presignedUrlTimeoutSeconds: number;
             useCognito: {
                 enabled: boolean;
                 useSaml: boolean;
                 useUserPasswordAuthFlow: boolean;
+                credTokenTimeoutSeconds: number;
             };
             useExternalOAuthIdp: {
                 enabled: boolean;

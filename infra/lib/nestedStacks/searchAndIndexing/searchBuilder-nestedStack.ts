@@ -4,14 +4,16 @@
  */
 
 import { storageResources } from "../storage/storageBuilder-nestedStack";
-import { buildIndexingFunction } from "../../lambdaBuilder/searchFunctions";
+import { buildIndexingFunction } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
 import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as lambda from "aws-cdk-lib/aws-lambda";
-import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
+import * as sqs from 'aws-cdk-lib/aws-sqs';
+import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
+import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { NagSuppressions } from "cdk-nag";
 import { OpensearchServerlessConstruct } from "./constructs/opensearch-serverless";
 import { OpensearchProvisionedConstruct } from "./constructs/opensearch-provisioned";
-import { buildSearchFunction } from "../../lambdaBuilder/searchFunctions";
+import { buildSearchFunction, buildSqsBucketSyncFunction } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
 import { attachFunctionToApi } from "../apiLambda/apiBuilder-nestedStack";
 import { Stack, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
@@ -20,6 +22,9 @@ import * as cdk from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as Config from "../../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as s3AssetBuckets from "../../helper/s3AssetBuckets";
+import { Service } from "../../helper/service-helper";
+import * as iam from "aws-cdk-lib/aws-iam";
 import { PropagatedTagSource } from "aws-cdk-lib/aws-ecs";
 
 export class SearchBuilderNestedStack extends NestedStack {
@@ -68,6 +73,8 @@ export function searchBuilder(
         api: api,
     });
 
+    let indexingS3ObjectMetadataFunction: lambda.Function | undefined = undefined
+
     if (config.app.openSearch.useServerless.enabled) {
         //Serverless Deployment
         const aoss = new OpensearchServerlessConstruct(scope, "AOSS", {
@@ -78,7 +85,7 @@ export function searchBuilder(
             subnets: subnets,
         });
 
-        const indexingFunction = buildIndexingFunction(
+        indexingS3ObjectMetadataFunction = buildIndexingFunction(
             scope,
             lambdaCommonBaseLayer,
             storageResources,
@@ -98,15 +105,6 @@ export function searchBuilder(
             subnets
         );
 
-        //Add subscriptions to kick-off lambda function for indexing
-        storageResources.sns.assetBucketObjectCreatedTopic.addSubscription(
-            new LambdaSubscription(indexingFunction)
-        );
-
-        storageResources.sns.assetBucketObjectRemovedTopic.addSubscription(
-            new LambdaSubscription(indexingFunction)
-        );
-
         // Due to cdk upgrade, not all regions support tags for EventSourceMapping
         // this line should remove the tags for regions that dont support it (govcloud currently not supported)
         if (config.app.govCloud.enabled) {
@@ -114,7 +112,7 @@ export function searchBuilder(
                 scope,
                 "idxmDynamoDBEventSourceStorageResourcesBuilderMetadataStorageTable",
                 {
-                    target: indexingFunction,
+                    target: indexingS3ObjectMetadataFunction,
                     eventSourceArn: storageResources.dynamo.metadataStorageTable.tableStreamArn,
                     startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                     batchSize: 100,
@@ -137,7 +135,7 @@ export function searchBuilder(
                 .defaultChild as lambda.CfnEventSourceMapping;
             cfnEsmAssetIndexing.addPropertyDeletionOverride("Tags");
         } else {
-            indexingFunction.addEventSource(
+            indexingS3ObjectMetadataFunction.addEventSource(
                 new eventsources.DynamoEventSource(storageResources.dynamo.metadataStorageTable, {
                     startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 })
@@ -149,9 +147,9 @@ export function searchBuilder(
             );
         }
 
-        aoss.grantCollectionAccess(indexingFunction);
+        aoss.grantCollectionAccess(indexingS3ObjectMetadataFunction);
         aoss.grantCollectionAccess(assetIndexingFunction);
-        aoss.grantVPCeAccess(indexingFunction);
+        aoss.grantVPCeAccess(indexingS3ObjectMetadataFunction);
         aoss.grantVPCeAccess(assetIndexingFunction);
 
         //grant search function access to collection and VPCe
@@ -179,7 +177,7 @@ export function searchBuilder(
                 : undefined,
         });
 
-        const indexingFunction = buildIndexingFunction(
+        indexingS3ObjectMetadataFunction = buildIndexingFunction(
             scope,
             lambdaCommonBaseLayer,
             storageResources,
@@ -200,16 +198,8 @@ export function searchBuilder(
         );
 
         aos.grantOSDomainAccess(assetIndexingFunction);
-        aos.grantOSDomainAccess(indexingFunction);
+        aos.grantOSDomainAccess(indexingS3ObjectMetadataFunction);
 
-        //Add subscriptions to kick-off lambda function for indexing
-        storageResources.sns.assetBucketObjectCreatedTopic.addSubscription(
-            new LambdaSubscription(indexingFunction)
-        );
-
-        storageResources.sns.assetBucketObjectRemovedTopic.addSubscription(
-            new LambdaSubscription(indexingFunction)
-        );
 
         // Due to cdk upgrade, not all regions support tags for EventSourceMapping
         // this line should remove the tags for regions that dont support it (govcloud currently not supported)
@@ -218,7 +208,7 @@ export function searchBuilder(
                 scope,
                 "idxmDynamoDBEventSourceStorageResourcesBuilderMetadataStorageTable",
                 {
-                    target: indexingFunction,
+                    target: indexingS3ObjectMetadataFunction,
                     eventSourceArn: storageResources.dynamo.metadataStorageTable.tableStreamArn,
                     startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                     batchSize: 100,
@@ -241,7 +231,7 @@ export function searchBuilder(
                 .defaultChild as lambda.CfnEventSourceMapping;
             cfnEsmAssetIndexing.addPropertyDeletionOverride("Tags");
         } else {
-            indexingFunction.addEventSource(
+            indexingS3ObjectMetadataFunction.addEventSource(
                 new eventsources.DynamoEventSource(storageResources.dynamo.metadataStorageTable, {
                     startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 })
@@ -256,6 +246,116 @@ export function searchBuilder(
         //grant search function access to AOS
         aos.grantOSDomainAccess(searchFun);
     }
+
+    /////////////////////////////////////////////////////////////////////////////
+    /////////////////////////////////////////////////////////////////////////////
+
+    //Setup assetbucket sync and indexing
+    //Loop through each asset bucket and setup the new event notifications sync method 
+    // and pass in indexing functions created (if they exist due to feature switching)
+    let index = 0
+    const assetBucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
+    for (const record of assetBucketRecords) {
+
+        //Create created queue
+        const onS3ObjectCreatedQueue = new sqs.Queue(scope, 'bucketSyncCreated'+record.bucket, {
+        queueName: `${config.app.baseStackName}-bucketSyncCreated-${index}`,
+        visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900.
+        encryption: storageResources.encryption.kmsKey? sqs.QueueEncryption.KMS : sqs.QueueEncryption.SQS_MANAGED,
+        encryptionMasterKey: storageResources.encryption.kmsKey,
+        enforceSSL: true
+        });
+        onS3ObjectCreatedQueue.grantSendMessages(Service("SNS").Principal);
+    
+
+        //Create new lambda for bucketSync (pass indexingS3ObjectMetadataFunction function name in if defined)
+        const sqsBucketSyncFunctionCreated = buildSqsBucketSyncFunction(
+            scope,
+            lambdaCommonBaseLayer,
+            storageResources,
+            indexingS3ObjectMetadataFunction,
+            record.bucket.bucketName,
+            record.prefix,
+            record.defaultSyncDatabaseId,
+            "created",
+            index,
+            config,
+            vpc,
+            subnets
+        );
+
+        //Add event notifications for syncing
+        if(record.snsS3ObjectCreatedTopic) {
+            record.snsS3ObjectCreatedTopic.addSubscription(
+                new SqsSubscription(onS3ObjectCreatedQueue)
+            );
+        }
+
+        // The functions poll the respective queues, which is populated by messages sent to the topic.
+        sqsBucketSyncFunctionCreated.addEventSource(
+            new SqsEventSource(onS3ObjectCreatedQueue, {
+                batchSize: 10, // Max configurable records w/o maxBatchingWindow.
+                maxBatchingWindow: cdk.Duration.seconds(30), // Max configurable time to wait before function is invoked.
+            })
+        );
+
+        index = index + 1
+
+        //Create deleted queue
+        const onS3ObjectDeletedQueue = new sqs.Queue(scope, 'bucketSyncDeleted'+record.bucket, {
+        queueName: `${config.app.baseStackName}-bucketSyncDeleted-${index}`,
+        visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900.
+        encryption: storageResources.encryption.kmsKey? sqs.QueueEncryption.KMS : sqs.QueueEncryption.SQS_MANAGED,
+        encryptionMasterKey: storageResources.encryption.kmsKey,
+        enforceSSL: true
+        });
+        onS3ObjectDeletedQueue.grantSendMessages(Service("SNS").Principal);
+
+        //Create new lambda for bucketSync (pass indexingS3ObjectMetadataFunction function name in if defined)
+        const sqsBucketSyncFunctionRemoved = buildSqsBucketSyncFunction(
+            scope,
+            lambdaCommonBaseLayer,
+            storageResources,
+            indexingS3ObjectMetadataFunction,
+            record.bucket.bucketName,
+            record.prefix,
+            record.defaultSyncDatabaseId,
+            "deleted",
+            index,
+            config,
+            vpc,
+            subnets
+        );
+        index = index + 1
+        
+
+
+        if(record.snsS3ObjectDeletedTopic) {
+            record.snsS3ObjectDeletedTopic.addSubscription(
+                new SqsSubscription(onS3ObjectDeletedQueue)
+            );
+        }
+
+        sqsBucketSyncFunctionRemoved.addEventSource(
+            new SqsEventSource(onS3ObjectDeletedQueue, {
+                batchSize: 10, // Max configurable records w/o maxBatchingWindow.
+                maxBatchingWindow: cdk.Duration.seconds(30), // Max configurable time to wait before function is invoked.
+            })
+        );
+
+    }
+
+    //Nag supressions
+    NagSuppressions.addResourceSuppressions(
+        scope,
+        [
+            {
+                id: "AwsSolutions-SQS3",
+                reason: "Intended not to use DLQs for these types of SQS events. Files easily redriven based on the logic of assets.",
+            },
+        ],
+        true
+    );
 
     NagSuppressions.addResourceSuppressions(
         scope,

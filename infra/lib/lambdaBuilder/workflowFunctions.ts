@@ -18,12 +18,14 @@ import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as kms from "aws-cdk-lib/aws-kms";
+import * as s3AssetBuckets from "../helper/s3AssetBuckets";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
     kmsKeyPolicyStatementGenerator,
     generateUniqueNameHash,
 } from "../helper/security";
+import { grantReadWritePermissionsToAllAssetBuckets, grantReadPermissionsToAllAssetBuckets } from "../helper/security";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as cdk from "aws-cdk-lib";
 
@@ -162,7 +164,6 @@ export function buildCreateWorkflowFunction(
 
     const role = buildWorkflowRole(
         scope,
-        storageResources.s3.assetBucket,
         processWorkflowExecutionOutputFunction,
         storageResources.encryption.kmsKey
     );
@@ -225,7 +226,7 @@ export function buildCreateWorkflowFunction(
     return createWorkflowFunction;
 }
 
-export function buildRunWorkflowFunction(
+export function buildExecuteWorkflowFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
@@ -235,7 +236,7 @@ export function buildRunWorkflowFunction(
     subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "executeWorkflow";
-    const runWorkflowFunction = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.workflows.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -251,6 +252,7 @@ export function buildRunWorkflowFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
             PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
@@ -258,30 +260,32 @@ export function buildRunWorkflowFunction(
                 storageResources.dynamo.workflowExecutionsStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
             S3_ASSETAUXILIARY_STORAGE_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
             METADATA_READ_LAMBDA_FUNCTION_NAME: metadataReadFunction.functionName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
-    storageResources.dynamo.workflowStorageTable.grantReadData(runWorkflowFunction);
-    storageResources.dynamo.pipelineStorageTable.grantReadData(runWorkflowFunction);
-    storageResources.dynamo.assetStorageTable.grantReadData(runWorkflowFunction);
-    storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(runWorkflowFunction);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(runWorkflowFunction);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(runWorkflowFunction);
-    storageResources.s3.assetBucket.grantReadWrite(runWorkflowFunction);
-    storageResources.s3.assetAuxiliaryBucket.grantReadWrite(runWorkflowFunction);
-    storageResources.dynamo.rolesStorageTable.grantReadData(runWorkflowFunction);
-    metadataReadFunction.grantInvoke(runWorkflowFunction);
+
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.workflowStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    metadataReadFunction.grantInvoke(fun);
+
+    grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(
-        runWorkflowFunction,
+        fun,
         storageResources.encryption.kmsKey
     );
-    globalLambdaEnvironmentsAndPermissions(runWorkflowFunction, config);
-    suppressCdkNagErrorsByGrantReadWrite(runWorkflowFunction);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagErrorsByGrantReadWrite(fun);
 
-    runWorkflowFunction.addToRolePolicy(
+    fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: [
@@ -292,7 +296,7 @@ export function buildRunWorkflowFunction(
             resources: [IAMArn("*vams*").statemachine, IAMArn("*vams*").statemachineExecution],
         })
     );
-    return runWorkflowFunction;
+    return fun;
 }
 
 export function buildProcessWorkflowExecutionOutputFunction(
@@ -307,7 +311,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
     subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "processWorkflowExecutionOutput";
-    const processWorkflowExecutionOutputFunction = new lambda.Function(scope, name, {
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.workflows.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -323,6 +327,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
@@ -332,40 +337,42 @@ export function buildProcessWorkflowExecutionOutputFunction(
             CREATE_METADATA_LAMBDA_FUNCTION_NAME: createMetadataLambdaFunction.functionName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            S3_ASSET_STORAGE_BUCKET: storageResources.s3.assetBucket.bucketName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
-    fileUploadLambdaFunction.grantInvoke(processWorkflowExecutionOutputFunction);
-    readMetadataLambdaFunction.grantInvoke(processWorkflowExecutionOutputFunction);
-    createMetadataLambdaFunction.grantInvoke(processWorkflowExecutionOutputFunction);
-    storageResources.s3.assetBucket.grantReadWrite(processWorkflowExecutionOutputFunction);
-    storageResources.dynamo.rolesStorageTable.grantReadData(processWorkflowExecutionOutputFunction);
+
+    fileUploadLambdaFunction.grantInvoke(fun);
+    readMetadataLambdaFunction.grantInvoke(fun);
+    createMetadataLambdaFunction.grantInvoke(fun);
+
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(
-        processWorkflowExecutionOutputFunction
+        fun
     );
-    storageResources.dynamo.assetStorageTable.grantReadData(processWorkflowExecutionOutputFunction);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(
-        processWorkflowExecutionOutputFunction
+        fun
     );
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(
-        processWorkflowExecutionOutputFunction
+        fun
     );
     storageResources.dynamo.userRolesStorageTable.grantReadData(
-        processWorkflowExecutionOutputFunction
+        fun
     );
+
+    grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(
-        processWorkflowExecutionOutputFunction,
+        fun,
         storageResources.encryption.kmsKey
     );
-    globalLambdaEnvironmentsAndPermissions(processWorkflowExecutionOutputFunction, config);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
-    return processWorkflowExecutionOutputFunction;
+    return fun;
 }
 
 export function buildWorkflowRole(
     scope: Construct,
-    assetStorageBucket: s3.IBucket,
     processWorkflowExecutionOutputFunction: lambda.Function,
     kmsKey?: kms.IKey
 ): iam.Role {
@@ -421,10 +428,20 @@ export function buildWorkflowRole(
                 //https://docs.aws.amazon.com/step-functions/latest/dg/cw-logs.html
                 resources: ["*"],
             }),
-            new iam.PolicyStatement({
-                effect: iam.Effect.ALLOW,
-                actions: ["s3:ListBucket", "s3:PutObject", "s3:GetObject"],
-                resources: [assetStorageBucket.bucketArn, assetStorageBucket.bucketArn + "/*"],
+            // Add permissions for all asset buckets from the global array
+            ...s3AssetBuckets.getS3AssetBucketRecords().map(record => {
+                const prefix = record.prefix || '/';
+                // Ensure the prefix ends with a slash for proper path construction
+                const normalizedPrefix = prefix.endsWith('/') ? prefix : prefix + '/';
+                
+                return new iam.PolicyStatement({
+                    effect: iam.Effect.ALLOW,
+                    actions: ["s3:ListBucket", "s3:PutObject", "s3:GetObject"],
+                    resources: [
+                        record.bucket.bucketArn,
+                        `${record.bucket.bucketArn}${normalizedPrefix}*`
+                    ],
+                });
             }),
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,

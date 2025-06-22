@@ -328,10 +328,9 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 | Bucket                   | Description                                                                                                                                                                                |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | accessLogsBucket         | For storing access logs from other S3 buckets                                                                                                                                              |
-| assetBucket              | Primary bucket for asset storage                                                                                                                                                           |
+| assetBucket              | Primary bucket for asset storage (optional creation if loading from external)                                                                                                              |
 | assetAuxiliaryBucket     | For auto-generated auxiliary working objects associated with asset storage (includes auto-generated previews, visualizer files, temporary storage for pipelines)                            |
 | artefactsBucket          | For storing artefacts                                                                                                                                                                      |
-| assetStagingBucket       | (Optional) For bucket migration staging                                                                                                                                                    |
 | webAppAccessLogsBucket   | For storing web app access logs                                                                                                                                                            |
 | webAppBucket             | For hosting the web application (static content)                                                                                                                                            |
 
@@ -360,6 +359,7 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 | TagTypeStorageTable           | tagTypeName           | n/a                   |                                                                                                                                   |
 | UserRolesStorageTable         | userId                | roleName              |                                                                                                                                   |
 | UserStorageTable              | userId                | n/a                   | email                                                                                                                             |
+| S3AssetBucketsStorageTable    | bucketId              | bucketName:baseAssetsPrefix | bucketName, baseAssetsPrefix                                                                                                |
 | WorkflowStorageTable          | databaseId            | workflowId            | dateCreated, description, specifiedPipelines, workflow_arn                                                                        |
 | WorkflowExecutionStorageTable | assetId               | executionId           | workflowId, databaseId, workflow_arn, execution_arn, startDate, stopDate, executionStatus                                         |
 
@@ -374,6 +374,13 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 | description         | String    | The user provided description                                                                                  |
 | generated_artifacts | Map       | S3 bucket and key references to artifacts generated automatically through pipelines when an asset is uploaded. |
 | isDistributable     | Boolean   | Whether the asset is distributable                                                                             |
+| bucketId            | String    | The bucket ID where this asset is stored that matches S3AssetBucketsStorageTable                               |
+
+### Global Secondary Indexes
+
+| Index Name      | Partition Key | Sort Key     | Description                                                |
+| --------------- | ------------- | ------------ | ---------------------------------------------------------- |
+| BucketIdGSI     | bucketId      | assetId      | For querying assets to a S3 bucket location                |
 
 ## PipelineStorageTable
 
@@ -390,11 +397,12 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 
 ## DatabaseStorageTable
 
-| Field       | Data Type | Description                       |
-| ----------- | --------- | --------------------------------- |
-| assetCount  | String    | Number of assets in this database |
-| dateCreated | String    | Creation date of this record      |
-| description | String    | User provided description         |
+| Field           | Data Type | Description                                                                              |
+| --------------- | --------- | ---------------------------------------------------------------------------------------- |
+| assetCount      | String    | Number of assets in this database                                                        |
+| dateCreated     | String    | Creation date of this record                                                             |
+| description     | String    | User provided description                                                                |
+| defaultBucketId | String    | Default bucket ID to use for new assets that matches the S3AssetBucketsStorageTable      |
 
 ## WorkflowStorageTable
 
@@ -463,12 +471,6 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 | eventName        | String    | Name of the event to subscribe to            |
 | entityName_entityId | String | Combined entity name and ID                  |
 
-### Global Secondary Indexes
-
-| Index Name                      | Partition Key | Sort Key            | Description                                |
-| ------------------------------- | ------------- | ------------------- | ------------------------------------------ |
-| eventName-entityName_entityId-index | eventName | entityName_entityId | For querying subscriptions by event and entity |
-
 ## MetadataStorageTable
 
 | Field       | Data Type | Description                                  |
@@ -483,6 +485,24 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 | userId | String    | (PK) Main user ID associated with profile |
 | email  | String    | Email belonging to the user               |
 
+## S3AssetBucketsStorageTable
+
+| Field                  | Data Type | Description                                                |
+| ---------------------- | --------- | ---------------------------------------------------------- |
+| bucketId               | String    | Unique identifier (UUID/GUID) for the bucket configuration |
+| bucketName:baseAssetsPrefix | String | Composite key combining bucket name and prefix           |
+| bucketName             | String    | Name of the S3 bucket used for asset storage               |
+| baseAssetsPrefix       | String    | Base prefix path within the bucket for assets              |
+| isVersioningEnabled    | Bool      | If the bucket has versioning enabled or not                |
+
+
+### Global Secondary Indexes
+
+| Index Name    | Partition Key | Sort Key         | Description                                |
+| ------------- | ------------- | ---------------- | ------------------------------------------ |
+| bucketNameGSI | bucketName    | baseAssetsPrefix | For querying buckets by name and prefix    |
+
+The S3AssetBucketsStorageTable stores information about S3 buckets used for asset storage in the VAMS system. This table supports a multi-bucket architecture where assets can be stored across different S3 buckets with different base prefixes. The table is populated during deployment by a custom resource that adds entries for each bucket configured in the system.
 
 
 # Updating Backend

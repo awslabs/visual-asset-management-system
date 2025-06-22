@@ -24,20 +24,55 @@ try:
 except Exception as e:
     logger.exception("Failed Loading Error Functions")
 
-bucket_name_asset_default = None
 bucket_name_assetAuxiliary = None
 
 try:
+    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
     asset_Database = os.environ["ASSET_STORAGE_TABLE_NAME"]
     pipeline_Database = os.environ["PIPELINE_STORAGE_TABLE_NAME"]
     workflow_database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
     workflow_execution_database = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_NAME"]
-    bucket_name_asset_default = os.environ["S3_ASSET_STORAGE_BUCKET"]
     bucket_name_assetAuxiliary = os.environ["S3_ASSETAUXILIARY_STORAGE_BUCKET"]
     metadata_read_function = os.environ['METADATA_READ_LAMBDA_FUNCTION_NAME']
 except:
     logger.exception("Failed loading environment variables")
 
+buckets_table = dynamodb.Table(s3_asset_buckets_table)
+
+def get_default_bucket_details(bucketId):
+    """Get default S3 bucket details from database default bucket DynamoDB"""
+    try:
+
+        bucket_response = buckets_table.query(
+            KeyConditionExpression=Key('bucketId').eq(bucketId),
+            Limit=1
+        )
+        # Use the first item from the query results
+        bucket = bucket_response.get("Items", [{}])[0] if bucket_response.get("Items") else {}
+        bucket_id = bucket.get('bucketId')
+        bucket_name = bucket.get('bucketName')
+        base_assets_prefix = bucket.get('baseAssetsPrefix')
+
+        #Check to make sure we have what we need
+        if not bucket_name or not base_assets_prefix:
+            raise Exception(f"Error getting database default bucket details: {str(e)}")
+        
+        #Make sure we end in a slash for the path
+        if not base_assets_prefix.endswith('/'):
+            base_assets_prefix += '/'
+
+        # Remove leading slash from file path if present
+        if base_assets_prefix.startswith('/'):
+            base_assets_prefix = base_assets_prefix[1:]
+
+        return {
+            'bucketId': bucket_id,
+            'bucketName': bucket_name,
+            'baseAssetsPrefix': base_assets_prefix
+        }
+    except Exception as e:
+        logger.exception(f"Error getting bucket details: {e}")
+        raise Exception(f"Error getting bucket details: {str(e)}")
 
 def get_pipelines(databaseId, pipelineId):
     table = dynamodb.Table(pipeline_Database)
@@ -408,7 +443,11 @@ def lambda_handler(event, context):
                             # Determine which file key to use
                             # If fileKey is provided in request body, use it, otherwise use asset's base prefix key
                             file_key = asset['assetLocation']['Key']
-                            asset_bucket = asset['assetLocation'].get('Bucket', bucket_name_asset_default)
+                            
+                            # Get bucket name from bucketId using get_default_bucket_details
+                            bucketDetails = get_default_bucket_details(asset['bucketId'])
+                            asset_bucket = bucketDetails['bucketName']
+                            
                             if request_body and 'fileKey' in request_body:
                                 file_key = resolve_asset_file_path(file_key, request_body['fileKey'])
                                 logger.info(f"Using file key from request: {file_key}")

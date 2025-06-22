@@ -106,8 +106,22 @@ export default function ModifyAssetsUploadsPage() {
         if (state) {
             // Extract folder information if available
             if (state.fileTree) {
-                setFolderPath(state.fileTree.relativePath || "");
-                setKeyPrefix(state.fileTree.keyPrefix || "");
+                const relativePath = state.fileTree.relativePath || "";
+                setFolderPath(relativePath);
+                
+                // Ensure that "/" is properly recognized as a root path
+                // If folderPath is "/", ensure keyPrefix is also "/"
+                let prefix = state.fileTree.keyPrefix || "";
+                if (relativePath === "/" || prefix === "/") {
+                    prefix = "/";
+                }
+                setKeyPrefix(prefix);
+                
+                console.log("ModifyAssetsUploads - Path Info:", { 
+                    relativePath, 
+                    prefix, 
+                    originalKeyPrefix: state.fileTree.keyPrefix 
+                });
                 
                 // If we have assetId and databaseId from URL params but no assetDetailState,
                 // update the assetDetail with the available information
@@ -191,8 +205,15 @@ export default function ModifyAssetsUploadsPage() {
         setShowUploadWorkflow(true);
     };
 
-    // Check if we're uploading to root path
+    // Check if we're uploading to root path (including explicit "/" path)
     const isRootPath = !keyPrefix || keyPrefix === "" || keyPrefix === "/";
+    
+    // Debug log to help troubleshoot path issues
+    console.log("ModifyAssetsUploads - Path Check:", { 
+        folderPath, 
+        keyPrefix, 
+        isRootPath 
+    });
 
     return (
         <Box padding={{ top: false ? "s" : "m", horizontal: "l" }}>
@@ -275,7 +296,7 @@ export default function ModifyAssetsUploadsPage() {
                                                 onChange={handleFileSelection}
                                             />
                                             
-                                            {/* Preview File Selection - Only show when uploading to root path */}
+                                            {/* Preview File Selection - Only show when uploading to root path (including "/") */}
                                             {isRootPath && (
                                                 <FileUpload
                                                     label="Preview File (Optional)"

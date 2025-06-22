@@ -4,7 +4,7 @@
 import json
 from common.validators import validate
 from handlers.auth import request_to_claims
-from handlers.metadata import build_response, ValidationError, table, validate_event
+from handlers.metadata import build_response, ValidationError, metadata_table, validate_event, normalize_s3_path
 from handlers.authz import CasbinEnforcer
 
 from common.dynamodb import get_asset_object_from_id
@@ -15,7 +15,7 @@ logger = safeLogger(service="DeleteMetadata")
 
 
 def delete_item(databaseId, assetId):
-    table.delete_item(
+    metadata_table.delete_item(
         Key={
             "databaseId": databaseId,
             "assetId": assetId,

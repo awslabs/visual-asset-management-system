@@ -729,6 +729,34 @@ paths:
               - $ref: "#/components/parameters/maxItemsParam"
               - $ref: "#/components/parameters/pageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
+    /buckets:
+        get:
+            summary: "List all S3 bucket configurations."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/getBucketsResponse"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
         delete:
             summary: "Delete a database."
             responses:
@@ -920,45 +948,6 @@ paths:
               required: true
               schema:
                 $ref: '#/components/schemas/id_regex'
-    /database/{databaseId}/assets/{assetId}/columns:
-        get:
-            summary: "For CSV assets, get the names of all column headers."
-            responses:
-                "200":
-                    description: OK
-                "404":
-                    description: Database OR Asset not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-            parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
-              - name: "assetId"
-                in: "path"
-                description: "Unique identifier for asset."
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-              - name: "databaseId"
-                in: "path"
-                description: "Unique identifier for database."
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-              - name: "list"
-                in: "query"
-                required: true
-                schema:
-                    type: "boolean"
     /database/{databaseId}/assets/{assetId}/download:
         post:
             summary: "Generate presigned url for downloading the given or latest version of an asset"
@@ -1801,39 +1790,6 @@ paths:
                     $ref: '#/components/schemas/id_regex'
             security:
               - DefaultCognitoAuthorizer: []
-    
-    /database/{databaseId}/assets/{assetId}/metadata:
-        get:
-            summary: "For CSV assets, get certain data within the document based on provided variables."
-            responses:
-                "200":
-                    description: Database OR Asset not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-        parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
-              - name: databaseId
-                in: path
-                description: Database ID
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-              - name: assetId
-                in: path
-                description: Asset ID
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
     /database/{databaseId}/assets/{assetId}/revert:
         post:
             summary: "Revert an asset to a previous version."
@@ -3559,9 +3515,13 @@ components:
                 description:
                     #example: 3d models used in training programs.
                     $ref: "#/components/schemas/string256Param"
+                defaultBucketId:
+                    #example: 550e8400-e29b-41d4-a716-446655440000
+                    $ref: '#/components/schemas/uuid_regex'
             required:
                 - databaseId
                 - description
+                - defaultBucketId
         email_pattern_regex: 
             type: string
             pattern: ^[\w\-\.\+]+@([\w-]+\.)+[\w-]{2,4}$
@@ -4459,6 +4419,33 @@ components:
                 - pipelineId
                 - workflowId
                 - description
+        bucket:
+            type: object
+            properties:
+                bucketId:
+                    $ref: '#/components/schemas/id_regex'
+                bucketName:
+                    type: string
+                    description: "Name of the S3 bucket used for asset storage"
+                baseAssetsPrefix:
+                    type: string
+                    description: "Base prefix path within the bucket for assets"
+            required:
+                - bucketId
+                - bucketName
+                - baseAssetsPrefix
+        getBucketsResponse:
+            type: object
+            properties:
+                Items:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/bucket"
+                NextToken:
+                    type: string
+                    description: "Token for pagination"
+            required:
+                - Items
     parameters:
       maxItemsParam:
         name: maxItems

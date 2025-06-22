@@ -121,7 +121,7 @@ export class AssetUploadService {
      */
     async addMetadata(databaseId: string, assetId: string, metadata: Metadata): Promise<any> {
         try {
-            const response = await API.post("api", `metadata/${databaseId}/${assetId}`, {
+            const response = await API.post("api", `database/${databaseId}/assets/${assetId}/metadata`, {
                 "Content-type": "application/json",
                 body: { 
                     metadata,

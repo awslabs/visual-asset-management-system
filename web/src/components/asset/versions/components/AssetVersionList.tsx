@@ -76,7 +76,10 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
         versionsForComparison,
         handleVersionSelectionForComparison,
         filterText,
-        setFilterText
+        setFilterText,
+        // Additional properties needed for comparison UI
+        showComparisonOptions,
+        comparisonType
     } = context;
     
     // Debug effect to track re-renders
@@ -252,23 +255,44 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                 const selectionIndex = getComparisonSelectionIndex(item);
                 
                 return (
-                    <Button
-                        variant={isSelected ? "primary" : "normal"}
-                        onClick={(e) => {
-                            e.stopPropagation(); // Prevent row selection
-                            handleVersionSelectionForComparison(item);
-                        }}
-                        iconName={isSelected ? "check" : "add-plus"}
-                        ariaLabel={
-                            isSelected 
-                                ? `Remove version ${item.Version} from comparison`
-                                : `Add version ${item.Version} to comparison`
-                        }
-                    >
-                        {isSelected 
-                            ? (selectionIndex > -1 ? `Selected (${selectionIndex + 1})` : "Selected") 
-                            : "Select"}
-                    </Button>
+                    <SpaceBetween direction="horizontal" size="xs">
+                        <Button
+                            variant={isSelected ? "primary" : "normal"}
+                            onClick={(e) => {
+                                e.stopPropagation(); // Prevent row selection
+                                console.log('AssetVersionList - Select button clicked for version:', item);
+                                console.log('AssetVersionList - Current versionsForComparison before selection:', versionsForComparison);
+                                
+                                // Directly call the function with the version
+                                handleVersionSelectionForComparison(item);
+                                
+                                console.log('AssetVersionList - Selection completed for version:', item.Version);
+                            }}
+                            iconName={isSelected ? "check" : "add-plus"}
+                            ariaLabel={
+                                isSelected 
+                                    ? `Remove version ${item.Version} from comparison`
+                                    : `Add version ${item.Version} to comparison`
+                            }
+                        >
+                            {isSelected 
+                                ? (selectionIndex > -1 ? `Selected (${selectionIndex + 1})` : "Selected") 
+                                : "Select for Comparison"}
+                        </Button>
+                        <Button
+                            variant="normal"
+                            onClick={(e) => {
+                                e.stopPropagation(); // Prevent row selection
+                                console.log('AssetVersionList - Compare with Current button clicked for version:', item);
+                                // Pass true for forceWithCurrent parameter
+                                handleVersionSelectionForComparison(item, true);
+                            }}
+                            iconName="copy"
+                            ariaLabel={`Compare version ${item.Version} with current files`}
+                        >
+                            Compare with Current
+                        </Button>
+                    </SpaceBetween>
                 );
             }
         },
@@ -398,44 +422,48 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                     }
                 }}
                 header={
-                    <SpaceBetween direction="vertical" size="xs">
-                        <SpaceBetween direction="horizontal" size="xs">
-                            <div>
-                                <strong>Total versions:</strong> {totalVersions}
-                                {selectedVersion && !compareMode && (
-                                    <span style={{ marginLeft: '12px' }}>
-                                        <Badge color="blue">Selected: v{selectedVersion.Version}</Badge>
-                                    </span>
-                                )}
-                            </div>
-                            {compareMode && versionToCompare && (
-                                <Badge color="blue">
-                                    Selected for comparison: v{versionToCompare.Version}
-                                </Badge>
-                            )}
-                            {versionsForComparison.length > 0 && (
+                    <div>
+                        <SpaceBetween direction="vertical" size="xs">
+                            <SpaceBetween direction="horizontal" size="xs">
                                 <div>
-                                    <strong>Selected for comparison:</strong>{' '}
-                                    {versionsForComparison.map((v, index) => (
-                                        <span key={v.Version} style={{ marginRight: '8px' }}>
-                                            <Badge color="blue">
-                                                {index + 1}: v{v.Version}
-                                            </Badge>
+                                    <strong>Total versions:</strong> {totalVersions}
+                                    {selectedVersion && !compareMode && (
+                                        <span style={{ marginLeft: '12px' }}>
+                                            <Badge color="blue">Selected: v{selectedVersion.Version}</Badge>
                                         </span>
-                                    ))}
-                                    {versionsForComparison.length === 1 && (
-                                        <span> (Select one more version to compare)</span>
                                     )}
                                 </div>
-                            )}
+                                {compareMode && versionToCompare && (
+                                    <Badge color="blue">
+                                        Selected for comparison: v{versionToCompare.Version}
+                                    </Badge>
+                                )}
+                                {versionsForComparison.length > 0 && showComparisonOptions && (
+                                    <div>
+                                        <strong>Selected for comparison:</strong>{' '}
+                                        {versionsForComparison.map((v, index) => (
+                                            <span key={v.Version} style={{ marginRight: '8px' }}>
+                                                <Badge color="blue">
+                                                    {index + 1}: v{v.Version}
+                                                </Badge>
+                                            </span>
+                                        ))}
+                                        {versionsForComparison.length === 1 && comparisonType === 'two-versions' && (
+                                            <span> (Select one more version to compare)</span>
+                                        )}
+                                    </div>
+                                )}
+                            </SpaceBetween>
                         </SpaceBetween>
-                        <TextFilter
-                            filteringText={filterText}
-                            filteringPlaceholder="Find versions"
-                            filteringAriaLabel="Filter versions"
-                            onChange={({ detail }) => setFilterText(detail.filteringText)}
-                        />
-                    </SpaceBetween>
+                    </div>
+                }
+                filter={
+                    <TextFilter
+                        filteringText={filterText}
+                        filteringPlaceholder="Find versions"
+                        filteringAriaLabel="Filter versions"
+                        onChange={({ detail }) => setFilterText(detail.filteringText)}
+                    />
                 }
                 pagination={
                     <Pagination

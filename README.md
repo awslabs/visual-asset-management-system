@@ -173,13 +173,9 @@ It is reccommended that VAMS be upgraded between major version changes, major co
 
 **NOTE** This should not be used for VAMS version upgrades or A/B deployments which should follow the instructions in ![VAMS Deployment Data Migration](./infra/deploymentDataMigration/README.md).
 
-VAMS can be deployed with a staging bucket config parameter to enable copying from an existing asset bucket.
+VAMS can be deployed with a external buckets to enable using non-VAMS created buckets for assets.
 
-To deploy with staging bucket, just set the `app.bucketMigrationStaging.assetBucketName` config parameter in `./infra/config/config.json` to your cdk deployment and VAMS will register your existing bucket as a staging bucket.
 
-Once the deployment is complete, you can invoke the `/assets/uploadAssetWorkflow` API to start copying the assets into the VAMS S3 bucket and registering the assets.
-
-Please refer to the uploadAssetWorkflow in the [API docs](./VAMS_API.yaml) to find out about the API request body.
 
 ### Configuration Options
 

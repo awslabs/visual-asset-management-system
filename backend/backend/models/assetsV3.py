@@ -50,12 +50,10 @@ class AssetLinksModel(BaseModel, extra=Extra.ignore):
 class AssetLocationModel(BaseModel, extra=Extra.ignore):
     """Model for asset location in S3"""
     Key: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
-    Bucket: Optional[str] = None
 
 class AssetPreviewLocationModel(BaseModel, extra=Extra.ignore):
     """Model for asset preview location in S3"""
     Key: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
-    Bucket: Optional[str] = None
 
 class CurrentVersionModel(BaseModel, extra=Extra.ignore):
     """Model for current version information"""
@@ -88,7 +86,6 @@ class CreateAssetRequestModel(BaseModel, extra=Extra.ignore):
     isDistributable: bool
     tags: Optional[list[str]] = []
     assetLinks: Optional[AssetLinksModel] = None
-    s3Bucket: Optional[str] = None  # Optional override for default S3 bucket
     bucketExistingKey: Optional[str] = None  # Optional existing key in the S3 bucket
 
     @root_validator
@@ -580,6 +577,8 @@ class AssetResponseModel(BaseModel, extra=Extra.ignore):
     tags: Optional[List[str]] = []
     assetType: Optional[str] = None
     status: Optional[str] = "active" #Used for determining archived vs non-archived (active)
+    bucketId: str = None
+    bucketName: str = None
     currentVersion: Optional[CurrentVersionModel] = None
     assetLocation: Optional[AssetLocationModel] = None
     previewLocation: Optional[AssetPreviewLocationModel] = None

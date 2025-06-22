@@ -75,7 +75,6 @@ export function buildAuthConstraintsFunction(
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
-    environment?: { [key: string]: string }
 ): lambda.Function {
     const name = "authConstraintsService";
     const authServiceFun = new lambda.Function(scope, name, {
@@ -94,18 +93,12 @@ export function buildAuthConstraintsFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
-            ...environment,
         },
     });
     storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(authServiceFun);
-    storageResources.dynamo.assetStorageTable.grantReadData(authServiceFun);
-    storageResources.dynamo.databaseStorageTable.grantReadData(authServiceFun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(authServiceFun);
     storageResources.dynamo.rolesStorageTable.grantReadData(authServiceFun);
     kmsKeyLambdaPermissionAddToResourcePolicy(authServiceFun, storageResources.encryption.kmsKey);

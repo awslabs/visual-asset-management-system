@@ -23,12 +23,10 @@ import {
     buildListWorkflowExecutionsFunction,
     buildWorkflowService,
     buildCreateWorkflowFunction,
-    buildRunWorkflowFunction,
+    buildExecuteWorkflowFunction,
     buildProcessWorkflowExecutionOutputFunction,
 } from "../../lambdaBuilder/workflowFunctions";
 import {
-    buildAssetColumnsFunction,
-    buildAssetMetadataFunction,
     buildAssetService,
     buildStreamAuxiliaryPreviewAssetFunction,
     buildDownloadAssetFunction,
@@ -65,7 +63,7 @@ import {
     buildGetAssetLinksFunction,
     buildDeleteAssetLinksFunction,
 } from "../../lambdaBuilder/assetsLinkFunctions";
-import { buildSearchFunction } from "../../lambdaBuilder/searchFunctions";
+import { buildSearchFunction } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
 import {
     buildTagTypeService,
     buildCreateTagTypeFunction,
@@ -171,7 +169,7 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, createDatabaseFunction, {
         routePath: "/databases",
-        method: apigwv2.HttpMethod.PUT,
+        method: apigwv2.HttpMethod.POST,
         api: api,
     });
 
@@ -196,6 +194,12 @@ export function apiBuilder(
     attachFunctionToApi(scope, databaseService, {
         routePath: "/databases/{databaseId}",
         method: apigwv2.HttpMethod.DELETE,
+        api: api,
+    });
+    
+    attachFunctionToApi(scope, databaseService, {
+        routePath: "/buckets",
+        method: apigwv2.HttpMethod.GET,
         api: api,
     });
 
@@ -670,34 +674,6 @@ export function apiBuilder(
         api: api,
     });
 
-    const assetMetadataFunction = buildAssetMetadataFunction(
-        scope,
-        lambdaCommonBaseLayer,
-        storageResources,
-        config,
-        vpc,
-        subnets
-    );
-    attachFunctionToApi(scope, assetMetadataFunction, {
-        routePath: "/database/{databaseId}/assets/{assetId}/metadata",
-        method: apigwv2.HttpMethod.GET,
-        api: api,
-    });
-
-    const assetColumnsFunction = buildAssetColumnsFunction(
-        scope,
-        lambdaCommonBaseLayer,
-        storageResources,
-        config,
-        vpc,
-        subnets
-    );
-    attachFunctionToApi(scope, assetColumnsFunction, {
-        routePath: "/database/{databaseId}/assets/{assetId}/columns",
-        method: apigwv2.HttpMethod.GET,
-        api: api,
-    });
-
     const createAssetFunction = buildCreateAssetFunction(
         scope,
         lambdaCommonBaseLayer,
@@ -819,7 +795,7 @@ export function apiBuilder(
     ];
     for (let i = 0; i < methods.length; i++) {
         attachFunctionToApi(scope, metadataCrudFunctions[i], {
-            routePath: "/metadata/{databaseId}/{assetId}",
+            routePath: "/database/{databaseId}/assets/{assetId}/metadata",
             method: methods[i],
             api: api,
         });
@@ -984,7 +960,7 @@ export function apiBuilder(
         api: api,
     });
 
-    const runWorkflowFunction = buildRunWorkflowFunction(
+    const runWorkflowFunction = buildExecuteWorkflowFunction(
         scope,
         lambdaCommonBaseLayer,
         storageResources,

@@ -205,6 +205,7 @@ Additionally it shows which object authorization checks it does for a particular
 -   `/databases/{databaseId}` - GET/DELETE
 -   -   `Database` (databaseId) - GET (api: GET)
 -   -   `Database` (databaseId) - DELETE (api: DELETE)
+-   `/buckets` - GET
 -   `/database/{databaseId}/assets` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/database/{databaseId}/assets/{assetId}` - GET/PUT
@@ -230,9 +231,6 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   `/database/{databaseId}/assets/{assetId}/deleteAsset` - DELETE
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
--   `/database/{databaseId}/assets/{assetId}/columns` - GET
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
--   `/database/{databaseId}/assets/{assetId}/metadata` - GET
 -   `/database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
 -   `/database/{databaseId}/assets/{assetId}/createVersion` - POST
@@ -255,6 +253,11 @@ Additionally it shows which object authorization checks it does for a particular
 -   `/database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   -   `Workflow` (databaseId, workflowId) - GET (api: GET)
+-   `/database/{databaseId}/assets/{assetId}/metadata` - GET/PUT/POST/DELETE
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   `/database/{databaseId}/pipelines` - GET
 -   -   `Pipeline` (databaseId, pipelineId, pipelineType, pipelineExecutionType) - GET (api: GET)
 -   `/database/{databaseId}/workflows` - GET
@@ -270,11 +273,6 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
 -   `/ingest-asset` - POST
 -   -   `Asset` (assetId, assetName databaseId) - PUT (api: POST)
--   `/metadata/{databaseId}/{assetId}` - GET/PUT/POST/DELETE
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   `/metadataschema/{databaseId}` - GET/PUT/POST
 -   -   `MetadataSchema` (databaseId, field) - GET (api: GET)
 -   -   `MetadataSchema` (databaseId, field) - POST (api: PUT)

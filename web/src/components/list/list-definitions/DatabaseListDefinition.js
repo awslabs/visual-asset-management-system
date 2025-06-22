@@ -13,9 +13,10 @@ export const DatabaseListDefinition = new ListDefinition({
     singularNameTitleCase: Synonyms.Database,
     pluralName: Synonyms.databases,
     pluralNameTitleCase: Synonyms.Databases,
-    visibleColumns: ["databaseId", "description", "assetCount"],
+    visibleColumns: ["databaseId", "description", "bucketName", "baseAssetsPrefix", "assetCount"],
     filterColumns: [
         { name: "databaseId", placeholder: "Name" },
+        { name: "bucketName", placeholder: "Bucket Name" },
         { name: "assetCount", placeholder: `${Synonyms.Asset} Count` },
     ],
     elementId: "databaseId",
@@ -37,6 +38,18 @@ export const DatabaseListDefinition = new ListDefinition({
             header: "Description",
             cellWrapper: (props) => <>{props.children}</>,
             sortingField: "description",
+        }),
+        new ColumnDefinition({
+            id: "bucketName",
+            header: "Bucket Name",
+            cellWrapper: (props) => <>{props.children}</>,
+            sortingField: "bucketName",
+        }),
+        new ColumnDefinition({
+            id: "baseAssetsPrefix",
+            header: "Base Bucket Prefix",
+            cellWrapper: (props) => <>{props.children}</>,
+            sortingField: "baseAssetsPrefix",
         }),
         new ColumnDefinition({
             id: "assetCount",

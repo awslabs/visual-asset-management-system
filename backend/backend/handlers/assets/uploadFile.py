@@ -55,15 +55,17 @@ MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
 
 # Load environment variables
 try:
-    asset_bucket_name_default = os.environ["S3_ASSET_STORAGE_BUCKET"]
+    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
     asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
     asset_upload_table_name = os.environ["ASSET_UPLOAD_TABLE_NAME"]
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
+    token_timeout = os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
 
 # Initialize DynamoDB tables
+buckets_table = dynamodb.Table(s3_asset_buckets_table)
 asset_table = dynamodb.Table(asset_storage_table_name)
 asset_upload_table = dynamodb.Table(asset_upload_table_name)
 
@@ -80,7 +82,7 @@ def calculate_num_parts(file_size=None, num_parts=None, max_part_size=MAX_PART_S
     else:
         raise ValueError("Either file_size or num_parts must be provided")
 
-def generate_presigned_url(key, upload_id, part_number, bucket, expiration=86400):
+def generate_presigned_url(key, upload_id, part_number, bucket, expiration=token_timeout):
     """Generate a presigned URL for a multipart upload part"""
     url = s3.generate_presigned_url(
         ClientMethod='upload_part',
@@ -93,6 +95,41 @@ def generate_presigned_url(key, upload_id, part_number, bucket, expiration=86400
         ExpiresIn=expiration
     )
     return url
+
+def get_default_bucket_details(bucketId):
+    """Get default S3 bucket details from database default bucket DynamoDB"""
+    try:
+
+        bucket_response = buckets_table.query(
+            KeyConditionExpression=Key('bucketId').eq(bucketId),
+            Limit=1
+        )
+        # Use the first item from the query results
+        bucket = bucket_response.get("Items", [{}])[0] if bucket_response.get("Items") else {}
+        bucket_id = bucket.get('bucketId')
+        bucket_name = bucket.get('bucketName')
+        base_assets_prefix = bucket.get('baseAssetsPrefix')
+
+        #Check to make sure we have what we need
+        if not bucket_name or not base_assets_prefix:
+            raise VAMSGeneralErrorResponse(f"Error getting database default bucket details: {str(e)}")
+        
+        #Make sure we end in a slash for the path
+        if not base_assets_prefix.endswith('/'):
+            base_assets_prefix += '/'
+
+        # Remove leading slash from file path if present
+        if base_assets_prefix.startswith('/'):
+            base_assets_prefix = base_assets_prefix[1:]
+
+        return {
+            'bucketId': bucket_id,
+            'bucketName': bucket_name,
+            'baseAssetsPrefix': base_assets_prefix
+        }
+    except Exception as e:
+        logger.exception(f"Error getting bucket details: {e}")
+        raise VAMSGeneralErrorResponse(f"Error getting bucket details: {str(e)}")
 
 def get_asset_details(databaseId, assetId):
     """Get asset details from DynamoDB"""
@@ -193,19 +230,16 @@ def is_file_archived(metadata):
     return (vams_status in ['archived', 'deleted'] or 
             storage_class in ['GLACIER', 'DEEP_ARCHIVE'])
 
-def determine_asset_type(assetId, bucket=None, prefix=None):
+def determine_asset_type(assetId, bucket, prefix):
     """Determine the asset type based on S3 contents"""
     try:
-        # Use provided bucket and prefix or default to asset_bucket_name_default and assetId/
-        bucket_to_use = bucket if bucket else asset_bucket_name_default
-        prefix_to_use = prefix if prefix else f'{assetId}/'
         
-        logger.info(f"Determining asset type from bucket: {bucket_to_use}, prefix: {prefix_to_use}")
+        logger.info(f"Determining asset type from bucket: {bucket}, prefix: {prefix}")
         
         # List all objects with the specified prefix
         response = s3.list_objects_v2(
-            Bucket=bucket_to_use,
-            Prefix=prefix_to_use,
+            Bucket=bucket,
+            Prefix=prefix,
         )
         
         # Get the contents and filter out folder markers (objects ending with '/')
@@ -221,7 +255,7 @@ def determine_asset_type(assetId, bucket=None, prefix=None):
             try:
                 # Get object metadata to check if archived
                 head_response = s3.head_object(
-                    Bucket=bucket_to_use,
+                    Bucket=bucket,
                     Key=item['Key']
                 )
                 
@@ -235,7 +269,7 @@ def determine_asset_type(assetId, bucket=None, prefix=None):
         
         # Count the actual files (excluding folder markers and archived files)
         file_count = len(non_archived_files)
-        logger.info(f"Found {file_count} non-archived files in {bucket_to_use}/{prefix_to_use} (total objects: {len(contents)})")
+        logger.info(f"Found {file_count} non-archived files in {bucket}/{prefix} (total objects: {len(contents)})")
         
         # Determine asset type
         if file_count == 0:
@@ -340,11 +374,14 @@ def create_folder(databaseId: str, assetId: str, request_model: CreateFolderRequ
     if not asset:
         raise VAMSGeneralErrorResponse(f"Asset {assetId} not found in database {databaseId}")
     
-    # Get the asset's base location
-    asset_bucket = asset.get('assetLocation', {}).get('Bucket', asset_bucket_name_default)
-    asset_base_key = asset.get('assetLocation', {}).get('Key', f"{assetId}/")
-
+    # Get bucket details from asset's bucketId
+    bucketDetails = get_default_bucket_details(asset['bucketId'])
+    asset_bucket = bucketDetails['bucketName']
+    baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
     
+    # Get the asset's base location
+    asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
+
     # Normalize the path by combining asset base key with the relative folder path
     normalized_key_path = normalize_s3_path(asset_base_key, request_model.relativeKey)
     
@@ -400,6 +437,11 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     # Process files
     file_responses = []
     total_parts = 0
+            
+    # Get bucket details from asset's bucketId
+    bucketDetails = get_default_bucket_details(asset['bucketId'])
+    bucket_name = bucketDetails['bucketName']
+    baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
     
     for file in request_model.files:
         # Validate file extension
@@ -413,15 +455,15 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         # Determine final S3 key based on upload type
         if uploadType == "assetFile":
             # Get the asset's base key from assetLocation
-            asset_base_key = asset.get('assetLocation', {}).get('Key', f"{assetId}/")
+            asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
             final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
         else:  # assetPreview
             #We only want the filename and none of the path if there is a path
             filename = os.path.basename(file.relativeKey)
-            final_s3_key = f"{PREVIEW_PREFIX}{assetId}/{filename}"
+            final_s3_key = f"{baseAssetsPrefix}{PREVIEW_PREFIX}{assetId}/{filename}"
             
         # Determine temporary S3 key by adding temp prefix to final key
-        temp_s3_key = f"{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
+        temp_s3_key = f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
         
         # Calculate number of parts
         num_parts = calculate_num_parts(file.file_size, file.num_parts)
@@ -429,7 +471,7 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         
         # Create multipart upload in temporary location with uploadId in metadata
         resp = s3.create_multipart_upload(
-            Bucket=asset_bucket_name_default,
+            Bucket=bucket_name,
             Key=temp_s3_key,
             ContentType='application/octet-stream',
             Metadata={
@@ -447,7 +489,7 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
                 temp_s3_key, 
                 s3_upload_id, 
                 part_number, 
-                asset_bucket_name_default
+                bucket_name
             )
             part_urls.append(UploadPartModel(
                 PartNumber=part_number,
@@ -527,6 +569,11 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
         )
     except Exception as e:
         logger.warning(f"Failed to update upload status: {e}")
+
+    # Get bucket details from asset's bucketId
+    bucketDetails = get_default_bucket_details(asset['bucketId'])
+    bucket_name = bucketDetails['bucketName']
+    baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
     
     # Track file completion results
     file_results = []
@@ -550,17 +597,17 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             # Determine final S3 key based on upload type
             if uploadType == "assetFile":
                 # Get the asset's base key from assetLocation
-                asset_base_key = asset.get('assetLocation', {}).get('Key', f"{assetId}/")
+                asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
                 final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
             else:  # assetPreview
                 #We only want the filename and none of the path if there is a path
                 filename = os.path.basename(file.relativeKey)
-                final_s3_key = f"{PREVIEW_PREFIX}{assetId}/{filename}"
+                final_s3_key = f"{baseAssetsPrefix}{PREVIEW_PREFIX}{assetId}/{filename}"
             
             # Verify the file exists in S3
             try:
                 head_response = s3.head_object(
-                    Bucket=asset_bucket_name_default,
+                    Bucket=bucket_name,
                     Key=file.tempKey
                 )
                 
@@ -585,7 +632,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 continue
             
             # Validate file content type
-            if not validateS3AssetExtensionsAndContentType(asset_bucket_name_default, file.tempKey):
+            if not validateS3AssetExtensionsAndContentType(bucket_name, file.tempKey):
                 file_results.append(FileCompletionResult(
                     relativeKey=file.relativeKey,
                     uploadIdS3="external",
@@ -632,18 +679,15 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             overallSuccess=False
         )
     
-    # Get the asset's specified bucket and key location
-    asset_bucket = asset.get('assetLocation', {}).get('Bucket', asset_bucket_name_default)
-    
     # Copy successful files from temporary to final location
     for file_detail in successful_files:
         
         logger.info(f"Copying file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
         
         copy_success = copy_s3_object(
-            asset_bucket_name_default, 
+            bucket_name, 
             file_detail['temp_s3_key'], 
-            asset_bucket, 
+            bucket_name, 
             file_detail['final_s3_key']
         )
         
@@ -657,12 +701,12 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                     has_failures = True
         else:
             # Delete temporary file after successful copy
-            delete_s3_object(asset_bucket_name_default, file_detail['temp_s3_key'])
+            delete_s3_object(bucket_name, file_detail['temp_s3_key'])
     
     # Update asset record based on upload type
     if uploadType == "assetFile" and any(f.success for f in file_results):
         # Determine asset type using the asset's bucket and key location
-        assetType = determine_asset_type(assetId, asset_bucket, asset_base_key)
+        assetType = determine_asset_type(assetId, bucket_name, asset_base_key)
         logger.info(f"Asset type determined for asset {assetId}: {assetType}")
         
         
@@ -685,8 +729,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
         if successful_preview:
             # Update asset with preview location
             asset['previewLocation'] = {
-                'Key': successful_preview['final_s3_key'],
-                'Bucket': asset_bucket_name_default
+                'Key': successful_preview['final_s3_key']
             }
             
             # Save updated asset
@@ -766,6 +809,11 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
         )
     except Exception as e:
         logger.warning(f"Failed to update upload status: {e}")
+
+    # Get bucket details from asset's bucketId
+    bucketDetails = get_default_bucket_details(asset['bucketId'])
+    bucket_name = bucketDetails['bucketName']
+    baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
     
     # Track file completion results
     file_results = []
@@ -778,14 +826,14 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
             # Construct the temporary S3 key directly (same logic as initialization)
             if uploadType == "assetFile":
                 # Get the asset's base key from assetLocation
-                asset_base_key = asset.get('assetLocation', {}).get('Key', f"{assetId}/")
+                asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
                 final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
             else:  # assetPreview
                 #We only want the filename and none of the path if there is a path
                 filename = os.path.basename(file.relativeKey)
-                final_s3_key = f"{PREVIEW_PREFIX}{assetId}/{filename}"
+                final_s3_key = f"{baseAssetsPrefix}{PREVIEW_PREFIX}{assetId}/{filename}"
                 
-            temp_s3_key = f"{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
+            temp_s3_key = f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
             
             # Get the number of parts from the request
             actual_parts = sorted([p.PartNumber for p in file.parts])
@@ -807,7 +855,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
             # Complete multipart upload in temporary location
             try:
                 s3.complete_multipart_upload(
-                    Bucket=asset_bucket_name_default,
+                    Bucket=bucket_name,
                     Key=temp_s3_key,
                     UploadId=file.uploadIdS3,
                     MultipartUpload={'Parts': [{'PartNumber': p.PartNumber, 'ETag': p.ETag} for p in file.parts]}
@@ -818,7 +866,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                 # Abort the multipart upload to clean up S3 resources
                 try:
                     s3.abort_multipart_upload(
-                        Bucket=asset_bucket_name_default,
+                        Bucket=bucket_name,
                         Key=temp_s3_key,
                         UploadId=file.uploadIdS3
                     )
@@ -837,7 +885,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
             # Now verify the metadata of the completed object
             try:
                 head_response = s3.head_object(
-                    Bucket=asset_bucket_name_default,
+                    Bucket=bucket_name,
                     Key=temp_s3_key
                 )
                 
@@ -848,7 +896,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                 # Verify the uploadId matches
                 if s3_upload_id != uploadId:
                     # Delete the uploaded file since metadata doesn't match
-                    delete_s3_object(asset_bucket_name_default, temp_s3_key)
+                    delete_s3_object(bucket_name, temp_s3_key)
                     
                     file_results.append(FileCompletionResult(
                         relativeKey=file.relativeKey,
@@ -862,7 +910,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                 # Check file size for preview files
                 if uploadType == "assetPreview" and head_response.get('ContentLength', 0) > MAX_PREVIEW_FILE_SIZE:
                     # Delete the uploaded file since it exceeds the size limit
-                    delete_s3_object(asset_bucket_name_default, temp_s3_key)
+                    delete_s3_object(bucket_name, temp_s3_key)
                     
                     file_results.append(FileCompletionResult(
                         relativeKey=file.relativeKey,
@@ -875,7 +923,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                 
             except Exception as e:
                 # Delete the uploaded file since we couldn't verify metadata
-                delete_s3_object(asset_bucket_name_default, temp_s3_key)
+                delete_s3_object(bucket_name, temp_s3_key)
                 
                 logger.exception(f"Error verifying file metadata: {e}")
                 file_results.append(FileCompletionResult(
@@ -896,9 +944,9 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
             }
             
             # Validate file content type
-            if not validateS3AssetExtensionsAndContentType(asset_bucket_name_default, temp_s3_key):
+            if not validateS3AssetExtensionsAndContentType(bucket_name, temp_s3_key):
                 # Delete the uploaded file
-                delete_s3_object(asset_bucket_name_default, temp_s3_key)
+                delete_s3_object(bucket_name, temp_s3_key)
                 
                 file_results.append(FileCompletionResult(
                     relativeKey=file.relativeKey,
@@ -923,7 +971,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
             # Abort the multipart upload to clean up S3 resources
             try:
                 s3.abort_multipart_upload(
-                    Bucket=asset_bucket_name_default,
+                    Bucket=bucket_name,
                     Key=temp_s3_key,  # Use temp_s3_key directly since it's defined in the outer try block
                     UploadId=file.uploadIdS3
                 )
@@ -950,8 +998,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
         )
     
     # Get the asset's specified bucket and key location
-    asset_bucket = asset.get('assetLocation', {}).get('Bucket', asset_bucket_name_default)
-    asset_base_key = asset.get('assetLocation', {}).get('Key', f"{assetId}/")
+    asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
     
     # Copy successful files from temporary to final location
     for file_detail in successful_files:
@@ -959,9 +1006,9 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
         logger.info(f"Copying file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
         
         copy_success = copy_s3_object(
-            asset_bucket_name_default, 
+            bucket_name, 
             file_detail['temp_s3_key'], 
-            asset_bucket, 
+            bucket_name, 
             file_detail['final_s3_key']
         )
         
@@ -975,12 +1022,12 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                     has_failures = True
         else:
             # Delete temporary file after successful copy
-            delete_s3_object(asset_bucket_name_default, file_detail['temp_s3_key'])
+            delete_s3_object(bucket_name, file_detail['temp_s3_key'])
     
     # Update asset record based on upload type
     if uploadType == "assetFile" and any(f.success for f in file_results):
         # Determine asset type using the asset's bucket and key location
-        assetType = determine_asset_type(assetId, asset_bucket, asset_base_key)
+        assetType = determine_asset_type(assetId, bucket_name, asset_base_key)
         logger.info(f"Asset type determined for asset {assetId}: {assetType}")
         
         
@@ -1003,8 +1050,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
         if successful_preview:
             # Update asset with preview location
             asset['previewLocation'] = {
-                'Key': successful_preview['final_s3_key'],
-                'Bucket': asset_bucket_name_default
+                'Key': successful_preview['final_s3_key']
             }
             
             # Save updated asset

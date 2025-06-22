@@ -24,6 +24,7 @@ import { NagSuppressions } from "cdk-nag";
 import { CfnOutput } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as ServiceHelper from "../../../../../helper/service-helper";
+import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import { Service } from "../../../../../helper/service-helper";
 import * as Config from "../../../../../../config/config";
 import { generateUniqueNameHash } from "../../../../../helper/security";
@@ -76,16 +77,26 @@ export class RapidPipelineConstruct extends NestedStack {
          */
         const inputBucketPolicy = new iam.PolicyDocument({
             statements: [
-                new iam.PolicyStatement({
-                    actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-                    resources: [
-                        props.storageResources.s3.assetBucket.bucketArn,
-                        `${props.storageResources.s3.assetBucket.bucketArn}/*`,
-                    ],
-                }),
-                new iam.PolicyStatement({
-                    actions: ["s3:ListBucket"],
-                    resources: [props.storageResources.s3.assetBucket.bucketArn],
+                // Add permissions for all asset buckets from the global array
+                ...s3AssetBuckets.getS3AssetBucketRecords().map(record => {
+                    const prefix = record.prefix || '/';
+                    // Ensure the prefix ends with a slash for proper path construction
+                    const normalizedPrefix = prefix.endsWith('/') ? prefix : prefix + '/';
+                    
+                    return new iam.PolicyStatement({
+                        effect: iam.Effect.ALLOW,
+                        actions: [
+                            "s3:PutObject",
+                            "s3:GetObject",
+                            "s3:ListBucket",
+                            "s3:DeleteObject",
+                            "s3:GetObjectVersion",
+                        ],
+                        resources: [
+                            record.bucket.bucketArn,
+                            `${record.bucket.bucketArn}${normalizedPrefix}*`
+                        ],
+                    });
                 }),
             ],
         });
@@ -211,7 +222,6 @@ export class RapidPipelineConstruct extends NestedStack {
         const pipelineEndFunction = buildPipelineEndFunction(
             this,
             props.lambdaCommonBaseLayer,
-            props.storageResources.s3.assetBucket,
             props.storageResources.s3.assetAuxiliaryBucket,
             props.config,
             props.vpc,
@@ -417,7 +427,6 @@ export class RapidPipelineConstruct extends NestedStack {
         const openPipelineFunction = buildOpenPipelineFunction(
             this,
             props.lambdaCommonBaseLayer,
-            props.storageResources.s3.assetBucket,
             props.storageResources.s3.assetAuxiliaryBucket,
             pipelineStateMachine,
             allowedInputFileExtensions,
@@ -431,7 +440,6 @@ export class RapidPipelineConstruct extends NestedStack {
         const rapidPipelineExecuteFunction = buildVamsExecuteRapidPipelineFunction(
             this,
             props.lambdaCommonBaseLayer,
-            props.storageResources.s3.assetBucket,
             props.storageResources.s3.assetAuxiliaryBucket,
             openPipelineFunction,
             props.config,

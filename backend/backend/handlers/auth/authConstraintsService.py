@@ -21,7 +21,7 @@ region = os.environ['AWS_REGION']
 dynamodb = boto3.resource('dynamodb', region_name=region)
 dynamodb_client = boto3.client('dynamodb')
 
-constraintsTableName = os.environ['TABLE_NAME']
+constraintsTableName = os.environ['AUTH_TABLE_NAME']
 
 table = dynamodb.Table(constraintsTableName)
 

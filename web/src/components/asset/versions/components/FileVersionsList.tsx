@@ -15,7 +15,10 @@ import {
     Table,
     Link,
     Badge,
-    ProgressBar
+    ProgressBar,
+    TextFilter,
+    Pagination,
+    CollectionPreferences
 } from '@cloudscape-design/components';
 import { useNavigate, useParams } from 'react-router';
 import { AssetVersionContext, FileVersion } from '../AssetVersionManager';
@@ -35,8 +38,35 @@ export const FileVersionsList: React.FC = () => {
     const {
         loading,
         selectedVersion,
-        selectedVersionDetails
+        selectedVersionDetails,
+        fileFilterText,
+        setFileFilterText,
+        fileCurrentPage,
+        setFileCurrentPage,
+        filePageSize,
+        setFilePageSize,
+        filteredFiles,
+        totalFiles
     } = context;
+    
+    // State for preferences
+    const [preferences, setPreferences] = useState<{
+        pageSize: number;
+        visibleContent: string[];
+    }>({
+        pageSize: filePageSize,
+        visibleContent: ['fileName', 'path', 'size', 'lastModified', 'versionId', 'actions']
+    });
+    
+    // Update preferences when page size changes
+    useEffect(() => {
+        if (preferences.pageSize !== filePageSize) {
+            setPreferences(prev => ({
+                ...prev,
+                pageSize: filePageSize
+            }));
+        }
+    }, [filePageSize]);
     
     // Debug logs to trace data flow
     console.log('FileVersionsList - selectedVersion:', selectedVersion);
@@ -422,7 +452,7 @@ export const FileVersionsList: React.FC = () => {
             )}
             <Table
                 columnDefinitions={columns}
-                items={selectedVersionDetails?.files || []}
+                items={filteredFiles || []}
                 loading={loading}
                 loadingText="Loading file versions"
                 empty={
@@ -430,52 +460,124 @@ export const FileVersionsList: React.FC = () => {
                         <div>No files associated with this asset version</div>
                     </Box>
                 }
-            header={
-                <Box padding="s">
-                    <SpaceBetween direction="vertical" size="xs">
-                        <SpaceBetween direction="horizontal" size="xs">
-                            <div>
-                                <strong>Total files:</strong> {selectedVersionDetails?.files?.length || 0}
-                            </div>
-                            <div>
-                                <strong>Created by:</strong> {selectedVersionDetails?.createdBy || 'System'}
-                            </div>
-                            <div>
-                                <strong>Created on:</strong> {formatDate(selectedVersionDetails?.dateCreated)}
-                            </div>
-                        </SpaceBetween>
-                        {selectedVersionDetails?.comment && (
-                            <div>
-                                <strong>Version comment:</strong> {selectedVersionDetails.comment}
-                            </div>
-                        )}
-                        {selectedVersionDetails?.files && (
-                            <div>
-                                <strong>File status:</strong>{' '}
-                                <span style={{ marginRight: '12px' }}>
-                                    <Badge color="green">
-                                        {selectedVersionDetails.files.filter(f => !f.isPermanentlyDeleted && !f.isLatestVersionArchived).length} Available
-                                    </Badge>
-                                </span>
-                                {selectedVersionDetails.files.some(f => f.isLatestVersionArchived && !f.isPermanentlyDeleted) && (
+                header={
+                    <Box padding="s">
+                        <SpaceBetween direction="vertical" size="xs">
+                            <SpaceBetween direction="horizontal" size="xs">
+                                <div>
+                                    <strong>Total files:</strong> {totalFiles}
+                                </div>
+                                <div>
+                                    <strong>Created by:</strong> {selectedVersionDetails?.createdBy || 'System'}
+                                </div>
+                                <div>
+                                    <strong>Created on:</strong> {formatDate(selectedVersionDetails?.dateCreated)}
+                                </div>
+                            </SpaceBetween>
+                            {selectedVersionDetails?.comment && (
+                                <div>
+                                    <strong>Version comment:</strong> {selectedVersionDetails.comment}
+                                </div>
+                            )}
+                            {selectedVersionDetails?.files && (
+                                <div>
+                                    <strong>File status:</strong>{' '}
                                     <span style={{ marginRight: '12px' }}>
-                                        <Badge color="grey">
-                                            {selectedVersionDetails.files.filter(f => f.isLatestVersionArchived && !f.isPermanentlyDeleted).length} Archived
+                                        <Badge color="green">
+                                            {selectedVersionDetails.files.filter(f => !f.isPermanentlyDeleted && !f.isLatestVersionArchived).length} Available
                                         </Badge>
                                     </span>
-                                )}
-                                {selectedVersionDetails.files.some(f => f.isPermanentlyDeleted) && (
-                                    <span>
-                                        <Badge color="red">
-                                            {selectedVersionDetails.files.filter(f => f.isPermanentlyDeleted).length} Permanently Deleted
-                                        </Badge>
-                                    </span>
-                                )}
-                            </div>
-                        )}
-                    </SpaceBetween>
-                </Box>
-            }
+                                    {selectedVersionDetails.files.some(f => f.isLatestVersionArchived && !f.isPermanentlyDeleted) && (
+                                        <span style={{ marginRight: '12px' }}>
+                                            <Badge color="grey">
+                                                {selectedVersionDetails.files.filter(f => f.isLatestVersionArchived && !f.isPermanentlyDeleted).length} Archived
+                                            </Badge>
+                                        </span>
+                                    )}
+                                    {selectedVersionDetails.files.some(f => f.isPermanentlyDeleted) && (
+                                        <span>
+                                            <Badge color="red">
+                                                {selectedVersionDetails.files.filter(f => f.isPermanentlyDeleted).length} Permanently Deleted
+                                            </Badge>
+                                        </span>
+                                    )}
+                                </div>
+                            )}
+                        </SpaceBetween>
+                    </Box>
+                }
+                filter={
+                    <TextFilter
+                        filteringText={fileFilterText}
+                        filteringPlaceholder="Find files"
+                        filteringAriaLabel="Filter files"
+                        onChange={({ detail }) => setFileFilterText(detail.filteringText)}
+                    />
+                }
+                pagination={
+                    <Pagination
+                        currentPageIndex={fileCurrentPage}
+                        pagesCount={Math.max(1, Math.ceil(totalFiles / filePageSize))}
+                        onChange={({ detail }) => setFileCurrentPage(detail.currentPageIndex)}
+                        ariaLabels={{
+                            nextPageLabel: 'Next page',
+                            previousPageLabel: 'Previous page',
+                            pageLabel: pageNumber => `Page ${pageNumber} of ${Math.max(1, Math.ceil(totalFiles / filePageSize))}`
+                        }}
+                    />
+                }
+                preferences={
+                    <CollectionPreferences
+                        title="Preferences"
+                        confirmLabel="Confirm"
+                        cancelLabel="Cancel"
+                        preferences={preferences}
+                        onConfirm={({ detail }) => {
+                            // Create a new preferences object with the correct types
+                            const newPreferences = {
+                                pageSize: detail.pageSize || preferences.pageSize,
+                                visibleContent: detail.visibleContent ? [...detail.visibleContent] : preferences.visibleContent
+                            };
+                            setPreferences(newPreferences);
+                            
+                            // Update page size if changed
+                            if (detail.pageSize !== undefined && detail.pageSize !== filePageSize) {
+                                setFilePageSize(detail.pageSize);
+                            }
+                        }}
+                        pageSizePreference={{
+                            title: "Page size",
+                            options: [
+                                { value: 10, label: "10 files" },
+                                { value: 20, label: "20 files" },
+                                { value: 50, label: "50 files" },
+                                { value: 100, label: "100 files" }
+                            ]
+                        }}
+                        visibleContentPreference={{
+                            title: "Select visible columns",
+                            options: [
+                                {
+                                    label: "File information",
+                                    options: [
+                                        { id: "fileName", label: "File Name" },
+                                        { id: "path", label: "Path" },
+                                        { id: "size", label: "Size" },
+                                        { id: "lastModified", label: "Last Modified" },
+                                        { id: "versionId", label: "Version ID" }
+                                    ]
+                                },
+                                {
+                                    label: "Actions",
+                                    options: [
+                                        { id: "actions", label: "Actions" }
+                                    ]
+                                }
+                            ]
+                        }}
+                    />
+                }
+                visibleColumns={preferences.visibleContent}
             />
         </Container>
     );

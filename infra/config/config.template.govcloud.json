@@ -7,8 +7,10 @@
     },
     "app": {
         "baseStackName": "prod",
-        "bucketMigrationStaging": {
-            "assetBucketName": null
+        "assetBuckets": {
+            "createNewBucket": true,
+            "defaultNewBucketSyncDatabaseId": "default",
+            "externalAssetBuckets": null
         },
         "adminUserId": "administrator",
         "adminEmailAddress": "adminEmail@example.com",
@@ -75,11 +77,12 @@
             }
         },
         "authProvider": {
-            "credTokenTimeoutSeconds": 3600,
+            "presignedUrlTimeoutSeconds": 86400,
             "useCognito": {
                 "enabled": true,
                 "useSaml": false,
-                "useUserPasswordAuthFlow": false
+                "useUserPasswordAuthFlow": false,
+                "credTokenTimeoutSeconds": 3600
             },
             "useExternalOAuthIdp": {
                 "enabled": false,

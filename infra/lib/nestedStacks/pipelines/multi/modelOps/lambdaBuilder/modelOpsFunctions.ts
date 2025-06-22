@@ -13,15 +13,16 @@ import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../config/config";
+import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import * as Config from "../../../../../../config/config";
 import * as kms from "aws-cdk-lib/aws-kms";
 import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../../../../../helper/security";
+import { grantReadWritePermissionsToAllAssetBuckets, grantReadPermissionsToAllAssetBuckets } from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 
 export function buildVamsExecuteModelOpsFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    assetBucket: s3.IBucket,
     assetAuxiliaryBucket: s3.IBucket,
     openPipelineLambdaFunction: lambda.IFunction,
     config: Config.Config,
@@ -52,7 +53,7 @@ export function buildVamsExecuteModelOpsFunction(
         },
     });
 
-    assetBucket.grantRead(fun);
+    grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
     openPipelineLambdaFunction.grantInvoke(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
@@ -63,7 +64,6 @@ export function buildVamsExecuteModelOpsFunction(
 export function buildOpenPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    assetBucket: s3.IBucket,
     assetAuxiliaryBucket: s3.IBucket,
     pipelineStateMachine: sfn.StateMachine,
     allowedPipelineInputExtensions: string,
@@ -100,7 +100,7 @@ export function buildOpenPipelineFunction(
         },
     });
 
-    assetBucket.grantRead(fun);
+    grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
     pipelineStateMachine.grantStartExecution(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
@@ -163,7 +163,6 @@ export function buildConstructPipelineFunction(
 export function buildPipelineEndFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    assetBucket: s3.IBucket,
     assetAuxiliaryBucket: s3.IBucket,
     config: Config.Config,
     vpc: ec2.IVpc,
@@ -200,7 +199,7 @@ export function buildPipelineEndFunction(
         environment: {},
     });
 
-    assetBucket.grantRead(fun);
+    grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
 

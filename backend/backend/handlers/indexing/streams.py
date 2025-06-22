@@ -12,6 +12,7 @@ from opensearchpy import OpenSearch, \
     RequestsHttpConnection, AWSV4SignerAuth, NotFoundError
 from boto3.dynamodb.types import TypeDeserializer
 from common import get_ssm_parameter_value
+from boto3.dynamodb.conditions import Key
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service="IndexingStreams")
@@ -20,6 +21,9 @@ s3client = boto3.client("s3")
 dynamodbClient = boto3.client("dynamodb")
 dynamodbResource = boto3.resource('dynamodb')
 deserialize = TypeDeserializer().deserialize
+
+s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+buckets_table = dynamodbResource.Table(s3_asset_buckets_table)
 
 #
 # Single doc Example
@@ -146,16 +150,14 @@ class MetadataTable():
         )
 
 class AOSIndexS3Objects():
-    def __init__(self, bucketName,
+    def __init__(self,
                  aosclient, indexName, metadataTable=MetadataTable.from_env):
-        self.bucketName = bucketName
         self.aosclient = aosclient
         self.indexName = indexName
         self.metadataTable = metadataTable()
 
     @staticmethod
     def from_env(env=os.environ):
-        bucketName = env.get("ASSET_BUCKET_NAME")
         region = env.get('AWS_REGION')
         service = env.get('AOS_TYPE')  # aoss (serverless) or es (provisioned)
         credentials = boto3.Session().get_credentials()
@@ -171,11 +173,46 @@ class AOSIndexS3Objects():
             connection_class=RequestsHttpConnection,
             pool_maxsize=20,
         )
-        return AOSIndexS3Objects(bucketName, aosclient, indexName)
+        return AOSIndexS3Objects(aosclient, indexName)
+    
+    def _get_default_bucket_details(self, bucketId):
+        """Get default S3 bucket details from database default bucket DynamoDB"""
+        try:
 
-    def _get_s3_object_keys_generator(self, prefix):
-        paginator = s3client.get_paginator('list_objects')
-        page_iterator = paginator.paginate(Bucket=self.bucketName,
+            bucket_response = buckets_table.query(
+                KeyConditionExpression=Key('bucketId').eq(bucketId),
+                Limit=1
+            )
+            # Use the first item from the query results
+            bucket = bucket_response.get("Items", [{}])[0] if bucket_response.get("Items") else {}
+            bucket_id = bucket.get('bucketId')
+            bucket_name = bucket.get('bucketName')
+            base_assets_prefix = bucket.get('baseAssetsPrefix')
+
+            #Check to make sure we have what we need
+            if not bucket_name or not base_assets_prefix:
+                raise Exception(f"Error getting database default bucket details: {str(e)}")
+            
+            #Make sure we end in a slash for the path
+            if not base_assets_prefix.endswith('/'):
+                base_assets_prefix += '/'
+
+            # Remove leading slash from file path if present
+            if base_assets_prefix.startswith('/'):
+                base_assets_prefix = base_assets_prefix[1:]
+
+            return {
+                'bucketId': bucket_id,
+                'bucketName': bucket_name,
+                'baseAssetsPrefix': base_assets_prefix
+            }
+        except Exception as e:
+            logger.exception(f"Error getting bucket details: {e}")
+            raise Exception(f"Error getting bucket details: {str(e)}")
+
+    def _get_s3_object_keys_generator(self, prefix, bucket):
+        paginator = s3client.get_paginator('list_objects_v2')
+        page_iterator = paginator.paginate(Bucket=bucket,
                                            Prefix=prefix)
         for page in page_iterator:
             for obj in page.get('Contents', []):
@@ -212,7 +249,7 @@ class AOSIndexS3Objects():
                 "databaseId": databaseId,
             },
             AttributesToGet=[
-                'assetName', "description", "assetType", "tags"
+                'assetName', "description", "assetType", "tags", "bucketId"
             ],
         )
 
@@ -264,7 +301,10 @@ class AOSIndexS3Objects():
             logger.info("prefix is None")
             logger.info(assetIdOrPrefix)
 
-        for s3object in self._get_s3_object_keys_generator(assetIdOrPrefix):
+        bucket_details = self._get_default_bucket_details(asset_fields['bucketId'])
+        bucket = bucket_details['bucketName']
+
+        for s3object in self._get_s3_object_keys_generator(assetIdOrPrefix, bucket):
             self.process_single_s3_object(databaseId, assetId,
                                           s3object, asset_fields)
 
@@ -528,15 +568,31 @@ def handle_s3_event_record_removed(record, s3index_fn):
 
 
 def handle_s3_event_record(record,
+                           bucketName = '',
+                           bucketPrefix = '',
                            metadata_fn=MetadataTable.from_env,
                            get_asset_fields_fn=get_asset_fields,
                            s3index_fn=AOSIndexS3Objects.from_env,
                            sleep_fn=time.sleep):
     
+
+    if bucketName != '' and record.get("s3", {}).get("bucket", {}).get("name", "") != bucketName:
+        logger.info("Buckets don't match. Ignoring")
+        logger.info(record)
+        return
+    
+    if bucketPrefix != '' and not record.get("s3", {}).get("object", {}).get("key", "").startswith(bucketPrefix):
+        logger.info("Bucket prefix doesn't match records we care to index. Ignoring")
+        logger.info(record)
+        return
+
+    if bucketPrefix == '':
+        bucketPrefix = ''
+    
     #Ignore pipeline and preview files from assets
-    if record.get("s3", {}).get("object", {}).get("key", "").startswith("pipeline") or \
-            record.get("s3", {}).get("object", {}).get("key", "").startswith("preview") or \
-            record.get("s3", {}).get("object", {}).get("key", "").startswith("temp-uploads"):
+    if record.get("s3", {}).get("object", {}).get("key", "").startswith(bucketPrefix+"pipeline") or \
+            record.get("s3", {}).get("object", {}).get("key", "").startswith(bucketPrefix+"preview") or \
+            record.get("s3", {}).get("object", {}).get("key", "").startswith(bucketPrefix+"temp-uploads"):
         logger.info("Ignoring pipeline and preview files from assets from indexing")
         return
 
@@ -554,9 +610,9 @@ def handle_s3_event_record(record,
         Key=record['s3']['object']['key'],
     )
 
-    databaseId = head_result['Metadata']['databaseid']
-    assetId = head_result['Metadata']['assetid']
-    deleted = head_result['Metadata'].get('vams-status')
+    databaseId = head_result['Metadata'].get('databaseid', None)
+    assetId = head_result['Metadata'].get('assetid', None)
+    deleted = head_result['Metadata'].get('vams-status', '')
 
     # s3 objects are marked with vams-status=deleted in their s3 metadata
     # by calls to delete assets in assetService.py
@@ -565,6 +621,9 @@ def handle_s3_event_record(record,
         s3index.delete_item(
             record.get("s3", {}).get("object", {}).get("key", ""))
         return
+    
+    if databaseId is None or assetId is None:
+        logger.info("databaseId or assetId not found in s3 metadata, skipping file as we may not we ingested yet or external")
 
     # see if records exist for the asset and metadata tables
     metadata_record = None
@@ -622,17 +681,47 @@ def lambda_handler_m(event, context,
     else:
         logger.info("Not a DynamoDB remove record")
 
-    if 'Records' not in event:
-        return
+    #Parse various formats depending on where the event could be fired from
+    records = []
+    if 'Records' in event:
+        records = event['Records']
+    elif 'Message' in event:
+        message = json.loads(event['Message'])
+        if 'Records' in message:
+            records = message['Records']
 
-    for record in event['Records']:
+    bucketName = None
+    bucketPrefix = None
+    
+    if 'ASSET_BUCKET_NAME' in event:
+        bucketName = event['ASSET_BUCKET_NAME']
+
+    if 'ASSET_BUCKET_PREFIX' in event:
+        bucketPrefix = event['ASSET_BUCKET_PREFIX']
+
+        if bucketPrefix is not None and bucketPrefix != '':
+            # Remove leading slash from file path if present
+            if bucketPrefix.startswith('/'):
+                bucketPrefix = bucketPrefix[1:]
+
+            if not bucketPrefix.endswith('/'):
+                bucketPrefix = bucketPrefix + '/'
+
+    for record in records:
         logger.info(record)
 
         # Coming from SNS by S3 event notification
         if "EventSource" in record and record['EventSource'] == 'aws:sns' and 'Records' in json.loads(record["Sns"]["Message"]):
             for snsS3Record in json.loads(record['Sns']['Message'])['Records']:
                 if (snsS3Record['eventSource'] == "aws:s3"):
-                    handle_s3_event_record(snsS3Record)
+                    handle_s3_event_record(snsS3Record, bucketName, bucketPrefix)
+            continue
+
+        # Coming from SQS by S3 event notification
+        if "EventSource" in record and record['EventSource'] == 'aws:sqs' and 'Records' in json.loads(record["Sqs"]["Message"]):
+            for sqsS3Record in json.loads(record['Sqs']['Message'])['Records']:
+                if (sqsS3Record['eventSource'] == "aws:s3"):
+                    handle_s3_event_record(sqsS3Record, bucketName, bucketPrefix)
             continue
 
         # Coming directly from S3 event notification

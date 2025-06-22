@@ -236,26 +236,45 @@ export const createUpdateElements = async ({ pluralName, config }, api = API) =>
 export const fetchAllDatabases = async (api = API) => {
     try {
         let response = await api.get("api", "databases", {});
+        console.log("Raw databases response:", response);
+        
+        // If response is directly an array, return it
+        if (Array.isArray(response)) {
+            return response;
+        }
+        
+        // If response has Items property, process it
         let items = [];
         const init = { queryStringParameters: { startingToken: null } };
-        if (response.message) {
-            if (response.message.Items) {
-                items = items.concat(response.message.Items);
-                while (response.message.NextToken) {
-                    init["queryStringParameters"]["startingToken"] = response.message.NextToken;
-                    response = await api.get("api", "databases", init);
+        
+        if (response && response.Items) {
+            items = items.concat(response.Items);
+            while (response.NextToken) {
+                init["queryStringParameters"]["startingToken"] = response.NextToken;
+                response = await api.get("api", "databases", init);
+                if (response && response.Items) {
+                    items = items.concat(response.Items);
+                }
+            }
+            return items;
+        } else if (response && response.message && response.message.Items) {
+            // Legacy format with message wrapper
+            items = items.concat(response.message.Items);
+            while (response.message.NextToken) {
+                init["queryStringParameters"]["startingToken"] = response.message.NextToken;
+                response = await api.get("api", "databases", init);
+                if (response && response.message && response.message.Items) {
                     items = items.concat(response.message.Items);
                 }
-                return items;
-            } else {
-                return response.message;
             }
-        } else {
-            return false;
+            return items;
         }
+        
+        // If no items found, return empty array instead of false
+        return [];
     } catch (error) {
-        console.log(error);
-        return error?.message;
+        console.log("Error fetching databases:", error);
+        return [];
     }
 };
 
@@ -529,23 +548,6 @@ export const fetchConstraints = async (api = API) => {
     }
 };
 
-// /**
-//  * Returns array of all constraints from the auth/constraints api
-//  * @returns {Promise<boolean|{rules}|any>}
-//  */
-// export const fetchRulesMetadata = async (api = API) => {
-//     try {
-//         const response = await api.get("api", "notification-config/metadata", {});
-//         if (response.message) {
-//             return response.message;
-//         } else {
-//             return false;
-//         }
-//     } catch (error) {
-//         console.log(error);
-//         return error?.message;
-//     }
-// };
 
 
 /**
@@ -1185,8 +1187,57 @@ export const deleteAssetPermanent = async ({ databaseId, assetId, confirmPermane
     }
 };
 
+/**
+ * Returns array of all buckets the current user can access, or false if error.
+ * @returns {Promise<boolean|{message}|any>}
+ */
+export const fetchBuckets = async (api = API) => {
+    try {
+        let response = await api.get("api", "buckets", {});
+        console.log("Raw buckets response:", response);
+        
+        // Direct return of the response which should contain Items array
+        return response;
+    } catch (error) {
+        console.log("Error fetching buckets:", error);
+        return { Items: [], error: error?.message };
+    }
+};
+
+/**
+ * Creates a new database
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.description - Database description
+ * @param {string} params.defaultBucketId - Default bucket ID
+ * @returns {Promise<boolean|{message}|any>}
+ */
+export const createDatabase = async ({ databaseId, description, defaultBucketId }, api = API) => {
+    try {
+        const response = await api.post("api", "databases", {
+            body: {
+                databaseId,
+                description,
+                defaultBucketId
+            }
+        });
+        
+        if (response.message) {
+            console.log("create database", response);
+            return [true, response.message];
+        } else {
+            return false;
+        }
+    } catch (error) {
+        console.log("create database error", error);
+        return [false, error?.message];
+    }
+};
+
 export const ACTIONS = {
-    CREATE: {},
+    CREATE: {
+        DATABASE: createDatabase
+    },
     UPDATE: {
         ASSET: updateAsset
     },

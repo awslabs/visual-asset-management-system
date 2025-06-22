@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from handlers.metadata import build_response, create_or_update, validate_event, validate_body, ValidationError
+from handlers.metadata import build_response, create_or_update, validate_event, validate_body, ValidationError, normalize_s3_path
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger

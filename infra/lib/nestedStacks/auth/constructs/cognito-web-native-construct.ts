@@ -18,7 +18,7 @@ import { LAMBDA_PYTHON_RUNTIME } from "../../../../config/config";
 import { NagSuppressions } from "cdk-nag";
 import { Service } from "../../../helper/service-helper";
 import * as Config from "../../../../config/config";
-import { handler } from "../../search/constructs/schemaDeploy/provisioned/deployschemaprovisioned";
+import { handler } from "../../searchAndIndexing/constructs/schemaDeploy/provisioned/deployschemaprovisioned";
 
 export interface SamlSettings {
     metadata: cognito.UserPoolIdentityProviderSamlMetadata;
@@ -164,10 +164,10 @@ export class CognitoWebNativeConstructStack extends Construct {
             userPoolClientName: "WebClient",
             refreshTokenValidity: Duration.hours(24), //AppSec Guidelines Recommendation
             accessTokenValidity: cdk.Duration.seconds(
-                props.config.app.authProvider.credTokenTimeoutSeconds
+                props.config.app.authProvider.useCognito.credTokenTimeoutSeconds
             ),
             idTokenValidity: cdk.Duration.seconds(
-                props.config.app.authProvider.credTokenTimeoutSeconds
+                props.config.app.authProvider.useCognito.credTokenTimeoutSeconds
             ),
             supportedIdentityProviders,
             authFlows: {
@@ -331,7 +331,7 @@ export class CognitoWebNativeConstructStack extends Construct {
                 "sts:AssumeRoleWithWebIdentity"
             ),
             maxSessionDuration: cdk.Duration.seconds(
-                props.config.app.authProvider.credTokenTimeoutSeconds
+                props.config.app.authProvider.useCognito.credTokenTimeoutSeconds
             ),
         });
 

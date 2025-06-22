@@ -28,23 +28,59 @@ dynamodb = boto3.resource('dynamodb')
 logger = safeLogger(service_name="DownloadAsset")
 
 # Constants
-TIMEOUT_SECONDS = 86400  # URL expiration in seconds (24 hours)
 PREVIEW_PREFIX = 'previews/'
 
 # Load environment variables
 try:
+    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
     asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_bucket_name_default = os.environ["S3_ASSET_STORAGE_BUCKET"]
+    token_timeout = os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]
 except Exception as e:
     logger.exception("Failed loading environment variables")
     raise e
 
 # Initialize DynamoDB tables
+buckets_table = dynamodb.Table(s3_asset_buckets_table)
 asset_table = dynamodb.Table(asset_storage_table_name)
 
 #######################
 # Utility Functions
 #######################
+
+def get_default_bucket_details(bucketId):
+    """Get default S3 bucket details from database default bucket DynamoDB"""
+    try:
+
+        bucket_response = buckets_table.query(
+            KeyConditionExpression=Key('bucketId').eq(bucketId),
+            Limit=1
+        )
+        # Use the first item from the query results
+        bucket = bucket_response.get("Items", [{}])[0] if bucket_response.get("Items") else {}
+        bucket_id = bucket.get('bucketId')
+        bucket_name = bucket.get('bucketName')
+        base_assets_prefix = bucket.get('baseAssetsPrefix')
+
+        #Check to make sure we have what we need
+        if not bucket_name or not base_assets_prefix:
+            raise VAMSGeneralErrorResponse(f"Error getting database default bucket details: {str(e)}")
+        
+        #Make sure we end in a slash for the path
+        if not base_assets_prefix.endswith('/'):
+            base_assets_prefix += '/'
+
+        # Remove leading slash from file path if present
+        if base_assets_prefix.startswith('/'):
+            base_assets_prefix = base_assets_prefix[1:]
+
+        return {
+            'bucketId': bucket_id,
+            'bucketName': bucket_name,
+            'baseAssetsPrefix': base_assets_prefix
+        }
+    except Exception as e:
+        logger.exception(f"Error getting bucket details: {e}")
+        raise VAMSGeneralErrorResponse(f"Error getting bucket details: {str(e)}")
 
 def get_asset_details(databaseId, assetId):
     """Get asset details from DynamoDB"""
@@ -194,8 +230,9 @@ def download_asset_file(databaseId, assetId, request_model):
     if not asset_location:
         raise VAMSGeneralErrorResponse("Asset location not found")
         
-    # Determine bucket and key
-    asset_bucket = asset_location.get('Bucket', asset_bucket_name_default)
+    # Get bucket details from bucketId
+    bucketDetails = get_default_bucket_details(asset.get('bucketId'))
+    asset_bucket = bucketDetails['bucketName']
     asset_base_key = asset_location.get('Key')
     
     # Determine final S3 key
@@ -240,13 +277,13 @@ def download_asset_file(databaseId, assetId, request_model):
         url = s3.generate_presigned_url(
             'get_object',
             Params=params,
-            ExpiresIn=TIMEOUT_SECONDS
+            ExpiresIn=int(token_timeout)
         )
         
         # Return response model
         return DownloadAssetResponseModel(
             downloadUrl=url,
-            expiresIn=TIMEOUT_SECONDS,
+            expiresIn=int(token_timeout),
             downloadType="assetFile",
             versionId=version_id
         )
@@ -279,8 +316,9 @@ def download_asset_preview(databaseId, assetId, request_model):
     if not preview_location:
         raise VAMSGeneralErrorResponse("Asset preview location not found")
         
-    # Determine bucket and key
-    preview_bucket = preview_location.get('Bucket', asset_bucket_name_default)
+    # Get bucket details from bucketId
+    bucketDetails = get_default_bucket_details(asset.get('bucketId'))
+    preview_bucket = bucketDetails['bucketName']
     preview_key = preview_location.get('Key')
     
     # Validate file extension and content type
@@ -299,13 +337,13 @@ def download_asset_preview(databaseId, assetId, request_model):
                 'Bucket': preview_bucket,
                 'Key': preview_key
             },
-            ExpiresIn=TIMEOUT_SECONDS
+            ExpiresIn=int(token_timeout)
         )
         
         # Return response model
         return DownloadAssetResponseModel(
             downloadUrl=url,
-            expiresIn=TIMEOUT_SECONDS,
+            expiresIn=int(token_timeout),
             downloadType="assetPreview"
         )
     except Exception as e:

@@ -33,7 +33,6 @@ def check_subscriptions(body):
     entity_name = "Asset"
     subscription_table = dynamodb.Table(subscription_table_name)
     result = subscription_table.query(
-        IndexName='eventName-entityName_entityId-index',
         KeyConditionExpression='#entityNameId = :entityNameId AND #eventName = :eventName',
         FilterExpression='contains(#subscribers, :userId)',
         ExpressionAttributeNames={

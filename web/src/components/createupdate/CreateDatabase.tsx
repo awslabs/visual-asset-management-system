@@ -13,9 +13,11 @@ import {
     Input,
     Textarea,
     MultiselectProps,
+    Select,
+    SelectProps,
 } from "@cloudscape-design/components";
-import { useState } from "react";
-import { API } from "aws-amplify";
+import { useState, useEffect } from "react";
+import { createDatabase, fetchBuckets } from "../../services/APIService";
 
 interface CreateDatabaseProps {
     open: boolean;
@@ -27,6 +29,13 @@ interface CreateDatabaseProps {
 interface DatabaseFields {
     databaseId: string;
     description: string;
+    defaultBucketId?: string;
+}
+
+interface BucketOption {
+    bucketId: string;
+    bucketName: string;
+    baseAssetsPrefix: string;
 }
 
 // when a string is all lower case, return null, otherwise return the string "All lower case letters only"
@@ -78,11 +87,52 @@ export default function CreateDatabase({
     const createOrUpdate = (initState && initState.databaseId && "Update") || "Create";
 
     const [selectedOptions, setSelectedOptions] = useState<MultiselectProps.Option[]>([]);
+    const [buckets, setBuckets] = useState<BucketOption[]>([]);
+    const [selectedBucket, setSelectedBucket] = useState<SelectProps.Option | null>(null);
+    const [loadingBuckets, setLoadingBuckets] = useState(true);
 
     const [groupOptions, setGroupOptions] = useState<MultiselectProps.Option[]>([]);
     const [loadingGroups, setLoadingGroups] = useState(true);
     const [inProgress, setInProgress] = useState(false);
     const [formError, setFormError] = useState("");
+
+    // Fetch buckets when component loads
+    useEffect(() => {
+        const loadBuckets = async () => {
+            setLoadingBuckets(true);
+            try {
+                const bucketsData = await fetchBuckets();
+                if (bucketsData && bucketsData.Items) {
+                    // API returns an object with Items array
+                    setBuckets(bucketsData.Items);
+                    console.log("Loaded buckets:", bucketsData.Items);
+                    
+                    // If there's only one bucket, select it by default
+                    if (bucketsData.Items.length === 1) {
+                        const bucket = bucketsData.Items[0];
+                        const option = {
+                            label: `${bucket.bucketName}${bucket.baseAssetsPrefix ? ` - ${bucket.baseAssetsPrefix}` : ''}`,
+                            value: bucket.bucketId
+                        };
+                        setSelectedBucket(option);
+                        setFormState(prevState => ({
+                            ...prevState,
+                            defaultBucketId: bucket.bucketId
+                        }));
+                        console.log("Auto-selected the only available bucket:", bucket.bucketId);
+                    }
+                } else {
+                    console.error("Failed to fetch buckets or no buckets found:", bucketsData);
+                }
+            } catch (error) {
+                console.error("Error fetching buckets:", error);
+            } finally {
+                setLoadingBuckets(false);
+            }
+        };
+
+        loadBuckets();
+    }, []);
 
     return (
         <Modal
@@ -110,19 +160,23 @@ export default function CreateDatabase({
                             variant="primary"
                             onClick={() => {
                                 setInProgress(true);
-                                API.put("api", `databases`, {
-                                    body: {
-                                        ...formState,
-                                    },
+                                createDatabase({
+                                    databaseId: formState.databaseId,
+                                    description: formState.description,
+                                    defaultBucketId: formState.defaultBucketId || ""
                                 })
                                     .then((res) => {
-                                        console.log("create database", res);
-                                        setOpen(false);
-                                        setReload(true);
+                                        if (res && res[0]) {
+                                            setOpen(false);
+                                            setReload(true);
+                                        } else {
+                                            let msg = `Unable to ${createOrUpdate} database. Error: ${res[1]}`;
+                                            setFormError(msg);
+                                        }
                                     })
                                     .catch((err) => {
                                         console.log("create database error", err);
-                                        let msg = `Unable to ${createOrUpdate} database. Error: Request failed with status code ${err.response.status}`;
+                                        let msg = `Unable to ${createOrUpdate} database. Error: ${err.message || "Unknown error"}`;
                                         setFormError(msg);
                                     })
                                     .finally(() => {
@@ -133,8 +187,8 @@ export default function CreateDatabase({
                                 inProgress ||
                                 !(
                                     validateDatabaseName(formState.databaseId) === null &&
-                                    validateDatabaseDescriptionLength(formState.description) ===
-                                        null
+                                    validateDatabaseDescriptionLength(formState.description) === null &&
+                                    formState.defaultBucketId
                                 )
                             }
                             data-testid={`${createOrUpdate}-database-button`}
@@ -182,6 +236,31 @@ export default function CreateDatabase({
                                 rows={4}
                                 placeholder="Database Description"
                                 data-testid="database-desc"
+                            />
+                        </FormField>
+                        <FormField
+                            label="Default Bucket and Prefix"
+                            constraintText="Required. Select a bucket and prefix for this database."
+                            errorText={!formState.defaultBucketId ? "A default bucket is required" : null}
+                        >
+                            <Select
+                                selectedOption={selectedBucket}
+                                onChange={({ detail }) => {
+                                    setSelectedBucket(detail.selectedOption);
+                                    setFormState({
+                                        ...formState,
+                                        defaultBucketId: detail.selectedOption.value || ""
+                                    });
+                                }}
+                                options={buckets.map(bucket => ({
+                                    label: `${bucket.bucketName}${bucket.baseAssetsPrefix ? ` - ${bucket.baseAssetsPrefix}` : ''}`,
+                                    value: bucket.bucketId
+                                }))}
+                                placeholder="Select a bucket"
+                                loadingText="Loading buckets"
+                                statusType={loadingBuckets ? "loading" : "finished"}
+                                disabled={inProgress}
+                                data-testid="database-bucket"
                             />
                         </FormField>
                     </SpaceBetween>

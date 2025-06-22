@@ -44,6 +44,7 @@ export function buildCreateDatabaseLambdaFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
@@ -55,6 +56,7 @@ export function buildCreateDatabaseLambdaFunction(
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(createDatabaseFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(createDatabaseFunction);
     storageResources.dynamo.rolesStorageTable.grantReadData(createDatabaseFunction);
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(createDatabaseFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(createDatabaseFunction, kmsKey);
     globalLambdaEnvironmentsAndPermissions(createDatabaseFunction, config);
     return createDatabaseFunction;
@@ -86,6 +88,7 @@ export function buildDatabaseService(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
@@ -96,6 +99,7 @@ export function buildDatabaseService(
         },
     });
 
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(databaseService);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(databaseService);
     storageResources.dynamo.workflowStorageTable.grantReadData(databaseService);
     storageResources.dynamo.pipelineStorageTable.grantReadData(databaseService);

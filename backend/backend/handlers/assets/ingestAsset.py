@@ -39,7 +39,6 @@ logger = safeLogger(service_name="IngestAsset")
 
 # Load environment variables
 try:
-    bucket_name = os.environ["S3_ASSET_STORAGE_BUCKET"]
     db_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
     asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
     metadata_table_name = os.environ["METADATA_STORAGE_TABLE_NAME"]

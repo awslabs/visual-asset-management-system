@@ -44,9 +44,9 @@ logger = safeLogger(service_name="AssetFiles")
 
 # Load environment variables
 try:
+    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
     asset_database_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
     asset_version_files_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"] 
-    asset_bucket_name_default = os.environ["S3_ASSET_STORAGE_BUCKET"]
     asset_aux_bucket_name = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
 except Exception as e:
@@ -54,6 +54,7 @@ except Exception as e:
     raise e
 
 # Initialize DynamoDB tables
+buckets_table = dynamodb.Table(s3_asset_buckets_table)
 asset_table = dynamodb.Table(asset_database_table_name)
 asset_version_files_table = dynamodb.Table(asset_version_files_table_name)
 
@@ -114,8 +115,43 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         logger.exception(f"Error getting asset with permissions: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving asset: {str(e)}")
 
+def get_default_bucket_details(bucketId):
+    """Get default S3 bucket details from database default bucket DynamoDB"""
+    try:
+
+        bucket_response = buckets_table.query(
+            KeyConditionExpression=Key('bucketId').eq(bucketId),
+            Limit=1
+        )
+        # Use the first item from the query results
+        bucket = bucket_response.get("Items", [{}])[0] if bucket_response.get("Items") else {}
+        bucket_id = bucket.get('bucketId')
+        bucket_name = bucket.get('bucketName')
+        base_assets_prefix = bucket.get('baseAssetsPrefix')
+
+        #Check to make sure we have what we need
+        if not bucket_name or not base_assets_prefix:
+            raise VAMSGeneralErrorResponse(f"Error getting database default bucket details: {str(e)}")
+        
+        #Make sure we end in a slash for the path
+        if not base_assets_prefix.endswith('/'):
+            base_assets_prefix += '/'
+
+        # Remove leading slash from file path if present
+        if base_assets_prefix.startswith('/'):
+            base_assets_prefix = base_assets_prefix[1:]
+
+        return {
+            'bucketId': bucket_id,
+            'bucketName': bucket_name,
+            'baseAssetsPrefix': base_assets_prefix
+        }
+    except Exception as e:
+        logger.exception(f"Error getting bucket details: {e}")
+        raise VAMSGeneralErrorResponse(f"Error getting bucket details: {str(e)}")
+
 def get_asset_s3_location(asset: Dict) -> Tuple[str, str]:
-    """Extract bucket and key from asset location
+    """Extract bucket from asset + s3 asset table, and key from asset location
     
     Args:
         asset: The asset dictionary
@@ -127,11 +163,14 @@ def get_asset_s3_location(asset: Dict) -> Tuple[str, str]:
         VAMSGeneralErrorResponse: If asset location is missing
     """
     asset_location = asset.get('assetLocation', {})
+    bucket_id = asset.get('bucketId')
+    
+    bucketDetails = get_default_bucket_details(bucket_id)
     
     if not asset_location:
         raise VAMSGeneralErrorResponse("Asset location not found")
     
-    bucket = asset_location.get('Bucket', asset_bucket_name_default)
+    bucket = bucketDetails.get("bucketName")
     key = asset_location.get('Key')
     
     if not key:
@@ -229,7 +268,7 @@ def filter_archived_files(file_list: List[Dict], include_archived: bool = False)
     
     return [f for f in file_list if not f.get('isArchived', False)]
 
-def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str) -> bool:
+def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str, source_asset_id: str = None, source_database_id: str = None, dest_asset_id: str = None, dest_database_id: str = None) -> bool:
     """Copy an S3 object from one location to another
     
     Args:
@@ -237,17 +276,44 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
         source_key: Source key
         dest_bucket: Destination bucket
         dest_key: Destination key
+        source_asset_id: Source asset ID (optional)
+        source_database_id: Source database ID (optional)
+        dest_asset_id: Destination asset ID (optional)
+        dest_database_id: Destination database ID (optional)
         
     Returns:
         True if successful, False otherwise
     """
     try:
-        # Copy the object to the new location using managed transfer for large files
-        s3_resource.meta.client.copy(
-            CopySource={'Bucket': source_bucket, 'Key': source_key},
-            Bucket=dest_bucket,
-            Key=dest_key
-        )
+        # Check if we need to update metadata (when copying to a different asset)
+        if (source_asset_id and dest_asset_id and source_asset_id != dest_asset_id) or \
+           (source_database_id and dest_database_id and source_database_id != dest_database_id):
+            
+            # Get existing metadata from source object
+            source_object = s3_client.head_object(Bucket=source_bucket, Key=source_key)
+            metadata = source_object.get('Metadata', {})
+            
+            # Update assetid and databaseid fields while preserving other metadata
+            if dest_asset_id:
+                metadata['assetid'] = dest_asset_id
+            if dest_database_id:
+                metadata['databaseid'] = dest_database_id
+            
+            # Copy with updated metadata
+            s3_resource.meta.client.copy(
+                CopySource={'Bucket': source_bucket, 'Key': source_key},
+                Bucket=dest_bucket,
+                Key=dest_key,
+                MetadataDirective='REPLACE',
+                Metadata=metadata
+            )
+        else:
+            # Standard copy with preserved metadata
+            s3_resource.meta.client.copy(
+                CopySource={'Bucket': source_bucket, 'Key': source_key},
+                Bucket=dest_bucket,
+                Key=dest_key
+            )
         return True
     except Exception as e:
         logger.exception(f"Error copying S3 object from {source_key} to {dest_key}: {e}")
@@ -489,8 +555,17 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str) -> List[str]:
             for version in page.get('Versions', []):
                 key = version['Key']
                 
-                # Skip if it's a folder marker or already processed
-                if key.endswith('/') or key in processed_keys:
+                # Process folder markers separately
+                if key.endswith('/'):
+                    if key not in processed_keys:
+                        # Delete all versions of this folder marker
+                        if delete_s3_object_all_versions(bucket, key):
+                            deleted_files.append(key)
+                            processed_keys.add(key)
+                    continue
+                
+                # Skip if already processed
+                if key in processed_keys:
                     continue
                 
                 # Delete all versions of this object
@@ -502,14 +577,37 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str) -> List[str]:
             for marker in page.get('DeleteMarkers', []):
                 key = marker['Key']
                 
-                # Skip if it's a folder marker or already processed
-                if key.endswith('/') or key in processed_keys:
+                # Process folder markers separately
+                if key.endswith('/'):
+                    if key not in processed_keys:
+                        # Delete all versions of this folder marker
+                        if delete_s3_object_all_versions(bucket, key):
+                            deleted_files.append(key)
+                            processed_keys.add(key)
+                    continue
+                
+                # Skip if already processed
+                if key in processed_keys:
                     continue
                 
                 # Delete all versions of this object
                 if delete_s3_object_all_versions(bucket, key):
                     deleted_files.append(key)
                     processed_keys.add(key)
+        
+        # Check if the prefix folder itself exists and delete it if it does
+        # Ensure the prefix ends with a slash for folder check
+        folder_prefix = prefix if prefix.endswith('/') else prefix + '/'
+        try:
+            # Check if the folder marker exists
+            s3_client.head_object(Bucket=bucket, Key=folder_prefix)
+            # Delete the folder marker if it exists
+            if delete_s3_object_all_versions(bucket, folder_prefix):
+                deleted_files.append(folder_prefix)
+        except ClientError as e:
+            # If the folder doesn't exist, that's fine
+            if e.response['Error']['Code'] != '404' and e.response['Error']['Code'] != 'NoSuchKey':
+                logger.warning(f"Error checking folder marker {folder_prefix}: {e}")
     
     except Exception as e:
         logger.exception(f"Error deleting all versions under prefix {prefix}: {e}")
@@ -537,13 +635,30 @@ def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str) -
             for obj in page.get('Contents', []):
                 key = obj['Key']
                 
-                # Skip if it's a folder marker (key ends with '/')
+                # Process folder markers separately
                 if key.endswith('/'):
+                    # Archive the folder marker
+                    if delete_s3_object(bucket, key):
+                        archived_files.append(key)
                     continue
                 
                 # Archive the object
                 if delete_s3_object(bucket, key):
                     archived_files.append(key)
+        
+        # Check if the prefix folder itself exists and archive it if it does
+        # Ensure the prefix ends with a slash for folder check
+        folder_prefix = prefix if prefix.endswith('/') else prefix + '/'
+        try:
+            # Check if the folder marker exists
+            s3_client.head_object(Bucket=bucket, Key=folder_prefix)
+            # Archive the folder marker if it exists
+            if delete_s3_object(bucket, folder_prefix):
+                archived_files.append(folder_prefix)
+        except ClientError as e:
+            # If the folder doesn't exist, that's fine
+            if e.response['Error']['Code'] != '404' and e.response['Error']['Code'] != 'NoSuchKey':
+                logger.warning(f"Error checking folder marker {folder_prefix}: {e}")
     
     except Exception as e:
         logger.exception(f"Error archiving files under prefix {prefix}: {e}")
@@ -1357,7 +1472,16 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
             raise VAMSGeneralErrorResponse(f"Error checking destination file: {str(e)}")
     
     # Copy the file
-    success = copy_s3_object(source_bucket, source_key, dest_bucket, dest_key)
+    success = copy_s3_object(
+        source_bucket, 
+        source_key, 
+        dest_bucket, 
+        dest_key,
+        source_asset_id=assetId,
+        source_database_id=databaseId,
+        dest_asset_id=dest_asset_id if is_cross_asset else assetId,
+        dest_database_id=databaseId
+    )
     
     if not success:
         raise VAMSGeneralErrorResponse(f"Failed to copy file from {source_path} to {dest_path}")

@@ -557,6 +557,14 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     </div>
                 </div>
                 
+                {/* Show S3 Bucket only for the top-level Asset Node */}
+                {selectedItem.relativePath === "/" && selectedItem.level === 0 && asset?.bucketName && (
+                    <div className="file-info-item">
+                        <div className="file-info-label">S3 Bucket:</div>
+                        <div className="file-info-value">{asset.bucketName}</div>
+                    </div>
+                )}
+                
                 {/* Show preview thumbnail only for the top-level Asset Node */}
                 {selectedItem.relativePath === "/" && selectedItem.level === 0 && (
                     <div className="file-info-item">

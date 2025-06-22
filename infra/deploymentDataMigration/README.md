@@ -173,7 +173,6 @@ VAMS Upgrade Templates are described below. Copy the template to a new configura
 
 ### Script Notes
 
-- Do not use A/B deployment migration scripts in conjunction with stagingBucket configurations as staging is only used for new VAMS stack deployments that require existing asset migration.
 - New tables should be empty to prevent possible key collisions. If script fails, clear table data first before re-running.
 - Always test migrations on a small subset of data before running on production data.
 - Always back up your data before running any migration scripts.

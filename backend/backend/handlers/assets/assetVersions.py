@@ -46,10 +46,10 @@ claims_and_roles = {}
 
 # Load environment variables
 try:
+    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
     asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
     asset_file_versions_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"]
     asset_versions_table_name = os.environ.get("ASSET_VERSIONS_STORAGE_TABLE_NAME")
-    bucket_name_default = os.environ["S3_ASSET_STORAGE_BUCKET"]
     asset_aux_bucket_name = os.environ["S3_ASSET_AUXILIARY_BUCKET"]
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
 except Exception as e:
@@ -57,6 +57,7 @@ except Exception as e:
     raise e
 
 # Initialize DynamoDB tables
+buckets_table = dynamodb.Table(s3_asset_buckets_table)
 asset_table = dynamodb.Table(asset_database)
 asset_file_versions_table = dynamodb.Table(asset_file_versions_table_name)
 asset_versions_table = dynamodb.Table(asset_versions_table_name)
@@ -64,6 +65,41 @@ asset_versions_table = dynamodb.Table(asset_versions_table_name)
 #######################
 # Utility Functions
 #######################
+
+def get_default_bucket_details(bucketId):
+    """Get default S3 bucket details from database default bucket DynamoDB"""
+    try:
+
+        bucket_response = buckets_table.query(
+            KeyConditionExpression=Key('bucketId').eq(bucketId),
+            Limit=1
+        )
+        # Use the first item from the query results
+        bucket = bucket_response.get("Items", [{}])[0] if bucket_response.get("Items") else {}
+        bucket_id = bucket.get('bucketId')
+        bucket_name = bucket.get('bucketName')
+        base_assets_prefix = bucket.get('baseAssetsPrefix')
+
+        #Check to make sure we have what we need
+        if not bucket_name or not base_assets_prefix:
+            raise VAMSGeneralErrorResponse(f"Error getting database default bucket details: {str(e)}")
+        
+        #Make sure we end in a slash for the path
+        if not base_assets_prefix.endswith('/'):
+            base_assets_prefix += '/'
+
+        # Remove leading slash from file path if present
+        if base_assets_prefix.startswith('/'):
+            base_assets_prefix = base_assets_prefix[1:]
+
+        return {
+            'bucketId': bucket_id,
+            'bucketName': bucket_name,
+            'baseAssetsPrefix': base_assets_prefix
+        }
+    except Exception as e:
+        logger.exception(f"Error getting bucket details: {e}")
+        raise VAMSGeneralErrorResponse(f"Error getting bucket details: {str(e)}")
 
 def send_subscription_email(database_id, asset_id):
     """Send email notifications to subscribers when an asset is updated"""
@@ -135,7 +171,11 @@ def get_asset_s3_location(asset: Dict) -> Tuple[str, str]:
     if not asset_location:
         raise VAMSGeneralErrorResponse("Asset location not found")
     
-    bucket = asset_location.get('Bucket', bucket_name_default)
+    
+    bucket_details = get_default_bucket_details(asset['bucketId'])
+    bucket = bucket_details['bucketName']
+    
+    # Get key from asset location
     key = asset_location.get('Key')
     
     if not key:

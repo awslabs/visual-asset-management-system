@@ -53,8 +53,6 @@ class CreatePipeline():
         self.workflow_db_table_name = env["WORKFLOW_STORAGE_TABLE_NAME"]
         self.enable_pipeline_function_name = env["ENABLE_PIPELINE_FUNCTION_NAME"]
         self.enable_pipeline_function_arn = env["ENABLE_PIPELINE_FUNCTION_ARN"]
-        self.s3_bucket = env['S3_BUCKET']
-        self.asset_bucket_arn = env['ASSET_BUCKET_ARN']
         self.lambda_role_to_attach = env['ROLE_TO_ATTACH_TO_LAMBDA_PIPELINE']
         self.lambda_pipeline_sample_function_bucket = env['LAMBDA_PIPELINE_SAMPLE_FUNCTION_BUCKET']
         self.lambda_pipeline_sample_function_key = env['LAMBDA_PIPELINE_SAMPLE_FUNCTION_KEY']

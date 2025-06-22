@@ -262,15 +262,18 @@ export const useAssetVersions = (databaseId: string, assetId: string) => {
     
     // Handle filter change
     const handleFilterChange = useCallback((newFilter: string) => {
+        console.log('handleFilterChange called with:', newFilter);
         setFilterText(newFilter);
-        setCurrentPage(1);
         
-        // If this is the first time filtering, load all versions for better filtering
-        if (newFilter.trim() !== '' && allVersions.length === 0) {
-            setAllVersions([]);
-            loadVersions(null, 1, true);
-        }
-    }, [loadVersions, allVersions.length]);
+        // Just set the filter text and let the useEffect handle the filtering
+        // Don't reload or change pages - this makes it a purely local filter
+        
+        // REMOVED: Loading all versions when filtering as it causes infinite loading
+        // if (newFilter.trim() !== '' && allVersions.length === 0) {
+        //     setAllVersions([]);
+        //     loadVersions(null, 1, true);
+        // }
+    }, []);
     
     // Refresh versions
     const refreshVersions = useCallback(() => {

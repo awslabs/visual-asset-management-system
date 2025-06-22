@@ -13,6 +13,7 @@ import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../config/config";
+import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import * as Config from "../../../../../../config/config";
 import * as kms from "aws-cdk-lib/aws-kms";
 import {
@@ -22,20 +23,23 @@ import {
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
+import { grantReadWritePermissionsToAllAssetBuckets, grantReadPermissionsToAllAssetBuckets } from "../../../../../helper/security";
 
-export function buildSnsExecutePcPotreeViewerPipelineFunction(
+export function buildSqsExecutePcPotreeViewerPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    assetBucket: s3.IBucket,
     assetAuxiliaryBucket: s3.IBucket,
     openPipelineLambdaFunction: lambda.IFunction,
+    bucketName: string,
+    bucketPrefix: string,
+    index: number,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
 ): lambda.Function {
-    const name = "snsExecutePreviewPcPotreeViewerPipeline";
-    const fun = new lambda.Function(scope, name, {
+    const name = "sqsExecutePreviewPcPotreeViewerPipeline";
+    const fun = new lambda.Function(scope, name+"-"+index, {
         code: lambda.Code.fromAsset(
             path.join(
                 __dirname,
@@ -61,7 +65,7 @@ export function buildSnsExecutePcPotreeViewerPipelineFunction(
         },
     });
 
-    assetBucket.grantRead(fun);
+    grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
     openPipelineLambdaFunction.grantInvoke(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
@@ -74,7 +78,6 @@ export function buildSnsExecutePcPotreeViewerPipelineFunction(
 export function buildVamsExecutePcPotreeViewerPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    assetBucket: s3.IBucket,
     assetAuxiliaryBucket: s3.IBucket,
     openPipelineLambdaFunction: lambda.IFunction,
     config: Config.Config,
@@ -108,7 +111,7 @@ export function buildVamsExecutePcPotreeViewerPipelineFunction(
         },
     });
 
-    assetBucket.grantRead(fun);
+    grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
     openPipelineLambdaFunction.grantInvoke(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
@@ -121,7 +124,6 @@ export function buildVamsExecutePcPotreeViewerPipelineFunction(
 export function buildOpenPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    assetBucket: s3.IBucket,
     assetAuxiliaryBucket: s3.IBucket,
     pipelineStateMachine: sfn.StateMachine,
     allowedPipelineInputExtensions: string,
@@ -161,7 +163,7 @@ export function buildOpenPipelineFunction(
         },
     });
 
-    assetBucket.grantRead(fun);
+    grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
     pipelineStateMachine.grantStartExecution(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
@@ -220,7 +222,6 @@ export function buildConstructPipelineFunction(
 export function buildPipelineEndFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    assetBucket: s3.IBucket,
     assetAuxiliaryBucket: s3.IBucket,
     config: Config.Config,
     vpc: ec2.IVpc,
@@ -260,7 +261,7 @@ export function buildPipelineEndFunction(
         environment: {},
     });
 
-    assetBucket.grantRead(fun);
+    grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);

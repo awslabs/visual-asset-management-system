@@ -63,6 +63,8 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
     -   Added additional validation checks to make sure users only stream assets that belong to the asset ID provided
 -   Subscription emails for assets will now trigger any time a asset itself changes or versions, or one of its files changes
 -   Added infra configuration option for basic GovCloud IL6 compliance checks for features/services enabled or disabled. 
+-   Added presignedUrlTimeoutSeconds configuration to infra config, moved credTokenTimeoutSeconds under useCognito configuration option (used to use one configuration value for both)
+-   Changed metadata API paths (to standardize) from '/metadata/{databaseId}/{assetId}/' to '/database/{databaseId}/assets/{assetId}/metadata'
 
 ### Bug Fixes
 -   Fixed various bugs with asset comments with editing and deleting
