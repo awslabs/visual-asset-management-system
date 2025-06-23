@@ -184,8 +184,6 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   `/asset-links` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
--   `/auxiliaryPreviewAssets/stream/{assetId}/{proxy+}` - GET
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/auth/constraints` - GET
 -   `/auth/constraints/{constraintId}` - GET/PUT/POST/DELETE
 -   `/auth/loginProfile/{userId}` - GET/POST
@@ -211,6 +209,8 @@ Additionally it shows which object authorization checks it does for a particular
 -   `/database/{databaseId}/assets/{assetId}` - GET/PUT
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
+-   `/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}` - GET
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/database/{databaseId}/assets/{assetId}/createFolder` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: POST)
 -   `/database/{databaseId}/assets/{assetId}/listFiles` - GET

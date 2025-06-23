@@ -77,12 +77,18 @@ def lambda_handler(event, context):
     roles = get_vams_roles(event)
     claims_to_save = set(roles)
     
-    logger.info(event['userName'] + "assigned to user roles")
+    logger.info(event['userName'] + " assigned to user roles")
     logger.info(roles)
 
     #Save roles as token claims if we have any
     if len(roles) > 0:
         remember_observed_claims(claims_to_save)
+
+    try:
+        email = event['request']['userAttributes']['email']
+    except Exception as e:
+        logger.warning("Email not found in userAttributes")
+        email = ""
 
     result = {}
     result.update(event)
@@ -95,7 +101,8 @@ def lambda_handler(event, context):
                         "vams:roles": json.dumps(roles),
                         "vams:tokens": (
                             json.dumps([event['userName']])
-                        )
+                        ),
+                        "email": email
                     }
                 },
                 "accessTokenGeneration": {
@@ -104,7 +111,8 @@ def lambda_handler(event, context):
                         "vams:roles": json.dumps(roles),
                         "vams:tokens": (
                             json.dumps([event['userName']])
-                        )
+                        ),
+                        "email": email
                     }
                 }
             },

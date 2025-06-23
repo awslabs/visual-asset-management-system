@@ -43,7 +43,9 @@ export function EnhancedFileManager({ assetName, assetFiles = [] }: EnhancedFile
         searchResults: [],
         isSearching: false,
         refreshTrigger: 0,
-        showArchived: false
+        showArchived: false,
+        showNonIncluded: false,
+        flattenedItems: []
     };
     
     const [state, dispatch] = useReducer(fileManagerReducer, initialState);
@@ -51,10 +53,18 @@ export function EnhancedFileManager({ assetName, assetFiles = [] }: EnhancedFile
     // Initial load of files
     useEffect(() => {
         if (assetFiles && assetFiles.length > 0) {
+            // Apply filters based on state
+            let filteredFiles = assetFiles;
+            
             // Filter out archived files if showArchived is false
-            const filteredFiles = state.showArchived 
-                ? assetFiles 
-                : assetFiles.filter(file => !file.isArchived);
+            if (!state.showArchived) {
+                filteredFiles = filteredFiles.filter(file => !file.isArchived);
+            }
+            
+            // Filter for non-included files if showNonIncluded is true
+            if (state.showNonIncluded) {
+                filteredFiles = filteredFiles.filter(file => file.currentAssetVersionFileVersionMismatch);
+            }
             
             const fileTree = addFiles(filteredFiles, initialState.fileTree);
             dispatch({ type: "FETCH_SUCCESS", payload: fileTree });
@@ -139,6 +149,12 @@ export function EnhancedFileManager({ assetName, assetFiles = [] }: EnhancedFile
                 // Log the files for debugging
                 console.log("Files received from API:", files);
                 
+                // Apply non-included filter if enabled
+                let filteredFiles = files;
+                if (state.showNonIncluded) {
+                    filteredFiles = filteredFiles.filter(file => file.currentAssetVersionFileVersionMismatch);
+                }
+                
                 // Create a new file tree with the updated files
                 const newFileTree = {
                     ...initialState.fileTree,
@@ -147,7 +163,7 @@ export function EnhancedFileManager({ assetName, assetFiles = [] }: EnhancedFile
                 
                 try {
                     // Add files to the tree with improved error handling
-                    const updatedFileTree = addFiles(files, newFileTree);
+                    const updatedFileTree = addFiles(filteredFiles, newFileTree);
                     
                     // Update the state with the new file tree
                     dispatch({ type: "FETCH_SUCCESS", payload: updatedFileTree });

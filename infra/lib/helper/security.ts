@@ -114,6 +114,7 @@ export function kmsKeyPolicyStatementPrincipalGenerator(
             Service("LAMBDA").Principal,
             Service("STS").Principal,
         ],
+        resources: ["*"],
     });
 
     if (!config.app.useAlb.enabled) {

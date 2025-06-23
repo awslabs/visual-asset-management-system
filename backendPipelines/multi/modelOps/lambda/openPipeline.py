@@ -63,11 +63,21 @@ def lambda_handler(event, context):
     inputOutput_s3_assetAuxiliary_files_uri = event['inputOutputS3AssetAuxiliaryFilesPath']
     output_file_type = event['outputFileType']
 
+    #Folder check
+    if (input_s3_asset_files_uri.endswith("/")):
+        abort_external_workflow("Input S3 URI cannot be a folder for this pipeline")
+        return {
+            'statusCode': 400,
+            'body': {
+                "message": "Input S3 URI cannot be a folder"
+            }
+        }
+
     # Extract the root name and extension from the input key
     file_root, extension = os.path.splitext(input_s3_asset_files_uri)
 
     # Check to make sure we are working with the right file types (if not, exit)
-    if (extension.lower() not in ALLOWED_INPUT_FILEEXTENSIONS):
+    if (not extension or extension == '' or extension.lower() not in ALLOWED_INPUT_FILEEXTENSIONS):
         abort_external_workflow("Pipeline cannot process file type provided")
         return {
             'statusCode': 400,

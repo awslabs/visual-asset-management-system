@@ -318,21 +318,38 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         record.snsS3ObjectDeletedTopic = removedTopic;
         
         // Use the prefix from the bucket record
-        const prefix = record.prefix || '/';
-        
-        // Add event notifications using the bucket-specific topics
-        record.bucket.addEventNotification(
-            s3.EventType.OBJECT_CREATED,
-            new s3not.SnsDestination(createdTopic),
-            { prefix: prefix }
-        );
+        let prefix = record.prefix || '/';
 
-        record.bucket.addEventNotification(
-            s3.EventType.OBJECT_REMOVED,
-            new s3not.SnsDestination(removedTopic),
-            { prefix: prefix }
-        );
-        
+        //S3 Event notifications doesn't like "/" for prefix filters (doesn't error but doesn't work either)
+        //Assume no prefix in this scenario
+        if (prefix == "/") {
+
+            // Add event notifications using the bucket-specific topics
+            record.bucket.addEventNotification(
+                s3.EventType.OBJECT_CREATED,
+                new s3not.SnsDestination(createdTopic)
+            );
+
+            record.bucket.addEventNotification(
+                s3.EventType.OBJECT_REMOVED,
+                new s3not.SnsDestination(removedTopic)
+            );
+        }
+        else {
+            // Add event notifications using the bucket-specific topics
+            record.bucket.addEventNotification(
+                s3.EventType.OBJECT_CREATED,
+                new s3not.SnsDestination(createdTopic),
+                { prefix: prefix }
+            );
+
+            record.bucket.addEventNotification(
+                s3.EventType.OBJECT_REMOVED,
+                new s3not.SnsDestination(removedTopic),
+                { prefix: prefix }
+            );
+        }
+
         console.log(`Added per-bucket event notifications for bucket ${record.bucket.bucketName} with prefix ${prefix}`);
     }
 

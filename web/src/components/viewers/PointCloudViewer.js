@@ -11,7 +11,7 @@ const Potree = window.Potree;
 
 export default function PointCloudViewer(props) {
     const engineElement = useRef(null);
-    const { assetId, relativeFileKey } = props;
+    const { databaseId, assetId, relativeFileKey } = props;
     const [loaded, setLoaded] = useState(false);
     const [showNoAssetMessage, setShowNoAssetMessage] = useState(false);
     const [config] = useState(Cache.getItem("config"));
@@ -19,7 +19,7 @@ export default function PointCloudViewer(props) {
     useEffect(() => {
         const loadAsset = async () => {
             let fileKey = relativeFileKey + '/preview/PotreeViewer/metadata.json'
-            let url = `${config.api}auxiliaryPreviewAssets/stream/${assetId}/${fileKey}`;
+            let url = `${config.api}database/${databaseId}/assets/${assetId}/auxiliaryPreviewAssets/stream/${fileKey}`;
 
             const authHeader = {
                 Authorization: `Bearer ${Auth.Credentials.Auth.user.signInUserSession.idToken.jwtToken}`,

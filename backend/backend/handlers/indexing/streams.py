@@ -576,17 +576,18 @@ def handle_s3_event_record(record,
                            sleep_fn=time.sleep):
     
 
-    if bucketName != '' and record.get("s3", {}).get("bucket", {}).get("name", "") != bucketName:
+    if bucketName and bucketName != '' and record.get("s3", {}).get("bucket", {}).get("name", "") != bucketName:
         logger.info("Buckets don't match. Ignoring")
         logger.info(record)
         return
     
-    if bucketPrefix != '' and not record.get("s3", {}).get("object", {}).get("key", "").startswith(bucketPrefix):
+    if bucketPrefix and bucketPrefix != '' and not record.get("s3", {}).get("object", {}).get("key", "").startswith(bucketPrefix):
         logger.info("Bucket prefix doesn't match records we care to index. Ignoring")
         logger.info(record)
         return
 
-    if bucketPrefix == '':
+    #Now set it to empty so we can do proper starts with checks
+    if not bucketPrefix:
         bucketPrefix = ''
     
     #Ignore pipeline and preview files from assets
@@ -698,6 +699,9 @@ def lambda_handler_m(event, context,
 
     if 'ASSET_BUCKET_PREFIX' in event:
         bucketPrefix = event['ASSET_BUCKET_PREFIX']
+
+        if bucketPrefix == '/':
+            bucketPrefix = None
 
         if bucketPrefix is not None and bucketPrefix != '':
             # Remove leading slash from file path if present

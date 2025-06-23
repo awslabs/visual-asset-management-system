@@ -126,8 +126,15 @@ function SearchResults({}: SearchResultsProps) {
                 return (
                     <div 
                         key={item.keyPrefix}
-                        className={`search-result-item ${state.selectedItem?.relativePath === item.relativePath ? 'selected' : ''}`}
-                        onClick={() => dispatch({ type: "SELECT_ITEM", payload: { item } })}
+                        className={`search-result-item ${state.selectedItem?.relativePath === item.relativePath ? 'selected' : ''} ${state.selectedItems.some(selectedItem => selectedItem.relativePath === item.relativePath) && state.multiSelectMode ? 'multi-selected' : ''}`}
+                        onClick={(e) => dispatch({ 
+                            type: "SELECT_ITEM", 
+                            payload: { 
+                                item,
+                                ctrlKey: e.ctrlKey,
+                                shiftKey: e.shiftKey
+                            } 
+                        })}
                     >
                         <span className="search-result-icon">
                             {isFolder ? (
@@ -221,20 +228,37 @@ export function DirectoryTree({}: DirectoryTreeProps) {
             
             <div className="selection-controls">
                 <div className="selection-note">
-                    Hold Ctrl to select multiple files
+                    Hold Ctrl or Shift to select multiple files
                 </div>
-                <div className="archived-toggle">
-                    <Toggle
-                        onChange={({ detail }) => 
-                            dispatch({ 
-                                type: "TOGGLE_SHOW_ARCHIVED", 
-                                payload: null 
-                            })
-                        }
-                        checked={state.showArchived}
-                    >
-                        Show archived files
-                    </Toggle>
+                <div className="toggle-controls">
+                    <div className="toggle-row">
+                        <div className="archived-toggle">
+                            <Toggle
+                                onChange={({ detail }) => 
+                                    dispatch({ 
+                                        type: "TOGGLE_SHOW_ARCHIVED", 
+                                        payload: null 
+                                    })
+                                }
+                                checked={state.showArchived}
+                            >
+                                Show archived files
+                            </Toggle>
+                        </div>
+                        <div className="non-included-toggle">
+                            <Toggle
+                                onChange={({ detail }) => 
+                                    dispatch({ 
+                                        type: "TOGGLE_SHOW_NON_INCLUDED", 
+                                        payload: null 
+                                    })
+                                }
+                                checked={state.showNonIncluded}
+                            >
+                                Filter for non-included
+                            </Toggle>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>

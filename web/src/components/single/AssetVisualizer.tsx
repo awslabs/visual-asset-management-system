@@ -69,6 +69,7 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                     {props.viewType === "pc" && (
                         <PointCloudViewer
                             assetId={props.asset.assetId}
+                            databaseId={props.asset.databaseId}
                             relativeFileKey={props.assetKey || props.asset?.assetLocation?.Key}
                             className="visualizer-container-canvas"
                         />

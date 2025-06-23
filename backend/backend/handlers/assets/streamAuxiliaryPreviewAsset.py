@@ -7,18 +7,52 @@ import json
 import base64
 import sys
 from botocore.exceptions import ClientError
+from botocore.config import Config
+from boto3.dynamodb.conditions import Key
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from common.s3 import validateUnallowedFileExtensionAndContentType
-from common.dynamodb import get_asset_object_from_id
 
-s3_client = boto3.client('s3')
+# Standardized retry configuration merged with existing S3 config
+s3_config = Config(
+    signature_version='s3v4', 
+    s3={'addressing_style': 'path'},
+    retries={
+        'max_attempts': 3,
+        'mode': 'adaptive'
+    }
+)
+
+s3_client = boto3.client('s3', config=s3_config)
+dynamodb = boto3.resource('dynamodb', config=s3_config)
 logger = safeLogger(service_name="StreamAuxiliaryPreviewAsset")
 
-auxasset_bucket_name = os.environ["ASSET_AUXILIARY_BUCKET_NAME"]
+try:
+    auxasset_bucket_name = os.environ["ASSET_AUXILIARY_BUCKET_NAME"]
+    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+except Exception as e:
+    logger.exception("Failed loading environment variables")
+    raise e
+
+# Initialize DynamoDB tables
+asset_table = dynamodb.Table(asset_storage_table_name)
+
+def get_asset_details(databaseId, assetId):
+    """Get asset details from DynamoDB"""
+    try:
+        response = asset_table.get_item(
+            Key={
+                'databaseId': databaseId,
+                'assetId': assetId
+            }
+        )
+        return response.get('Item')
+    except Exception as e:
+        logger.exception(f"Error getting asset details: {e}")
+        raise Exception(f"Error retrieving asset: {str(e)}")
 
 def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
     """
@@ -92,6 +126,7 @@ def lambda_handler(event, context):
 
     # Get the object key which comes after the base path of the API Call
     assetId = path_parameters.get('assetId', "") 
+    databaseId = path_parameters.get('databaseId', "") 
     object_key = path_parameters.get('proxy', "")  
 
 
@@ -110,6 +145,10 @@ def lambda_handler(event, context):
 
     logger.info("Validating parameters")
     (valid, message) = validate({
+        'databaseId': {
+            'value': databaseId,
+            'validator': 'ID'
+        },
         'assetId': {
             'value': assetId,
             'validator': 'ASSET_ID'
@@ -129,7 +168,7 @@ def lambda_handler(event, context):
     http_method = "GET"
     operation_allowed_on_asset = False
 
-    asset_object = get_asset_object_from_id(assetId)
+    asset_object = get_asset_details(databaseId, assetId)
     asset_object.update({"object__type": "asset"})
 
     logger.info(asset_object)

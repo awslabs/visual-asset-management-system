@@ -14,8 +14,6 @@ logger = safeLogger(service="SnsExecutePreviewPcPotreeViewerPipeline")
 lambda_client = boto3.client('lambda')
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 S3_ASSETAUXILIARY_BUCKET_NAME = os.environ["S3_ASSETAUXILIARY_BUCKET_NAME"]
-S3_ASSET_BUCKET_NAME = os.environ["S3_ASSET_BUCKET_NAME"]
-S3_ASSET_BUCKET_PREFIX = os.environ["S3_ASSET_BUCKET_PREFIX"]
 
 def normalize_s3_path(asset_base_key, file_path):
     """
@@ -103,17 +101,20 @@ def lambda_handler(event, context):
             logger.info(f"SNS Record: {sns_record}")
 
             try:
-                # Parse SNS Message to retrieve S3 Records
-                s3_records = json.loads(sns_record["Sns"]["Message"])['Records']
+                # Parse SQS body to get SNS message, then parse SNS Message to retrieve S3 Records
+                sns_message = json.loads(sns_record["body"])
+                s3_records = json.loads(sns_message["Message"])['Records']
                 logger.info(f"S3 Records: {s3_records}")
-            except:
-                logger.exception(f"Error: Unable to parse SNS Message. No S3 Records to process.")
+            except Exception as e:
+                logger.exception(f"Error: Unable to parse SNS Message. No S3 Records to process. Error: {str(e)}")
                 responses.append({
                     'statusCode': 500,
                     'body': {
                         'error': "Error: unable to parse SNS Message. No S3 Records to process."
                     }
                 })
+                # Initialize s3_records to prevent UnboundLocalError in the loop below
+                s3_records = []
 
             # Get any given additional inputMetadata
             input_Metadata = ''
@@ -145,10 +146,6 @@ def lambda_handler(event, context):
                 logger.info(inputS3AssetFilePath)
                 logger.info(inputOutputS3AssetAuxiliaryFilesPath)
 
-                #If s3_source_bucket and s3_source_key does not start match the environment bucket name and prefix then ignore the file
-                if not (s3_source_bucket == S3_ASSET_BUCKET_NAME and s3_source_key.startswith(S3_ASSET_BUCKET_PREFIX)):
-                    logger.info("Ignoring file as it does not match the environment bucket name and prefix - not part of assets to track")
-                    continue
 
                 #Ignore pipeline and preview files from assets
                 if "pipeline" in s3_source_key or "preview" in s3_source_key or "temp-upload" in s3_source_key:

@@ -232,6 +232,8 @@ def get_userProfile_Email(userId):
 
         if not valid:
             email = "INVALID_FORMAT"
+        else: 
+            email = userId
 
     return email
 

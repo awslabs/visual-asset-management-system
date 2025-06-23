@@ -62,9 +62,18 @@ def convert_input_output(input_path, output_path, output_filetype):
 
     supported_formats = ['.stl', '.obj', '.ply', '.gltf', '.glb', '.3mf', '.xaml', '.3dxml', '.dae', '.xyz']
 
+    #Folder check
+    if (input_key.endswith("/")):
+        return {
+            'statusCode': 400,
+            'body': {
+                "message": "Input S3 URI cannot be a folder"
+            }
+        }
+
     # Check input and output formats
     input_s3_asset_file_root, input_s3_asset_extension = os.path.splitext(input_key)
-    if input_s3_asset_extension not in supported_formats:
+    if (not input_s3_asset_extension or input_s3_asset_extension == '' or input_s3_asset_extension not in supported_formats):
         raise ValueError(f"Input format {input_s3_asset_extension} not supported by Trimesh pipeline")
     if output_filetype not in supported_formats:
         raise ValueError(f"Output format {output_filetype} not supported by Trimesh pipeline")

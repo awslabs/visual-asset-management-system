@@ -1,16 +1,46 @@
-import { FileManagerState, FileManagerAction } from "../types/FileManagerTypes";
+import { FileManagerState, FileManagerAction, FileTree } from "../types/FileManagerTypes";
 import { toggleExpanded, downloadFile, searchFileTree } from "./FileManagerUtils";
+
+// Helper function to flatten the file tree into an array for shift-selection
+function flattenFileTree(tree: FileTree, result: FileTree[] = []): FileTree[] {
+    // Add the current node
+    result.push(tree);
+    
+    // Recursively add all children if expanded
+    if (tree.expanded && tree.subTree && tree.subTree.length > 0) {
+        for (const child of tree.subTree) {
+            flattenFileTree(child, result);
+        }
+    }
+    
+    return result;
+}
 
 export function fileManagerReducer(state: FileManagerState, action: FileManagerAction): FileManagerState {
     switch (action.type) {
-        case "TOGGLE_EXPANDED":
+        case "TOGGLE_EXPANDED": {
+            const updatedTree = toggleExpanded(state.fileTree, action.payload.relativePath);
+            // Update flattened items whenever tree structure changes
+            const updatedFlattenedItems = flattenFileTree(updatedTree);
             return {
                 ...state,
-                fileTree: toggleExpanded(state.fileTree, action.payload.relativePath),
+                fileTree: updatedTree,
+                flattenedItems: updatedFlattenedItems
             };
+        }
             
-        case "SELECT_ITEM":
+        case "SELECT_ITEM": {
             const { item, ctrlKey, shiftKey } = action.payload;
+            
+            // Make sure we have flattened items
+            const currentFlattenedItems = state.flattenedItems.length > 0 
+                ? state.flattenedItems 
+                : flattenFileTree(state.fileTree);
+            
+            // Find the current item's index in the flattened array
+            const currentIndex = currentFlattenedItems.findIndex(
+                flatItem => flatItem.relativePath === item.relativePath
+            );
             
             if (ctrlKey) {
                 // Ctrl+click: toggle selection
@@ -28,6 +58,8 @@ export function fileManagerReducer(state: FileManagerState, action: FileManagerA
                         selectedItems: newSelectedItems,
                         selectedItem: newSelectedItems.length > 0 ? newSelectedItems[newSelectedItems.length - 1] : null,
                         multiSelectMode: newSelectedItems.length > 1,
+                        lastSelectedIndex: currentIndex,
+                        flattenedItems: currentFlattenedItems
                     };
                 } else {
                     // Add to selection
@@ -37,27 +69,35 @@ export function fileManagerReducer(state: FileManagerState, action: FileManagerA
                         selectedItems: newSelectedItems,
                         selectedItem: item,
                         multiSelectMode: newSelectedItems.length > 1,
-                        lastSelectedIndex: action.payload.itemIndex || -1,
+                        lastSelectedIndex: currentIndex,
+                        flattenedItems: currentFlattenedItems
                     };
                 }
-            } else if (shiftKey && state.lastSelectedIndex !== -1) {
+            } else if (shiftKey && state.lastSelectedIndex !== -1 && currentIndex !== -1) {
                 // Shift+click: select range
-                // This is a simplified implementation - in a real app you'd need to track item indices
-                // For now, just add the item to selection
-                const isAlreadySelected = state.selectedItems.some(
-                    selectedItem => selectedItem.relativePath === item.relativePath
-                );
+                const startIndex = Math.min(state.lastSelectedIndex, currentIndex);
+                const endIndex = Math.max(state.lastSelectedIndex, currentIndex);
                 
-                if (!isAlreadySelected) {
-                    const newSelectedItems = [...state.selectedItems, item];
-                    return {
-                        ...state,
-                        selectedItems: newSelectedItems,
-                        selectedItem: item,
-                        multiSelectMode: newSelectedItems.length > 1,
-                    };
-                }
-                return state;
+                // Get all items in the range
+                const itemsInRange = currentFlattenedItems.slice(startIndex, endIndex + 1);
+                
+                // Combine with existing selection if ctrl is also pressed
+                const newSelectedItems = ctrlKey 
+                    ? [...state.selectedItems, ...itemsInRange.filter(
+                        rangeItem => !state.selectedItems.some(
+                            selectedItem => selectedItem.relativePath === rangeItem.relativePath
+                        )
+                      )]
+                    : itemsInRange;
+                
+                return {
+                    ...state,
+                    selectedItems: newSelectedItems,
+                    selectedItem: item,
+                    multiSelectMode: newSelectedItems.length > 1,
+                    lastSelectedIndex: currentIndex,
+                    flattenedItems: currentFlattenedItems
+                };
             } else {
                 // Regular click: single selection
                 return {
@@ -65,9 +105,10 @@ export function fileManagerReducer(state: FileManagerState, action: FileManagerA
                     selectedItem: item,
                     selectedItems: [item],
                     multiSelectMode: false,
-                    lastSelectedIndex: action.payload.itemIndex || -1,
+                    lastSelectedIndex: currentIndex,
                 };
             }
+        }
             
         case "SELECT_MULTIPLE_ITEMS":
             return {
@@ -100,6 +141,8 @@ export function fileManagerReducer(state: FileManagerState, action: FileManagerA
             return state;
             
         case "FETCH_SUCCESS":
+            // Update flattened items whenever tree structure changes
+            const newFlattenedItems = flattenFileTree(action.payload);
             return {
                 ...state,
                 fileTree: action.payload,
@@ -110,6 +153,7 @@ export function fileManagerReducer(state: FileManagerState, action: FileManagerA
                 selectedItem: null,
                 multiSelectMode: false,
                 lastSelectedIndex: -1,
+                flattenedItems: newFlattenedItems
             };
             
         case "FETCH_ERROR":
@@ -133,18 +177,23 @@ export function fileManagerReducer(state: FileManagerState, action: FileManagerA
                     ...state,
                     searchTerm: '',
                     searchResults: [],
-                    isSearching: false
+                    isSearching: false,
+                    // Reset flattened items to tree view when exiting search
+                    flattenedItems: flattenFileTree(state.fileTree)
                 };
             }
             
             // Perform search
             const results = searchFileTree(state.fileTree, searchTerm);
             
+            // When in search mode, use search results as flattened items for shift-selection
             return {
                 ...state,
                 searchTerm,
                 searchResults: results,
-                isSearching: true
+                isSearching: true,
+                // Use search results as flattened items for shift-selection
+                flattenedItems: results
             };
             
         case "REFRESH_FILES":
@@ -158,6 +207,14 @@ export function fileManagerReducer(state: FileManagerState, action: FileManagerA
             return {
                 ...state,
                 showArchived: !state.showArchived,
+                refreshTrigger: state.refreshTrigger + 1,
+                loading: true
+            };
+            
+        case "TOGGLE_SHOW_NON_INCLUDED":
+            return {
+                ...state,
+                showNonIncluded: !state.showNonIncluded,
                 refreshTrigger: state.refreshTrigger + 1,
                 loading: true
             };

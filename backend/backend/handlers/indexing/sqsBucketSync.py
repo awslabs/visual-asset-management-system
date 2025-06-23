@@ -31,16 +31,17 @@ dynamodb_client = boto3.client('dynamodb')
 logger = safeLogger(service_name="sqsBucketSync")
 
 # Environment variables
-asset_bucket_name = os.environ.get('ASSET_BUCKET_NAME')
-asset_bucket_prefix = os.environ.get('ASSET_BUCKET_PREFIX')
-
-s3_asset_buckets_table = os.environ.get('S3_ASSET_BUCKETS_STORAGE_TABLE_NAME')
-asset_table_name = os.environ.get('ASSET_STORAGE_TABLE_NAME')
-db_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-
-database_id = os.environ.get('DEFAULT_DATABASE_ID')  
-
-openSearchIndexing_lambda_name = os.environ["INDEXING_FUNCTION_NAME"]
+try:
+    asset_bucket_name = os.environ.get('ASSET_BUCKET_NAME')
+    asset_bucket_prefix = os.environ.get('ASSET_BUCKET_PREFIX')
+    s3_asset_buckets_table = os.environ.get('S3_ASSET_BUCKETS_STORAGE_TABLE_NAME')
+    asset_table_name = os.environ.get('ASSET_STORAGE_TABLE_NAME')
+    db_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
+    database_id = os.environ.get('DEFAULT_DATABASE_ID')  
+    openSearchIndexing_lambda_name = os.environ["INDEXING_FUNCTION_NAME"]
+except Exception as e:
+    logger.exception("Failed loading environment variables")
+    raise e
 
 if not database_id:
     raise Exception('databaseId not configured')
@@ -427,18 +428,25 @@ def extract_asset_id_from_key(object_key: str, prefix: str) -> Optional[str]:
     Returns:
         str: Asset ID if found, None otherwise
     """
-    if not prefix.endswith('/'):
-        prefix = prefix + '/'
-        
-    # Remove the prefix from the object key
-    if object_key.startswith(prefix):
-        relative_path = object_key[len(prefix):]
-        
+
+    #ignore prefix if we don't have one or process by removing path start
+    if not prefix or prefix == '' or prefix == '/':
         # The asset ID is the first part of the path
-        parts = relative_path.split('/')
+        parts = object_key.split('/')
         if parts:
             return parts[0]
-    
+    else:
+        if not prefix.endswith('/'):
+            prefix = prefix + '/'
+            
+        # Remove the prefix from the object key
+        if object_key.startswith(prefix):
+            relative_path = object_key[len(prefix):]
+            
+            # The asset ID is the first part of the path
+            parts = relative_path.split('/')
+            if parts:
+                return parts[0]
     return None
 
 def verify_database_exists(database_id):
@@ -511,34 +519,55 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
     """
     Process a single S3 record
     
+    This function implements the core business logic for processing S3 events:
+    1. Validates bucket and prefix against environment variables
+    2. Checks if bucket and prefix have a record in S3 asset buckets table
+    3. Skips special folders (temp-uploads, preview, pipeline)
+    4. Validates asset ID format
+    5. Looks up or creates assets/databases as needed
+    6. Handles "init" files by deleting them
+    7. Updates S3 metadata with database and asset IDs
+    
     Args:
         record: The S3 record to process
         
     Returns:
-        tuple: (success, message)
+        tuple: (success, message) where success is a boolean indicating if the
+               processing was successful, and message is a string with details
     """
     try:
+        # Validate record has S3 information
         if not record.get('s3'):
             return False, "Record does not contain S3 information"
 
+        # Extract bucket name and object key
         bucket_name = record['s3']['bucket']['name']
         object_key = record['s3']['object']['key']
         
         logger.info(f"Processing S3 record for bucket {bucket_name}, key {object_key}")
+
+        #Copy prefix
+        prefix = asset_bucket_prefix
+        
+        #Make sure prefix doesn't start with a '/'. 
+        if prefix and prefix != '/':
+            prefix = prefix.lstrip('/')
         
         # 1.a. Check if record bucket and base prefix matches the environment variables
         if asset_bucket_name and bucket_name != asset_bucket_name:
             logger.info(f"Bucket {bucket_name} does not match configured bucket {asset_bucket_name}, skipping")
             return False, f"Bucket {bucket_name} does not match configured bucket"
         
-        if asset_bucket_prefix and not object_key.startswith(asset_bucket_prefix):
-            logger.info(f"Object key {object_key} does not start with configured prefix {asset_bucket_prefix}, skipping")
+        #Note: if '/' given, treat this as no prefix
+        if prefix and prefix != '/' and not object_key.startswith(prefix):
+            logger.info(f"Object key {object_key} does not start with configured prefix {prefix}, skipping")
             return False, f"Object key does not start with configured prefix"
         
         # Use the configured prefix or empty string
-        prefix = asset_bucket_prefix or ""
+        prefix = prefix or ""
         
         # 1.b Check if bucket name and prefix have a record in the S3 asset buckets table
+        # Use cache to prevent excessive lookups (TTL: 60 seconds)
         bucket_id = get_bucket_id(bucket_name, prefix)
         if not bucket_id:
             logger.info(f"No bucket ID found for {bucket_name} with prefix {prefix}, skipping")
@@ -561,6 +590,7 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
             return False, f"Asset ID {asset_id} is not valid"
         
         # 2.a. Lookup asset in assets dynamoDB table
+        # Use cache to prevent excessive lookups (TTL: 60 seconds)
         asset_data = lookup_asset(bucket_id, asset_id)
         database_id_to_use = None
         
@@ -569,6 +599,7 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
             database_id_to_use = asset_data.get('databaseId')
         else:
             # 2.b. Lookup databases that match the bucketId
+            # Use cache to prevent excessive lookups (TTL: 60 seconds)
             databases = lookup_databases(bucket_id)
             
             if not databases:
@@ -582,6 +613,7 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
             elif len(databases) == 1:
                 # Use the single database
                 database_id_to_use = databases[0]['databaseId']
+                logger.info(f"Using single database {database_id_to_use} for bucket {bucket_id}")
             else:
                 # Multiple databases, check if any match defaultDatabaseId
                 # First check cache
@@ -591,8 +623,10 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
                 # If not in cache, check the list of databases
                 if default_db is None:
                     default_db = next((db for db in databases if db['databaseId'] == database_id), None)
+                
                 if default_db:
                     database_id_to_use = default_db['databaseId']
+                    logger.info(f"Using default database {database_id_to_use} for bucket {bucket_id}")
                 else:
                     # Create a new database with defaultDatabaseId
                     logger.info(f"No default database found for bucket {bucket_id}, creating new database")
@@ -610,7 +644,7 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
                     logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
                     return False, f"Failed to create asset {asset_id} in database {database_id_to_use}"
         
-        # 4. Check if the object key ends with "init" - If so return either way after attempting delete
+        # 4. Check if the object key ends with "init" - If so delete and skip rest of steps
         if object_key.endswith('init') or object_key.endswith('init/'):
             # Check if versioning is enabled
             versioning_enabled = is_versioning_enabled(bucket_id)
@@ -639,8 +673,20 @@ def on_storage_event_created(event):
     """
     Process S3 storage events for created files
     
+    This function handles S3 events for file creation, implementing the following process:
+    1. Validates bucket and prefix against environment variables
+    2. Checks if bucket and prefix have a record in S3 asset buckets table
+    3. Skips special folders (temp-uploads, preview, pipeline)
+    4. Validates asset ID format
+    5. Looks up or creates assets/databases as needed
+    6. Handles "init" files by deleting them
+    7. Updates S3 metadata with database and asset IDs
+    
     Args:
-        event: The S3 event
+        event: The S3 event containing records to process
+        
+    Returns:
+        bool: True if processing completed without hard errors, False otherwise
     """
     logger.info(f"Processing storage event: {json.dumps(event)}")
     
@@ -648,20 +694,36 @@ def on_storage_event_created(event):
     error_count = 0
     skip_count = 0
     
+    # Process each record in the event
     for record in event.get('Records', []):
+        # Skip records without S3 information
         if not record.get('s3'):
+            logger.warning("Record does not contain S3 information, skipping")
             skip_count += 1
             continue
-
-        success, message = process_s3_record(record)
-        if success:
-            success_count += 1
-        else:
-            if "skipping" in message.lower():
-                skip_count += 1
+            
+        # Handle records with S3 information
+        try:
+            # Process the S3 record
+            success, message = process_s3_record(record)
+            
+            # Track success/failure counts
+            if success:
+                success_count += 1
+                logger.info(f"Successfully processed record: {message}")
             else:
-                error_count += 1
+                if "skipping" in message.lower():
+                    skip_count += 1
+                    logger.info(f"Skipped record: {message}")
+                else:
+                    error_count += 1
+                    logger.error(f"Error processing record: {message}")
+        except Exception as e:
+            # Catch any unexpected exceptions during record processing
+            error_count += 1
+            logger.exception(f"Unexpected error processing record: {e}")
     
+    # Log summary of processing results
     logger.info(f"Processed {len(event.get('Records', []))} records: {success_count} successful, {error_count} errors, {skip_count} skipped")
     
     # Return True if there were no errors, False otherwise
@@ -690,6 +752,7 @@ def parse_event(event):
             
             for record in event['Records']:
                 if not record.get('body'):
+                    logger.warning("SQS record missing body field, skipping")
                     continue
                 
                 try:
@@ -697,19 +760,37 @@ def parse_event(event):
                     
                     # Check if this is an SNS message
                     if 'Message' in parsed_body:
-                        message = json.loads(parsed_body['Message'])
-                        if 'Records' in message:
-                            s3_events.append(message)
+                        try:
+                            # Try to parse the Message field as JSON
+                            message = json.loads(parsed_body['Message'])
+                            if 'Records' in message:
+                                s3_events.append(message)
+                        except json.JSONDecodeError as e:
+                            # Handle case where Message is not valid JSON
+                            logger.warning(f"Message field is not valid JSON: {e}. Message content: {parsed_body['Message']}")
+                            # If Message contains S3 event data in a non-standard format, try to extract it
+                            if 's3' in parsed_body['Message'] or 'bucket' in parsed_body['Message']:
+                                logger.info("Attempting to process Message as raw S3 event data")
+                                # Create a placeholder event with the raw message for further processing
+                                s3_events.append({
+                                    'Records': [{
+                                        'eventSource': 'aws:s3',
+                                        'rawMessage': parsed_body['Message']
+                                    }]
+                                })
                     elif 'Records' in parsed_body:
                         s3_events.append(parsed_body)
+                except json.JSONDecodeError as e:
+                    logger.exception(f"Error parsing SQS record body as JSON: {e}")
                 except Exception as e:
-                    logger.exception(f"Error parsing SQS record body: {e}")
+                    logger.exception(f"Unexpected error parsing SQS record: {e}")
             
             if s3_events:
                 # Combine all S3 events into a single event
                 combined_event = {'Records': []}
                 for event in s3_events:
-                    combined_event['Records'].extend(event['Records'])
+                    if 'Records' in event:
+                        combined_event['Records'].extend(event['Records'])
                 
                 return combined_event
         
@@ -720,34 +801,58 @@ def parse_event(event):
             
             for record in event['Records']:
                 if not record.get('Sns') or not record['Sns'].get('Message'):
+                    logger.warning("SNS record missing Sns.Message field, skipping")
                     continue
                 
                 try:
                     message = json.loads(record['Sns']['Message'])
                     if 'Records' in message:
                         s3_events.append(message)
+                except json.JSONDecodeError as e:
+                    logger.warning(f"SNS Message field is not valid JSON: {e}. Message content: {record['Sns']['Message']}")
+                    # If Message contains S3 event data in a non-standard format, try to extract it
+                    if 's3' in record['Sns']['Message'] or 'bucket' in record['Sns']['Message']:
+                        logger.info("Attempting to process SNS Message as raw S3 event data")
+                        # Create a placeholder event with the raw message for further processing
+                        s3_events.append({
+                            'Records': [{
+                                'eventSource': 'aws:s3',
+                                'rawMessage': record['Sns']['Message']
+                            }]
+                        })
                 except Exception as e:
-                    logger.exception(f"Error parsing SNS message: {e}")
+                    logger.exception(f"Unexpected error parsing SNS message: {e}")
             
             if s3_events:
                 # Combine all S3 events into a single event
                 combined_event = {'Records': []}
                 for event in s3_events:
-                    combined_event['Records'].extend(event['Records'])
+                    if 'Records' in event:
+                        combined_event['Records'].extend(event['Records'])
                 
                 return combined_event
     except Exception as e:
         logger.exception(f"Error parsing event: {e}")
     
     # Return the original event if we couldn't parse it
+    logger.warning("Could not parse event into a standard format, returning original event")
     return event
 
-def lambda_handler_created(event):
+def lambda_handler_created(event, context):
     """
     Handler for file creation events from SQS
     
+    This function is the main entry point for processing file creation events.
+    It parses the event from different sources (SQS, SNS, direct S3),
+    processes the storage event, and runs the OpenSearch indexing lambda
+    if there were no hard errors.
+    
     Args:
-        event: The SQS event
+        event: The event from the event source (SQS, SNS, or direct S3)
+        context: The Lambda context
+        
+    Returns:
+        None
     """
     logger.info(f"File creation event received: {json.dumps(event)}")
     
@@ -755,34 +860,51 @@ def lambda_handler_created(event):
         # Parse the event to handle different sources
         parsed_event = parse_event(event)
         
-        # Process the storage event
+        # Process the storage event if it contains records
         if parsed_event.get('Records'):
+            # Process the storage event and get success status
             success = on_storage_event_created(parsed_event)
             
             # Only run indexing if there were no hard errors
             if success:
                 # Run OpenSearch indexing
+                logger.info("No hard errors encountered, running OpenSearch indexing")
                 runOpenSearchIndexingLambda(event)
             else:
-                logger.warning("Skipping OpenSearch indexing due to errors in processing")
+                logger.warning("Hard errors encountered, skipping OpenSearch indexing")
         else:
-            logger.warning("No records found in parsed event")
+            logger.warning("No records found in parsed event, nothing to process")
     except Exception as e:
-        logger.exception(f"Error in lambda_handler_created: {e}")
-        # We still want to run the indexing lambda even if there are errors
-        runOpenSearchIndexingLambda(event)
+        logger.exception(f"Unhandled error in lambda_handler_created: {e}")
+        # We don't run the indexing lambda on unhandled exceptions to avoid potential data corruption
+        # This is a change from the previous behavior where we would still run the indexing lambda
 
-def lambda_handler_deleted(event):
+def lambda_handler_deleted(event, context):
     """
     Handler for file deleted events from SQS
     
+    This function is the entry point for processing file deletion events.
+    For deletions, we only run the OpenSearch indexing lambda to update
+    the search index.
+    
     Args:
-        event: The SQS event
+        event: The event from the event source (SQS, SNS, or direct S3)
+        context: The Lambda context
+        
+    Returns:
+        None
     """
     logger.info(f"File deletion event received: {json.dumps(event)}")
     
     try:
+        # Parse the event to handle different sources
+        parsed_event = parse_event(event)
+        
         # For deletions, we just run the OpenSearch indexing lambda
-        runOpenSearchIndexingLambda(event)
+        if parsed_event.get('Records'):
+            logger.info("Running OpenSearch indexing for deletion event")
+            runOpenSearchIndexingLambda(event)
+        else:
+            logger.warning("No records found in parsed deletion event, nothing to process")
     except Exception as e:
         logger.exception(f"Error in lambda_handler_deleted: {e}")
