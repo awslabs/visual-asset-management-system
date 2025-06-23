@@ -1,7 +1,10 @@
 {
     "assets_table_name": "PROD_ASSETS_TABLE_NAME",
     "asset_versions_table_name": "PROD_ASSET_VERSIONS_TABLE_NAME",
-    "asset_bucket_name": "prod-asset-bucket-name",
+    "s3_asset_buckets_table_name": "PROD_S3_ASSET_BUCKETS_TABLE_NAME",
+    "databases_table_name": "PROD_DATABASES_TABLE_NAME",
+    "base_assets_prefix": "/",
+    "asset_bucket_name": "PROD_ASSETS_BUCKET_NAME",
     "aws_profile": "prod-profile",
     "aws_region": "us-east-1",
     "log_level": "INFO",
@@ -12,6 +15,8 @@
         "Replace the placeholder values with your actual production values before running the migration.",
         "It is recommended to first run with dry_run set to true to verify the changes that would be made.",
         "Then set dry_run to false when you're ready to run the actual migration.",
-        "Make sure to back up your data before running the migration in production."
+        "Make sure to back up your data before running the migration in production.",
+        "base_assets_prefix should end with a slash (/) for proper path construction.",
+        "asset_bucket_name is the name of the S3 bucket used for asset storage."
     ]
 }

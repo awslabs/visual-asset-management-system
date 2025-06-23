@@ -1,6 +1,9 @@
 {
     "assets_table_name": "YOUR_ASSETS_TABLE_NAME",
     "asset_versions_table_name": "YOUR_ASSET_VERSIONS_TABLE_NAME",
+    "s3_asset_buckets_table_name": "YOUR_S3_ASSET_BUCKETS_TABLE_NAME",
+    "databases_table_name": "YOUR_DATABASES_TABLE_NAME",
+    "base_assets_prefix": "YOUR_BASE_ASSETS_PREFIX",
     "asset_bucket_name": "YOUR_ASSET_BUCKET_NAME",
     "aws_profile": "YOUR_AWS_PROFILE",
     "aws_region": "YOUR_AWS_REGION",
@@ -11,6 +14,8 @@
         "This is a sample configuration file for the VAMS v2.2 to v2.3 migration script.",
         "Replace the placeholder values with your actual values before running the script.",
         "The batch_size parameter controls how many items are processed in each batch.",
-        "Set dry_run to true to perform a test run without making any changes."
+        "Set dry_run to true to perform a test run without making any changes.",
+        "base_assets_prefix should end with a slash (/) for proper path construction.",
+        "asset_bucket_name is the name of the S3 bucket used for asset storage."
     ]
 }

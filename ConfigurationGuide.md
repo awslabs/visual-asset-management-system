@@ -20,6 +20,14 @@ Some configuration options can be overriden at time of deployment with either en
 -   `app.adminUserId` | default: < administrator > | #Administrator username to use for the initial super admin account. This can also be in the form of an email address.
 -   `app.adminEmailAddress` | default: < adminEmail@example.com > | #Administrator email address to use for the initial super admin account. A temporary password will be sent here for an initial solution standup.
 
+-   `app.assetBuckets.createNewBucket` | default: true | #Controls whether to create a new S3 bucket for assets. If set to false, you must define external asset buckets.
+-   `app.assetBuckets.defaultNewBucketSyncDatabaseId` | default: default | #Specifies the database ID to sync with the new bucket. Required when createNewBucket is true.
+-   `app.assetBuckets.externalAssetBuckets[]` | default: NULL | #Configuration for defining use of preeixsting external asset buckets (array). Buckets can be added over time through deployments
+-   `app.assetBuckets.externalAssetBuckets[].bucketArn` | default: NULL | #The ARN of the existing bucket to add to VAMS
+-   `app.assetBuckets.externalAssetBuckets[].baseAssetsPrefix` | default: NULL | #The base prefix to start using for catalogging and syncing assets. If at the base of the S3 bucket, use `/`
+-   `app.assetBuckets.externalAssetBuckets[].defaultSyncDatabaseId` | default: NULL | #The database ID to sync asset changes to if adding new asset folders direct to S3. If database ID does
+not exist when syncing, the system will attempt to create a new database with this ID and bucket/prefix. 
+
 -   `app.useWaf` | default: true | #Feature to turn use of Amazon Web Application Firewall on/off for VAMS deployment. This is used for Cloudfront or ALB + API Gateway attachment points. Warning: We reccomend you keep this on unless your organization has other firewalls in-use.
 -   `app.useFips` | default: false | #Feature to use FIPS compliant AWS partition endpoints. Must combine with AWS CLI FIPS Environment variable `AWS_USE_FIPS_ENDPOINT`.
 -   `app.addStackCloudTrailLogs` | default: true | #Feature to turn the creating of a new CloudWatch logs group and associated CloudTrail trail for this stack deployment.
@@ -73,6 +81,8 @@ Some configuration options can be overriden at time of deployment with either en
 -   `app.authProvider.useExternalOauthIdp.lambdaAuthorizorJWTIssuerUrl` | default: NULL | URL for external OAUTH IDP authentication endpoint for authorizer verification
 -   `app.authProvider.useExternalOauthIdp.lambdaAuthorizorJWTAudience` | default: NULL | The audience provided by the external IDP system to recognize this application deployment for JWT token verification
 
+-   `app.webUi.optionalBannerHtmlMessage` | default: NULL | #Optional HTML message to display as a banner in the web UI. Can be used for system notifications or compliance messages.
+
 ### Additional configuration notes
 
 -   `Gov Cloud` - This will check for Use Global VPC, Use ALB, Use OpenSearch Provisioned, and Use Location Services. Additionally does some small implementation changes for components that are different in GovCloud partitions. 
@@ -110,6 +120,8 @@ Some configuration options can be overriden at time of deployment with either en
 -   -   Actions: `["kms:GenerateDataKey*", "kms:Decrypt", "kms:ReEncrypt*", "kms:DescribeKey",  "kms:ListKeys", "kms:CreateGrant"]`
 -   -   Resources: `["*"]`
 -   -   Principals: `S3, DYNAMODB, STS, SQS, SNS, ECS, ECS_TASKS, LOGS, LAMBDA, CLOUDFRONT, ES, AOSS` - Note: ES: OpenSearch Provisioned, AOSS - OpenSearch Serverless
+
+-   `Asset Buckets` - If `app.assetBuckets.createNewBucket` is set to false, you must define at least one external asset bucket in `app.assetBuckets.externalAssetBuckets`. Each external bucket configuration requires a bucketArn, baseAssetsPrefix, and defaultSyncDatabaseId.
 
 ### Misc Troubleshooting
 

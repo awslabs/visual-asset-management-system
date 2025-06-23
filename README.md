@@ -36,6 +36,7 @@ Sample use cases that have leveraged early iterations of VAMS include:
 ![assets](./diagrams/screenshots/assets.png)
 ![model](./diagrams/screenshots/model_view.png)
 ![metadata](./diagrams/screenshots/metadata.png)
+![Asset Versioning](./diagrams/screenshots/asset_versioning.png)
 ![Workflows](./diagrams/screenshots/workflow_view.png)
 
 ## Architecture Overview

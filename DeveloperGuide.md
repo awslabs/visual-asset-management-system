@@ -283,7 +283,7 @@ If you would like your job check in to show that it is still running and fail th
 
 ### Special Configurations
 
-### Static WebApp - ALB w/ Manual VPC Interface Endpoint Creation
+#### Static WebApp - ALB w/ Manual VPC Interface Endpoint Creation
 
 During deployment of the ALB configuration for the static web contents, some organizations require that all VPC endpoints be created outside of a CDK stack.
 
@@ -296,6 +296,24 @@ Turn the `app.useAlb.addAlbS3SpecialVpcEndpoint` infrastructure configuration to
 5. Lookup all the Private IP Addresses for each ALB subnet that are assigned to the VPC Interface endpoint
 6. Add to the stack-created ALB target group all the VPCe IP addresses looked up in the previous step.
 7. Update the resource policy of the S3 ALB domainname bucket (which contains the webapp files) to update the condition of `aws:SourceVpce` to point to the new VPCe endpoint ID
+
+#### Single/Multi-S3 Assets Bucket Support and Setup
+
+During deployment of CDK you can define different asset buckets to create and/or use. The `app.assetBuckets.createNewBucket` and `app.assetBuckets.defaultNewBucketSyncDatabaseId` CDK configuration define if the CDK should create and manage a new bucket and which databaseId it should sync direct S3 changes to. The default prefix it uses for this bucket is `/` for assets.
+
+Or, you can additionally defin external buckets that already exist to use for assets and syncing. This is defined in the `app.assetBuckets.externalAssetBuckets[]` CDK configuration that requires fields for `app.assetBuckets.externalAssetBuckets[].bucketArn`, `app.assetBuckets.externalAssetBuckets[].baseAssetsPrefix`, `app.assetBuckets.externalAssetBuckets[].defaultSyncDatabaseId` per external bucket. See the [Configuration Guide](./ConfigurationGuide.md) for information on these fields
+
+At least a new creation or 1 external bucket must be defined.
+
+The system will attempt to add resource policies to the created and external buckets as well as all involved VAMS AWS components to access each bucket, during CDK deployment. 
+
+During CDK the S3 Assets Buckets dynamoDB table will be populated with the available buckets defined. This table is the basis for VAMS databases to define which bucket / prefix to use. the defaultSyncDatabaseId is used to narrow down on a database (or create one) if multiple for a bucket/prefix are defined or not existing. 
+
+Assets separately store which bucket and bucket prefix they are assigned to once an asset is initially created. This is determined based on what the defaultDatabaseBucketId is at the time of asset creation. 
+
+Any buckets within the base asset prefix will also sync changes back to dynamoDB tables and opensearch indexes if changes are made directly. New asset prefix folders will create a new asset in VAMS. File changes under that asset will be picked up by the file manager API calls and auto-index in OpenSearch as needed. Asset folder S3 deletions will not delete assets out of VAMS entirely (it will show as an empty asset) in VAMS, these must be manually archived or deleted through the VAMS API / UI currently. 
+
+Existing buckets that are brought in with existing files/asset folders in the base prefix defined will need to change a file in each asset prefix folder or add a `init` file to create/catalog the asset in VAMS. `init` files will be deleted after the asset is processed if you don't/can't change an existing file in a asset folder in S3. 
 
 ### Uninstalling
 
@@ -311,12 +329,12 @@ After running CDK destroy there might still some resources be running in AWS tha
 The CDK deployment deploys the VAMS stack into your account. The components that are created by this app are:
 
 1. Web app hosted on [cloudfront](https://aws.amazon.com/cloudfront/) distribution
-1. [API Gateway](https://aws.amazon.com/api-gateway/) to route front end calls to api handlers.
-1. [Lambda](https://aws.amazon.com/lambda/) Lambda handlers are created per API path.
-1. [DynamoDB](https://aws.amazon.com/dynamodb/) tables to store Workflows, Assets, Pipelines
-1. [S3 Buckets](https://aws.amazon.com/s3/) for assets, cdk deployments and log storage
-1. [Cognito User Pool](https://docs.aws.amazon.com/cognito/) for authentication
-1. [Open Search Collection](https://aws.amazon.com/opensearch-service/features/serverless/) for searching the assets using metadata
+2. [API Gateway](https://aws.amazon.com/api-gateway/) to route front end calls to api handlers.
+3. [Lambda](https://aws.amazon.com/lambda/) Lambda handlers are created per API path.
+4. [DynamoDB](https://aws.amazon.com/dynamodb/) tables to store Workflows, Assets, Pipelines
+5. [S3 Buckets](https://aws.amazon.com/s3/) for assets, cdk deployments and log storage
+6. [Cognito User Pool](https://docs.aws.amazon.com/cognito/) for authentication
+7. [Open Search Collection](https://aws.amazon.com/opensearch-service/features/serverless/) for searching the assets using metadata
    ![ARCHITECTURE](./VAMS_Architecture.jpg)
 
 # API Schema

@@ -4,7 +4,12 @@ All notable changes to this project will be documented in this file. See [standa
 
 ## [2.3.0] (2025-11-31)
 
-This minor version includes changes to VAMS infrastructure, authentication, web UI, pipelines, use-case pipeline implementations, and v2.0+ bug fixes.
+This version includes changes to VAMS infrastructure, asset management APIs/Backend/UI, and v2.0+ bug fixes.
+
+### ⚠ BREAKING CHANGES
+
+    -   CDK Configuration files must be updated to include the new required fields. See ConfigurationGuide.md and template configuration files for new formats. 
+    -   Asset and Database table formats have changed which require using the migration scripts after CDK deployment to update the new field values. See v2.2_to_v2.3_migration_README.md for details on using the migration scripts. 
 
 ### Features
 -   Database, Pipeline, Workflow, Tag, Tag Types, Role, and Constraints id/names no longer need to follow as strict of regex guidelines. New Regex: ^[-_a-zA-Z0-9]{3,63}$
@@ -20,23 +25,24 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
     -   Assets now are better built to support a range of different files, including no files. The separation allows for better reliance on S3 functionalities to support file versioning.
     -   AssetType on assets are now specified as "none" (no files on asset), "folder" (multiple files on an asset), or single file extension (single file on asset and provides the extension, as before)
     -   File Uploads will go to a temporary S3 location on stage 1 while stage 2 upload completions performs checks, including for malicious file extensions or MIME types, before moving files into an asset for versioning
-    -   Only completed asset file uploads will now trigger an asset version change/roll. 
     -   UploadFile now supports upload types for assetFiles and assetPreview to better support the separation of the uploads. This will allow for future enhancement support of adding filePreviews, seaparate of assets. 
     -   Workflow execution final steps which return files to an asset are now rigged to use the new uploadFile lambda to support all file checks before versioning as part of an asset and to now support pipelines that return asset previews. This process follows an alternate external upload stage where presigned URLs are not needed due to the direct access nature of pipelines into the assets bucket (still uses temporary locations for security). 
     -   AssetFiles API now brings back additional information for each file such as size, version, version created, and if the file is a versioned prefix folder or a file
     -   Support for empty asset creation and/or throughout life cycle of an asset (uploads no longer required during asset creation)
+    -   Asset uploads in the UI now keep their original filenames and no longer change them to the asset name. 
+    -   The concept of "primary file" in an asset has been removed to support assets being truely multi-file
 -   **Web** The front-end asset upload has been heavily modified to support the new backend asset changes
     -   Now supports choosing multiple files and/or entire folders
     -   Files now keep their original names and are no longer changed to the assetName
     -   Supports the presigned URL and multi-stage API calls needed now for an upload (including support for splitting large files into multiple parts for parallel upload)
     -   Supports stage and file error recovery options, including proceeding with certain failed uploads that will be discarded
-    -   Comments no longer a supported field for now as part of upload, this will be updated as more asset version features get added; this was a confusing field as this was the comment on a version and not part of the comments feature. 
+    -   Comments no longer a supported field for now as part of upload, this is now moved to creating asset versions. 
 -   The assetFiles API now supports additional paths for functionality including `../fileInfo`, `../moveFile`, `../copyFile`, `../archiveFile`, `../deleteFile`, `../revertFileVersion`. ListFiles now provides additional data back as well about each file. 
 -   **Web** The front-end asset download for multiple files has been updated to support downloading again an entire folders worth of files in parallel
     -   Note: This still fetches individual files based on their presigned URL for automation, it does not pre-ZIP files on a server and may still cause issues if hundreds or thousands of files need to be downloaded. 
     -   Overall UI and field displays
 -   **Web** The asset viewer file manager has been rewritten to support new features and richer user experience
-    -   Instead of having a separate redundant icon view of files in the right pane of the file manager, it now shows file information such as file name, path, size, and any version information. This will now allow for support for file preview and thumbnails. 
+    -   Instead of having a separate redundant icon view of files in the right pane of the file manager, it now shows file information such as file name, path, size, and any version information. For top-level asset nodes, this will show the Preview file now. This will also allow for support for file preview thumbnails in the future. 
     -   Added back buttons for various downloads of file and folders
     -   Add ability and button to create sub-folders in an asset
     -   ViewAsset button still shown on files for asset 3D visualization, preview files, and file specific metadata.
@@ -45,13 +51,15 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
     -   Added new API endpoints for file operations: fileInfo, moveFile, copyFile, archiveFile, unarchive, deleteFile, getVersion, getVersions, revertFileVersion
     -   Implemented file versioning with UI for showing files, knowing what version you are looking at, and reverting to a version
     -   Implemented file archiving which is just using S3 delete markers (vs a permenant delete that deletes the entire file)
-    -   Added support for cross-asset file copying with proper permission validation
+    -   Added support for cross-asset file copying with proper permission validation (must stay within the same VAMS database)
     -   Implemented detailed file metadata retrieval including size, storage class, and version history
     -   Added permanent file deletion with safety confirmation to prevent accidental data loss
-    -   All file operations update asset version history for complete audit trail
     -   Implemented proper error handling and validation for all file operations
     -   Asset files and versions will now show a flag for archived and if the asset is part of the assets current version files' version
--   **Web** All new asset versioning capability and version comparisons
+-   **Web** (Breaking Change) All new asset versioning capability and version comparisons
+    -   Asset versions for now must be manually created and will no longer auto-create when editing the asset or uploading files. 
+    -   New APIs are defined for asset versioning for create, get, and revert options
+    -   Asset table has changed fields and new asset version and asset file versions tables are created which require a database migration script to be used most upgrade from a previous VAMS version.
 -   Displayed as Versions tab under Asset Viewer and labels throughout (such as on file versions) to show files versions included in the current asset version (or mismatched)
 -   **Web** New tabbed design for Viewing Asset
     -   Moved comments page for assets to now be a tab under view assets
@@ -65,9 +73,16 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
 -   Added infra configuration option for basic GovCloud IL6 compliance checks for features/services enabled or disabled. 
 -   Added presignedUrlTimeoutSeconds configuration to infra config, moved credTokenTimeoutSeconds under useCognito configuration option (used to use one configuration value for both)
 -   Changed metadata API paths (to standardize) from '/metadata/{databaseId}/{assetId}/' to '/database/{databaseId}/assets/{assetId}/metadata'
+-   Added capability to support multiple S3 buckets for assets now for a solution. 
+    -   (Breaking Change) New CDK configuration options are added and required for defining asset buckets (created with solution or external load), see DeveloperGuide and ConfigurationGuide for details.
+    -   **Web** Databases now allow you to select which bucket/prefix the database will use for its assets. 
+    -   New dynamodb table for S3 Asset Buckets is setup with CDK deployment to define available asset S3 buckets
+    -   Direct changes to asset S3 buckets are allowed and will be synced back to VAMS. New asset prefix files will create new assets and databases based on configuration details defined.File changes within an asset will be indexed and pulled with any new API requests involving asset file operations. 
+    -   **Web** Pipelines in the nagigation menu is now under "Orchestrate and Automate"
 
 ### Bug Fixes
 -   Fixed various bugs with asset comments with editing and deleting
+-   Fixed various UI and backend bugs with asset management overhaul
 
 ### Chores
 -   Added more input variables for use in pipeline lambdas called such as bucketAssetAuxiliary, bucketAsset, and inputAssetFileKey. This is in additional to the predetemined "easy" paths setup for pipeline use. 
@@ -77,6 +92,9 @@ This minor version includes changes to VAMS infrastructure, authentication, web 
 -   Created new dynamoDB workflow executions table (old one will remain as deprecated to not lose data) to store better format for lambda storage and retrieval
 -   Modified workflow executions API to '/database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}' and also added '/database/{databaseId}/assets/{assetId}/workflows/executions/' to get all executions for an asset
 -   Subscription SNS topics now store databaseId along with assetId in the topic name to prevent future conflicts
+-   Create/Execute workflow backend update, to support new asset management file/bucket/prefix locations, to be more dynamic based on the calling asset and file. 
+-   Updated S3 asset bucket event notifications to be a SNS->SQS fan-out for bucket sync/indexing and other bucket subscriptions like for the PcPotreePreview pipeline. 
+-   Cleaned up and removed backend and UI files and components that were no longer needed and/or deprecated
 
 ## [2.2.0] (2025-05-31)
 

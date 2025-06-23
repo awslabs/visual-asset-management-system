@@ -68,7 +68,7 @@ This section contains instructions for migrating data between specific VAMS vers
 
 ### VAMS v2.2 to v2.3 Migration
 
-The v2.2 to v2.3 migration involves creating a new asset versions table and updating the structure of asset records in DynamoDB.
+The v2.2 to v2.3 migration involves creating a new asset versions table, updating the structure of asset records, and adding bucket information to database records in DynamoDB.
 
 #### Migration Overview
 
@@ -79,10 +79,13 @@ The migration script performs the following operations:
    - Map fields from the `currentVersion` field in the assets table to the new structure in the asset versions table
 
 2. **Asset Records Update**:
-   - Update the `assetLocation` field to include the bucket name
-   - Add bucket information to `previewLocation` if it exists
+   - Update the `assetLocation` field structure to use `baseAssetsPrefix`: `{'assetLocation': { 'Key': "{baseAssetsPrefix}{assetId}/" }}`
+   - Add `bucketId` to each asset record based on lookup from S3_Asset_Buckets table
    - Move the version number from `currentVersion.Version` to a new field `currentVersionId`
    - Remove specified fields: `isMultiFile`, `pipelineId`, `executionId`, `versions`, `currentVersion`, `specifiedPipelines`, `Parent`, `objectFamily`
+
+3. **Database Records Update**:
+   - Add `defaultBucketId` to all records in the databases table
 
 #### Running the Migration
 
@@ -98,8 +101,14 @@ The migration scripts are located in the `infra/deploymentDataMigration/v2.2_to_
 2. Configure the migration:
    - Copy and modify one of the provided configuration templates:
      - `v2.2_to_v2.3_migration_config.json`: Basic configuration template
-     - `v2.2_to_v2.3_migration_test_config.json`: Configuration for testing
      - `v2.2_to_v2.3_migration_prod_config.json`: Template for production migration
+   - Make sure to set the following required parameters:
+     - `assets_table_name`: Name of the assets table
+     - `asset_versions_table_name`: Name of the asset versions table
+     - `s3_asset_buckets_table_name`: Name of the S3 asset buckets table
+     - `databases_table_name`: Name of the databases table
+     - `base_assets_prefix`: Base prefix for asset locations (should end with a slash)
+     - `asset_bucket_name`: Name of the S3 bucket used for asset storage
 
 3. Run the migration using the helper scripts:
    
@@ -170,9 +179,11 @@ VAMS Upgrade Templates are described below. Copy the template to a new configura
 - VAMS 1.X -> 1.X - `MigrationSchema_v1.X_to_v2.0.template.json`
 - VAMS 1.X -> 2.0 - `MigrationSchema_v1.X_to_v2.0.template.json`
 - VAMS 2.0 -> 2.0 - `MigrationSchema_v2.1_to_v2.1.template.json`
+- VAMS 2.2 -> 2.3 - See the [v2.2 to v2.3 Migration README](./v2.2_to_v2.3/upgrade/v2.2_to_v2.3_migration_README.md)
 
 ### Script Notes
 
+- Do not use A/B deployment migration scripts in conjunction with stagingBucket configurations as staging is only used for new VAMS stack deployments that require existing asset migration.
 - New tables should be empty to prevent possible key collisions. If script fails, clear table data first before re-running.
 - Always test migrations on a small subset of data before running on production data.
 - Always back up your data before running any migration scripts.

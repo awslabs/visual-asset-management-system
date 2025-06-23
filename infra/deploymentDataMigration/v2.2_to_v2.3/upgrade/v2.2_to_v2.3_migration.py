@@ -7,10 +7,11 @@ Data Migration Script for VAMS v2.2 to v2.3
 
 This script performs the following migrations:
 1. Copy data from assetsTable to assetVersionsTable
-2. Update assetLocation field in assetsTable to include bucket name
-3. Add bucket information to previewLocation if it exists
-4. Move version number from currentVersion.Version to currentVersionId
-5. Remove specified fields from assetsTable records
+2. Update assetLocation field in assetsTable to use baseAssetsPrefix
+3. Add bucketId to assets based on lookup from S3_Asset_Buckets table
+4. Add defaultBucketId to all records in the databases table
+5. Move version number from currentVersion.Version to currentVersionId
+6. Remove specified fields from assetsTable records
 
 Usage:
     python v2.2_to_v2.3_migration.py --profile <aws-profile-name>
@@ -49,11 +50,12 @@ logger = logging.getLogger(__name__)
 CONFIG = {
     # Source tables
     "assets_table_name": "YOUR_ASSETS_TABLE_NAME",
-    
-    # Target tables
     "asset_versions_table_name": "YOUR_ASSET_VERSIONS_TABLE_NAME",
+    "s3_asset_buckets_table_name": "YOUR_S3_ASSET_BUCKETS_TABLE_NAME",
+    "databases_table_name": "YOUR_DATABASES_TABLE_NAME",
     
-    # Asset bucket name for assetLocation.Bucket field
+    # Asset configuration
+    "base_assets_prefix": "YOUR_BASE_ASSETS_PREFIX",
     "asset_bucket_name": "YOUR_ASSET_BUCKET_NAME",
     
     # AWS settings
@@ -223,6 +225,49 @@ def update_item(dynamodb, table_name, key, update_expression, expression_attribu
         logger.error(f"Error updating item in table {table_name}: {e}")
         raise
 
+def query_bucket_id(dynamodb, s3_asset_buckets_table_name, asset_bucket_name, base_assets_prefix):
+    """
+    Query the S3_Asset_Buckets table to get the bucketId.
+    
+    Args:
+        dynamodb: DynamoDB resource
+        s3_asset_buckets_table_name (str): Name of the S3_Asset_Buckets table
+        asset_bucket_name (str): Asset bucket name to look up
+        base_assets_prefix (str): Base assets prefix to look up
+        
+    Returns:
+        str: The bucketId if found, None otherwise
+    """
+    table = dynamodb.Table(s3_asset_buckets_table_name)
+    
+    try:
+        # Query using the bucketNameGSI index
+        response = table.query(
+            IndexName='bucketNameGSI',
+            KeyConditionExpression='bucketName = :bucketName AND baseAssetsPrefix = :baseAssetsPrefix',
+            ExpressionAttributeValues={
+                ':bucketName': asset_bucket_name,
+                ':baseAssetsPrefix': base_assets_prefix
+            }
+        )
+        
+        items = response.get('Items', [])
+        
+        if not items:
+            logger.warning(f"No bucket found with bucketName={asset_bucket_name} and baseAssetsPrefix={base_assets_prefix}")
+            return None
+        
+        bucket_id = items[0].get('bucketId')
+        
+        if not bucket_id:
+            logger.warning(f"Found bucket record but it does not have a bucketId field")
+            return None
+        
+        return bucket_id
+    except ClientError as e:
+        logger.error(f"Error querying S3_Asset_Buckets table: {e}")
+        return None
+
 # =====================================================================
 # MIGRATION FUNCTIONS
 # =====================================================================
@@ -259,13 +304,14 @@ def create_asset_version_record(asset):
     
     return version_record
 
-def update_asset_location(asset, asset_bucket_name):
+def update_asset_location(asset, base_assets_prefix, bucket_id):
     """
     Update the assetLocation field in an asset record.
     
     Args:
         asset (dict): Asset record from the assets table
-        asset_bucket_name (str): Name of the asset bucket
+        base_assets_prefix (str): Base assets prefix to use in the Key
+        bucket_id (str): Bucket ID to add to the asset record
         
     Returns:
         dict: Updated asset record
@@ -277,19 +323,14 @@ def update_asset_location(asset, asset_bucket_name):
     if 'assetLocation' in updated_asset:
         asset_id = updated_asset.get('assetId')
         
-        # Transform assetLocation to include bucket
-        if isinstance(updated_asset['assetLocation'], dict) and 'Key' in updated_asset['assetLocation']:
-            updated_asset['assetLocation'] = {
-                'Key': f"{asset_id}/",
-                'Bucket': asset_bucket_name
-            }
+        # Transform assetLocation to use baseAssetsPrefix
+        updated_asset['assetLocation'] = {
+            'Key': f"{base_assets_prefix}{asset_id}/"
+        }
     
-    # Update previewLocation if it exists
-    if 'previewLocation' in updated_asset:
-        if isinstance(updated_asset['previewLocation'], dict) and 'Key' in updated_asset['previewLocation']:
-            # Add bucket to previewLocation if it doesn't already have one
-            if 'Bucket' not in updated_asset['previewLocation']:
-                updated_asset['previewLocation']['Bucket'] = asset_bucket_name
+    # Add bucketId to the asset record
+    if bucket_id:
+        updated_asset['bucketId'] = bucket_id
     
     # Add currentVersionId if currentVersion exists
     if 'currentVersion' in updated_asset and 'Version' in updated_asset['currentVersion']:
@@ -301,6 +342,53 @@ def update_asset_location(asset, asset_bucket_name):
             del updated_asset[field]
     
     return updated_asset
+
+def update_database_records(dynamodb, databases_table_name, bucket_id, limit=None):
+    """
+    Update all records in the databases table to add defaultBucketId.
+    
+    Args:
+        dynamodb: DynamoDB resource
+        databases_table_name (str): Name of the databases table
+        bucket_id (str): Bucket ID to add as defaultBucketId
+        limit (int, optional): Maximum number of databases to process
+        
+    Returns:
+        tuple: (success_count, error_count)
+    """
+    logger.info(f"Starting update of database records in {databases_table_name}")
+    
+    # Get all databases
+    databases = scan_table(dynamodb, databases_table_name, limit)
+    logger.info(f"Found {len(databases)} databases to update")
+    
+    success_count = 0
+    error_count = 0
+    
+    # Process each database
+    for database in databases:
+        database_id = database.get('databaseId')
+        
+        if not database_id:
+            error_count += 1
+            logger.warning(f"Skipped updating database - missing databaseId: {database}")
+            continue
+        
+        try:
+            # Add defaultBucketId to the database record
+            updated_database = database.copy()
+            updated_database['defaultBucketId'] = bucket_id
+            
+            # Put the updated database back into the databases table
+            put_item(dynamodb, databases_table_name, updated_database)
+            success_count += 1
+            logger.info(f"Successfully updated database {database_id}")
+        except Exception as e:
+            error_count += 1
+            logger.error(f"Error updating database {database_id}: {e}")
+    
+    logger.info(f"Completed update of database records: {success_count} successful, {error_count} errors")
+    return success_count, error_count
 
 def migrate_asset_versions(dynamodb, assets_table_name, asset_versions_table_name, limit=None):
     """
@@ -347,24 +435,33 @@ def migrate_asset_versions(dynamodb, assets_table_name, asset_versions_table_nam
     logger.info(f"Completed migration of asset versions: {success_count} successful, {error_count} errors")
     return success_count, error_count
 
-def update_asset_records(dynamodb, assets_table_name, asset_bucket_name, limit=None):
+def update_asset_records(dynamodb, assets_table_name, s3_asset_buckets_table_name, asset_bucket_name, base_assets_prefix, limit=None):
     """
     Update asset records in the assets table.
     
     Args:
         dynamodb: DynamoDB resource
         assets_table_name (str): Name of the assets table
-        asset_bucket_name (str): Name of the asset bucket
+        s3_asset_buckets_table_name (str): Name of the S3_Asset_Buckets table
+        asset_bucket_name (str): Name of the asset bucket to use for lookup
+        base_assets_prefix (str): Base assets prefix to use in the Key
         limit (int, optional): Maximum number of assets to process
         
     Returns:
-        tuple: (success_count, error_count)
+        tuple: (success_count, error_count, bucket_id)
     """
     logger.info(f"Starting update of asset records in {assets_table_name}")
     
     # Get all assets
     assets = scan_table(dynamodb, assets_table_name, limit)
     logger.info(f"Found {len(assets)} assets to update")
+    
+    # Look up the bucket ID once
+    bucket_id = query_bucket_id(dynamodb, s3_asset_buckets_table_name, asset_bucket_name, base_assets_prefix)
+    if bucket_id:
+        logger.info(f"Found bucket ID {bucket_id} for bucket {asset_bucket_name} with prefix {base_assets_prefix}")
+    else:
+        logger.warning(f"Could not find bucket ID for bucket {asset_bucket_name} with prefix {base_assets_prefix}")
     
     success_count = 0
     error_count = 0
@@ -381,7 +478,7 @@ def update_asset_records(dynamodb, assets_table_name, asset_bucket_name, limit=N
         
         try:
             # Update asset record
-            updated_asset = update_asset_location(asset, asset_bucket_name)
+            updated_asset = update_asset_location(asset, base_assets_prefix, bucket_id)
             
             # Put the updated asset back into the assets table
             put_item(dynamodb, assets_table_name, updated_asset)
@@ -392,7 +489,7 @@ def update_asset_records(dynamodb, assets_table_name, asset_bucket_name, limit=N
             logger.error(f"Error updating asset {asset_id}: {e}")
     
     logger.info(f"Completed update of asset records: {success_count} successful, {error_count} errors")
-    return success_count, error_count
+    return success_count, error_count, bucket_id
 
 # =====================================================================
 # MAIN FUNCTION
@@ -406,7 +503,10 @@ def main():
     parser.add_argument('--limit', type=int, help='Maximum number of assets to process')
     parser.add_argument('--assets-table', help='Name of the assets table')
     parser.add_argument('--asset-versions-table', help='Name of the asset versions table')
-    parser.add_argument('--asset-bucket', help='Name of the asset bucket')
+    parser.add_argument('--s3-asset-buckets-table', help='Name of the S3_Asset_Buckets table')
+    parser.add_argument('--databases-table', help='Name of the databases table')
+    parser.add_argument('--base-assets-prefix', help='Base assets prefix to use in assetLocation.Key')
+    parser.add_argument('--asset-bucket-name', help='Name of the asset bucket to use for lookup')
     parser.add_argument('--dry-run', action='store_true', help='Perform a dry run without making changes')
     parser.add_argument('--config', help='Path to configuration file')
     parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], 
@@ -425,8 +525,14 @@ def main():
         CONFIG['assets_table_name'] = args.assets_table
     if args.asset_versions_table:
         CONFIG['asset_versions_table_name'] = args.asset_versions_table
-    if args.asset_bucket:
-        CONFIG['asset_bucket_name'] = args.asset_bucket
+    if args.s3_asset_buckets_table:
+        CONFIG['s3_asset_buckets_table_name'] = args.s3_asset_buckets_table
+    if args.databases_table:
+        CONFIG['databases_table_name'] = args.databases_table
+    if args.base_assets_prefix:
+        CONFIG['base_assets_prefix'] = args.base_assets_prefix
+    if args.asset_bucket_name:
+        CONFIG['asset_bucket_name'] = args.asset_bucket_name
     if args.profile:
         CONFIG['aws_profile'] = args.profile
     if args.region:
@@ -450,8 +556,20 @@ def main():
         logger.error("Please set the asset_versions_table_name in the CONFIG or provide it with --asset-versions-table")
         return 1
     
+    if CONFIG['s3_asset_buckets_table_name'] == 'YOUR_S3_ASSET_BUCKETS_TABLE_NAME':
+        logger.error("Please set the s3_asset_buckets_table_name in the CONFIG or provide it with --s3-asset-buckets-table")
+        return 1
+    
+    if CONFIG['databases_table_name'] == 'YOUR_DATABASES_TABLE_NAME':
+        logger.error("Please set the databases_table_name in the CONFIG or provide it with --databases-table")
+        return 1
+    
+    if CONFIG['base_assets_prefix'] == 'YOUR_BASE_ASSETS_PREFIX':
+        logger.error("Please set the base_assets_prefix in the CONFIG or provide it with --base-assets-prefix")
+        return 1
+    
     if CONFIG['asset_bucket_name'] == 'YOUR_ASSET_BUCKET_NAME':
-        logger.error("Please set the asset_bucket_name in the CONFIG or provide it with --asset-bucket")
+        logger.error("Please set the asset_bucket_name in the CONFIG or provide it with --asset-bucket-name")
         return 1
     
     # Initialize DynamoDB client
@@ -478,20 +596,36 @@ def main():
             args.limit if args.limit else None
         )
         
-        # Step 2: Update asset records
-        asset_success, asset_errors = update_asset_records(
+        # Step 2: Update asset records and get bucket ID
+        asset_success, asset_errors, bucket_id = update_asset_records(
             dynamodb, 
-            CONFIG['assets_table_name'], 
+            CONFIG['assets_table_name'],
+            CONFIG['s3_asset_buckets_table_name'],
             CONFIG['asset_bucket_name'],
+            CONFIG['base_assets_prefix'],
             args.limit if args.limit else None
         )
+        
+        # Step 3: Update database records with the bucket ID
+        if bucket_id:
+            db_success, db_errors = update_database_records(
+                dynamodb,
+                CONFIG['databases_table_name'],
+                bucket_id,
+                args.limit if args.limit else None
+            )
+        else:
+            logger.error("Could not find bucket ID, skipping database updates")
+            db_success = 0
+            db_errors = 0
         
         # Print summary
         logger.info("Migration completed")
         logger.info(f"Asset versions migration: {version_success} successful, {version_errors} errors")
         logger.info(f"Asset records update: {asset_success} successful, {asset_errors} errors")
+        logger.info(f"Database records update: {db_success} successful, {db_errors} errors")
         
-        if version_errors > 0 or asset_errors > 0:
+        if version_errors > 0 or asset_errors > 0 or db_errors > 0:
             logger.warning("Migration completed with errors - check the logs for details")
             return 1
         else:
