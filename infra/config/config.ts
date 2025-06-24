@@ -20,8 +20,10 @@ export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_20_X;
 export const LAMBDA_MEMORY_SIZE = 3003;
 export const OPENSEARCH_VERSION = cdk.aws_opensearchservice.EngineVersion.OPENSEARCH_2_7;
 
-export const STACK_WAF_DESCRIPTION = "WAF Components for the Visual Asset Management Systems (VAMS) (SO9299)"
-export const STACK_CORE_DESCRIPTION = "Primary Components for the Visual Asset Management Systems (VAMS) (SO9299)"
+export const STACK_WAF_DESCRIPTION =
+    "WAF Components for the Visual Asset Management Systems (VAMS) (SO9299)";
+export const STACK_CORE_DESCRIPTION =
+    "Primary Components for the Visual Asset Management Systems (VAMS) (SO9299)";
 
 export function getConfig(app: cdk.App): Config {
     const file: string = readFileSync(join(__dirname, "config.json"), {
@@ -171,38 +173,29 @@ export function getConfig(app: cdk.App): Config {
         config.s3AdditionalBucketPolicyJSON = undefined;
     }
 
-    //If we are govCloud, check for certain features that are required to be on or off. 
+    //If we are govCloud, check for certain features that are required to be on or off.
     //Note: FIP not required for use in GovCloud. Some GovCloud endpoints are natively FIPS compliant regardless of this flag to use specific FIPS endpoints.
     //Note: FedRAMP best practices require all Lambdas/OpenSearch behind VPC but not required for GovCloud
     if (config.app.govCloud.enabled) {
-        
-        if (
-            !config.app.useGlobalVpc.enabled
-        ) {
+        if (!config.app.useGlobalVpc.enabled) {
             throw new Error(
                 "Configuration Error: GovCloud must have useGlobalVpc.enabled set to true"
             );
         }
 
-        if (
-            !config.app.useAlb.enabled
-        ) {
+        if (!config.app.useAlb.enabled) {
             throw new Error(
                 "Configuration Error: GovCloud must have app.useAlb.enabled set to true"
             );
         }
 
-        if (
-            config.app.openSearch.useServerless.enabled
-        ) {
+        if (config.app.openSearch.useServerless.enabled) {
             throw new Error(
                 "Configuration Error: GovCloud must have openSearch.useServerless.enabled set to false"
             );
         }
 
-        if (
-            config.app.useLocationService.enabled
-        ) {
+        if (config.app.useLocationService.enabled) {
             throw new Error(
                 "Configuration Error: GovCloud must have app.useLocationService.enabled set to false"
             );
@@ -211,39 +204,29 @@ export function getConfig(app: cdk.App): Config {
         //Now check additional IL6 compliance
         // https://aws.amazon.com/compliance/services-in-scope/DoD_CC_SRG/
         if (config.app.govCloud.il6Compliant) {
-
-            if (
-                config.app.authProvider.useCognito.enabled
-            ) {
+            if (config.app.authProvider.useCognito.enabled) {
                 throw new Error(
                     "Configuration Error: GovCloud IL6 must have app.authProvider.useCognito.enabled set to false"
                 );
             }
 
-            if (
-                config.app.useWaf
-            ) {
+            if (config.app.useWaf) {
                 throw new Error(
                     "Configuration Error: GovCloud IL6 must have config.app.useWaf set to false"
                 );
             }
 
-            if (
-                !config.app.useGlobalVpc.useForAllLambdas
-            ) {
+            if (!config.app.useGlobalVpc.useForAllLambdas) {
                 throw new Error(
                     "Configuration Error: GovCloud IL6 must have app.useGlobalVpc.useForAllLambdas set to true"
                 );
             }
 
-            if (
-                !config.app.useKmsCmkEncryption.enabled
-            ) {
+            if (!config.app.useKmsCmkEncryption.enabled) {
                 throw new Error(
                     "Configuration Error: GovCloud IL6 must have config.app.useKmsCmkEncryption.enabled set to true"
                 );
             }
-
         }
     }
 
@@ -266,22 +249,19 @@ export function getConfig(app: cdk.App): Config {
     }
 
     //Any configuration warnings/errors checks
-    if (config.app.assetBuckets.createNewBucket && 
+    if (
+        config.app.assetBuckets.createNewBucket &&
         (!config.app.assetBuckets.defaultNewBucketSyncDatabaseId ||
             config.app.assetBuckets.defaultNewBucketSyncDatabaseId == "" ||
-            config.app.assetBuckets.defaultNewBucketSyncDatabaseId == "UNDEFINED"
-        )) {
-
+            config.app.assetBuckets.defaultNewBucketSyncDatabaseId == "UNDEFINED")
+    ) {
         throw new Error(
             "Configuration Error: Must define a app.assetBuckets.defaultNewBucketSyncDatabaseId if app.assetBuckets.createNewBucke is true"
         );
     }
 
     //If we aren't creating a new bucket and aren't adding any external asset buckets throw an error
-    if (!config.app.assetBuckets.createNewBucket &&
-        (!config.app.assetBuckets.externalAssetBuckets
-        )) {
-
+    if (!config.app.assetBuckets.createNewBucket && !config.app.assetBuckets.externalAssetBuckets) {
         throw new Error(
             "Configuration Error: Must define at least a new asset bucket and/or app.assetBuckets.externalAssetBuckets"
         );
@@ -494,7 +474,7 @@ export function getConfig(app: cdk.App): Config {
 
     return config;
 }
- 
+
 export interface ConfigPublicAssetS3Buckets {
     bucketArn: string;
     baseAssetsPrefix: string;
