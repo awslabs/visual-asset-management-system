@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React from "react";
 import {
     Box,
     Container,
@@ -13,9 +13,9 @@ import {
     Toggle,
     Checkbox,
     Badge,
-    Pagination
-} from '@cloudscape-design/components';
-import { SpaceBetween } from '@cloudscape-design/components';
+    Pagination,
+} from "@cloudscape-design/components";
+import { SpaceBetween } from "@cloudscape-design/components";
 
 interface S3File {
     fileName: string;
@@ -70,7 +70,7 @@ export const AvailableFilesContainer: React.FC<AvailableFilesContainerProps> = (
     currentAvailableFilesPage,
     setCurrentAvailableFilesPage,
     availableFilesPerPage,
-    paginatedAvailableFiles
+    paginatedAvailableFiles,
 }) => {
     return (
         <Container header={<Header variant="h3">Available Files</Header>}>
@@ -89,7 +89,7 @@ export const AvailableFilesContainer: React.FC<AvailableFilesContainerProps> = (
                         Filter to versions not in current asset version
                     </Toggle>
                 </SpaceBetween>
-                
+
                 {loadingFiles ? (
                     <Box textAlign="center" padding="l">
                         <Spinner size="normal" />
@@ -99,18 +99,23 @@ export const AvailableFilesContainer: React.FC<AvailableFilesContainerProps> = (
                     <Table
                         columnDefinitions={[
                             {
-                                id: 'select',
-                                header: 'Select',
+                                id: "select",
+                                header: "Select",
                                 cell: (item: S3File) => (
                                     <Checkbox
-                                        checked={selectedFiles.some(f => f.relativeKey === normalizePath(item.relativePath))}
-                                        onChange={({ detail }) => handleFileSelection(item, detail.checked)}
+                                        checked={selectedFiles.some(
+                                            (f) =>
+                                                f.relativeKey === normalizePath(item.relativePath)
+                                        )}
+                                        onChange={({ detail }) =>
+                                            handleFileSelection(item, detail.checked)
+                                        }
                                     />
-                                )
+                                ),
                             },
                             {
-                                id: 'fileName',
-                                header: 'File Name',
+                                id: "fileName",
+                                header: "File Name",
                                 cell: (item: S3File) => (
                                     <Box>
                                         <div>{item.fileName}</div>
@@ -118,39 +123,50 @@ export const AvailableFilesContainer: React.FC<AvailableFilesContainerProps> = (
                                             <Badge color="blue">Version Mismatch</Badge>
                                         )}
                                     </Box>
-                                )
+                                ),
                             },
                             {
-                                id: 'path',
-                                header: 'Path',
-                                cell: (item: S3File) => normalizePath(item.relativePath)
+                                id: "path",
+                                header: "Path",
+                                cell: (item: S3File) => normalizePath(item.relativePath),
                             },
                             {
-                                id: 'size',
-                                header: 'Size',
-                                cell: (item: S3File) => formatFileSize(item.size)
+                                id: "size",
+                                header: "Size",
+                                cell: (item: S3File) => formatFileSize(item.size),
                             },
                             {
-                                id: 'lastModified',
-                                header: 'Last Modified',
-                                cell: (item: S3File) => formatDate(item.dateCreatedCurrentVersion)
+                                id: "lastModified",
+                                header: "Last Modified",
+                                cell: (item: S3File) => formatDate(item.dateCreatedCurrentVersion),
                             },
                             {
-                                id: 'status',
-                                header: 'Status',
-                                cell: (item: S3File) => item.isArchived ? 'Archived' : 'Active'
-                            }
+                                id: "status",
+                                header: "Status",
+                                cell: (item: S3File) => (item.isArchived ? "Archived" : "Active"),
+                            },
                         ]}
                         items={paginatedAvailableFiles}
                         pagination={
                             <Pagination
                                 currentPageIndex={currentAvailableFilesPage}
-                                pagesCount={Math.max(1, Math.ceil(filteredS3Files.length / availableFilesPerPage))}
-                                onChange={({ detail }) => setCurrentAvailableFilesPage(detail.currentPageIndex)}
+                                pagesCount={Math.max(
+                                    1,
+                                    Math.ceil(filteredS3Files.length / availableFilesPerPage)
+                                )}
+                                onChange={({ detail }) =>
+                                    setCurrentAvailableFilesPage(detail.currentPageIndex)
+                                }
                                 ariaLabels={{
-                                    nextPageLabel: 'Next page',
-                                    previousPageLabel: 'Previous page',
-                                    pageLabel: pageNumber => `Page ${pageNumber} of ${Math.max(1, Math.ceil(filteredS3Files.length / availableFilesPerPage))}`
+                                    nextPageLabel: "Next page",
+                                    previousPageLabel: "Previous page",
+                                    pageLabel: (pageNumber) =>
+                                        `Page ${pageNumber} of ${Math.max(
+                                            1,
+                                            Math.ceil(
+                                                filteredS3Files.length / availableFilesPerPage
+                                            )
+                                        )}`,
                                 }}
                             />
                         }

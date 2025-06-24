@@ -176,8 +176,6 @@ It is reccommended that VAMS be upgraded between major version changes, major co
 
 VAMS can be deployed with a external buckets to enable using non-VAMS created buckets for assets.
 
-
-
 ### Configuration Options
 
 VAMS backend allows for basic to advanced configuration based on the environment and use-case need.

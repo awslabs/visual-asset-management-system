@@ -233,14 +233,14 @@ export const FileUploadTable = ({
     allowRemoval = false,
 }: FileUploadTableProps) => {
     let visibleContent = ["filesize", "status", "progress"];
-    
+
     // If no custom column definitions are provided, add actions column if needed
     if (!columnDefinitions) {
         // Start with the default column definitions
         let customColumnDefinitions = [...FileUploadTableColumnDefinitions];
-        
+
         // Add actions column if we need retry or removal functionality
-        if ((onRetryItem || (allowRemoval && onRemoveItem))) {
+        if (onRetryItem || (allowRemoval && onRemoveItem)) {
             customColumnDefinitions.push({
                 id: "actions",
                 header: "Actions",
@@ -268,10 +268,10 @@ export const FileUploadTable = ({
                 isRowHeader: false,
             });
         }
-        
+
         columnDefinitions = customColumnDefinitions;
     }
-    
+
     if (columnDefinitions) {
         visibleContent = columnDefinitions.map((definition) => definition.id);
     }

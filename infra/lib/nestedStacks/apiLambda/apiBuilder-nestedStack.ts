@@ -34,7 +34,7 @@ import {
     buildIngestAssetFunction,
     buildCreateAssetFunction,
     buildUploadFileFunction,
-    buildAssetVersionsFunction
+    buildAssetVersionsFunction,
 } from "../../lambdaBuilder/assetFunctions";
 import {
     buildAddCommentLambdaFunction,
@@ -196,7 +196,7 @@ export function apiBuilder(
         method: apigwv2.HttpMethod.DELETE,
         api: api,
     });
-    
+
     attachFunctionToApi(scope, databaseService, {
         routePath: "/buckets",
         method: apigwv2.HttpMethod.GET,
@@ -593,13 +593,13 @@ export function apiBuilder(
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
-    
+
     attachFunctionToApi(scope, assetService, {
         routePath: "/database/{databaseId}/assets/{assetId}/archiveAsset",
         method: apigwv2.HttpMethod.DELETE,
         api: api,
     });
-    
+
     attachFunctionToApi(scope, assetService, {
         routePath: "/database/{databaseId}/assets/{assetId}/deleteAsset",
         method: apigwv2.HttpMethod.DELETE,
@@ -630,44 +630,44 @@ export function apiBuilder(
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
-    
+
     // Add new file operation routes
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/fileInfo",
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
-    
+
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/moveFile",
         method: apigwv2.HttpMethod.POST,
         api: api,
     });
-    
+
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/copyFile",
         method: apigwv2.HttpMethod.POST,
         api: api,
     });
-    
+
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/archiveFile",
         method: apigwv2.HttpMethod.DELETE,
         api: api,
     });
-    
+
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/deleteFile",
         method: apigwv2.HttpMethod.DELETE,
         api: api,
     });
-    
+
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}",
         method: apigwv2.HttpMethod.POST,
         api: api,
     });
-    
+
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/unarchiveFile",
         method: apigwv2.HttpMethod.POST,
@@ -742,7 +742,7 @@ export function apiBuilder(
         method: apigwv2.HttpMethod.POST,
         api: api,
     });
-    
+
     // Asset Versions Function
     const assetVersionsFunction = buildAssetVersionsFunction(
         scope,

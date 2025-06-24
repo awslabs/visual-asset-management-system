@@ -104,11 +104,11 @@ export class Metadata3dLabelingConstruct extends NestedStack {
         const inputBucketPolicy = new iam.PolicyDocument({
             statements: [
                 // Add permissions for all asset buckets from the global array
-                ...s3AssetBuckets.getS3AssetBucketRecords().map(record => {
-                    const prefix = record.prefix || '/';
+                ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
+                    const prefix = record.prefix || "/";
                     // Ensure the prefix ends with a slash for proper path construction
-                    const normalizedPrefix = prefix.endsWith('/') ? prefix : prefix + '/';
-                    
+                    const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+
                     return new iam.PolicyStatement({
                         effect: iam.Effect.ALLOW,
                         actions: [
@@ -120,7 +120,7 @@ export class Metadata3dLabelingConstruct extends NestedStack {
                         ],
                         resources: [
                             record.bucket.bucketArn,
-                            `${record.bucket.bucketArn}${normalizedPrefix}*`
+                            `${record.bucket.bucketArn}${normalizedPrefix}*`,
                         ],
                     });
                 }),

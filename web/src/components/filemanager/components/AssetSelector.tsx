@@ -6,7 +6,7 @@ import {
     Link,
     Box,
     SpaceBetween,
-    Spinner
+    Spinner,
 } from "@cloudscape-design/components";
 import { fetchAllAssets } from "../../../services/APIService";
 import { fetchAssetS3Files } from "../../../services/AssetVersionService";
@@ -34,7 +34,7 @@ export function AssetSelector({
     currentDatabaseId,
     selectedAsset,
     onAssetSelect,
-    onAssetFilesLoad
+    onAssetFilesLoad,
 }: AssetSelectorProps) {
     const [searchTerm, setSearchTerm] = useState("");
     const [searchResults, setSearchResults] = useState<Asset[]>([]);
@@ -109,9 +109,8 @@ export function AssetSelector({
 
             // Filter out current asset and assets from different databases
             const filteredResults = results.filter(
-                (asset) => 
-                    asset.assetId !== currentAssetId && 
-                    asset.databaseId === currentDatabaseId
+                (asset) =>
+                    asset.assetId !== currentAssetId && asset.databaseId === currentDatabaseId
             );
 
             setSearchResults(filteredResults);
@@ -128,14 +127,14 @@ export function AssetSelector({
 
     const handleAssetSelection = async (asset: Asset) => {
         onAssetSelect(asset);
-        
+
         // Load asset files if callback provided
         if (onAssetFilesLoad) {
             try {
-                const [success, files] = await fetchAssetS3Files({ 
-                    databaseId: asset.databaseId, 
+                const [success, files] = await fetchAssetS3Files({
+                    databaseId: asset.databaseId,
                     assetId: asset.assetId,
-                    includeArchived: false
+                    includeArchived: false,
                 });
                 if (success && files && Array.isArray(files)) {
                     onAssetFilesLoad(asset.assetId, files);
@@ -151,8 +150,8 @@ export function AssetSelector({
             id: "assetName",
             header: "Asset Name",
             cell: (item: Asset) => (
-                <Link 
-                    href="#" 
+                <Link
+                    href="#"
                     onFollow={(e) => {
                         e.preventDefault();
                         handleAssetSelection(item);
@@ -226,11 +225,7 @@ export function AssetSelector({
                             loadingText="Loading assets"
                             sortingDisabled
                             empty={
-                                <Box
-                                    margin={{ vertical: "xs" }}
-                                    textAlign="center"
-                                    color="inherit"
-                                >
+                                <Box margin={{ vertical: "xs" }} textAlign="center" color="inherit">
                                     <SpaceBetween size="m">
                                         <b>No assets found</b>
                                         <p>Try adjusting your search terms</p>

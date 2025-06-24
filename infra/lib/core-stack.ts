@@ -48,7 +48,7 @@ export class CoreVAMSStack extends cdk.Stack {
     private vpceSecurityGroup: ec2.ISecurityGroup;
 
     constructor(scope: Construct, id: string, props: EnvProps) {
-        super(scope, id, { ...props, crossRegionReferences: true});
+        super(scope, id, { ...props, crossRegionReferences: true });
 
         const adminUserId = new cdk.CfnParameter(this, "adminUserId", {
             type: "String",
@@ -169,7 +169,7 @@ export class CoreVAMSStack extends cdk.Stack {
             vpc: this.vpc,
             subnets: this.subnetsIsolated,
         });
-        authBuilderNestedStack.addDependency(storageResourcesNestedStack)
+        authBuilderNestedStack.addDependency(storageResourcesNestedStack);
 
         //Ignore stacks if we are only loading context (mostly for Imported VPC)
         if (!props.config.env.loadContextIgnoreVPCStacks) {
@@ -180,7 +180,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 storageResources: storageResourcesNestedStack.storageResources,
                 config: props.config,
             });
-            apiNestedStack.addDependency(storageResourcesNestedStack)
+            apiNestedStack.addDependency(storageResourcesNestedStack);
 
             //Deploy Static Website and any API proxies (nested stack)
             const staticWebBuilderNestedStack = new StaticWebBuilderNestedStack(this, "StaticWeb", {
@@ -195,7 +195,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 ssmWafArn: props.ssmWafArn,
                 authResources: authBuilderNestedStack.authResources,
             });
-            staticWebBuilderNestedStack.addDependency(storageResourcesNestedStack)
+            staticWebBuilderNestedStack.addDependency(storageResourcesNestedStack);
 
             //Deploy Backend API framework (nested stack)
             const apiBuilderNestedStack = new ApiBuilderNestedStack(
@@ -210,7 +210,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 this.vpc,
                 this.subnetsIsolated
             );
-            apiBuilderNestedStack.addDependency(storageResourcesNestedStack)
+            apiBuilderNestedStack.addDependency(storageResourcesNestedStack);
 
             //Deploy OpenSearch Serverless (nested stack)
             const searchBuilderNestedStack = new SearchBuilderNestedStack(
@@ -223,7 +223,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 this.vpc,
                 this.subnetsIsolated
             );
-            storageResourcesNestedStack.addDependency(storageResourcesNestedStack)
+            storageResourcesNestedStack.addDependency(storageResourcesNestedStack);
 
             //Set feature for no opensearch in neither provisioned or serverless selected
             if (
@@ -248,7 +248,7 @@ export class CoreVAMSStack extends cdk.Stack {
                     privateSubnets: this.subnetsPrivate,
                 }
             );
-            pipelineBuilderNestedStack.addDependency(storageResourcesNestedStack)
+            pipelineBuilderNestedStack.addDependency(storageResourcesNestedStack);
 
             //Write final output configurations (pulling forward from nested stacks)
             const endPointURLParamsOutput = new cdk.CfnOutput(this, "WebsiteEndpointURLOutput", {
@@ -292,9 +292,7 @@ export class CoreVAMSStack extends cdk.Stack {
             }
 
             //Nag supressions
-            const refactorPaths = [
-                `/${props.stackName}/ApiBuilder/VAMSWorkflowIAMRole/Resource`,
-            ];
+            const refactorPaths = [`/${props.stackName}/ApiBuilder/VAMSWorkflowIAMRole/Resource`];
 
             for (const path of refactorPaths) {
                 const reason = `Intention is to refactor this model away moving forward 
@@ -387,10 +385,14 @@ export class CoreVAMSStack extends cdk.Stack {
         const assetBucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
         let assetBucketIndex = 0;
         for (const record of assetBucketRecords) {
-            const assetBucketOutput = new cdk.CfnOutput(this, "AssetS3BucketNameOutput"+assetBucketIndex, {
-                value: record.bucket.bucketName,
-                description: "S3 bucket for asset storage - IndexCount:"+assetBucketIndex,
-            });
+            const assetBucketOutput = new cdk.CfnOutput(
+                this,
+                "AssetS3BucketNameOutput" + assetBucketIndex,
+                {
+                    value: record.bucket.bucketName,
+                    description: "S3 bucket for asset storage - IndexCount:" + assetBucketIndex,
+                }
+            );
             assetBucketIndex = assetBucketIndex + 1;
         }
 
@@ -418,7 +420,6 @@ export class CoreVAMSStack extends cdk.Stack {
         cdk.Tags.of(this).add("AppManagerCFNStackKey", this.stackId, {
             includeResourceTypes: ["AWS::CloudFormation::Stack"],
         });
-
 
         //Global Nag Supressions
         this.node.findAll().forEach((item) => {

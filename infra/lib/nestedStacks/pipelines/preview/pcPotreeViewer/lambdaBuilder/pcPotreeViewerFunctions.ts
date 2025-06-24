@@ -23,7 +23,10 @@ import {
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
-import { grantReadWritePermissionsToAllAssetBuckets, grantReadPermissionsToAllAssetBuckets } from "../../../../../helper/security";
+import {
+    grantReadWritePermissionsToAllAssetBuckets,
+    grantReadPermissionsToAllAssetBuckets,
+} from "../../../../../helper/security";
 
 export function buildSqsExecutePcPotreeViewerPipelineFunction(
     scope: Construct,
@@ -39,7 +42,7 @@ export function buildSqsExecutePcPotreeViewerPipelineFunction(
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "sqsExecutePreviewPcPotreeViewerPipeline";
-    const fun = new lambda.Function(scope, name+"-"+index, {
+    const fun = new lambda.Function(scope, name + "-" + index, {
         code: lambda.Code.fromAsset(
             path.join(
                 __dirname,

@@ -114,10 +114,14 @@ export class StorageResourcesBuilderNestedStack extends NestedStack {
         const assetBucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
         let assetBucketIndex = 0;
         for (const record of assetBucketRecords) {
-            const assetBucketOutput = new cdk.CfnOutput(this, "AssetBucketNameOutput"+assetBucketIndex, {
-                value: record.bucket.bucketName,
-                description: "S3 bucket for asset storage - IndexCount:"+assetBucketIndex,
-            });
+            const assetBucketOutput = new cdk.CfnOutput(
+                this,
+                "AssetBucketNameOutput" + assetBucketIndex,
+                {
+                    value: record.bucket.bucketName,
+                    description: "S3 bucket for asset storage - IndexCount:" + assetBucketIndex,
+                }
+            );
             assetBucketIndex = assetBucketIndex + 1;
         }
 
@@ -220,7 +224,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
 
     // Check if asset buckets are defined in config
     let assetBucket: s3.Bucket | undefined = undefined;
-    
+
     //Create new asset bucket based on configuration
     if (config.app.assetBuckets.createNewBucket) {
         // Create default bucket as before
@@ -249,20 +253,30 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
             serverAccessLogsPrefix: "asset-bucket-logs/",
         });
         requireTLSAndAdditionalPolicyAddToResourcePolicy(assetBucket, config);
-        
+
         // Add to global array with default prefix '/'
-        s3AssetBuckets.addS3AssetBucket(assetBucket, '/', config.app.assetBuckets.defaultNewBucketSyncDatabaseId);
+        s3AssetBuckets.addS3AssetBucket(
+            assetBucket,
+            "/",
+            config.app.assetBuckets.defaultNewBucketSyncDatabaseId
+        );
     }
 
     //Load external buckets based on configuration
-    if (config.app.assetBuckets.externalAssetBuckets && config.app.assetBuckets.externalAssetBuckets.length > 0) {
+    if (
+        config.app.assetBuckets.externalAssetBuckets &&
+        config.app.assetBuckets.externalAssetBuckets.length > 0
+    ) {
         // Look up each bucket and add to global array
         for (const bucketConfig of config.app.assetBuckets.externalAssetBuckets) {
-
-            if (!bucketConfig.defaultSyncDatabaseId ||
+            if (
+                !bucketConfig.defaultSyncDatabaseId ||
                 bucketConfig.defaultSyncDatabaseId == "" ||
-                bucketConfig.defaultSyncDatabaseId == "UNDEFINED") {
-                throw new Error(`External bucket ${bucketConfig.bucketArn} is missing defaultSyncDatabaseId`);
+                bucketConfig.defaultSyncDatabaseId == "UNDEFINED"
+            ) {
+                throw new Error(
+                    `External bucket ${bucketConfig.bucketArn} is missing defaultSyncDatabaseId`
+                );
             }
 
             const bucket = s3.Bucket.fromBucketArn(
@@ -273,9 +287,13 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
 
             requireTLSAndAdditionalPolicyAddToResourcePolicy(bucket, config);
 
-            s3AssetBuckets.addS3AssetBucket(bucket, bucketConfig.baseAssetsPrefix, bucketConfig.defaultSyncDatabaseId);
+            s3AssetBuckets.addS3AssetBucket(
+                bucket,
+                bucketConfig.baseAssetsPrefix,
+                bucketConfig.defaultSyncDatabaseId
+            );
         }
-    } 
+    }
 
     /**
      * Create per-bucket SNS topics for S3 Asset Creation/Deletion
@@ -283,14 +301,14 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
 
     // Helper function to create SNS topics with proper policies
     function createSNSTopicWithPolicy(
-        constructScope: Construct, 
-        id: string, 
+        constructScope: Construct,
+        id: string,
         encryptionKey: kms.IKey | undefined
     ): sns.Topic {
         // Create the topic
         const topic = new sns.Topic(constructScope, id, {
             masterKey: encryptionKey, //Key undefined if not using KMS
-            enforceSSL: true
+            enforceSSL: true,
         });
 
         return topic;
@@ -298,35 +316,33 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
 
     // Create per-bucket SNS topics and add event notifications
     const assetBucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
-    let index = 0
+    let index = 0;
     for (const record of assetBucketRecords) {
-        
         // Create bucket-specific SNS topics
         const createdTopic = createSNSTopicWithPolicy(
-            scope, 
-            `${config.app.baseStackName}-S3ObjectCreatedTopic-${index}`, 
+            scope,
+            `${config.app.baseStackName}-S3ObjectCreatedTopic-${index}`,
             kmsEncryptionKey
         );
-        index = index + 1
-        
+        index = index + 1;
+
         const removedTopic = createSNSTopicWithPolicy(
-            scope, 
-            `${config.app.baseStackName}-S3ObjectRemovedTopic-${index}`, 
+            scope,
+            `${config.app.baseStackName}-S3ObjectRemovedTopic-${index}`,
             kmsEncryptionKey
         );
-        index = index + 1
-        
+        index = index + 1;
+
         // Store the topics in the bucket record
         record.snsS3ObjectCreatedTopic = createdTopic;
         record.snsS3ObjectDeletedTopic = removedTopic;
-        
+
         // Use the prefix from the bucket record
-        let prefix = record.prefix || '/';
+        const prefix = record.prefix || "/";
 
         //S3 Event notifications doesn't like "/" for prefix filters (doesn't error but doesn't work either)
         //Assume no prefix in this scenario
         if (prefix == "/") {
-
             // Add event notifications using the bucket-specific topics
             record.bucket.addEventNotification(
                 s3.EventType.OBJECT_CREATED,
@@ -337,8 +353,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
                 s3.EventType.OBJECT_REMOVED,
                 new s3not.SnsDestination(removedTopic)
             );
-        }
-        else {
+        } else {
             // Add event notifications using the bucket-specific topics
             record.bucket.addEventNotification(
                 s3.EventType.OBJECT_CREATED,
@@ -353,13 +368,15 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
             );
         }
 
-        console.log(`Added per-bucket event notifications for bucket ${record.bucket.bucketName} with prefix ${prefix}`);
+        console.log(
+            `Added per-bucket event notifications for bucket ${record.bucket.bucketName} with prefix ${prefix}`
+        );
     }
 
     // Event Email Subscription Topic
     const EventEmailSubscriptionTopic = new sns.Topic(scope, "EventEmailSubscriptionTopic", {
         masterKey: kmsEncryptionKey, //Key undefined if not using KMS
-        enforceSSL: true
+        enforceSSL: true,
     });
 
     const assetAuxiliaryBucket = new s3.Bucket(scope, "AssetAuxiliaryBucket", {
@@ -428,10 +445,14 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
 
     // Create a custom resource to populate the S3AssetBucketsStorageTable with bucket information
     // Pass the newly created bucket as a dependency if we created one
-    const newlyCreatedBucket = assetBucket ? (assetBucket instanceof s3.Bucket ? assetBucket : undefined) : undefined;
+    const newlyCreatedBucket = assetBucket
+        ? assetBucket instanceof s3.Bucket
+            ? assetBucket
+            : undefined
+        : undefined;
     const populateS3AssetBucketsTable = createPopulateS3AssetBucketsTableCustomResource(
         scope,
-        'PopulateS3AssetBucketsTable',
+        "PopulateS3AssetBucketsTable",
         s3AssetBucketsStorageTable,
         newlyCreatedBucket
     );
@@ -557,7 +578,6 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         },
     });
 
-
     const metadataStorageTable = new dynamodb.Table(scope, "MetadataStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
@@ -680,17 +700,21 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         },
     });
 
-    const assetFileVersionsStorageTable = new dynamodb.Table(scope, "AssetFileVersionsStorageTable", {
-        ...dynamodbDefaultProps,
-        partitionKey: {
-            name: "assetId:assetVersionId",
-            type: dynamodb.AttributeType.STRING,
-        },
-        sortKey: {
-            name: "fileKey",
-            type: dynamodb.AttributeType.STRING,
-        },
-    });
+    const assetFileVersionsStorageTable = new dynamodb.Table(
+        scope,
+        "AssetFileVersionsStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "assetId:assetVersionId",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: "fileKey",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
 
     const assetVersionsStorageTable = new dynamodb.Table(scope, "AssetVersionsStorageTable", {
         ...dynamodbDefaultProps,

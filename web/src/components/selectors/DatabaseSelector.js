@@ -35,7 +35,7 @@ const DatabaseSelector = (props) => {
                         label: item.databaseId,
                         value: item.databaseId,
                     };
-                })
+                }),
             ]}
             filteringType="auto"
             selectedAriaLabel="Selected"

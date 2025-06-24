@@ -17,7 +17,10 @@ import * as Config from "../../../../../../config/config";
 import * as kms from "aws-cdk-lib/aws-kms";
 import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../../../../../helper/security";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
-import { grantReadWritePermissionsToAllAssetBuckets, grantReadPermissionsToAllAssetBuckets } from "../../../../../helper/security";
+import {
+    grantReadWritePermissionsToAllAssetBuckets,
+    grantReadPermissionsToAllAssetBuckets,
+} from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 
 export function buildVamsExecuteRapidPipelineFunction(

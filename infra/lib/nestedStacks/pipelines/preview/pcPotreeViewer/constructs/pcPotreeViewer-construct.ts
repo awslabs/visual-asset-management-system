@@ -9,9 +9,9 @@ import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as path from "path";
-import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as sqs from "aws-cdk-lib/aws-sqs";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
-import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources'
+import { SqsEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
 import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import * as cdk from "aws-cdk-lib";
 import { Duration, Stack, Names, NestedStack } from "aws-cdk-lib";
@@ -79,11 +79,11 @@ export class PcPotreeViewerConstruct extends NestedStack {
         const inputBucketPolicy = new iam.PolicyDocument({
             statements: [
                 // Add permissions for all asset buckets from the global array
-                ...s3AssetBuckets.getS3AssetBucketRecords().map(record => {
-                    const prefix = record.prefix || '/';
+                ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
+                    const prefix = record.prefix || "/";
                     // Ensure the prefix ends with a slash for proper path construction
-                    const normalizedPrefix = prefix.endsWith('/') ? prefix : prefix + '/';
-                    
+                    const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+
                     return new iam.PolicyStatement({
                         effect: iam.Effect.ALLOW,
                         actions: [
@@ -95,7 +95,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
                         ],
                         resources: [
                             record.bucket.bucketArn,
-                            `${record.bucket.bucketArn}${normalizedPrefix}*`
+                            `${record.bucket.bucketArn}${normalizedPrefix}*`,
                         ],
                     });
                 }),
@@ -409,18 +409,22 @@ export class PcPotreeViewerConstruct extends NestedStack {
                 props.storageResources.encryption.kmsKey
             );
 
-
         //Add subscription for each bucket to kick-off lambda function of pipeline (as the main pipeline execution action)
         const assetBucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
-        let index = 0
+        let index = 0;
         for (const record of assetBucketRecords) {
-
-            const onS3ObjectCreatedQueue = new sqs.Queue(this, 'pcPotreePipelineS3EventCreated'+record.bucket, {
-            queueName: `${props.config.app.baseStackName}-pcPotreePipelineS3EventCreated-${index}`,
-            visibilityTimeout: cdk.Duration.seconds(360), // Corresponding function's is 300.
-            encryption: props.storageResources.encryption.kmsKey? sqs.QueueEncryption.KMS : sqs.QueueEncryption.SQS_MANAGED,
-            encryptionMasterKey: props.storageResources.encryption.kmsKey
-            });
+            const onS3ObjectCreatedQueue = new sqs.Queue(
+                this,
+                "pcPotreePipelineS3EventCreated" + record.bucket,
+                {
+                    queueName: `${props.config.app.baseStackName}-pcPotreePipelineS3EventCreated-${index}`,
+                    visibilityTimeout: cdk.Duration.seconds(360), // Corresponding function's is 300.
+                    encryption: props.storageResources.encryption.kmsKey
+                        ? sqs.QueueEncryption.KMS
+                        : sqs.QueueEncryption.SQS_MANAGED,
+                    encryptionMasterKey: props.storageResources.encryption.kmsKey,
+                }
+            );
             onS3ObjectCreatedQueue.grantSendMessages(Service("SNS").Principal);
 
             //Set TLS HTTPS on SQS queue
@@ -453,22 +457,21 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     props.storageResources.encryption.kmsKey
                 );
 
-            index = index + 1
+            index = index + 1;
 
             //Add event notifications for syncing
-            if(record.snsS3ObjectCreatedTopic) {
+            if (record.snsS3ObjectCreatedTopic) {
                 record.snsS3ObjectCreatedTopic.addSubscription(
                     new SqsSubscription(onS3ObjectCreatedQueue)
                 );
             }
 
             // The functions poll the respective queues, which is populated by messages sent to the topic.
-             PcPotreeViewerPipelineSqsExecuteFunction.addEventSource(
+            PcPotreeViewerPipelineSqsExecuteFunction.addEventSource(
                 new SqsEventSource(onS3ObjectCreatedQueue, {
-                    batchSize: 1 // Max configurable records w/o maxBatchingWindow.
+                    batchSize: 1, // Max configurable records w/o maxBatchingWindow.
                 })
             );
-
         }
 
         //Output VAMS Pipeline Execution Function name

@@ -12,7 +12,11 @@ import * as cdk from "aws-cdk-lib";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
-import { suppressCdkNagErrorsByGrantReadWrite, grantReadWritePermissionsToAllAssetBuckets, grantReadPermissionsToAllAssetBuckets } from "../helper/security";
+import {
+    suppressCdkNagErrorsByGrantReadWrite,
+    grantReadWritePermissionsToAllAssetBuckets,
+    grantReadPermissionsToAllAssetBuckets,
+} from "../helper/security";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
@@ -53,16 +57,19 @@ export function buildCreateAssetFunction(
                 : undefined,
 
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            ASSET_LINKS_STORAGE_TABLE_NAME: storageResources.dynamo.assetLinksStorageTable.tableName,
+            ASSET_LINKS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetLinksStorageTable.tableName,
             TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName,
             TAG_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
-            ASSET_VERSIONS_STORAGE_TABLE_NAME: storageResources.dynamo.assetVersionsStorageTable.tableName,
+            ASSET_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetVersionsStorageTable.tableName,
         },
     });
 
@@ -97,7 +104,7 @@ export function buildAssetService(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
-    sendEmailFunction:  lambda.Function,
+    sendEmailFunction: lambda.Function,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -121,7 +128,8 @@ export function buildAssetService(
                 : undefined,
 
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             S3_ASSET_AUXILIARY_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
@@ -129,13 +137,17 @@ export function buildAssetService(
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             ASSET_UPLOAD_TABLE_NAME: storageResources.dynamo.assetUploadsStorageTable.tableName,
-            ASSET_LINKS_STORAGE_TABLE_NAME: storageResources.dynamo.assetLinksStorageTable.tableName,
+            ASSET_LINKS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetLinksStorageTable.tableName,
             METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
-            ASSET_VERSIONS_STORAGE_TABLE_NAME: storageResources.dynamo.assetVersionsStorageTable.tableName,
-            ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME: storageResources.dynamo.assetFileVersionsStorageTable.tableName,
+            ASSET_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetVersionsStorageTable.tableName,
+            ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileVersionsStorageTable.tableName,
             COMMENT_STORAGE_TABLE_NAME: storageResources.dynamo.commentStorageTable.tableName,
-            SUBSCRIPTIONS_STORAGE_TABLE_NAME: storageResources.dynamo.subscriptionsStorageTable.tableName,
-            SEND_EMAIL_FUNCTION_NAME: sendEmailFunction.functionName
+            SUBSCRIPTIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.subscriptionsStorageTable.tableName,
+            SEND_EMAIL_FUNCTION_NAME: sendEmailFunction.functionName,
         },
     });
 
@@ -161,7 +173,7 @@ export function buildAssetService(
             resources: [assetTopicWildcardArn],
         })
     );
-    
+
     grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -197,9 +209,11 @@ export function buildAssetFiles(
                 : undefined,
 
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME: storageResources.dynamo.assetFileVersionsStorageTable.tableName,
+            ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileVersionsStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             S3_ASSET_AUXILIARY_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
@@ -210,7 +224,7 @@ export function buildAssetFiles(
 
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
-    storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun)
+    storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
@@ -230,7 +244,7 @@ export function buildUploadFileFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
-    sendEmailFunction:  lambda.Function,
+    sendEmailFunction: lambda.Function,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -252,7 +266,8 @@ export function buildUploadFileFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             S3_ASSET_AUXILIARY_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             ASSET_UPLOAD_TABLE_NAME: storageResources.dynamo.assetUploadsStorageTable.tableName,
@@ -260,12 +275,13 @@ export function buildUploadFileFunction(
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
-            PRESIGNED_URL_TIMEOUT_SECONDS: config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
+            PRESIGNED_URL_TIMEOUT_SECONDS:
+                config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
         },
     });
 
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
-    storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun)
+    storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetUploadsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
@@ -274,10 +290,7 @@ export function buildUploadFileFunction(
     sendEmailFunction.grantInvoke(fun);
 
     grantReadWritePermissionsToAllAssetBuckets(fun);
-    kmsKeyLambdaPermissionAddToResourcePolicy(
-        fun,
-        storageResources.encryption.kmsKey
-    );
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
@@ -318,18 +331,11 @@ export function buildStreamAuxiliaryPreviewAssetFunction(
     });
     storageResources.s3.assetAuxiliaryBucket.grantRead(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(
-        fun
-    );
-    storageResources.dynamo.userRolesStorageTable.grantReadData(
-        fun
-    );
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
-    kmsKeyLambdaPermissionAddToResourcePolicy(
-        fun,
-        storageResources.encryption.kmsKey
-    );
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
@@ -361,11 +367,13 @@ export function buildDownloadAssetFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            PRESIGNED_URL_TIMEOUT_SECONDS: config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
+            PRESIGNED_URL_TIMEOUT_SECONDS:
+                config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
@@ -377,10 +385,7 @@ export function buildDownloadAssetFunction(
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
     grantReadPermissionsToAllAssetBuckets(fun);
-    kmsKeyLambdaPermissionAddToResourcePolicy(
-        fun,
-        storageResources.encryption.kmsKey
-    );
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
@@ -392,7 +397,7 @@ export function buildAssetVersionsFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
-    sendEmailFunction:  lambda.Function,
+    sendEmailFunction: lambda.Function,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -415,10 +420,13 @@ export function buildAssetVersionsFunction(
                 : undefined,
 
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            ASSET_VERSIONS_STORAGE_TABLE_NAME: storageResources.dynamo.assetVersionsStorageTable.tableName,
-            ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME: storageResources.dynamo.assetFileVersionsStorageTable.tableName,
+            ASSET_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetVersionsStorageTable.tableName,
+            ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetFileVersionsStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
@@ -426,7 +434,7 @@ export function buildAssetVersionsFunction(
             SEND_EMAIL_FUNCTION_NAME: sendEmailFunction.functionName,
         },
     });
-    
+
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadWriteData(fun);
@@ -475,7 +483,8 @@ export function buildIngestAssetFunction(
                 : undefined,
 
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,

@@ -10,7 +10,7 @@
  */
 export const normalizePath = (path: string): string => {
     // Remove leading slash if present
-    return path.startsWith('/') ? path.substring(1) : path;
+    return path.startsWith("/") ? path.substring(1) : path;
 };
 
 /**
@@ -19,10 +19,10 @@ export const normalizePath = (path: string): string => {
  * @returns Formatted file size string
  */
 export const formatFileSize = (size?: number): string => {
-    if (size === undefined) return 'Unknown';
-    if (size === 0) return '0 B';
-    
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    if (size === undefined) return "Unknown";
+    if (size === 0) return "0 B";
+
+    const units = ["B", "KB", "MB", "GB", "TB"];
     const i = Math.floor(Math.log(size) / Math.log(1024));
     return `${(size / Math.pow(1024, i)).toFixed(2)} ${units[i]}`;
 };
@@ -33,7 +33,7 @@ export const formatFileSize = (size?: number): string => {
  * @returns Formatted date string
  */
 export const formatDate = (dateString?: string): string => {
-    if (!dateString) return 'Unknown';
+    if (!dateString) return "Unknown";
     try {
         const date = new Date(dateString);
         return date.toLocaleString();

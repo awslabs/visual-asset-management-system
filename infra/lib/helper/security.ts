@@ -160,7 +160,7 @@ export function generateContentSecurityPolicy(
         authenticationDomain,
         `https://${apiUrl}`,
         `https://${Service("S3").PrincipalString}/`,
-        `https://${Service("S3").Endpoint}/`
+        `https://${Service("S3").Endpoint}/`,
     ];
 
     const scriptSrc = [
@@ -170,7 +170,7 @@ export function generateContentSecurityPolicy(
         authenticationDomain,
         `https://${apiUrl}`,
         `https://${Service("S3").PrincipalString}/`,
-        `https://${Service("S3").Endpoint}/`
+        `https://${Service("S3").Endpoint}/`,
     ];
 
     const imgMediaSrc = [
@@ -178,7 +178,7 @@ export function generateContentSecurityPolicy(
         "blob:",
         "data:",
         `https://${Service("S3").PrincipalString}/`,
-        `https://${Service("S3").Endpoint}/`
+        `https://${Service("S3").Endpoint}/`,
     ];
 
     if (config.app.authProvider.useCognito.enabled) {
@@ -242,11 +242,11 @@ export function suppressCdkNagErrorsByGrantReadWrite(scope: Construct) {
  */
 export function grantReadPermissionsToAllAssetBuckets(lambdaFunction: lambda.Function): void {
     const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
-    
+
     for (const record of bucketRecords) {
         record.bucket.grantRead(lambdaFunction);
     }
-    
+
     // // Add CDK Nag suppressions
     // const reason = "Lambda needs read access to all asset buckets to perform its operations";
     // NagSuppressions.addResourceSuppressions(
@@ -275,11 +275,11 @@ export function grantReadPermissionsToAllAssetBuckets(lambdaFunction: lambda.Fun
  */
 export function grantReadWritePermissionsToAllAssetBuckets(lambdaFunction: lambda.Function): void {
     const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
-    
+
     for (const record of bucketRecords) {
         record.bucket.grantReadWrite(lambdaFunction);
     }
-    
+
     // Add CDK Nag suppressions
     //suppressCdkNagErrorsByGrantReadWrite(lambdaFunction);
 }

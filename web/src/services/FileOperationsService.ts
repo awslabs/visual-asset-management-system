@@ -36,8 +36,8 @@ export interface FileOperationResult {
  * Move a file within an asset
  */
 export const moveFile = async (
-    databaseId: string, 
-    assetId: string, 
+    databaseId: string,
+    assetId: string,
     request: MoveFileRequest,
     api = API
 ): Promise<FileOperationResponse> => {
@@ -46,10 +46,10 @@ export const moveFile = async (
             "api",
             `/database/${databaseId}/assets/${assetId}/moveFile`,
             {
-                body: request
+                body: request,
             }
         );
-        
+
         if (response.message) {
             return response.message;
         } else {
@@ -65,8 +65,8 @@ export const moveFile = async (
  * Copy a file within an asset or between assets
  */
 export const copyFile = async (
-    databaseId: string, 
-    assetId: string, 
+    databaseId: string,
+    assetId: string,
     request: CopyFileRequest,
     api = API
 ): Promise<FileOperationResponse> => {
@@ -75,10 +75,10 @@ export const copyFile = async (
             "api",
             `/database/${databaseId}/assets/${assetId}/copyFile`,
             {
-                body: request
+                body: request,
             }
         );
-        
+
         if (response.message) {
             return response.message;
         } else {
@@ -94,8 +94,8 @@ export const copyFile = async (
  * Unarchive a file that was previously archived
  */
 export const unarchiveFile = async (
-    databaseId: string, 
-    assetId: string, 
+    databaseId: string,
+    assetId: string,
     request: UnarchiveFileRequest,
     api = API
 ): Promise<FileOperationResponse> => {
@@ -104,10 +104,10 @@ export const unarchiveFile = async (
             "api",
             `/database/${databaseId}/assets/${assetId}/unarchiveFile`,
             {
-                body: request
+                body: request,
             }
         );
-        
+
         if (response.message) {
             return response.message;
         } else {
@@ -127,51 +127,51 @@ export const processMultipleFileOperations = async (
     assetId: string,
     files: string[],
     destinationFolder: string,
-    operation: 'move' | 'copy',
+    operation: "move" | "copy",
     destinationAssetId?: string
 ): Promise<FileOperationResult[]> => {
     const results: FileOperationResult[] = [];
-    
+
     for (const filePath of files) {
         try {
             // Construct destination path
-            const fileName = filePath.split('/').pop() || filePath;
-            const destinationPath = destinationFolder.endsWith('/') 
+            const fileName = filePath.split("/").pop() || filePath;
+            const destinationPath = destinationFolder.endsWith("/")
                 ? `${destinationFolder}${fileName}`
                 : `${destinationFolder}/${fileName}`;
-            
-            if (operation === 'move') {
+
+            if (operation === "move") {
                 const response = await moveFile(databaseId, assetId, {
                     sourcePath: filePath,
-                    destinationPath: destinationPath
+                    destinationPath: destinationPath,
                 });
-                
+
                 results.push({
                     filePath,
                     success: response.success,
-                    error: response.success ? undefined : response.message
+                    error: response.success ? undefined : response.message,
                 });
             } else {
                 const response = await copyFile(databaseId, assetId, {
                     sourcePath: filePath,
                     destinationPath: destinationPath,
-                    destinationAssetId: destinationAssetId
+                    destinationAssetId: destinationAssetId,
                 });
-                
+
                 results.push({
                     filePath,
                     success: response.success,
-                    error: response.success ? undefined : response.message
+                    error: response.success ? undefined : response.message,
                 });
             }
         } catch (error: any) {
             results.push({
                 filePath,
                 success: false,
-                error: error.message || `Failed to ${operation} file`
+                error: error.message || `Failed to ${operation} file`,
             });
         }
     }
-    
+
     return results;
 };

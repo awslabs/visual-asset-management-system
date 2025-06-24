@@ -4,14 +4,7 @@
  */
 
 import React, { useState } from "react";
-import {
-    Modal,
-    Box,
-    SpaceBetween,
-    Button,
-    Alert,
-    Spinner
-} from "@cloudscape-design/components";
+import { Modal, Box, SpaceBetween, Button, Alert, Spinner } from "@cloudscape-design/components";
 import { unarchiveFile } from "../../services/FileOperationsService";
 
 interface UnarchiveFileModalProps {
@@ -29,7 +22,7 @@ const UnarchiveFileModal: React.FC<UnarchiveFileModalProps> = ({
     onSuccess,
     selectedFiles,
     databaseId,
-    assetId
+    assetId,
 }) => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -45,9 +38,9 @@ const UnarchiveFileModal: React.FC<UnarchiveFileModalProps> = ({
     }, [visible]);
 
     const isMultipleFiles = selectedFiles.length > 1;
-    const fileName = isMultipleFiles 
-        ? `${selectedFiles.length} files` 
-        : (selectedFiles[0]?.name || selectedFiles[0]?.displayName || 'file');
+    const fileName = isMultipleFiles
+        ? `${selectedFiles.length} files`
+        : selectedFiles[0]?.name || selectedFiles[0]?.displayName || "file";
 
     const handleSubmit = async () => {
         if (!databaseId || !assetId) {
@@ -62,10 +55,10 @@ const UnarchiveFileModal: React.FC<UnarchiveFileModalProps> = ({
             // Process each file sequentially
             for (let i = 0; i < selectedFiles.length; i++) {
                 setProcessedCount(i);
-                
+
                 const file = selectedFiles[i];
                 await unarchiveFile(databaseId, assetId, {
-                    filePath: file.relativePath
+                    filePath: file.relativePath,
                 });
             }
 
@@ -83,30 +76,22 @@ const UnarchiveFileModal: React.FC<UnarchiveFileModalProps> = ({
         <Modal
             visible={visible}
             onDismiss={onDismiss}
-            header={`Unarchive ${isMultipleFiles ? 'Files' : 'File'}`}
+            header={`Unarchive ${isMultipleFiles ? "Files" : "File"}`}
             size="medium"
             footer={
                 <Box float="right">
                     <SpaceBetween direction="horizontal" size="xs">
-                        <Button
-                            variant="link"
-                            onClick={onDismiss}
-                            disabled={loading}
-                        >
+                        <Button variant="link" onClick={onDismiss} disabled={loading}>
                             Cancel
                         </Button>
-                        <Button
-                            variant="primary"
-                            onClick={handleSubmit}
-                            disabled={loading}
-                        >
+                        <Button variant="primary" onClick={handleSubmit} disabled={loading}>
                             {loading ? (
                                 <SpaceBetween direction="horizontal" size="xs">
                                     <Spinner />
                                     {`Processing ${processedCount + 1}/${selectedFiles.length}`}
                                 </SpaceBetween>
                             ) : (
-                                'Unarchive'
+                                "Unarchive"
                             )}
                         </Button>
                     </SpaceBetween>

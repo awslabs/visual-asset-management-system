@@ -37,7 +37,6 @@ export function buildAuthFunctions(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): AuthFunctions {
- 
     return {
         authConstraintsService: buildAuthConstraintsFunction(
             scope,
@@ -74,7 +73,7 @@ export function buildAuthConstraintsFunction(
     authResources: authResources,
     config: Config.Config,
     vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[],
+    subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "authConstraintsService";
     const authServiceFun = new lambda.Function(scope, name, {

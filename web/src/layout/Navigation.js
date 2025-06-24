@@ -74,7 +74,7 @@ export function Navigation({
             text: "Orchestrate & Automate",
             items: [
                 { type: "link", text: "Pipelines", href: "#/pipelines/" },
-                { type: "link", text: "Workflows", href: "#/workflows/" }
+                { type: "link", text: "Workflows", href: "#/workflows/" },
             ],
         },
         {

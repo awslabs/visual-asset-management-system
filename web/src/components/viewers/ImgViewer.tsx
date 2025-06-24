@@ -24,7 +24,7 @@ export default function ImgViewer({ assetId, databaseId, assetKey, altAssetKey }
                 databaseId: databaseId,
                 key: assetKey,
                 versionId: "",
-                downloadType: "assetFile"
+                downloadType: "assetFile",
             }).then((response) => {
                 if (response !== false && Array.isArray(response)) {
                     if (response[0] === false) {
@@ -50,7 +50,7 @@ export default function ImgViewer({ assetId, databaseId, assetKey, altAssetKey }
                 databaseId: databaseId,
                 key: altAssetKey,
                 versionId: "",
-                downloadType: "assetFile"
+                downloadType: "assetFile",
             }).then((response) => {
                 if (response !== false && Array.isArray(response)) {
                     if (response[0] === false) {

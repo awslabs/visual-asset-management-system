@@ -50,4 +50,4 @@ export interface S3FileVersion {
 }
 
 // Creation mode type
-export type CreationMode = 'current' | 'select' | 'modify';
+export type CreationMode = "current" | "select" | "modify";

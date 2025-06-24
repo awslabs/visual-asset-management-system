@@ -18,7 +18,7 @@ export default function PointCloudViewer(props) {
 
     useEffect(() => {
         const loadAsset = async () => {
-            let fileKey = relativeFileKey + '/preview/PotreeViewer/metadata.json'
+            let fileKey = relativeFileKey + "/preview/PotreeViewer/metadata.json";
             let url = `${config.api}database/${databaseId}/assets/${assetId}/auxiliaryPreviewAssets/stream/${fileKey}`;
 
             const authHeader = {

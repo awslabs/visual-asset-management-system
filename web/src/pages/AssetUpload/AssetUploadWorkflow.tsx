@@ -4,7 +4,15 @@
  */
 
 import React, { useContext, useState } from "react";
-import { Alert, Box, Button, Container, Grid, Header, SpaceBetween } from "@cloudscape-design/components";
+import {
+    Alert,
+    Box,
+    Button,
+    Container,
+    Grid,
+    Header,
+    SpaceBetween,
+} from "@cloudscape-design/components";
 import { AssetDetail } from "./AssetUpload";
 import { Metadata } from "../../components/single/Metadata";
 import { FileUploadTableItem } from "./FileUploadTable";
@@ -78,7 +86,7 @@ export default function AssetUploadWorkflow({
                     onCancel={onCancel}
                     keyPrefix={keyPrefix}
                 />
-                
+
                 {uploadComplete && (
                     <Box>
                         <SpaceBetween direction="vertical" size="m">
@@ -86,24 +94,27 @@ export default function AssetUploadWorkflow({
                                 // Message for existing assets
                                 uploadResponse?.message?.includes("Preview file upload failed") ? (
                                     <Alert type="warning" header="Upload Completed with Warnings">
-                                        Files have been added to asset {uploadResponse?.assetId}, but there were issues with the preview file upload.
+                                        Files have been added to asset {uploadResponse?.assetId},
+                                        but there were issues with the preview file upload.
                                     </Alert>
                                 ) : (
                                     <Alert type="success" header="Upload Complete">
-                                        Files have been successfully added to asset {uploadResponse?.assetId}.
+                                        Files have been successfully added to asset{" "}
+                                        {uploadResponse?.assetId}.
                                     </Alert>
                                 )
+                            ) : // Message for new assets
+                            uploadResponse?.message?.includes("Preview file upload failed") ? (
+                                <Alert type="warning" header="Upload Completed with Warnings">
+                                    Asset {uploadResponse?.assetId} has been created and asset files
+                                    have been uploaded, but there were issues with the preview file
+                                    upload.
+                                </Alert>
                             ) : (
-                                // Message for new assets
-                                uploadResponse?.message?.includes("Preview file upload failed") ? (
-                                    <Alert type="warning" header="Upload Completed with Warnings">
-                                        Asset {uploadResponse?.assetId} has been created and asset files have been uploaded, but there were issues with the preview file upload.
-                                    </Alert>
-                                ) : (
-                                    <Alert type="success" header="Upload Complete">
-                                        Asset {uploadResponse?.assetId} has been successfully created and all files have been uploaded.
-                                    </Alert>
-                                )
+                                <Alert type="success" header="Upload Complete">
+                                    Asset {uploadResponse?.assetId} has been successfully created
+                                    and all files have been uploaded.
+                                </Alert>
                             )}
                             <SpaceBetween direction="horizontal" size="xs">
                                 <Button onClick={handleViewAsset} variant="primary">

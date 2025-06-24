@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React from "react";
 import {
     Box,
     Button,
@@ -12,8 +12,8 @@ import {
     Spinner,
     Table,
     Badge,
-    Pagination
-} from '@cloudscape-design/components';
+    Pagination,
+} from "@cloudscape-design/components";
 
 interface SelectedFile {
     relativeKey: string;
@@ -55,7 +55,7 @@ export const FileVersionsContainer: React.FC<FileVersionsContainerProps> = ({
     currentFileVersionsPage,
     setCurrentFileVersionsPage,
     fileVersionsPerPage,
-    paginatedFileVersions
+    paginatedFileVersions,
 }) => {
     if (!selectedFileForVersions) {
         return null;
@@ -71,7 +71,7 @@ export const FileVersionsContainer: React.FC<FileVersionsContainerProps> = ({
                     <strong>Current Version:</strong> {selectedFileForVersions.versionId}
                 </div>
             </Box>
-            
+
             {loadingFileVersions ? (
                 <Box textAlign="center" padding="l">
                     <Spinner size="normal" />
@@ -81,59 +81,72 @@ export const FileVersionsContainer: React.FC<FileVersionsContainerProps> = ({
                 <Table
                     columnDefinitions={[
                         {
-                            id: 'versionId',
-                            header: 'Version ID',
+                            id: "versionId",
+                            header: "Version ID",
                             cell: (item: S3FileVersion) => (
                                 <Box>
-                                    <div style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
+                                    <div style={{ fontFamily: "monospace", fontSize: "0.9em" }}>
                                         {item.versionId}
                                     </div>
                                     {item.isLatest && <Badge color="blue">Latest</Badge>}
                                 </Box>
-                            )
+                            ),
                         },
                         {
-                            id: 'lastModified',
-                            header: 'Last Modified',
-                            cell: (item: S3FileVersion) => formatDate(item.lastModified)
+                            id: "lastModified",
+                            header: "Last Modified",
+                            cell: (item: S3FileVersion) => formatDate(item.lastModified),
                         },
                         {
-                            id: 'size',
-                            header: 'Size',
-                            cell: (item: S3FileVersion) => formatFileSize(item.size)
+                            id: "size",
+                            header: "Size",
+                            cell: (item: S3FileVersion) => formatFileSize(item.size),
                         },
                         {
-                            id: 'status',
-                            header: 'Status',
-                            cell: (item: S3FileVersion) => item.isArchived ? 'Archived' : 'Active'
+                            id: "status",
+                            header: "Status",
+                            cell: (item: S3FileVersion) =>
+                                item.isArchived ? "Archived" : "Active",
                         },
                         {
-                            id: 'actions',
-                            header: 'Actions',
+                            id: "actions",
+                            header: "Actions",
                             cell: (item: S3FileVersion) => (
                                 <Button
                                     onClick={() => {
                                         if (selectedFileForVersions) {
-                                            handleFileVersionSelection(selectedFileForVersions, item.versionId);
+                                            handleFileVersionSelection(
+                                                selectedFileForVersions,
+                                                item.versionId
+                                            );
                                         }
                                     }}
                                     disabled={item.isArchived}
                                 >
                                     Select This Version
                                 </Button>
-                            )
-                        }
+                            ),
+                        },
                     ]}
                     items={paginatedFileVersions}
                     pagination={
                         <Pagination
                             currentPageIndex={currentFileVersionsPage}
-                            pagesCount={Math.max(1, Math.ceil(fileVersions.length / fileVersionsPerPage))}
-                            onChange={({ detail }) => setCurrentFileVersionsPage(detail.currentPageIndex)}
+                            pagesCount={Math.max(
+                                1,
+                                Math.ceil(fileVersions.length / fileVersionsPerPage)
+                            )}
+                            onChange={({ detail }) =>
+                                setCurrentFileVersionsPage(detail.currentPageIndex)
+                            }
                             ariaLabels={{
-                                nextPageLabel: 'Next page',
-                                previousPageLabel: 'Previous page',
-                                pageLabel: pageNumber => `Page ${pageNumber} of ${Math.max(1, Math.ceil(fileVersions.length / fileVersionsPerPage))}`
+                                nextPageLabel: "Next page",
+                                previousPageLabel: "Previous page",
+                                pageLabel: (pageNumber) =>
+                                    `Page ${pageNumber} of ${Math.max(
+                                        1,
+                                        Math.ceil(fileVersions.length / fileVersionsPerPage)
+                                    )}`,
                             }}
                         />
                     }
@@ -144,12 +157,9 @@ export const FileVersionsContainer: React.FC<FileVersionsContainerProps> = ({
                     }
                 />
             )}
-            
+
             <Box padding="m" textAlign="right">
-                <Button
-                    onClick={() => setSelectedFileForVersions(null)}
-                    variant="normal"
-                >
+                <Button onClick={() => setSelectedFileForVersions(null)} variant="normal">
                     Cancel
                 </Button>
             </Box>

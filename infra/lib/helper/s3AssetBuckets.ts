@@ -12,22 +12,32 @@ import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedS
 
 // Define interface for bucket records
 export interface S3AssetBucketRecord {
-  bucket: s3.IBucket;
-  prefix: string;
-  defaultSyncDatabaseId: string;
-  snsS3ObjectCreatedTopic: sns.ITopic | undefined;
-  snsS3ObjectDeletedTopic: sns.ITopic | undefined;
+    bucket: s3.IBucket;
+    prefix: string;
+    defaultSyncDatabaseId: string;
+    snsS3ObjectCreatedTopic: sns.ITopic | undefined;
+    snsS3ObjectDeletedTopic: sns.ITopic | undefined;
 }
 
 // Global array to store bucket records
 export const s3AssetBucketRecords: S3AssetBucketRecord[] = [];
 
 // Function to add a bucket to the global array
-export function addS3AssetBucket(bucket: s3.IBucket, prefix: string, defaultSyncDatabaseId: string): void {
-  s3AssetBucketRecords.push({ bucket, prefix, defaultSyncDatabaseId, snsS3ObjectCreatedTopic: undefined, snsS3ObjectDeletedTopic: undefined});
+export function addS3AssetBucket(
+    bucket: s3.IBucket,
+    prefix: string,
+    defaultSyncDatabaseId: string
+): void {
+    s3AssetBucketRecords.push({
+        bucket,
+        prefix,
+        defaultSyncDatabaseId,
+        snsS3ObjectCreatedTopic: undefined,
+        snsS3ObjectDeletedTopic: undefined,
+    });
 }
 
 // Function to get all bucket records
 export function getS3AssetBucketRecords(): S3AssetBucketRecord[] {
-  return s3AssetBucketRecords;
+    return s3AssetBucketRecords;
 }

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from "react";
 import {
     Box,
     SpaceBetween,
@@ -13,11 +13,11 @@ import {
     Pagination,
     StatusIndicator,
     Alert,
-    Spinner
-} from '@cloudscape-design/components';
-import { downloadAsset, revertFileVersion } from '../../../services/APIService';
-import { fetchFileVersions } from '../../../services/AssetVersionService';
-import { useNavigate } from 'react-router';
+    Spinner,
+} from "@cloudscape-design/components";
+import { downloadAsset, revertFileVersion } from "../../../services/APIService";
+import { fetchFileVersions } from "../../../services/AssetVersionService";
+import { useNavigate } from "react-router";
 
 // TypeScript interfaces
 interface FileVersion {
@@ -38,7 +38,7 @@ interface FileVersionsTableProps {
     fileName: string;
     currentVersionId?: string; // For ViewFile context
     onVersionRevert?: () => void; // Refresh callback
-    displayMode?: 'modal' | 'container'; // Display context
+    displayMode?: "modal" | "container"; // Display context
     visible?: boolean; // For modal context
 }
 
@@ -54,8 +54,8 @@ interface RevertConfirmationModalProps {
 // Helper function to format file size
 const formatFileSize = (size: number): string => {
     if (size === 0) return "0 B";
-    
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+
+    const units = ["B", "KB", "MB", "GB", "TB"];
     const i = Math.floor(Math.log(size) / Math.log(1024));
     return `${(size / Math.pow(1024, i)).toFixed(2)} ${units[i]}`;
 };
@@ -77,23 +77,25 @@ const RevertConfirmationModal: React.FC<RevertConfirmationModalProps> = ({
     onConfirm,
     versionId,
     fileName,
-    isLoading
+    isLoading,
 }) => {
     return (
-        <div className="revert-confirmation-modal" style={{ paddingTop: '20px' }}>
+        <div className="revert-confirmation-modal" style={{ paddingTop: "20px" }}>
             {visible && (
                 <Box>
                     <SpaceBetween direction="vertical" size="m">
                         <Alert type="warning">
-                            This will create a new current version with the contents of version <strong>{versionId}</strong>.
+                            This will create a new current version with the contents of version{" "}
+                            <strong>{versionId}</strong>.
                         </Alert>
                         <Box>
                             <p>
-                                Are you sure you want to revert <strong>{fileName}</strong> to version <strong>{versionId}</strong>?
+                                Are you sure you want to revert <strong>{fileName}</strong> to
+                                version <strong>{versionId}</strong>?
                             </p>
                             <p>
-                                This action will create a new version that becomes the current version, 
-                                containing the same content as the selected version.
+                                This action will create a new version that becomes the current
+                                version, containing the same content as the selected version.
                             </p>
                         </Box>
                         <Box float="right">
@@ -101,11 +103,7 @@ const RevertConfirmationModal: React.FC<RevertConfirmationModalProps> = ({
                                 <Button variant="link" onClick={onDismiss} disabled={isLoading}>
                                     Cancel
                                 </Button>
-                                <Button 
-                                    variant="primary" 
-                                    onClick={onConfirm}
-                                    loading={isLoading}
-                                >
+                                <Button variant="primary" onClick={onConfirm} loading={isLoading}>
                                     Revert
                                 </Button>
                             </SpaceBetween>
@@ -125,20 +123,20 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
     fileName,
     currentVersionId,
     onVersionRevert,
-    displayMode = 'container',
-    visible = true
+    displayMode = "container",
+    visible = true,
 }) => {
     const navigate = useNavigate();
-    
+
     // State management
     const [versions, setVersions] = useState<FileVersion[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [currentPage, setCurrentPage] = useState(1);
     const [showRevertModal, setShowRevertModal] = useState(false);
-    const [selectedVersionForRevert, setSelectedVersionForRevert] = useState<string>('');
+    const [selectedVersionForRevert, setSelectedVersionForRevert] = useState<string>("");
     const [revertLoading, setRevertLoading] = useState(false);
-    
+
     const itemsPerPage = 20;
     const totalPages = Math.ceil(versions.length / itemsPerPage);
     const startIndex = (currentPage - 1) * itemsPerPage;
@@ -155,14 +153,14 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
     const loadFileVersions = async () => {
         setLoading(true);
         setError(null);
-        
+
         try {
             const [success, response] = await fetchFileVersions({
                 databaseId,
                 assetId,
-                filePath
+                filePath,
             });
-            
+
             if (success && response?.versions) {
                 setVersions(response.versions);
                 setCurrentPage(1); // Reset to first page
@@ -186,9 +184,9 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                 assetId,
                 key: filePath,
                 versionId: versionId,
-                downloadType: "assetFile"
+                downloadType: "assetFile",
             });
-            
+
             if (success && downloadUrl) {
                 const link = document.createElement("a");
                 link.href = downloadUrl;
@@ -203,10 +201,9 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
 
     // Handle view version
     const handleViewVersion = (versionId: string) => {
-
         // Find the version to get its isArchived status
-        const version = versions.find(v => v.versionId === versionId);
-        
+        const version = versions.find((v) => v.versionId === versionId);
+
         // For EnhancedFileManager context without callback - navigate directly
         navigate(`/databases/${databaseId}/assets/${assetId}/file`, {
             state: {
@@ -214,10 +211,9 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                 key: filePath,
                 isDirectory: false,
                 versionId: versionId,
-                isArchived: version?.isArchived
-            }
+                isArchived: version?.isArchived,
+            },
         });
-
     };
 
     // Handle revert version
@@ -229,29 +225,29 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
     // Confirm revert
     const confirmRevert = async () => {
         if (!selectedVersionForRevert) return;
-        
+
         setRevertLoading(true);
-        
+
         try {
             const [success, response] = await revertFileVersion({
                 databaseId,
                 assetId,
                 filePath,
-                versionId: selectedVersionForRevert
+                versionId: selectedVersionForRevert,
             });
-            
+
             if (success) {
                 setShowRevertModal(false);
-                setSelectedVersionForRevert('');
-                
+                setSelectedVersionForRevert("");
+
                 // Refresh versions list
                 await loadFileVersions();
-                
+
                 // Call parent refresh callback if provided
                 if (onVersionRevert) {
                     onVersionRevert();
                 }
-                
+
                 setError(null);
             } else {
                 setError(response || "Failed to revert file version");
@@ -266,50 +262,52 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
     // Table column definitions
     const columnDefinitions = [
         {
-            id: 'version',
-            header: 'Version',
+            id: "version",
+            header: "Version",
             cell: (item: FileVersion) => (
                 <div className="version-cell">
                     <span className="version-id">{item.versionId}</span>
                     {item.isLatest && (
-                        <span style={{ marginLeft: '12px' }}>
+                        <span style={{ marginLeft: "12px" }}>
                             <StatusIndicator type="success">Latest</StatusIndicator>
                         </span>
                     )}
                     {currentVersionId === item.versionId && (
-                        <span style={{ marginLeft: '12px' }}>
+                        <span style={{ marginLeft: "12px" }}>
                             <StatusIndicator type="info">Viewing</StatusIndicator>
                         </span>
                     )}
                     {item.isArchived && (
-                        <span style={{ marginLeft: '12px' }}>
+                        <span style={{ marginLeft: "12px" }}>
                             <StatusIndicator type="error">Archived</StatusIndicator>
                         </span>
                     )}
                     {item.currentAssetVersionFileVersionMismatch && (
-                        <span style={{ marginLeft: '12px' }}>
-                            <StatusIndicator type="warning">Not Included in Asset Version</StatusIndicator>
+                        <span style={{ marginLeft: "12px" }}>
+                            <StatusIndicator type="warning">
+                                Not Included in Asset Version
+                            </StatusIndicator>
                         </span>
                     )}
                 </div>
             ),
-            sortingField: 'versionId'
+            sortingField: "versionId",
         },
         {
-            id: 'date',
-            header: 'Date Created',
+            id: "date",
+            header: "Date Created",
             cell: (item: FileVersion) => formatDate(item.lastModified),
-            sortingField: 'lastModified'
+            sortingField: "lastModified",
         },
         {
-            id: 'size',
-            header: 'File Size',
+            id: "size",
+            header: "File Size",
             cell: (item: FileVersion) => formatFileSize(item.size),
-            sortingField: 'size'
+            sortingField: "size",
         },
         {
-            id: 'actions',
-            header: 'Actions',
+            id: "actions",
+            header: "Actions",
             cell: (item: FileVersion) => (
                 <SpaceBetween direction="horizontal" size="xs">
                     <Button
@@ -329,16 +327,13 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                         </Button>
                     )}
                     {!item.isLatest && !item.isArchived && (
-                        <Button
-                            variant="link"
-                            onClick={() => handleRevertVersion(item.versionId)}
-                        >
+                        <Button variant="link" onClick={() => handleRevertVersion(item.versionId)}>
                             Revert To
                         </Button>
                     )}
                 </SpaceBetween>
-            )
-        }
+            ),
+        },
     ];
 
     if (!visible) {
@@ -349,15 +344,11 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
         <>
             <SpaceBetween direction="vertical" size="l">
                 {error && (
-                    <Alert
-                        type="error"
-                        dismissible
-                        onDismiss={() => setError(null)}
-                    >
+                    <Alert type="error" dismissible onDismiss={() => setError(null)}>
                         {error}
                     </Alert>
                 )}
-                
+
                 {loading ? (
                     <Box textAlign="center" padding="l">
                         <Spinner size="large" />
@@ -388,7 +379,7 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                                 </Header>
                             }
                         />
-                        
+
                         {totalPages > 1 && (
                             <Pagination
                                 currentPageIndex={currentPage}
@@ -404,7 +395,7 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                 visible={showRevertModal}
                 onDismiss={() => {
                     setShowRevertModal(false);
-                    setSelectedVersionForRevert('');
+                    setSelectedVersionForRevert("");
                 }}
                 onConfirm={confirmRevert}
                 versionId={selectedVersionForRevert}

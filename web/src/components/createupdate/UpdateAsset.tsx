@@ -1,9 +1,4 @@
-import {
-    Modal,
-    Select,
-    SpaceBetween,
-    Multiselect,
-} from "@cloudscape-design/components";
+import { Modal, Select, SpaceBetween, Multiselect } from "@cloudscape-design/components";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import FormField from "@cloudscape-design/components/form-field";
@@ -65,7 +60,10 @@ const update = async (
         // Mark as complete
         setComplete(true);
     } catch (err: any) {
-        setError({ isError: true, message: err.message || "An error occurred during the update process" });
+        setError({
+            isError: true,
+            message: err.message || "An error occurred during the update process",
+        });
     }
 };
 
@@ -76,11 +74,11 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     const [isValid, setIsValid] = useState(true);
     const [isFormTouched, setIsFormTouched] = useState(false);
     const [inProgress, setInProgress] = useState(false);
-    
+
     if (complete) {
         props.onComplete();
     }
-    
+
     const [selectedTags, setSelectedTags] = useState<OptionDefinition[]>([]);
 
     const [validationText, setValidationText] = useState<{
@@ -197,12 +195,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                             onClick={() => {
                                 setInProgress(true);
                                 setIsFormTouched(true);
-                                update(
-                                    assetDetail,
-                                    setError,
-                                    setComplete,
-                                    isValid
-                                );
+                                update(assetDetail, setError, setComplete, isValid);
                             }}
                             disabled={(inProgress && !error.isError) || !isValid}
                         >

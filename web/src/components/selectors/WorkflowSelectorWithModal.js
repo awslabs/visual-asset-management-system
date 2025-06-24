@@ -11,7 +11,7 @@ import { fetchDatabaseWorkflows, runWorkflow } from "../../services/APIService";
 // Helper function to check if a file has an extension (is a file, not a folder)
 const isFile = (file) => {
     // Check if the fileName contains a dot (.) which indicates it has an extension
-    return file.fileName.includes('.');
+    return file.fileName.includes(".");
 };
 
 export default function WorkflowSelectorWithModal(props) {
@@ -40,17 +40,16 @@ export default function WorkflowSelectorWithModal(props) {
     useEffect(() => {
         if (assetFiles && assetFiles.length > 0) {
             // Filter out folders, only keep files with extensions
-            const onlyFiles = assetFiles.filter(file => isFile(file));
-            
+            const onlyFiles = assetFiles.filter((file) => isFile(file));
+
             setFilteredFiles(onlyFiles);
-            
+
             // Only set the selected file key if there are files available
             if (onlyFiles.length > 0) {
                 setSelectedFileKey(onlyFiles[0].key);
             }
         }
     }, [assetFiles]);
-
 
     const handleWorkflowSelection = (event) => {
         const newWorkflowId = event.detail.selectedOption.value;
@@ -59,7 +58,7 @@ export default function WorkflowSelectorWithModal(props) {
 
     const handleExecuteWorkflow = async () => {
         if (!workflowId) return;
-        
+
         const result = await runWorkflow({
             databaseId: databaseId,
             assetId: assetId,
@@ -71,7 +70,7 @@ export default function WorkflowSelectorWithModal(props) {
                 // TODO: error handling
             } else {
                 // Instead of reloading the entire page, call the onWorkflowExecuted callback if provided
-                if (typeof onWorkflowExecuted === 'function') {
+                if (typeof onWorkflowExecuted === "function") {
                     onWorkflowExecuted();
                 }
             }
@@ -82,7 +81,6 @@ export default function WorkflowSelectorWithModal(props) {
     const handleFileSelection = (event) => {
         setSelectedFileKey(event.detail.selectedOption.value);
     };
-
 
     const handleClose = () => {
         setOpen(false);
@@ -134,9 +132,12 @@ export default function WorkflowSelectorWithModal(props) {
                                 selectedFileKey
                                     ? {
                                           value: selectedFileKey,
-                                          label: filteredFiles.find(f => f.key === selectedFileKey)?.relativePath || 
-                                                 filteredFiles.find(f => f.key === selectedFileKey)?.fileName || 
-                                                 selectedFileKey,
+                                          label:
+                                              filteredFiles.find((f) => f.key === selectedFileKey)
+                                                  ?.relativePath ||
+                                              filteredFiles.find((f) => f.key === selectedFileKey)
+                                                  ?.fileName ||
+                                              selectedFileKey,
                                       }
                                     : null
                             }
@@ -146,10 +147,10 @@ export default function WorkflowSelectorWithModal(props) {
                         />
                     </FormField>
                 )}
-                
+
                 <Box textAlign="right">
-                    <Button 
-                        variant="primary" 
+                    <Button
+                        variant="primary"
                         onClick={handleExecuteWorkflow}
                         disabled={!workflowId}
                     >

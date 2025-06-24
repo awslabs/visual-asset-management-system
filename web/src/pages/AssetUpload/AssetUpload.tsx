@@ -34,10 +34,7 @@ import DatabaseSelector from "../../components/selectors/DatabaseSelector";
 import { previewFileFormats } from "../../common/constants/fileFormats";
 import { Metadata } from "../../components/single/Metadata";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
-import {
-    validateNonZeroLengthTextAsYouType,
-    validateRequiredTagTypeSelected,
-} from "./validations";
+import { validateNonZeroLengthTextAsYouType, validateRequiredTagTypeSelected } from "./validations";
 import { DisplayKV, FileUpload } from "./components";
 import AssetUploadWorkflow from "./AssetUploadWorkflow";
 import ControlledMetadata from "../../components/metadata/ControlledMetadata";
@@ -362,7 +359,6 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
     const [tagsValid, setTagsValid] = useState(true);
 
     useEffect(() => {
-
         if (!assetDetailState.tags) {
             assetDetailDispatch({
                 type: "UPDATE_ASSET_TAGS",
@@ -544,7 +540,6 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
                         options={tags}
                     />
                 </FormField>
-
             </SpaceBetween>
         </Container>
     );
@@ -1221,22 +1216,22 @@ const AssetFileInfo = ({
         setValid(true);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [assetDetailState]);
-    
+
     // Function to remove a file
     const handleRemoveFile = (index: number) => {
         if (assetDetailState.Asset) {
-            const updatedFiles = assetDetailState.Asset.filter(item => item.index !== index);
-            
+            const updatedFiles = assetDetailState.Asset.filter((item) => item.index !== index);
+
             // Update indices to be sequential
             const reindexedFiles = updatedFiles.map((item, idx) => ({
                 ...item,
-                index: idx
+                index: idx,
             }));
-            
+
             setFileUploadTableItems(reindexedFiles);
-            assetDetailDispatch({ 
-                type: "UPDATE_ASSET_FILES", 
-                payload: reindexedFiles 
+            assetDetailDispatch({
+                type: "UPDATE_ASSET_FILES",
+                payload: reindexedFiles,
             });
         }
     };
@@ -1248,14 +1243,14 @@ const AssetFileInfo = ({
             // Don't update the state with the oversized file
             return;
         }
-        
+
         // Clear any previous error
         setPreviewFileError(undefined);
-        
+
         // Update the state with the valid file
-        assetDetailDispatch({ 
-            type: "UPDATE_ASSET_PREVIEW", 
-            payload: file 
+        assetDetailDispatch({
+            type: "UPDATE_ASSET_PREVIEW",
+            payload: file,
         });
     };
 
@@ -1274,7 +1269,7 @@ const AssetFileInfo = ({
                         />
                     </Box>
                 )}
-                
+
                 <Grid gridDefinition={[{ colspan: { default: 6 } }, { colspan: { default: 6 } }]}>
                     <SpaceBetween direction="vertical" size="m">
                         <EnhancedFileSelector
@@ -1304,7 +1299,7 @@ const AssetFileInfo = ({
                                 });
                             }}
                         />
-                        
+
                         {/* Move the toggle below the file selector */}
                         <FormField label="Selection Mode">
                             <SpaceBetween direction="horizontal" size="xs">
@@ -1351,22 +1346,24 @@ const AssetUploadReview = ({
     const { assetDetailState } = assetDetailContext;
 
     // Create a preview file item if it exists
-    const previewFileItem = assetDetailState.Preview ? {
-        handle: { getFile: () => Promise.resolve(assetDetailState.Preview as File) },
-        index: 999, // Use a high index to distinguish from regular files
-        name: assetDetailState.Preview.name,
-        size: assetDetailState.Preview.size,
-        relativePath: `preview/${assetDetailState.Preview.name}`,
-        progress: 0,
-        status: "Queued" as "Queued" | "In Progress" | "Completed" | "Failed", // Explicitly type the status
-        loaded: 0,
-        total: assetDetailState.Preview.size,
-    } as FileUploadTableItem : null;
+    const previewFileItem = assetDetailState.Preview
+        ? ({
+              handle: { getFile: () => Promise.resolve(assetDetailState.Preview as File) },
+              index: 999, // Use a high index to distinguish from regular files
+              name: assetDetailState.Preview.name,
+              size: assetDetailState.Preview.size,
+              relativePath: `preview/${assetDetailState.Preview.name}`,
+              progress: 0,
+              status: "Queued" as "Queued" | "In Progress" | "Completed" | "Failed", // Explicitly type the status
+              loaded: 0,
+              total: assetDetailState.Preview.size,
+          } as FileUploadTableItem)
+        : null;
 
     // Combine asset files and preview file for display
     const allFiles = [
         ...(assetDetailState.Asset || []),
-        ...(previewFileItem ? [previewFileItem] : [])
+        ...(previewFileItem ? [previewFileItem] : []),
     ];
 
     return (
@@ -1381,32 +1378,26 @@ const AssetUploadReview = ({
                 <ColumnLayout columns={2} variant="text-grid">
                     <SpaceBetween direction="vertical" size="xl">
                         {/* Left Column: Asset Name, Database, Description */}
-                        <DisplayKV 
-                            label="Asset Name" 
-                            value={assetDetailState.assetName || ""} 
-                        />
-                        <DisplayKV 
-                            label="Database" 
-                            value={assetDetailState.databaseId || ""} 
-                        />
-                        <DisplayKV 
-                            label="Description" 
-                            value={assetDetailState.description || ""} 
-                        />
+                        <DisplayKV label="Asset Name" value={assetDetailState.assetName || ""} />
+                        <DisplayKV label="Database" value={assetDetailState.databaseId || ""} />
+                        <DisplayKV label="Description" value={assetDetailState.description || ""} />
                     </SpaceBetween>
-                    
+
                     <SpaceBetween direction="vertical" size="xl">
                         {/* Right Column: Is Distributable, Tags */}
-                        <DisplayKV 
-                            label="Is Distributable" 
-                            value={assetDetailState.isDistributable === false ? "No" : "Yes"} 
+                        <DisplayKV
+                            label="Is Distributable"
+                            value={assetDetailState.isDistributable === false ? "No" : "Yes"}
                         />
-                        <DisplayKV 
-                            label="Tags" 
-                            value={assetDetailState.frontendTags 
-                                ? assetDetailState.frontendTags.map((tag: any) => tag?.label).join(", ")
-                                : ""
-                            } 
+                        <DisplayKV
+                            label="Tags"
+                            value={
+                                assetDetailState.frontendTags
+                                    ? assetDetailState.frontendTags
+                                          .map((tag: any) => tag?.label)
+                                          .join(", ")
+                                    : ""
+                            }
                         />
                     </SpaceBetween>
                 </ColumnLayout>
@@ -1469,7 +1460,7 @@ const AssetUploadReview = ({
                         {
                             id: "type",
                             header: "Type",
-                            cell: (item: FileUploadTableItem) => 
+                            cell: (item: FileUploadTableItem) =>
                                 item.index === 999 ? "Preview File" : "Asset File",
                             sortingField: "type",
                             isRowHeader: false,

@@ -3,16 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
-import {
-    Modal,
-    Box,
-    Button,
-    Alert
-} from '@cloudscape-design/components';
-import { FileVersionsTable } from '../components/FileVersionsTable';
-import { useNavigate } from 'react-router';
-import './FileVersionsModal.css';
+import React, { useState } from "react";
+import { Modal, Box, Button, Alert } from "@cloudscape-design/components";
+import { FileVersionsTable } from "../components/FileVersionsTable";
+import { useNavigate } from "react-router";
+import "./FileVersionsModal.css";
 
 // TypeScript interfaces
 interface FileVersionsModalProps {
@@ -42,7 +37,7 @@ const RevertConfirmationModal: React.FC<RevertConfirmationModalProps> = ({
     onConfirm,
     versionId,
     fileName,
-    isLoading
+    isLoading,
 }) => {
     return (
         <Modal
@@ -54,25 +49,23 @@ const RevertConfirmationModal: React.FC<RevertConfirmationModalProps> = ({
                     <Button variant="link" onClick={onDismiss} disabled={isLoading}>
                         Cancel
                     </Button>
-                    <Button 
-                        variant="primary" 
-                        onClick={onConfirm}
-                        loading={isLoading}
-                    >
+                    <Button variant="primary" onClick={onConfirm} loading={isLoading}>
                         Revert
                     </Button>
                 </Box>
             }
         >
             <Alert type="warning">
-                This will create a new current version with the contents of version <strong>{versionId}</strong>.
+                This will create a new current version with the contents of version{" "}
+                <strong>{versionId}</strong>.
             </Alert>
             <Box>
                 <p>
-                    Are you sure you want to revert <strong>{fileName}</strong> to version <strong>{versionId}</strong>?
+                    Are you sure you want to revert <strong>{fileName}</strong> to version{" "}
+                    <strong>{versionId}</strong>?
                 </p>
                 <p>
-                    This action will create a new version that becomes the current version, 
+                    This action will create a new version that becomes the current version,
                     containing the same content as the selected version.
                 </p>
             </Box>
@@ -89,10 +82,9 @@ export const FileVersionsModal: React.FC<FileVersionsModalProps> = ({
     filePath,
     fileName,
     currentVersionId,
-    onVersionRevert
+    onVersionRevert,
 }) => {
     const navigate = useNavigate();
-    
 
     return (
         <Modal

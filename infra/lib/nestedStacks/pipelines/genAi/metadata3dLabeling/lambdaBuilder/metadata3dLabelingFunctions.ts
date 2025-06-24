@@ -22,7 +22,10 @@ import {
 } from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
-import { grantReadWritePermissionsToAllAssetBuckets, grantReadPermissionsToAllAssetBuckets } from "../../../../../helper/security";
+import {
+    grantReadWritePermissionsToAllAssetBuckets,
+    grantReadPermissionsToAllAssetBuckets,
+} from "../../../../../helper/security";
 
 export function buildVamsExecuteMetadata3dLabelingPipelineFunction(
     scope: Construct,

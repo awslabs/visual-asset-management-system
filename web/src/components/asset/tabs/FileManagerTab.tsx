@@ -10,31 +10,28 @@ import { FileKey } from "../../filemanager/types/FileManagerTypes";
 import { LoadingSpinner } from "../../common/LoadingSpinner";
 
 interface FileManagerTabProps {
-  assetName: string;
-  assetFiles: FileKey[];
-  assetId: string;
-  databaseId: string;
-  loading: boolean;
-  onExecuteWorkflow: () => void; // Keeping prop for compatibility, but not using it
+    assetName: string;
+    assetFiles: FileKey[];
+    assetId: string;
+    databaseId: string;
+    loading: boolean;
+    onExecuteWorkflow: () => void; // Keeping prop for compatibility, but not using it
 }
 
 export const FileManagerTab: React.FC<FileManagerTabProps> = ({
-  assetName,
-  assetFiles,
-  loading,
+    assetName,
+    assetFiles,
+    loading,
 }) => {
-  return (
-    <ErrorBoundary componentName="File Manager">
-      {loading ? (
-        <LoadingSpinner text="Loading files..." />
-      ) : (
-        <EnhancedFileManager
-          assetName={assetName}
-          assetFiles={assetFiles}
-        />
-      )}
-    </ErrorBoundary>
-  );
+    return (
+        <ErrorBoundary componentName="File Manager">
+            {loading ? (
+                <LoadingSpinner text="Loading files..." />
+            ) : (
+                <EnhancedFileManager assetName={assetName} assetFiles={assetFiles} />
+            )}
+        </ErrorBoundary>
+    );
 };
 
 export default FileManagerTab;

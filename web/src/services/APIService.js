@@ -55,13 +55,16 @@ export const webRoutes = async (body) => {
  * @param {string} params.downloadType - Download type: "assetFile" (default) or "assetPreview"
  * @returns {Promise<boolean|{message}|any>}
  */
-export const downloadAsset = async ({ databaseId, assetId, key, versionId, downloadType = "assetFile" }, api = API) => {
+export const downloadAsset = async (
+    { databaseId, assetId, key, versionId, downloadType = "assetFile" },
+    api = API
+) => {
     try {
         // Build request body with new model structure
         const body = {
             downloadType: downloadType,
             key: key,
-            versionId: versionId
+            versionId: versionId,
         };
 
         const response = await api.post(
@@ -71,7 +74,7 @@ export const downloadAsset = async ({ databaseId, assetId, key, versionId, downl
                 body: body,
             }
         );
-        
+
         // Handle new response structure
         if (response.downloadUrl) {
             // New API response format
@@ -107,7 +110,7 @@ export const downloadAsset = async ({ databaseId, assetId, key, versionId, downl
 export const deleteElement = async ({ deleteRoute, elementId, item }, api = API) => {
     try {
         let route = deleteRoute;
-        
+
         // Handle global pipelines/workflows (no database ID)
         if (item?.databaseId === "" && deleteRoute.includes("{databaseId}")) {
             // For global items, use the global database route
@@ -115,12 +118,8 @@ export const deleteElement = async ({ deleteRoute, elementId, item }, api = API)
         } else {
             route = route.replace("{databaseId}", item?.databaseId);
         }
-        
-        const response = await api.del(
-            "api",
-            route.replace(`{${elementId}}`, item[elementId]),
-            {}
-        );
+
+        const response = await api.del("api", route.replace(`{${elementId}}`, item[elementId]), {});
         if (response.message) {
             console.log(response.message);
             return [true, response.message, ""];
@@ -137,21 +136,24 @@ export const deleteElement = async ({ deleteRoute, elementId, item }, api = API)
  * Returns array of boolean and response/error message for the workflow that the current user is running, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */
-export const runWorkflow = async ({ databaseId, assetId, workflowId, fileKey, isGlobalWorkflow = false }, api = API) => {
+export const runWorkflow = async (
+    { databaseId, assetId, workflowId, fileKey, isGlobalWorkflow = false },
+    api = API
+) => {
     try {
         let endpoint;
-        
+
         // If it's a global workflow, use the global database route
         if (isGlobalWorkflow) {
             endpoint = `database/global/assets/${assetId}/workflows/${workflowId}`;
         } else {
             endpoint = `database/${databaseId}/assets/${assetId}/workflows/${workflowId}`;
         }
-        
+
         // Include fileKey in request body if provided
         const body = fileKey ? { fileKey } : {};
         const response = await api.post("api", endpoint, { body });
-        
+
         if (response.message) {
             if (
                 response.message.indexOf("error") !== -1 ||
@@ -179,10 +181,10 @@ export const saveWorkflow = async ({ config }, api = API) => {
     try {
         // Check if this is a global workflow (databaseId is empty string)
         const isGlobalWorkflow = config?.body?.databaseId === "";
-        
+
         // Use different endpoint for global workflows
         const endpoint = isGlobalWorkflow ? "database/global/workflows" : "workflows";
-        
+
         const response = await api.put("api", endpoint, config || config.body);
         if (response.message) {
             if (
@@ -237,16 +239,16 @@ export const fetchAllDatabases = async (api = API) => {
     try {
         let response = await api.get("api", "database", {});
         console.log("Raw databases response:", response);
-        
+
         // If response is directly an array, return it
         if (Array.isArray(response)) {
             return response;
         }
-        
+
         // If response has Items property, process it
         let items = [];
         const init = { queryStringParameters: { startingToken: null } };
-        
+
         if (response && response.Items) {
             items = items.concat(response.Items);
             while (response.NextToken) {
@@ -269,7 +271,7 @@ export const fetchAllDatabases = async (api = API) => {
             }
             return items;
         }
-        
+
         // If no items found, return empty array instead of false
         return [];
     } catch (error) {
@@ -292,26 +294,27 @@ export const fetchAsset = async ({ databaseId, assetId, showArchived = false }, 
         if (databaseId && assetId) {
             response = await api.get("api", `database/${databaseId}/assets/${assetId}`, {
                 queryStringParameters: {
-                    showArchived: showArchived.toString()
-                }
+                    showArchived: showArchived.toString(),
+                },
             });
-            
+
             // Handle the new API response structure
             // If response has a message field and it contains "error" or "Error", it's an error message
-            if (response.message && (
-                response.message.indexOf && (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1)
-            )) {
+            if (
+                response.message &&
+                response.message.indexOf &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
+            ) {
                 console.log("Error fetching asset:", response.message);
                 return response.message;
             }
-            
+
             // If response has a message field, return it (for backward compatibility)
             if (response.message) {
                 return response.message;
             }
-            
+
             // Otherwise, return the response directly (new API structure)
             return response;
         } else {
@@ -548,8 +551,6 @@ export const fetchConstraints = async (api = API) => {
     }
 };
 
-
-
 /**
  * Returns array of all the comments that are attached to a given assetId
  * @returns {Promise<boolean|{message}|any>}
@@ -604,7 +605,6 @@ export const deleteComment = async ({ assetId, assetVersionIdAndCommentId }, api
     }
 };
 
-
 /**
  * Returns array of all assets the current user can access for a given database, or false if error.
  * @param {Object} params - Parameters object
@@ -615,30 +615,27 @@ export const deleteComment = async ({ assetId, assetVersionIdAndCommentId }, api
  * @param {string} params.startingToken - Pagination token (optional)
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchDatabaseAssets = async ({ 
-    databaseId, 
-    showArchived = false, 
-    maxItems = 1000, 
-    pageSize = 1000, 
-    startingToken = null 
-}, api = API) => {
+export const fetchDatabaseAssets = async (
+    { databaseId, showArchived = false, maxItems = 1000, pageSize = 1000, startingToken = null },
+    api = API
+) => {
     try {
         let response;
         if (databaseId) {
             const queryParams = {
                 showArchived: showArchived.toString(),
                 maxItems: maxItems.toString(),
-                pageSize: pageSize.toString()
+                pageSize: pageSize.toString(),
             };
-            
+
             if (startingToken) {
                 queryParams.startingToken = startingToken;
             }
-            
+
             response = await api.get("api", `database/${databaseId}/assets`, {
-                queryStringParameters: queryParams
+                queryStringParameters: queryParams,
             });
-            
+
             let items = [];
             if (response.message) {
                 if (response.message.Items) {
@@ -646,7 +643,7 @@ export const fetchDatabaseAssets = async ({
                     while (response.message.NextToken) {
                         queryParams.startingToken = response.message.NextToken;
                         response = await api.get("api", `database/${databaseId}/assets`, {
-                            queryStringParameters: queryParams
+                            queryStringParameters: queryParams,
                         });
                         items = items.concat(response.message.Items);
                     }
@@ -673,27 +670,25 @@ export const fetchDatabaseAssets = async ({
  * @param {string} params.startingToken - Pagination token (optional)
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchAllAssets = async ({ 
-    showArchived = false, 
-    maxItems = 1000, 
-    pageSize = 1000, 
-    startingToken = null 
-} = {}, api = API) => {
+export const fetchAllAssets = async (
+    { showArchived = false, maxItems = 1000, pageSize = 1000, startingToken = null } = {},
+    api = API
+) => {
     try {
         const queryParams = {
             showArchived: showArchived.toString(),
             maxItems: maxItems.toString(),
-            pageSize: pageSize.toString()
+            pageSize: pageSize.toString(),
         };
-        
+
         if (startingToken) {
             queryParams.startingToken = startingToken;
         }
-        
+
         let response = await api.get("api", `assets`, {
-            queryStringParameters: queryParams
+            queryStringParameters: queryParams,
         });
-        
+
         let items = [];
         if (response.message) {
             if (response.message.Items) {
@@ -701,7 +696,7 @@ export const fetchAllAssets = async ({
                 while (response.message.NextToken) {
                     queryParams.startingToken = response.message.NextToken;
                     response = await api.get("api", `assets`, {
-                        queryStringParameters: queryParams
+                        queryStringParameters: queryParams,
                     });
                     items = items.concat(response.message.Items);
                 }
@@ -760,7 +755,7 @@ export const fetchDatabasePipelines = async ({ databaseId }, api = API) => {
             console.log("not fetching pipelines");
             return false;
         }
-        
+
         // If databaseId is an empty string, fetch global pipelines using the global database route
         if (databaseId === "") {
             response = await api.get("api", `database/global/pipelines`, {});
@@ -768,7 +763,7 @@ export const fetchDatabasePipelines = async ({ databaseId }, api = API) => {
             // Otherwise fetch database-specific pipelines
             response = await api.get("api", `database/${databaseId}/pipelines`, {});
         }
-        
+
         let items = [];
         const init = { queryStringParameters: { startingToken: null } };
         if (response.message) {
@@ -806,7 +801,7 @@ export const fetchDatabaseWorkflows = async ({ databaseId }, api = API) => {
             console.log("not fetching workflows");
             return false;
         }
-        
+
         // If databaseId is an empty string, fetch global workflows using the global database route
         if (databaseId === "") {
             response = await api.get("api", `database/global/workflows`, {});
@@ -814,7 +809,7 @@ export const fetchDatabaseWorkflows = async ({ databaseId }, api = API) => {
             // Otherwise fetch database-specific workflows
             response = await api.get("api", `database/${databaseId}/workflows`, {});
         }
-        
+
         let items = [];
         const init = { queryStringParameters: { startingToken: null } };
         if (response.message) {
@@ -874,7 +869,10 @@ export const fetchAllWorkflows = async (api = API) => {
  * Returns array of all workflow executions the current user can access for the given databaseId & assetId, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchWorkflowExecutions = async ({ databaseId, assetId, workflowId = '', isGlobalWorkflow = false }, api = API) => {
+export const fetchWorkflowExecutions = async (
+    { databaseId, assetId, workflowId = "", isGlobalWorkflow = false },
+    api = API
+) => {
     try {
         let response;
         let endpoint;
@@ -884,15 +882,15 @@ export const fetchWorkflowExecutions = async ({ databaseId, assetId, workflowId 
         if (isGlobalWorkflow) {
             dbId = "GLOBAL";
         }
-        
+
         if (assetId) {
             // Determine the endpoint based on whether it's a global workflow
-            if (workflowId == '') {
+            if (workflowId == "") {
                 endpoint = `database/${dbId}/assets/${assetId}/workflows/executions`;
             } else {
                 endpoint = `database/${dbId}/assets/${assetId}/workflows/executions/${workflowId}`;
             }
-            
+
             response = await api.get("api", endpoint, {});
             let items = [];
             const init = { queryStringParameters: { startingToken: null } };
@@ -992,10 +990,10 @@ export const createFolder = async ({ databaseId, assetId, relativeKey }, api = A
             "api",
             `database/${databaseId}/assets/${assetId}/createFolder`,
             {
-                body: { relativeKey }
+                body: { relativeKey },
             }
         );
-        
+
         if (response.message) {
             return [true, response.message];
         } else {
@@ -1007,12 +1005,14 @@ export const createFolder = async ({ databaseId, assetId, relativeKey }, api = A
     }
 };
 
-
 /**
  * Reverts a file to a specific version by creating a new current version with the contents of the specified version
  * @returns {Promise<boolean|{message}|any>}
  */
-export const revertFileVersion = async ({ databaseId, assetId, filePath, versionId }, api = API) => {
+export const revertFileVersion = async (
+    { databaseId, assetId, filePath, versionId },
+    api = API
+) => {
     try {
         if (!databaseId || !assetId || !filePath || !versionId) {
             return [false, "Missing required parameters"];
@@ -1022,7 +1022,7 @@ export const revertFileVersion = async ({ databaseId, assetId, filePath, version
             "api",
             `database/${databaseId}/assets/${assetId}/revertFileVersion/${versionId}`,
             {
-                body: { filePath }
+                body: { filePath },
             }
         );
 
@@ -1059,19 +1059,15 @@ export const updateAsset = async ({ databaseId, assetId, updateData }, api = API
             return [false, "Missing required parameters"];
         }
 
-        const response = await api.put(
-            "api",
-            `database/${databaseId}/assets/${assetId}`,
-            {
-                body: updateData
-            }
-        );
+        const response = await api.put("api", `database/${databaseId}/assets/${assetId}`, {
+            body: updateData,
+        });
 
         if (response.message) {
             if (
-                response.message.indexOf && (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1)
+                response.message.indexOf &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
             ) {
                 console.log("Update asset error:", response.message);
                 return [false, response.message];
@@ -1096,7 +1092,10 @@ export const updateAsset = async ({ databaseId, assetId, updateData }, api = API
  * @param {string} params.reason - Optional reason for archiving
  * @returns {Promise<boolean|{message}|any>}
  */
-export const archiveAsset = async ({ databaseId, assetId, confirmArchive = true, reason = "" }, api = API) => {
+export const archiveAsset = async (
+    { databaseId, assetId, confirmArchive = true, reason = "" },
+    api = API
+) => {
     try {
         if (!databaseId || !assetId) {
             return [false, "Database ID and Asset ID are required"];
@@ -1112,16 +1111,16 @@ export const archiveAsset = async ({ databaseId, assetId, confirmArchive = true,
             {
                 body: {
                     confirmArchive,
-                    reason
-                }
+                    reason,
+                },
             }
         );
 
         if (response.message) {
             if (
-                response.message.indexOf && (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1)
+                response.message.indexOf &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
             ) {
                 console.log("Archive asset error:", response.message);
                 return [false, response.message];
@@ -1146,7 +1145,10 @@ export const archiveAsset = async ({ databaseId, assetId, confirmArchive = true,
  * @param {string} params.reason - Optional reason for deletion
  * @returns {Promise<boolean|{message}|any>}
  */
-export const deleteAssetPermanent = async ({ databaseId, assetId, confirmPermanentDelete = false, reason = "" }, api = API) => {
+export const deleteAssetPermanent = async (
+    { databaseId, assetId, confirmPermanentDelete = false, reason = "" },
+    api = API
+) => {
     try {
         if (!databaseId || !assetId) {
             return [false, "Database ID and Asset ID are required"];
@@ -1162,16 +1164,16 @@ export const deleteAssetPermanent = async ({ databaseId, assetId, confirmPermane
             {
                 body: {
                     confirmPermanentDelete,
-                    reason
-                }
+                    reason,
+                },
             }
         );
 
         if (response.message) {
             if (
-                response.message.indexOf && (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1)
+                response.message.indexOf &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
             ) {
                 console.log("Delete asset error:", response.message);
                 return [false, response.message];
@@ -1195,7 +1197,7 @@ export const fetchBuckets = async (api = API) => {
     try {
         let response = await api.get("api", "buckets", {});
         console.log("Raw buckets response:", response);
-        
+
         // Direct return of the response which should contain Items array
         return response;
     } catch (error) {
@@ -1218,10 +1220,10 @@ export const createDatabase = async ({ databaseId, description, defaultBucketId 
             body: {
                 databaseId,
                 description,
-                defaultBucketId
-            }
+                defaultBucketId,
+            },
         });
-        
+
         if (response.message) {
             console.log("create database", response);
             return [true, response.message];
@@ -1236,10 +1238,10 @@ export const createDatabase = async ({ databaseId, description, defaultBucketId 
 
 export const ACTIONS = {
     CREATE: {
-        DATABASE: createDatabase
+        DATABASE: createDatabase,
     },
     UPDATE: {
-        ASSET: updateAsset
+        ASSET: updateAsset,
     },
     READ: {
         ASSET: fetchAsset,
@@ -1247,7 +1249,7 @@ export const ACTIONS = {
     LIST: {},
     DELETE: {
         ASSET_ARCHIVE: archiveAsset,
-        ASSET_PERMANENT: deleteAssetPermanent
+        ASSET_PERMANENT: deleteAssetPermanent,
     },
     EXECUTE: {},
     REVERT: {},

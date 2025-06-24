@@ -513,7 +513,7 @@ const Auth: React.FC<AuthProps> = (props) => {
     //Once logged in, get/set other configuration and profile information
     useEffect(() => {
         //Secure Config Fetch
-        if (config && (!config.featuresEnabled) && isLoggedIn) {
+        if (config && !config.featuresEnabled && isLoggedIn) {
             getSecureConfig()
                 .then((value) => {
                     config.featuresEnabled = value.featuresEnabled;

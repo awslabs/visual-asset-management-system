@@ -424,7 +424,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                                                 { label: "All", value: "all" },
                                                 //List every database from "databases" variable and then map to result aggregation to display (doc_count) next to each
                                                 //We do this because opensearch has a max items it will return in a query which may not be everything across aggregated databases
-                                                //Without this, you wouldn't be able to search on other databases not listed due to trimmed results. 
+                                                //Without this, you wouldn't be able to search on other databases not listed due to trimmed results.
                                                 // ...(databases?.map((b: any) => {
                                                 //     var count = 0
                                                 //     //Map through result aggregation to find doc_count for each database

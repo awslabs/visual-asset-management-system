@@ -20,7 +20,10 @@ import {
 } from "../../../../../helper/security";
 import { generateUniqueNameHash } from "../../../../../helper/security";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
-import { grantReadWritePermissionsToAllAssetBuckets, grantReadPermissionsToAllAssetBuckets } from "../../../../../helper/security";
+import {
+    grantReadWritePermissionsToAllAssetBuckets,
+    grantReadPermissionsToAllAssetBuckets,
+} from "../../../../../helper/security";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
 
 export function buildVamsExecute3dBasicConversionPipelineFunction(

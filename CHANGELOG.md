@@ -8,28 +8,29 @@ This version includes significant enhancements to VAMS infrastructure, a complet
 
 ### ⚠ BREAKING CHANGES
 
-    -   CDK Configuration files must be updated to include the new required fields. See ConfigurationGuide.md and template configuration files for new formats. 
-    -   Asset and Database table formats have changed which require using the migration scripts after CDK deployment to update the new field values. See v2.2_to_v2.3_migration_README.md for details on using the migration scripts. 
+    -   CDK Configuration files must be updated to include the new required fields. See ConfigurationGuide.md and template configuration files for new formats.
+    -   Asset and Database table formats have changed which require using the migration scripts after CDK deployment to update the new field values. See v2.2_to_v2.3_migration_README.md for details on using the migration scripts.
 
 ### Features
+
 -   Database, Pipeline, Workflow, Tag, Tag Types, Role, and Constraints id/names no longer need to follow as strict regex guidelines. New Regex: ^[-_a-zA-Z0-9]{3,63}$
--   AssetId no longer needs to follow as strict regex guidelines. New Regex (regular filename regex): ^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$'
+-   AssetId no longer needs to follow as strict regex guidelines. New Regex (regular filename regex): ^(?!._[<>:"\/\\|?_])(?!.\*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$'
 -   File paths no longer need to follow as strict regex guidelines and now allow for deep pathing. Some restrictions apply to specific input paths for auxiliary asset previews and pipeline output paths.
--   The asset upload API and backend along with many associated supporting asset API backends have been rewritten to support new features, security, and performance improvements. 
+-   The asset upload API and backend along with many associated supporting asset API backends have been rewritten to support new features, security, and performance improvements.
     -   The old uploadAsset, uploadAssetWorkflow, and s3scoped access APIs and backend have been removed
-    -   A new uploadFile (initialize, complete, createFolder), createAsset, and assetService (edit asset) have been created to support separation of assets and files. UploadFile now fully supports S3 Signed URL uploads for better security and performance (replaces providing UI with scoped S3 access). 
-    -   ScopedS3Access removal provides benefits as previous implementations had issues with scoped role timeouts, different authentication implementations in VAMS, parallelization issues which prevented file validation, asset file overwrite issues, and more. 
+    -   A new uploadFile (initialize, complete, createFolder), createAsset, and assetService (edit asset) have been created to support separation of assets and files. UploadFile now fully supports S3 Signed URL uploads for better security and performance (replaces providing UI with scoped S3 access).
+    -   ScopedS3Access removal provides benefits as previous implementations had issues with scoped role timeouts, different authentication implementations in VAMS, parallelization issues which prevented file validation, asset file overwrite issues, and more.
     -   New AssetUploads DynamoDB created to track uploads between initializations and completions
-    -   IngestAsset API, intended for backend data system ingresses, wraps the new APIs as an all-in-one API caller. 
+    -   IngestAsset API, intended for backend data system ingresses, wraps the new APIs as an all-in-one API caller.
     -   UploadFile is now split into two stages for upload which allow for multiple files and multiple parts per file to be specified for better performant uploads of large files
     -   Assets now are better built to support a range of different files, including no files. The separation allows for better reliance on S3 functionalities to support file versioning.
     -   AssetType on assets are now specified as "none" (no files on asset), "folder" (multiple files on an asset), or single file extension (single file on asset and provides the extension, as before)
     -   File Uploads will go to a temporary S3 location on stage 1 while stage 2 upload completions performs checks, including for malicious file extensions or MIME types, before moving files into an asset for versioning
-    -   UploadFile now supports upload types for assetFiles and assetPreview to better support the separation of the uploads. This will allow for future enhancement support of adding filePreviews, separate of assets. 
-    -   Workflow execution final steps which return files to an asset are now rigged to use the new uploadFile lambda to support all file checks before versioning as part of an asset and to now support pipelines that return asset previews. This process follows an alternate external upload stage where presigned URLs are not needed due to the direct access nature of pipelines into the assets bucket (still uses temporary locations for security). 
+    -   UploadFile now supports upload types for assetFiles and assetPreview to better support the separation of the uploads. This will allow for future enhancement support of adding filePreviews, separate of assets.
+    -   Workflow execution final steps which return files to an asset are now rigged to use the new uploadFile lambda to support all file checks before versioning as part of an asset and to now support pipelines that return asset previews. This process follows an alternate external upload stage where presigned URLs are not needed due to the direct access nature of pipelines into the assets bucket (still uses temporary locations for security).
     -   AssetFiles API now brings back additional information for each file such as size, version, version created, and if the file is a versioned prefix folder or a file
     -   Support for empty asset creation and/or throughout life cycle of an asset (uploads no longer required during asset creation)
-    -   Asset uploads in the UI now keep their original filenames and no longer change them to the asset name. 
+    -   Asset uploads in the UI now keep their original filenames and no longer change them to the asset name.
     -   The concept of "primary file" in an asset has been removed to support assets being truly multi-file
 -   **Web** The front-end asset upload has been heavily modified to support the new backend asset changes
     -   Now supports choosing multiple files and/or entire folders
@@ -37,7 +38,7 @@ This version includes significant enhancements to VAMS infrastructure, a complet
     -   Supports the presigned URL and multi-stage API calls needed now for an upload (including support for splitting large files into multiple parts for parallel upload)
     -   Supports stage and file error recovery options, including proceeding with certain failed uploads that will be discarded
     -   Comments are no longer a supported field as part of upload, as this functionality has been moved to creating asset versions
--   The assetFiles API now supports additional paths for functionality including `../fileInfo`, `../moveFile`, `../copyFile`, `../archiveFile`, `../deleteFile`, `../revertFileVersion`. ListFiles now provides additional data about each file. 
+-   The assetFiles API now supports additional paths for functionality including `../fileInfo`, `../moveFile`, `../copyFile`, `../archiveFile`, `../deleteFile`, `../revertFileVersion`. ListFiles now provides additional data about each file.
 -   **Web** The front-end asset download for multiple files has been updated to support downloading an entire folder's worth of files in parallel
     -   Note: This still fetches individual files based on their presigned URL for automation, it does not pre-ZIP files on a server and may still cause issues if hundreds or thousands of files need to be downloaded
 -   **Web** The asset viewer file manager has been rewritten to support new features and richer user experience
@@ -81,11 +82,13 @@ This version includes significant enhancements to VAMS infrastructure, a complet
 -   Standardized API route paths that had /databases* (plural) to /database* (singular)
 
 ### Bug Fixes
+
 -   Fixed various bugs with asset comments editing and deleting
 -   Fixed various UI and backend bugs related to the asset management overhaul
 -   For cognito deployments, email was not getting added to the the token which could cause problems with setting auth profile and subscription email registrations
 
 ### Chores
+
 -   Added more input variables for use in pipeline lambdas called such as bucketAssetAuxiliary, bucketAsset, and inputAssetFileKey. This is in addition to the predetermined "easy" paths setup for pipeline use
 -   Added more error checks and outer workflow abort procedures for workflows/pipelines in use-case pipelines
 -   Updated auxiliary asset handling to match the new asset location keys and handling
@@ -150,7 +153,7 @@ This version includes significant enhancements to VAMS infrastructure, a complet
 
 -   **Web** Cleaned up unused web files and consolidated functionalities for authentication and amplify configuration setting.
 -   Upgraded lambda and all associated libraries (including use-case pipelines) to use Python 3.12 runtimes.
--   Upgraded infrastructure NPM package dependencies. Note: This switches CDK to use Node 20.x runtimes for Lambda's used for CustomResources or S3 Bucket deployments. 
+-   Upgraded infrastructure NPM package dependencies. Note: This switches CDK to use Node 20.x runtimes for Lambda's used for CustomResources or S3 Bucket deployments.
 -   Optimized some backend lambda initialization code in various functions and globally in the casbin authorization functions for cold start performance improvement.
 -   Updated S3 bucket name for WebAppAccessLogs for ALB deployment (to be based on the domain name used `<ALBDomainName>-webappaccesslogs`) to help with organization policy exceptions.
 -   Added scripts and documentation for external oauth IDP and API local development servers.

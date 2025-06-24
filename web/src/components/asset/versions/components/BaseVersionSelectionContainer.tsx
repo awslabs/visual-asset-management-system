@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React from "react";
 import {
     Box,
     Button,
@@ -12,8 +12,8 @@ import {
     Spinner,
     Table,
     Badge,
-    Pagination
-} from '@cloudscape-design/components';
+    Pagination,
+} from "@cloudscape-design/components";
 
 interface AssetVersion {
     Version: number;
@@ -44,7 +44,7 @@ export const BaseVersionSelectionContainer: React.FC<BaseVersionSelectionContain
     currentVersionPage,
     setCurrentVersionPage,
     versionsPerPage,
-    paginatedVersions
+    paginatedVersions,
 }) => {
     return (
         <Container header={<Header variant="h3">Select Base Version</Header>}>
@@ -57,55 +57,73 @@ export const BaseVersionSelectionContainer: React.FC<BaseVersionSelectionContain
                 <Table
                     columnDefinitions={[
                         {
-                            id: 'version',
-                            header: 'Version',
+                            id: "version",
+                            header: "Version",
                             cell: (item: AssetVersion) => (
                                 <Box>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <div
+                                        style={{
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: "8px",
+                                        }}
+                                    >
                                         v{item.Version}
                                         {item.isCurrent && <Badge color="blue">Current</Badge>}
                                     </div>
                                 </Box>
-                            )
+                            ),
                         },
                         {
-                            id: 'dateModified',
-                            header: 'Date Created',
-                            cell: (item: AssetVersion) => formatDate(item.DateModified)
+                            id: "dateModified",
+                            header: "Date Created",
+                            cell: (item: AssetVersion) => formatDate(item.DateModified),
                         },
                         {
-                            id: 'createdBy',
-                            header: 'Created By',
-                            cell: (item: AssetVersion) => item.createdBy || 'System'
+                            id: "createdBy",
+                            header: "Created By",
+                            cell: (item: AssetVersion) => item.createdBy || "System",
                         },
                         {
-                            id: 'comment',
-                            header: 'Comment',
-                            cell: (item: AssetVersion) => item.Comment || '-'
+                            id: "comment",
+                            header: "Comment",
+                            cell: (item: AssetVersion) => item.Comment || "-",
                         },
                         {
-                            id: 'actions',
-                            header: 'Actions',
+                            id: "actions",
+                            header: "Actions",
                             cell: (item: AssetVersion) => (
                                 <Button
                                     onClick={() => selectVersionAsBase(item)}
-                                    variant={selectedVersion?.Version === item.Version ? "primary" : "normal"}
+                                    variant={
+                                        selectedVersion?.Version === item.Version
+                                            ? "primary"
+                                            : "normal"
+                                    }
                                 >
-                                    {selectedVersion?.Version === item.Version ? "Selected" : "Use as Base"}
+                                    {selectedVersion?.Version === item.Version
+                                        ? "Selected"
+                                        : "Use as Base"}
                                 </Button>
-                            )
-                        }
+                            ),
+                        },
                     ]}
                     items={paginatedVersions}
                     pagination={
                         <Pagination
                             currentPageIndex={currentVersionPage}
                             pagesCount={Math.max(1, Math.ceil(versions.length / versionsPerPage))}
-                            onChange={({ detail }) => setCurrentVersionPage(detail.currentPageIndex)}
+                            onChange={({ detail }) =>
+                                setCurrentVersionPage(detail.currentPageIndex)
+                            }
                             ariaLabels={{
-                                nextPageLabel: 'Next page',
-                                previousPageLabel: 'Previous page',
-                                pageLabel: pageNumber => `Page ${pageNumber} of ${Math.max(1, Math.ceil(versions.length / versionsPerPage))}`
+                                nextPageLabel: "Next page",
+                                previousPageLabel: "Previous page",
+                                pageLabel: (pageNumber) =>
+                                    `Page ${pageNumber} of ${Math.max(
+                                        1,
+                                        Math.ceil(versions.length / versionsPerPage)
+                                    )}`,
                             }}
                         />
                     }

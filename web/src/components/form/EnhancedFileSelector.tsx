@@ -99,10 +99,7 @@ export default function EnhancedFileSelector({
                 } else if (entry.kind === "directory") {
                     // Process subdirectory
                     const subDirPath = entry.name;
-                    const processSubDir = async (
-                        dirHandle: any,
-                        currentPath: string
-                    ) => {
+                    const processSubDir = async (dirHandle: any, currentPath: string) => {
                         for await (const subEntry of dirHandle.values()) {
                             if (subEntry.kind === "file") {
                                 fileHandles.push({
@@ -110,10 +107,7 @@ export default function EnhancedFileSelector({
                                     path: `${currentPath}/${subEntry.name}`,
                                 });
                             } else if (subEntry.kind === "directory") {
-                                await processSubDir(
-                                    subEntry,
-                                    `${currentPath}/${subEntry.name}`
-                                );
+                                await processSubDir(subEntry, `${currentPath}/${subEntry.name}`);
                             }
                         }
                     };
@@ -216,11 +210,7 @@ export default function EnhancedFileSelector({
                         disabled={disabled || isLoading}
                         iconName="file"
                     >
-                        {isLoading ? (
-                            <Spinner />
-                        ) : (
-                            `Select ${multiFile ? "Files" : "File"}`
-                        )}
+                        {isLoading ? <Spinner /> : `Select ${multiFile ? "Files" : "File"}`}
                     </Button>
                 )}
 

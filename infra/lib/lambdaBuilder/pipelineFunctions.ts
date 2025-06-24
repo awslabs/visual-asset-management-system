@@ -136,36 +136,33 @@ export function buildCreatePipelineFunction(
     return createPipelineFunction;
 }
 
-function createRoleToAttachToLambdaPipelines(
-    scope: Construct,
-    kmsKey?: kms.IKey
-) {
+function createRoleToAttachToLambdaPipelines(scope: Construct, kmsKey?: kms.IKey) {
     const newPipelineLambdaRole = new iam.Role(scope, "lambdaPipelineRole", {
         assumedBy: Service("LAMBDA").Principal,
         inlinePolicies: {
             ReadWriteAssetBucketPolicy: new iam.PolicyDocument({
                 statements: [
-                // Add permissions for all asset buckets from the global array
-                ...s3AssetBuckets.getS3AssetBucketRecords().map(record => {
-                    const prefix = record.prefix || '/';
-                    // Ensure the prefix ends with a slash for proper path construction
-                    const normalizedPrefix = prefix.endsWith('/') ? prefix : prefix + '/';
-                    
-                    return new iam.PolicyStatement({
-                        effect: iam.Effect.ALLOW,
-                        actions: [
-                            "s3:PutObject",
-                            "s3:GetObject",
-                            "s3:ListBucket",
-                            "s3:DeleteObject",
-                            "s3:GetObjectVersion",
-                        ],
-                        resources: [
-                            record.bucket.bucketArn,
-                            `${record.bucket.bucketArn}${normalizedPrefix}*`
-                        ],
-                    });
-                }),
+                    // Add permissions for all asset buckets from the global array
+                    ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
+                        const prefix = record.prefix || "/";
+                        // Ensure the prefix ends with a slash for proper path construction
+                        const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+
+                        return new iam.PolicyStatement({
+                            effect: iam.Effect.ALLOW,
+                            actions: [
+                                "s3:PutObject",
+                                "s3:GetObject",
+                                "s3:ListBucket",
+                                "s3:DeleteObject",
+                                "s3:GetObjectVersion",
+                            ],
+                            resources: [
+                                record.bucket.bucketArn,
+                                `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                            ],
+                        });
+                    }),
                 ],
             }),
         },

@@ -9,12 +9,15 @@ import {
     Alert,
     ProgressBar,
     Header,
-    Container
+    Container,
 } from "@cloudscape-design/components";
 import { FileTree } from "../types/FileManagerTypes";
 import { FolderTreeView } from "../components/FolderTreeView";
 import { AssetSelector, Asset } from "../components/AssetSelector";
-import { processMultipleFileOperations, FileOperationResult } from "../../../services/FileOperationsService";
+import {
+    processMultipleFileOperations,
+    FileOperationResult,
+} from "../../../services/FileOperationsService";
 import { addFiles } from "../utils/FileManagerUtils";
 import "./MoveFilesModal.css";
 
@@ -25,11 +28,11 @@ export interface MoveFilesModalProps {
     currentAssetId: string;
     databaseId: string;
     fileTreeData: FileTree;
-    onSuccess: (operation: 'move' | 'copy', results: FileOperationResult[]) => void;
+    onSuccess: (operation: "move" | "copy", results: FileOperationResult[]) => void;
 }
 
-type OperationMode = 'move' | 'copy';
-type CopyTarget = 'same' | 'different';
+type OperationMode = "move" | "copy";
+type CopyTarget = "same" | "different";
 
 export function MoveFilesModal({
     visible,
@@ -38,13 +41,13 @@ export function MoveFilesModal({
     currentAssetId,
     databaseId,
     fileTreeData,
-    onSuccess
+    onSuccess,
 }: MoveFilesModalProps) {
     // State management
-    const [operationMode, setOperationMode] = useState<OperationMode>('move');
-    const [copyTarget, setCopyTarget] = useState<CopyTarget>('same');
+    const [operationMode, setOperationMode] = useState<OperationMode>("move");
+    const [copyTarget, setCopyTarget] = useState<CopyTarget>("same");
     const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
-    const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['/']));
+    const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(["/"]));
     const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
     const [targetAssetFiles, setTargetAssetFiles] = useState<any[]>([]);
     const [targetFileTree, setTargetFileTree] = useState<FileTree | null>(null);
@@ -57,10 +60,10 @@ export function MoveFilesModal({
     // Reset state when modal opens/closes
     useEffect(() => {
         if (visible) {
-            setOperationMode('move');
-            setCopyTarget('same');
+            setOperationMode("move");
+            setCopyTarget("same");
             setSelectedFolder(null);
-            setExpandedFolders(new Set(['/']));
+            setExpandedFolders(new Set(["/"]));
             setSelectedAsset(null);
             setTargetAssetFiles([]);
             setTargetFileTree(null);
@@ -100,7 +103,7 @@ export function MoveFilesModal({
     // Handle asset files load for cross-asset copy
     const handleAssetFilesLoad = (assetId: string, files: any[]) => {
         setTargetAssetFiles(files);
-        
+
         // Build file tree for the target asset
         if (files.length > 0) {
             const initialTree: FileTree = {
@@ -112,16 +115,16 @@ export function MoveFilesModal({
                 expanded: true,
                 subTree: [],
             };
-            
+
             const tree = addFiles(files, initialTree);
             setTargetFileTree(tree);
-            setExpandedFolders(new Set(['/']));
+            setExpandedFolders(new Set(["/"]));
         }
     };
 
     // Get current tree data based on mode and target
     const getCurrentTreeData = (): FileTree => {
-        if (operationMode === 'copy' && copyTarget === 'different' && targetFileTree) {
+        if (operationMode === "copy" && copyTarget === "different" && targetFileTree) {
             return targetFileTree;
         }
         return fileTreeData;
@@ -130,19 +133,19 @@ export function MoveFilesModal({
     // Validate selection
     const isValidSelection = (): boolean => {
         if (!selectedFolder) return false;
-        
-        if (operationMode === 'copy' && copyTarget === 'different') {
+
+        if (operationMode === "copy" && copyTarget === "different") {
             return selectedAsset !== null && selectedFolder !== null;
         }
-        
+
         return selectedFolder !== null;
     };
 
     // Get button text
     const getButtonText = (): string => {
         const fileCount = selectedFiles.length;
-        const fileText = fileCount === 1 ? 'File' : 'Files';
-        return operationMode === 'move' 
+        const fileText = fileCount === 1 ? "File" : "Files";
+        return operationMode === "move"
             ? `Move ${fileCount} ${fileText}`
             : `Copy ${fileCount} ${fileText}`;
     };
@@ -159,10 +162,11 @@ export function MoveFilesModal({
         setError(null);
 
         try {
-            const filePaths = selectedFiles.map(file => file.relativePath);
-            const destinationAssetId = operationMode === 'copy' && copyTarget === 'different' 
-                ? selectedAsset?.assetId 
-                : undefined;
+            const filePaths = selectedFiles.map((file) => file.relativePath);
+            const destinationAssetId =
+                operationMode === "copy" && copyTarget === "different"
+                    ? selectedAsset?.assetId
+                    : undefined;
 
             const results = await processMultipleFileOperations(
                 databaseId,
@@ -175,9 +179,9 @@ export function MoveFilesModal({
 
             setOperationResults(results);
             setShowResults(true);
-            
+
             // Check if all operations were successful
-            const allSuccessful = results.every(result => result.success);
+            const allSuccessful = results.every((result) => result.success);
             if (allSuccessful) {
                 onSuccess(operationMode, results);
             }
@@ -200,8 +204,8 @@ export function MoveFilesModal({
     const renderResults = () => {
         if (!showResults) return null;
 
-        const successCount = operationResults.filter(r => r.success).length;
-        const failureCount = operationResults.filter(r => !r.success).length;
+        const successCount = operationResults.filter((r) => r.success).length;
+        const failureCount = operationResults.filter((r) => !r.success).length;
 
         return (
             <Container header={<Header variant="h3">Operation Results</Header>}>
@@ -209,28 +213,30 @@ export function MoveFilesModal({
                     <Box>
                         <strong>Summary:</strong> {successCount} successful, {failureCount} failed
                     </Box>
-                    
+
                     {failureCount > 0 && (
                         <Alert type="error" header="Some operations failed">
-                            <ul style={{ margin: 0, paddingLeft: '20px' }}>
+                            <ul style={{ margin: 0, paddingLeft: "20px" }}>
                                 {operationResults
-                                    .filter(r => !r.success)
+                                    .filter((r) => !r.success)
                                     .map((result, index) => (
                                         <li key={index}>
                                             <strong>{result.filePath}:</strong> {result.error}
                                         </li>
-                                    ))
-                                }
+                                    ))}
                             </ul>
                         </Alert>
                     )}
-                    
+
                     {successCount > 0 && (
-                        <Alert type="success" header={`Successfully ${operationMode}d ${successCount} file(s)`}>
+                        <Alert
+                            type="success"
+                            header={`Successfully ${operationMode}d ${successCount} file(s)`}
+                        >
                             Files have been {operationMode}d to: {selectedFolder}
-                            {operationMode === 'copy' && copyTarget === 'different' && selectedAsset && (
-                                <> in asset: {selectedAsset.assetName}</>
-                            )}
+                            {operationMode === "copy" &&
+                                copyTarget === "different" &&
+                                selectedAsset && <> in asset: {selectedAsset.assetName}</>}
                         </Alert>
                     )}
                 </SpaceBetween>
@@ -243,15 +249,11 @@ export function MoveFilesModal({
             visible={visible}
             onDismiss={handleDismiss}
             size="large"
-            header={`${operationMode === 'move' ? 'Move' : 'Copy'} Files`}
+            header={`${operationMode === "move" ? "Move" : "Copy"} Files`}
             footer={
                 <Box float="right">
                     <SpaceBetween direction="horizontal" size="xs">
-                        <Button 
-                            variant="link" 
-                            onClick={handleDismiss}
-                            disabled={isProcessing}
-                        >
+                        <Button variant="link" onClick={handleDismiss} disabled={isProcessing}>
                             Cancel
                         </Button>
                         <Button
@@ -271,9 +273,13 @@ export function MoveFilesModal({
                 <Container header={<Header variant="h3">Selected Files</Header>}>
                     <Box>
                         {selectedFiles.length === 1 ? (
-                            <span>Moving/copying: <strong>{selectedFiles[0].displayName}</strong></span>
+                            <span>
+                                Moving/copying: <strong>{selectedFiles[0].displayName}</strong>
+                            </span>
                         ) : (
-                            <span>Moving/copying <strong>{selectedFiles.length} files</strong></span>
+                            <span>
+                                Moving/copying <strong>{selectedFiles.length} files</strong>
+                            </span>
                         )}
                     </Box>
                 </Container>
@@ -282,37 +288,42 @@ export function MoveFilesModal({
                 <FormField label="Operation">
                     <SegmentedControl
                         selectedId={operationMode}
-                        onChange={({ detail }) => setOperationMode(detail.selectedId as OperationMode)}
+                        onChange={({ detail }) =>
+                            setOperationMode(detail.selectedId as OperationMode)
+                        }
                         options={[
                             { text: "Move", id: "move" },
-                            { text: "Copy", id: "copy" }
+                            { text: "Copy", id: "copy" },
                         ]}
                     />
                 </FormField>
 
                 {/* Move Mode Note */}
-                {operationMode === 'move' && (
+                {operationMode === "move" && (
                     <Alert type="info" statusIconAriaLabel="Info">
-                        This will archive the original file and a copy the latest version to the new location.
+                        This will archive the original file and a copy the latest version to the new
+                        location.
                     </Alert>
                 )}
 
                 {/* Copy Target Selection */}
-                {operationMode === 'copy' && (
+                {operationMode === "copy" && (
                     <FormField label="Copy to">
                         <SegmentedControl
                             selectedId={copyTarget}
-                            onChange={({ detail }) => setCopyTarget(detail.selectedId as CopyTarget)}
+                            onChange={({ detail }) =>
+                                setCopyTarget(detail.selectedId as CopyTarget)
+                            }
                             options={[
                                 { text: "Same Asset", id: "same" },
-                                { text: "Different Asset", id: "different" }
+                                { text: "Different Asset", id: "different" },
                             ]}
                         />
                     </FormField>
                 )}
 
                 {/* Asset Selector for Different Asset Copy */}
-                {operationMode === 'copy' && copyTarget === 'different' && (
+                {operationMode === "copy" && copyTarget === "different" && (
                     <AssetSelector
                         currentAssetId={currentAssetId}
                         currentDatabaseId={databaseId}
@@ -323,10 +334,10 @@ export function MoveFilesModal({
                 )}
 
                 {/* Folder Selection */}
-                {(operationMode === 'move' || 
-                  (operationMode === 'copy' && copyTarget === 'same') ||
-                  (operationMode === 'copy' && copyTarget === 'different' && selectedAsset)) && (
-                    <FormField 
+                {(operationMode === "move" ||
+                    (operationMode === "copy" && copyTarget === "same") ||
+                    (operationMode === "copy" && copyTarget === "different" && selectedAsset)) && (
+                    <FormField
                         label="Destination Folder"
                         description="Select a folder to move/copy the files to"
                         errorText={error}
@@ -347,7 +358,9 @@ export function MoveFilesModal({
                         <ProgressBar
                             value={processingProgress}
                             label="Processing files..."
-                            description={`${operationMode === 'move' ? 'Moving' : 'Copying'} ${selectedFiles.length} file(s)`}
+                            description={`${operationMode === "move" ? "Moving" : "Copying"} ${
+                                selectedFiles.length
+                            } file(s)`}
                         />
                     </Box>
                 )}

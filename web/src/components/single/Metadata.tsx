@@ -45,12 +45,16 @@ export const put = async (
             prefix = "/" + prefix;
         }
 
-        return API.put("api", `database/${databaseId}/assets/${assetId}/metadata?prefix=${prefix}`, {
-            body: {
-                version: "1",
-                metadata: record,
-            },
-        });
+        return API.put(
+            "api",
+            `database/${databaseId}/assets/${assetId}/metadata?prefix=${prefix}`,
+            {
+                body: {
+                    version: "1",
+                    metadata: record,
+                },
+            }
+        );
     } else {
         return API.put("api", `database/${databaseId}/assets/${assetId}/metadata`, {
             body: {
@@ -67,8 +71,12 @@ const get = async (databaseId: string, assetId: string, prefix?: string): Promis
         if (!prefix.startsWith("/")) {
             prefix = "/" + prefix;
         }
-        
-        return API.get("api", `database/${databaseId}/assets/${assetId}/metadata?prefix=${prefix}`, {});
+
+        return API.get(
+            "api",
+            `database/${databaseId}/assets/${assetId}/metadata?prefix=${prefix}`,
+            {}
+        );
     } else {
         return API.get("api", `database/${databaseId}/assets/${assetId}/metadata`, {});
     }

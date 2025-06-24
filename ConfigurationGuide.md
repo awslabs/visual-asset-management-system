@@ -22,11 +22,11 @@ Some configuration options can be overriden at time of deployment with either en
 
 -   `app.assetBuckets.createNewBucket` | default: true | #Controls whether to create a new S3 bucket for assets. If set to false, you must define external asset buckets.
 -   `app.assetBuckets.defaultNewBucketSyncDatabaseId` | default: default | #Specifies the database ID to sync with the new bucket. Required when createNewBucket is true.
--   `app.assetBuckets.externalAssetBuckets[]` | default: NULL | #Configuration for defining use of preeixsting external asset buckets (array). Buckets can be added over time through deployments. External buckets need additional IAM bucket policies added, see DeveloperGuide.md for more information. 
+-   `app.assetBuckets.externalAssetBuckets[]` | default: NULL | #Configuration for defining use of preeixsting external asset buckets (array). Buckets can be added over time through deployments. External buckets need additional IAM bucket policies added, see DeveloperGuide.md for more information.
 -   `app.assetBuckets.externalAssetBuckets[].bucketArn` | default: NULL | #The ARN of the existing bucket to add to VAMS
 -   `app.assetBuckets.externalAssetBuckets[].baseAssetsPrefix` | default: NULL | #The base prefix to start using for catalogging and syncing assets. If at the base of the S3 bucket, use `/`
 -   `app.assetBuckets.externalAssetBuckets[].defaultSyncDatabaseId` | default: NULL | #The database ID to sync asset changes to if adding new asset folders direct to S3. If database ID does
-not exist when syncing, the system will attempt to create a new database with this ID and bucket/prefix. 
+    not exist when syncing, the system will attempt to create a new database with this ID and bucket/prefix.
 
 -   `app.useWaf` | default: true | #Feature to turn use of Amazon Web Application Firewall on/off for VAMS deployment. This is used for Cloudfront or ALB + API Gateway attachment points. Warning: We reccomend you keep this on unless your organization has other firewalls in-use.
 -   `app.useFips` | default: false | #Feature to use FIPS compliant AWS partition endpoints. Must combine with AWS CLI FIPS Environment variable `AWS_USE_FIPS_ENDPOINT`.
@@ -68,7 +68,7 @@ not exist when syncing, the system will attempt to create a new database with th
 -   `app.authProvider.useCognito.enabled` | default: true | #Feature to use Cognito Use Pools should be used for VAMS user management and authentication. At least 1 authProvider must be enabled in the configuration.
 -   `app.authProvider.useCognito.useSaml` | default: false | #Specifies if Cognito User Pools use a federated SAML from an external IDP integration.
 -   `app.authProvider.useCognito.useUserPasswordAuthFlow` | default: false | #Specifies if Cognito User Pools enable `USER_PASSWORD_AUTH` authentication flow that allow USERNAME/PASSWORD to be sent directly for authentication verses using only SRP caluclated authentication. Some organizations may use this when cognito SRP calculation libraries are not available for system-to-system integrations or user interfaces.
--   `app.authProvider.useCognito.credTokenTimeoutSeconds` | default: 3600 | #Used to specify authentication token timeouts for cognito issued tokens. Refresh token is fixed to 24 hours. 
+-   `app.authProvider.useCognito.credTokenTimeoutSeconds` | default: 3600 | #Used to specify authentication token timeouts for cognito issued tokens. Refresh token is fixed to 24 hours.
 -   `app.authProvider.useExternalOauthIdp.enabled` | default: false | Feature to use an external OAUTH IDP. Switches front-end web to use new IDP from Cognito. Cannot currently use location services with this option. Switches API gateway authorizers to an external JWT authorizer hook. At least 1 authProvider must be enabled in the configuration.
 -   `app.authProvider.useExternalOauthIdp.idpAuthProviderUrl` | default: NULL | URL for external OAUTH IDP authentication endpoint such as https://ping-federate.com
 -   `app.authProvider.useExternalOauthIdp.idpAuthClientId` | default: NULL | The clientId provided by the external IDP system to recognize this application deployment
@@ -85,8 +85,8 @@ not exist when syncing, the system will attempt to create a new database with th
 
 ### Additional configuration notes
 
--   `Gov Cloud` - This will check for Use Global VPC, Use ALB, Use OpenSearch Provisioned, and Use Location Services. Additionally does some small implementation changes for components that are different in GovCloud partitions. 
--   `Gov Cloud - IL6 Compliant` - This will check for Use Cognito, Use WAF, Use VPC for all Lambdas, and Use KMS CMK Encryption. Additionally does some small implementation changes for components that are different in GovCloud IL6 partition. 
+-   `Gov Cloud` - This will check for Use Global VPC, Use ALB, Use OpenSearch Provisioned, and Use Location Services. Additionally does some small implementation changes for components that are different in GovCloud partitions.
+-   `Gov Cloud - IL6 Compliant` - This will check for Use Cognito, Use WAF, Use VPC for all Lambdas, and Use KMS CMK Encryption. Additionally does some small implementation changes for components that are different in GovCloud IL6 partition.
 -   `OpenSearch` - If both serverless and provisioned are not enabled, no OpenSearch will be enabled which will reduce the functionality in the application to not have any search capabilities on assets. All authorized assets will be returned always on the assets page.
 -   `OpenSearch - Provisioned` - This service is very sensitive to VPC Subnet Availabilty Zone selection. If using an external VPC, make sure the provided private subnets are a minimum of 3 and are each in their own availability zone. OpenSearch Provisioned CDK creates service-linked roles althoguh sometimes these don't get recognized right away during a first-time deployment by receiving the following error: `Invalid request provided: Before you can proceed, you must enable a service-linked role to give Amazon OpenSearch Service permissions to access your VPC.`. Wait 5 minutes minutes after your first run and then re-run your deployment (after clearing out any previous stack in CloudFormation). If you continue seeing issues, run the following CLI command manually to try to create these roles by hand: `aws iam create-service-linked-role --aws-service-name es.amazonaws.com`, `aws iam create-service-linked-role --aws-service-name opensearchservice.amazonaws.com`
 

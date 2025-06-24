@@ -1,4 +1,11 @@
-import { Box, Button, Container, Grid, SpaceBetween, TextContent } from "@cloudscape-design/components";
+import {
+    Box,
+    Button,
+    Container,
+    Grid,
+    SpaceBetween,
+    TextContent,
+} from "@cloudscape-design/components";
 import Header from "@cloudscape-design/components/header";
 import React, { useEffect, useState } from "react";
 import { AssetDetail } from "./AssetUpload";
@@ -44,13 +51,18 @@ interface FinishUploadsProps {
     isNewFiles: boolean;
 }
 
-const convertToFileUploadTableItems = (fileInfo: FileInfo[], prefix: string = ""): FileUploadTableItem[] => {
+const convertToFileUploadTableItems = (
+    fileInfo: FileInfo[],
+    prefix: string = ""
+): FileUploadTableItem[] => {
     return fileInfo.map((file, index) => {
         // Prepend the folder path to the relative path if a prefix exists
-        const relativePath = prefix ? 
-            (prefix.endsWith('/') ? prefix + file.path : prefix + '/' + file.path) : 
-            file.path;
-            
+        const relativePath = prefix
+            ? prefix.endsWith("/")
+                ? prefix + file.path
+                : prefix + "/" + file.path
+            : file.path;
+
         return {
             index: index,
             name: file.path,
@@ -70,16 +82,16 @@ export default function ModifyAssetsUploadsPage() {
     const { state } = useLocation();
     const navigate = useNavigate();
     const { databaseId, assetId } = useParams();
-    
+
     // Create a default AssetDetail if state.assetDetailState is undefined
     const defaultAssetDetail: AssetDetail = {
         assetId: assetId || "",
         databaseId: databaseId || "",
         assetName: "",
         Asset: [],
-        isMultiFile: false
+        isMultiFile: false,
     };
-    
+
     const [assetDetail, setAssetDetail] = useState<AssetDetail>(
         state?.assetDetailState || defaultAssetDetail
     );
@@ -90,14 +102,14 @@ export default function ModifyAssetsUploadsPage() {
     const [previewFileError, setPreviewFileError] = useState<string | undefined>(undefined);
     const [folderPath, setFolderPath] = useState<string>("");
     const [keyPrefix, setKeyPrefix] = useState<string>("");
-    
+
     // Update assetDetail when fileItems change
     useEffect(() => {
-        setAssetDetail(prev => ({
+        setAssetDetail((prev) => ({
             ...prev,
             Asset: fileItems,
             isMultiFile: fileItems.length > 1,
-            Preview: previewFile || undefined
+            Preview: previewFile || undefined,
         }));
     }, [fileItems, previewFile]);
 
@@ -108,7 +120,7 @@ export default function ModifyAssetsUploadsPage() {
             if (state.fileTree) {
                 const relativePath = state.fileTree.relativePath || "";
                 setFolderPath(relativePath);
-                
+
                 // Ensure that "/" is properly recognized as a root path
                 // If folderPath is "/", ensure keyPrefix is also "/"
                 let prefix = state.fileTree.keyPrefix || "";
@@ -116,20 +128,20 @@ export default function ModifyAssetsUploadsPage() {
                     prefix = "/";
                 }
                 setKeyPrefix(prefix);
-                
-                console.log("ModifyAssetsUploads - Path Info:", { 
-                    relativePath, 
-                    prefix, 
-                    originalKeyPrefix: state.fileTree.keyPrefix 
+
+                console.log("ModifyAssetsUploads - Path Info:", {
+                    relativePath,
+                    prefix,
+                    originalKeyPrefix: state.fileTree.keyPrefix,
                 });
-                
+
                 // If we have assetId and databaseId from URL params but no assetDetailState,
                 // update the assetDetail with the available information
                 if (!state.assetDetailState && assetId && databaseId) {
-                    setAssetDetail(prev => ({
+                    setAssetDetail((prev) => ({
                         ...prev,
                         assetId: assetId,
-                        databaseId: databaseId
+                        databaseId: databaseId,
                     }));
                 }
             }
@@ -171,10 +183,10 @@ export default function ModifyAssetsUploadsPage() {
             // Don't update the state with the oversized file
             return;
         }
-        
+
         // Clear any previous error
         setPreviewFileError(undefined);
-        
+
         // Update the state with the valid file
         setPreviewFile(file);
     };
@@ -207,12 +219,12 @@ export default function ModifyAssetsUploadsPage() {
 
     // Check if we're uploading to root path (including explicit "/" path)
     const isRootPath = !keyPrefix || keyPrefix === "" || keyPrefix === "/";
-    
+
     // Debug log to help troubleshoot path issues
-    console.log("ModifyAssetsUploads - Path Check:", { 
-        folderPath, 
-        keyPrefix, 
-        isRootPath 
+    console.log("ModifyAssetsUploads - Path Check:", {
+        folderPath,
+        keyPrefix,
+        isRootPath,
     });
 
     return (
@@ -223,7 +235,7 @@ export default function ModifyAssetsUploadsPage() {
                         <TextContent>
                             <Header variant="h1">Modify Asset Files</Header>
                         </TextContent>
-                        
+
                         {/* Asset Information */}
                         <Container header={<Header variant="h2">Asset Information</Header>}>
                             <SpaceBetween direction="vertical" size="m">
@@ -246,7 +258,7 @@ export default function ModifyAssetsUploadsPage() {
                                 )}
                             </SpaceBetween>
                         </Container>
-                        
+
                         {/* Show upload workflow or file selection UI */}
                         {showUploadWorkflow ? (
                             <AssetUploadWorkflow
@@ -269,14 +281,18 @@ export default function ModifyAssetsUploadsPage() {
                                             showCount={true}
                                             allowRemoval={true}
                                             onRemoveItem={(index) => {
-                                                const updatedFiles = fileItems.filter(item => item.index !== index);
-                                                
+                                                const updatedFiles = fileItems.filter(
+                                                    (item) => item.index !== index
+                                                );
+
                                                 // Update indices to be sequential
-                                                const reindexedFiles = updatedFiles.map((item, idx) => ({
-                                                    ...item,
-                                                    index: idx
-                                                }));
-                                                
+                                                const reindexedFiles = updatedFiles.map(
+                                                    (item, idx) => ({
+                                                        ...item,
+                                                        index: idx,
+                                                    })
+                                                );
+
                                                 setFileItems(reindexedFiles);
                                             }}
                                         />
@@ -286,16 +302,20 @@ export default function ModifyAssetsUploadsPage() {
                                         </Box>
                                     )}
                                 </Container>
-                                
+
                                 {/* File Selection */}
                                 <Container header={<Header variant="h2">Add Files</Header>}>
                                     <SpaceBetween direction="vertical" size="l">
-                                        <Grid gridDefinition={isRootPath ? [{ colspan: 6 }, { colspan: 6 }] : [{ colspan: 12 }]}>
+                                        <Grid
+                                            gridDefinition={
+                                                isRootPath
+                                                    ? [{ colspan: 6 }, { colspan: 6 }]
+                                                    : [{ colspan: 12 }]
+                                            }
+                                        >
                                             {/* Asset Files Selection */}
-                                            <MultiFileSelect
-                                                onChange={handleFileSelection}
-                                            />
-                                            
+                                            <MultiFileSelect onChange={handleFileSelection} />
+
                                             {/* Preview File Selection - Only show when uploading to root path (including "/") */}
                                             {isRootPath && (
                                                 <FileUpload
@@ -310,22 +330,29 @@ export default function ModifyAssetsUploadsPage() {
                                                 />
                                             )}
                                         </Grid>
-                                        
+
                                         {/* Upload Button */}
                                         <Box textAlign="right">
                                             <SpaceBetween direction="vertical" size="xs">
-                                                {fileItems.length === 0 && (isRootPath ? !previewFile : true) && (
-                                                    <Box color="text-status-error" fontSize="body-s">
-                                                        {isRootPath 
-                                                            ? "Please select at least one asset file or preview file to upload."
-                                                            : "Please select at least one asset file to upload."
-                                                        }
-                                                    </Box>
-                                                )}
-                                                <Button 
-                                                    variant="primary" 
+                                                {fileItems.length === 0 &&
+                                                    (isRootPath ? !previewFile : true) && (
+                                                        <Box
+                                                            color="text-status-error"
+                                                            fontSize="body-s"
+                                                        >
+                                                            {isRootPath
+                                                                ? "Please select at least one asset file or preview file to upload."
+                                                                : "Please select at least one asset file to upload."}
+                                                        </Box>
+                                                    )}
+                                                <Button
+                                                    variant="primary"
                                                     onClick={startUpload}
-                                                    disabled={(fileItems.length === 0 && (isRootPath ? !previewFile : true)) || !!previewFileError}
+                                                    disabled={
+                                                        (fileItems.length === 0 &&
+                                                            (isRootPath ? !previewFile : true)) ||
+                                                        !!previewFileError
+                                                    }
                                                 >
                                                     Finalize and Upload
                                                 </Button>

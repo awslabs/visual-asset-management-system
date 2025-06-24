@@ -106,18 +106,20 @@ export default function CreateDatabase({
                     // API returns an object with Items array
                     setBuckets(bucketsData.Items);
                     console.log("Loaded buckets:", bucketsData.Items);
-                    
+
                     // If there's only one bucket, select it by default
                     if (bucketsData.Items.length === 1) {
                         const bucket = bucketsData.Items[0];
                         const option = {
-                            label: `${bucket.bucketName}${bucket.baseAssetsPrefix ? ` - ${bucket.baseAssetsPrefix}` : ''}`,
-                            value: bucket.bucketId
+                            label: `${bucket.bucketName}${
+                                bucket.baseAssetsPrefix ? ` - ${bucket.baseAssetsPrefix}` : ""
+                            }`,
+                            value: bucket.bucketId,
                         };
                         setSelectedBucket(option);
-                        setFormState(prevState => ({
+                        setFormState((prevState) => ({
                             ...prevState,
-                            defaultBucketId: bucket.bucketId
+                            defaultBucketId: bucket.bucketId,
                         }));
                         console.log("Auto-selected the only available bucket:", bucket.bucketId);
                     }
@@ -163,7 +165,7 @@ export default function CreateDatabase({
                                 createDatabase({
                                     databaseId: formState.databaseId,
                                     description: formState.description,
-                                    defaultBucketId: formState.defaultBucketId || ""
+                                    defaultBucketId: formState.defaultBucketId || "",
                                 })
                                     .then((res) => {
                                         if (res && res[0]) {
@@ -176,7 +178,9 @@ export default function CreateDatabase({
                                     })
                                     .catch((err) => {
                                         console.log("create database error", err);
-                                        let msg = `Unable to ${createOrUpdate} database. Error: ${err.message || "Unknown error"}`;
+                                        let msg = `Unable to ${createOrUpdate} database. Error: ${
+                                            err.message || "Unknown error"
+                                        }`;
                                         setFormError(msg);
                                     })
                                     .finally(() => {
@@ -187,7 +191,8 @@ export default function CreateDatabase({
                                 inProgress ||
                                 !(
                                     validateDatabaseName(formState.databaseId) === null &&
-                                    validateDatabaseDescriptionLength(formState.description) === null &&
+                                    validateDatabaseDescriptionLength(formState.description) ===
+                                        null &&
                                     formState.defaultBucketId
                                 )
                             }
@@ -241,7 +246,9 @@ export default function CreateDatabase({
                         <FormField
                             label="Default Bucket and Prefix"
                             constraintText="Required. Select a bucket and prefix for this database."
-                            errorText={!formState.defaultBucketId ? "A default bucket is required" : null}
+                            errorText={
+                                !formState.defaultBucketId ? "A default bucket is required" : null
+                            }
                         >
                             <Select
                                 selectedOption={selectedBucket}
@@ -249,12 +256,16 @@ export default function CreateDatabase({
                                     setSelectedBucket(detail.selectedOption);
                                     setFormState({
                                         ...formState,
-                                        defaultBucketId: detail.selectedOption.value || ""
+                                        defaultBucketId: detail.selectedOption.value || "",
                                     });
                                 }}
-                                options={buckets.map(bucket => ({
-                                    label: `${bucket.bucketName}${bucket.baseAssetsPrefix ? ` - ${bucket.baseAssetsPrefix}` : ''}`,
-                                    value: bucket.bucketId
+                                options={buckets.map((bucket) => ({
+                                    label: `${bucket.bucketName}${
+                                        bucket.baseAssetsPrefix
+                                            ? ` - ${bucket.baseAssetsPrefix}`
+                                            : ""
+                                    }`,
+                                    value: bucket.bucketId,
                                 }))}
                                 placeholder="Select a bucket"
                                 loadingText="Loading buckets"

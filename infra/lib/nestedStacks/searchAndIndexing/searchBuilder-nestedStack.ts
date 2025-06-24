@@ -7,13 +7,16 @@ import { storageResources } from "../storage/storageBuilder-nestedStack";
 import { buildIndexingFunction } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
 import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as lambda from "aws-cdk-lib/aws-lambda";
-import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as sqs from "aws-cdk-lib/aws-sqs";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
-import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
+import { SqsEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
 import { NagSuppressions } from "cdk-nag";
 import { OpensearchServerlessConstruct } from "./constructs/opensearch-serverless";
 import { OpensearchProvisionedConstruct } from "./constructs/opensearch-provisioned";
-import { buildSearchFunction, buildSqsBucketSyncFunction } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
+import {
+    buildSearchFunction,
+    buildSqsBucketSyncFunction,
+} from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
 import { attachFunctionToApi } from "../apiLambda/apiBuilder-nestedStack";
 import { Stack, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
@@ -73,7 +76,7 @@ export function searchBuilder(
         api: api,
     });
 
-    let indexingS3ObjectMetadataFunction: lambda.Function | undefined = undefined
+    let indexingS3ObjectMetadataFunction: lambda.Function | undefined = undefined;
 
     if (config.app.openSearch.useServerless.enabled) {
         //Serverless Deployment
@@ -200,7 +203,6 @@ export function searchBuilder(
         aos.grantOSDomainAccess(assetIndexingFunction);
         aos.grantOSDomainAccess(indexingS3ObjectMetadataFunction);
 
-
         // Due to cdk upgrade, not all regions support tags for EventSourceMapping
         // this line should remove the tags for regions that dont support it (govcloud currently not supported)
         if (config.app.govCloud.enabled) {
@@ -251,22 +253,22 @@ export function searchBuilder(
     /////////////////////////////////////////////////////////////////////////////
 
     //Setup assetbucket sync and indexing
-    //Loop through each asset bucket and setup the new event notifications sync method 
+    //Loop through each asset bucket and setup the new event notifications sync method
     // and pass in indexing functions created (if they exist due to feature switching)
-    let index = 0
+    let index = 0;
     const assetBucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
     for (const record of assetBucketRecords) {
-
         //Create created queue
-        const onS3ObjectCreatedQueue = new sqs.Queue(scope, 'bucketSyncCreated'+record.bucket, {
-        queueName: `${config.app.baseStackName}-bucketSyncCreated-${index}`,
-        visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900.
-        encryption: storageResources.encryption.kmsKey? sqs.QueueEncryption.KMS : sqs.QueueEncryption.SQS_MANAGED,
-        encryptionMasterKey: storageResources.encryption.kmsKey,
-        enforceSSL: true
+        const onS3ObjectCreatedQueue = new sqs.Queue(scope, "bucketSyncCreated" + record.bucket, {
+            queueName: `${config.app.baseStackName}-bucketSyncCreated-${index}`,
+            visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900.
+            encryption: storageResources.encryption.kmsKey
+                ? sqs.QueueEncryption.KMS
+                : sqs.QueueEncryption.SQS_MANAGED,
+            encryptionMasterKey: storageResources.encryption.kmsKey,
+            enforceSSL: true,
         });
         onS3ObjectCreatedQueue.grantSendMessages(Service("SNS").Principal);
-    
 
         //Create new lambda for bucketSync (pass indexingS3ObjectMetadataFunction function name in if defined)
         const sqsBucketSyncFunctionCreated = buildSqsBucketSyncFunction(
@@ -285,7 +287,7 @@ export function searchBuilder(
         );
 
         //Add event notifications for syncing
-        if(record.snsS3ObjectCreatedTopic) {
+        if (record.snsS3ObjectCreatedTopic) {
             record.snsS3ObjectCreatedTopic.addSubscription(
                 new SqsSubscription(onS3ObjectCreatedQueue)
             );
@@ -299,15 +301,17 @@ export function searchBuilder(
             })
         );
 
-        index = index + 1
+        index = index + 1;
 
         //Create deleted queue
-        const onS3ObjectDeletedQueue = new sqs.Queue(scope, 'bucketSyncDeleted'+record.bucket, {
-        queueName: `${config.app.baseStackName}-bucketSyncDeleted-${index}`,
-        visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900.
-        encryption: storageResources.encryption.kmsKey? sqs.QueueEncryption.KMS : sqs.QueueEncryption.SQS_MANAGED,
-        encryptionMasterKey: storageResources.encryption.kmsKey,
-        enforceSSL: true
+        const onS3ObjectDeletedQueue = new sqs.Queue(scope, "bucketSyncDeleted" + record.bucket, {
+            queueName: `${config.app.baseStackName}-bucketSyncDeleted-${index}`,
+            visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900.
+            encryption: storageResources.encryption.kmsKey
+                ? sqs.QueueEncryption.KMS
+                : sqs.QueueEncryption.SQS_MANAGED,
+            encryptionMasterKey: storageResources.encryption.kmsKey,
+            enforceSSL: true,
         });
         onS3ObjectDeletedQueue.grantSendMessages(Service("SNS").Principal);
 
@@ -326,11 +330,9 @@ export function searchBuilder(
             vpc,
             subnets
         );
-        index = index + 1
-        
+        index = index + 1;
 
-
-        if(record.snsS3ObjectDeletedTopic) {
+        if (record.snsS3ObjectDeletedTopic) {
             record.snsS3ObjectDeletedTopic.addSubscription(
                 new SqsSubscription(onS3ObjectDeletedQueue)
             );
@@ -342,7 +344,6 @@ export function searchBuilder(
                 maxBatchingWindow: cdk.Duration.seconds(30), // Max configurable time to wait before function is invoked.
             })
         );
-
     }
 
     //Nag supressions

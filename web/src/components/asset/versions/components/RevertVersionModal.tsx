@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState } from "react";
 import {
     Box,
     Button,
@@ -11,11 +11,11 @@ import {
     SpaceBetween,
     Alert,
     FormField,
-    Textarea
-} from '@cloudscape-design/components';
-import { useParams } from 'react-router';
-import { revertAssetVersion } from '../../../../services/AssetVersionService';
-import { AssetVersion } from '../AssetVersionManager';
+    Textarea,
+} from "@cloudscape-design/components";
+import { useParams } from "react-router";
+import { revertAssetVersion } from "../../../../services/AssetVersionService";
+import { AssetVersion } from "../AssetVersionManager";
 
 interface RevertVersionModalProps {
     visible: boolean;
@@ -28,46 +28,46 @@ export const RevertVersionModal: React.FC<RevertVersionModalProps> = ({
     visible,
     onDismiss,
     version,
-    onSuccess
+    onSuccess,
 }) => {
     const { databaseId, assetId } = useParams<{ databaseId: string; assetId: string }>();
-    
+
     // State
     const [loading, setLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
-    const [comment, setComment] = useState<string>('');
-    
+    const [comment, setComment] = useState<string>("");
+
     // Handle revert
     const handleRevert = async () => {
         if (!databaseId || !assetId) {
-            setError('Database ID and Asset ID are required');
+            setError("Database ID and Asset ID are required");
             return;
         }
-        
+
         setLoading(true);
         setError(null);
-        
+
         try {
             const [success, response] = await revertAssetVersion({
                 databaseId,
                 assetId,
                 assetVersionId: `${version.Version}`,
-                comment
+                comment,
             });
-            
+
             if (success) {
                 onSuccess();
             } else {
-                setError(typeof response === 'string' ? response : 'Failed to revert version');
+                setError(typeof response === "string" ? response : "Failed to revert version");
             }
         } catch (err) {
-            setError('An error occurred while reverting the version');
-            console.error('Error reverting version:', err);
+            setError("An error occurred while reverting the version");
+            console.error("Error reverting version:", err);
         } finally {
             setLoading(false);
         }
     };
-    
+
     // Format date
     const formatDate = (dateString: string): string => {
         try {
@@ -77,7 +77,7 @@ export const RevertVersionModal: React.FC<RevertVersionModalProps> = ({
             return dateString;
         }
     };
-    
+
     return (
         <Modal
             visible={visible}
@@ -107,16 +107,18 @@ export const RevertVersionModal: React.FC<RevertVersionModalProps> = ({
                         {error}
                     </Alert>
                 )}
-                
+
                 <Alert type="warning">
                     <div>
-                        <strong>Warning:</strong> Reverting to this version will create a new version that matches the state of version v{version.Version}.
+                        <strong>Warning:</strong> Reverting to this version will create a new
+                        version that matches the state of version v{version.Version}.
                     </div>
                     <div>
-                        Permanently deleted files will not be restored and will be discarded from the new version.
+                        Permanently deleted files will not be restored and will be discarded from
+                        the new version.
                     </div>
                 </Alert>
-                
+
                 <Box>
                     <SpaceBetween direction="vertical" size="s">
                         <div>
@@ -126,7 +128,7 @@ export const RevertVersionModal: React.FC<RevertVersionModalProps> = ({
                             <strong>Created:</strong> {formatDate(version.DateModified)}
                         </div>
                         <div>
-                            <strong>Created By:</strong> {version.createdBy || 'System'}
+                            <strong>Created By:</strong> {version.createdBy || "System"}
                         </div>
                         {version.Comment && (
                             <div>
@@ -135,7 +137,7 @@ export const RevertVersionModal: React.FC<RevertVersionModalProps> = ({
                         )}
                     </SpaceBetween>
                 </Box>
-                
+
                 <FormField
                     label="Revert Comment *"
                     description="Add a comment to describe this revert operation (required)"

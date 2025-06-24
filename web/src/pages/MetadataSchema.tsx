@@ -515,7 +515,6 @@ class ProgressCallbackArgs {
     total!: number;
 }
 
-
 export default function MetadataSchema() {
     const { databaseId } = useParams();
     const navigate = useNavigate();

@@ -39,7 +39,11 @@ export const FileUpload = ({
     const inputRef = useRef<HTMLInputElement>(null);
 
     return (
-        <FormField errorText={errorText} label={label} description={description || ("File types: " + fileFormats)}>
+        <FormField
+            errorText={errorText}
+            label={label}
+            description={description || "File types: " + fileFormats}
+        >
             <input
                 ref={inputRef}
                 type="file"

@@ -31,7 +31,7 @@ export function createPopulateS3AssetBucketsTableCustomResource(
     // Create the Lambda function for the custom resource
     const populateS3AssetBucketsTableLambda = new lambda.Function(scope, `${id}Lambda`, {
         runtime: LAMBDA_PYTHON_RUNTIME,
-        handler: 'index.lambda_handler',
+        handler: "index.lambda_handler",
         timeout: Duration.minutes(5),
         code: lambda.Code.fromInline(`
 import json
@@ -138,31 +138,31 @@ def lambda_handler(event, context):
         raise
         `),
     });
-    
+
     // Grant the Lambda function permissions to read/write to the DynamoDB table
     table.grantReadWriteData(populateS3AssetBucketsTableLambda);
-    
+
     // Grant the Lambda function permissions to check S3 bucket versioning status
     populateS3AssetBucketsTableLambda.addToRolePolicy(
         new iam.PolicyStatement({
-            actions: ['s3:GetBucketVersioning'],
-            resources: ['arn:aws:s3:::*'],
-            effect: iam.Effect.ALLOW
+            actions: ["s3:GetBucketVersioning"],
+            resources: ["arn:aws:s3:::*"],
+            effect: iam.Effect.ALLOW,
         })
     );
-    
+
     // Prepare bucket data for the custom resource
     const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
-    const bucketData = bucketRecords.map(record => ({
+    const bucketData = bucketRecords.map((record) => ({
         bucketName: record.bucket.bucketName,
-        prefix: record.prefix || '/'
+        prefix: record.prefix || "/",
     }));
-    
+
     // Create the custom resource provider
     const populateS3AssetBucketsTableProvider = new cr.Provider(scope, `${id}Provider`, {
         onEventHandler: populateS3AssetBucketsTableLambda,
     });
-    
+
     // Create the custom resource
     const customResource = new cdk.CustomResource(scope, id, {
         serviceToken: populateS3AssetBucketsTableProvider.serviceToken,
@@ -170,17 +170,17 @@ def lambda_handler(event, context):
             buckets: JSON.stringify(bucketData),
             tableName: table.tableName,
             // Add a timestamp to force the custom resource to run on every deployment
-            timestamp: new Date().toISOString()
-        }
+            timestamp: new Date().toISOString(),
+        },
     });
-    
+
     // Add dependency to ensure the table exists before the custom resource runs
     customResource.node.addDependency(table);
-    
+
     // Add dependency to ensure the new bucket exists before the custom resource runs (if provided)
     if (newBucket) {
         customResource.node.addDependency(newBucket);
     }
-    
+
     return customResource;
 }

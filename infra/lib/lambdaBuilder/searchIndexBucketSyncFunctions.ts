@@ -14,7 +14,11 @@ import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import * as Service from "../helper/service-helper";
 import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
-import { suppressCdkNagErrorsByGrantReadWrite, grantReadWritePermissionsToAllAssetBuckets, grantReadPermissionsToAllAssetBuckets } from "../helper/security";
+import {
+    suppressCdkNagErrorsByGrantReadWrite,
+    grantReadWritePermissionsToAllAssetBuckets,
+    grantReadPermissionsToAllAssetBuckets,
+} from "../helper/security";
 import * as kms from "aws-cdk-lib/aws-kms";
 import * as iam from "aws-cdk-lib/aws-iam";
 import {
@@ -114,7 +118,8 @@ export function buildIndexingFunction(
                 : undefined,
 
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
@@ -164,9 +169,9 @@ export function buildSqsBucketSyncFunction(
     subnets: ec2.ISubnet[]
 ): lambda.Function {
     const assetTopicWildcardArn = cdk.Fn.sub(`arn:${Service.Partition()}:sns:*:*:AssetTopic*`);
-    const fun = new lambda.Function(scope, "sqsBucketSync-"+handlerType+'-'+index, {
+    const fun = new lambda.Function(scope, "sqsBucketSync-" + handlerType + "-" + index, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
-        handler: `handlers.indexing.sqsBucketSync.lambda_handler_`+handlerType,
+        handler: `handlers.indexing.sqsBucketSync.lambda_handler_` + handlerType,
         runtime: LAMBDA_PYTHON_RUNTIME,
         layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
@@ -183,18 +188,23 @@ export function buildSqsBucketSyncFunction(
                 : undefined,
 
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            ASSET_VERSIONS_STORAGE_TABLE_NAME: storageResources.dynamo.assetVersionsStorageTable.tableName,
-            ASSET_LINKS_STORAGE_TABLE_NAME: storageResources.dynamo.assetLinksStorageTable.tableName, //Not directly used but needed to execute create_asset functions
+            ASSET_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetVersionsStorageTable.tableName,
+            ASSET_LINKS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetLinksStorageTable.tableName, //Not directly used but needed to execute create_asset functions
             TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName, //Not directly used but needed to execute create_asset functions
             TAG_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName, //Not directly used but needed to execute create_asset functions
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            INDEXING_FUNCTION_NAME: indexingS3ObjectMetadataFunction? indexingS3ObjectMetadataFunction.functionName : "",
+            INDEXING_FUNCTION_NAME: indexingS3ObjectMetadataFunction
+                ? indexingS3ObjectMetadataFunction.functionName
+                : "",
             ASSET_BUCKET_NAME: bucketName,
             ASSET_BUCKET_PREFIX: bucketPrefix,
-            DEFAULT_DATABASE_ID: defaultDatabaseId
+            DEFAULT_DATABASE_ID: defaultDatabaseId,
         },
     });
 
@@ -206,7 +216,6 @@ export function buildSqsBucketSyncFunction(
     storageResources.dynamo.assetLinksStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.tagTypeStorageTable.grantReadData(fun);
     storageResources.dynamo.tagStorageTable.grantReadData(fun);
-
 
     if (indexingS3ObjectMetadataFunction) {
         indexingS3ObjectMetadataFunction.grantInvoke(fun);

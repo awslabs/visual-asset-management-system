@@ -52,7 +52,7 @@ export default function ModelViewer(props) {
             try {
                 console.log("Loading multiple assets:", multiFileKeys);
                 const urls = [];
-                
+
                 // Download all files and collect their URLs
                 for (const key of multiFileKeys) {
                     try {
@@ -79,19 +79,15 @@ export default function ModelViewer(props) {
                 if (urls.length > 0) {
                     // Set the first URL as the model attribute for compatibility
                     engineElement.current.setAttribute("model", urls[0]);
-                    
+
                     setTimeout(() => {
                         let parentDiv = engineElement.current;
                         let viewer = new OV.EmbeddedViewer(parentDiv, {
                             backgroundColor: new OV.RGBAColor(182, 182, 182, 182),
                             defaultColor: new OV.RGBColor(200, 200, 200),
-                            edgeSettings: new OV.EdgeSettings(
-                                false,
-                                new OV.RGBColor(0, 0, 255),
-                                1
-                            ),
+                            edgeSettings: new OV.EdgeSettings(false, new OV.RGBColor(0, 0, 255), 1),
                         });
-                        
+
                         // Load all URLs into the viewer
                         console.log(`Loading ${urls.length} files into Online3DViewer:`, urls);
                         viewer.LoadModelFromUrlList(urls);

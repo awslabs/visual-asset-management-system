@@ -209,7 +209,8 @@
     gap: 16px;
 }
 
-.archived-toggle, .non-included-toggle {
+.archived-toggle,
+.non-included-toggle {
     display: flex;
     margin-top: 4px;
 }

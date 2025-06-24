@@ -121,13 +121,17 @@ export class AssetUploadService {
      */
     async addMetadata(databaseId: string, assetId: string, metadata: Metadata): Promise<any> {
         try {
-            const response = await API.post("api", `database/${databaseId}/assets/${assetId}/metadata`, {
-                "Content-type": "application/json",
-                body: { 
-                    metadata,
-                    version: "1" // Required by the backend API
-                },
-            });
+            const response = await API.post(
+                "api",
+                `database/${databaseId}/assets/${assetId}/metadata`,
+                {
+                    "Content-type": "application/json",
+                    body: {
+                        metadata,
+                        version: "1", // Required by the backend API
+                    },
+                }
+            );
             return response;
         } catch (error) {
             console.error("Error adding metadata:", error);
@@ -140,7 +144,9 @@ export class AssetUploadService {
      * @param uploadRequest Upload request data
      * @returns Promise with upload ID and presigned URLs
      */
-    async initializeUpload(uploadRequest: InitializeUploadRequest): Promise<InitializeUploadResponse> {
+    async initializeUpload(
+        uploadRequest: InitializeUploadRequest
+    ): Promise<InitializeUploadResponse> {
         try {
             const response = await API.post("api", "uploads", {
                 "Content-type": "application/json",
@@ -190,7 +196,10 @@ export class AssetUploadService {
      * @param completionData Completion data
      * @returns Promise with upload result
      */
-    async completeUpload(uploadId: string, completionData: CompleteUploadRequest): Promise<CompleteUploadResponse> {
+    async completeUpload(
+        uploadId: string,
+        completionData: CompleteUploadRequest
+    ): Promise<CompleteUploadResponse> {
         try {
             const response = await API.post("api", `uploads/${uploadId}/complete`, {
                 "Content-type": "application/json",

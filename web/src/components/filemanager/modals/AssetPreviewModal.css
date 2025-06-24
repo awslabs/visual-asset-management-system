@@ -4,64 +4,64 @@
  */
 
 .asset-preview-modal-content {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
 }
 
 .asset-preview-image-container {
-  flex: 1;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  overflow: auto;
-  margin: 0 auto;
-  background-color: #f8f8f8;
-  border-radius: 4px;
-  padding: 16px;
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: auto;
+    margin: 0 auto;
+    background-color: #f8f8f8;
+    border-radius: 4px;
+    padding: 16px;
 }
 
 .asset-preview-image-container img {
-  max-width: 100%;
-  object-fit: contain;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    max-width: 100%;
+    object-fit: contain;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
 }
 
 .asset-preview-controls {
-  display: flex;
-  justify-content: center;
-  margin-top: 16px;
-  padding: 8px;
-  border-top: 1px solid #eaeded;
+    display: flex;
+    justify-content: center;
+    margin-top: 16px;
+    padding: 8px;
+    border-top: 1px solid #eaeded;
 }
 
 .asset-preview-loading,
 .asset-preview-error {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  height: 100%;
-  width: 100%;
-  color: #5f6b7a;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    height: 100%;
+    width: 100%;
+    color: #5f6b7a;
 }
 
 .asset-preview-error {
-  color: #d13212;
+    color: #d13212;
 }
 
 /* Viewer mode styles */
 .viewer-mode-normal .asset-preview-image-container {
-  height: 50vh;
-  max-width: 700px;
+    height: 50vh;
+    max-width: 700px;
 }
 
 .viewer-mode-wide .asset-preview-image-container {
-  height: 60vh;
-  max-width: 1100px;
+    height: 60vh;
+    max-width: 1100px;
 }
 
 .viewer-mode-fullscreen .asset-preview-image-container {
-  height: 80vh;
-  max-width: 100%;
+    height: 80vh;
+    max-width: 100%;
 }

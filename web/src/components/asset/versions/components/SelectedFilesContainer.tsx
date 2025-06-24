@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React from "react";
 import {
     Box,
     Button,
@@ -13,8 +13,8 @@ import {
     Badge,
     Pagination,
     SpaceBetween,
-    Toggle
-} from '@cloudscape-design/components';
+    Toggle,
+} from "@cloudscape-design/components";
 
 interface SelectedFile {
     relativeKey: string;
@@ -47,7 +47,7 @@ export const SelectedFilesContainer: React.FC<SelectedFilesContainerProps> = ({
     selectedFilesPerPage,
     paginatedSelectedFiles,
     showMismatchedOnly,
-    setShowMismatchedOnly
+    setShowMismatchedOnly,
 }) => {
     return (
         <Container header={<Header variant="h3">Selected Files</Header>}>
@@ -63,7 +63,7 @@ export const SelectedFilesContainer: React.FC<SelectedFilesContainerProps> = ({
                     </SpaceBetween>
                 </SpaceBetween>
             )}
-            
+
             {selectedFiles.length === 0 ? (
                 <Box textAlign="center" padding="l">
                     <div>No files selected</div>
@@ -72,63 +72,80 @@ export const SelectedFilesContainer: React.FC<SelectedFilesContainerProps> = ({
                 <Table
                     columnDefinitions={[
                         {
-                            id: 'fileName',
-                            header: 'File Name',
+                            id: "fileName",
+                            header: "File Name",
                             cell: (item: SelectedFile) => (
                                 <Box>
-                                    <div>{item.relativeKey.split('/').pop() || item.relativeKey}</div>
+                                    <div>
+                                        {item.relativeKey.split("/").pop() || item.relativeKey}
+                                    </div>
                                     {item.versionMismatch && (
                                         <Badge color="blue">Version Mismatch</Badge>
                                     )}
                                 </Box>
-                            )
+                            ),
                         },
                         {
-                            id: 'path',
-                            header: 'Path',
-                            cell: (item: SelectedFile) => item.relativeKey
+                            id: "path",
+                            header: "Path",
+                            cell: (item: SelectedFile) => item.relativeKey,
                         },
                         {
-                            id: 'versionId',
-                            header: 'Version ID',
+                            id: "versionId",
+                            header: "Version ID",
                             cell: (item: SelectedFile) => (
                                 <Box>
-                                    <div style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
+                                    <div style={{ fontFamily: "monospace", fontSize: "0.9em" }}>
                                         {item.versionId}
                                     </div>
                                     {item.isCurrent && <Badge color="blue">Current</Badge>}
                                 </Box>
-                            )
+                            ),
                         },
                         {
-                            id: 'actions',
-                            header: 'Actions',
+                            id: "actions",
+                            header: "Actions",
                             cell: (item: SelectedFile) => (
                                 <SpaceBetween direction="horizontal" size="xs">
-                                    <Button
-                                        onClick={() => setSelectedFileForVersions(item)}
-                                    >
+                                    <Button onClick={() => setSelectedFileForVersions(item)}>
                                         Select Other Version
                                     </Button>
                                     <Button
-                                        onClick={() => setSelectedFiles(prev => prev.filter(f => f.relativeKey !== item.relativeKey))}
+                                        onClick={() =>
+                                            setSelectedFiles((prev) =>
+                                                prev.filter(
+                                                    (f) => f.relativeKey !== item.relativeKey
+                                                )
+                                            )
+                                        }
                                     >
                                         Remove
                                     </Button>
                                 </SpaceBetween>
-                            )
-                        }
+                            ),
+                        },
                     ]}
                     items={paginatedSelectedFiles}
                     pagination={
                         <Pagination
                             currentPageIndex={currentSelectedFilesPage}
-                            pagesCount={Math.max(1, Math.ceil(filteredSelectedFiles.length / selectedFilesPerPage))}
-                            onChange={({ detail }) => setCurrentSelectedFilesPage(detail.currentPageIndex)}
+                            pagesCount={Math.max(
+                                1,
+                                Math.ceil(filteredSelectedFiles.length / selectedFilesPerPage)
+                            )}
+                            onChange={({ detail }) =>
+                                setCurrentSelectedFilesPage(detail.currentPageIndex)
+                            }
                             ariaLabels={{
-                                nextPageLabel: 'Next page',
-                                previousPageLabel: 'Previous page',
-                                pageLabel: pageNumber => `Page ${pageNumber} of ${Math.max(1, Math.ceil(filteredSelectedFiles.length / selectedFilesPerPage))}`
+                                nextPageLabel: "Next page",
+                                previousPageLabel: "Previous page",
+                                pageLabel: (pageNumber) =>
+                                    `Page ${pageNumber} of ${Math.max(
+                                        1,
+                                        Math.ceil(
+                                            filteredSelectedFiles.length / selectedFilesPerPage
+                                        )
+                                    )}`,
                             }}
                         />
                     }

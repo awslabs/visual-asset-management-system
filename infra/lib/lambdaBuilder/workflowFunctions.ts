@@ -25,7 +25,10 @@ import {
     kmsKeyPolicyStatementGenerator,
     generateUniqueNameHash,
 } from "../helper/security";
-import { grantReadWritePermissionsToAllAssetBuckets, grantReadPermissionsToAllAssetBuckets } from "../helper/security";
+import {
+    grantReadWritePermissionsToAllAssetBuckets,
+    grantReadPermissionsToAllAssetBuckets,
+} from "../helper/security";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as cdk from "aws-cdk-lib";
 
@@ -252,7 +255,8 @@ export function buildExecuteWorkflowFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
             PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
@@ -278,10 +282,7 @@ export function buildExecuteWorkflowFunction(
     metadataReadFunction.grantInvoke(fun);
 
     grantReadWritePermissionsToAllAssetBuckets(fun);
-    kmsKeyLambdaPermissionAddToResourcePolicy(
-        fun,
-        storageResources.encryption.kmsKey
-    );
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(fun);
 
@@ -327,7 +328,8 @@ export function buildProcessWorkflowExecutionOutputFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
@@ -347,25 +349,14 @@ export function buildProcessWorkflowExecutionOutputFunction(
 
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.databaseStorageTable.grantReadWriteData(
-        fun
-    );
+    storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(
-        fun
-    );
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(
-        fun
-    );
-    storageResources.dynamo.userRolesStorageTable.grantReadData(
-        fun
-    );
+    storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
 
     grantReadWritePermissionsToAllAssetBuckets(fun);
-    kmsKeyLambdaPermissionAddToResourcePolicy(
-        fun,
-        storageResources.encryption.kmsKey
-    );
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return fun;
@@ -429,17 +420,17 @@ export function buildWorkflowRole(
                 resources: ["*"],
             }),
             // Add permissions for all asset buckets from the global array
-            ...s3AssetBuckets.getS3AssetBucketRecords().map(record => {
-                const prefix = record.prefix || '/';
+            ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
+                const prefix = record.prefix || "/";
                 // Ensure the prefix ends with a slash for proper path construction
-                const normalizedPrefix = prefix.endsWith('/') ? prefix : prefix + '/';
-                
+                const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+
                 return new iam.PolicyStatement({
                     effect: iam.Effect.ALLOW,
                     actions: ["s3:ListBucket", "s3:PutObject", "s3:GetObject"],
                     resources: [
                         record.bucket.bucketArn,
-                        `${record.bucket.bucketArn}${normalizedPrefix}*`
+                        `${record.bucket.bucketArn}${normalizedPrefix}*`,
                     ],
                 });
             }),

@@ -34,10 +34,10 @@ const WorkflowEditor = React.lazy(() => import("../interactive/WorkflowEditor"))
 
 export default function CreateUpdateWorkflow(props) {
     // Check if this is a global workflow route
-    const isGlobalWorkflow = window.location.hash.includes('/databases/global/workflows/');
+    const isGlobalWorkflow = window.location.hash.includes("/databases/global/workflows/");
     // Get parameters from URL
     const { databaseId: urlDatabaseId, workflowId } = useParams();
-    
+
     // If this is a global workflow, use empty string as databaseId
     const databaseId = isGlobalWorkflow ? "" : urlDatabaseId;
     const navigate = useNavigate();
@@ -239,20 +239,21 @@ export default function CreateUpdateWorkflow(props) {
             <Box padding={{ top: "s", horizontal: "l" }}>
                 <SpaceBetween direction="vertical" size="xs">
                     <BreadcrumbGroup
-                        items={isGlobalWorkflow ?
-                            [
-                                { text: Synonyms.Databases, href: "#/databases/" },
-                                { text: "Global", href: "#/databases/global/workflows/" },
-                                { text: "Create Workflow" }
-                            ] :
-                            [
-                                { text: Synonyms.Databases, href: "#/databases/" },
-                                {
-                                    text: databaseId,
-                                    href: "#/databases/" + databaseId + "/workflows/",
-                                },
-                                { text: "Create Workflow" },
-                            ]
+                        items={
+                            isGlobalWorkflow
+                                ? [
+                                      { text: Synonyms.Databases, href: "#/databases/" },
+                                      { text: "Global", href: "#/databases/global/workflows/" },
+                                      { text: "Create Workflow" },
+                                  ]
+                                : [
+                                      { text: Synonyms.Databases, href: "#/databases/" },
+                                      {
+                                          text: databaseId,
+                                          href: "#/databases/" + databaseId + "/workflows/",
+                                      },
+                                      { text: "Create Workflow" },
+                                  ]
                         }
                         ariaLabel="Breadcrumbs"
                     />

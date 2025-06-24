@@ -76,7 +76,10 @@ export class CognitoWebNativeConstructStack extends Construct {
         );
         props.storageResources.dynamo.userRolesStorageTable.grantReadData(preTokenGeneration);
         props.storageResources.dynamo.rolesStorageTable.grantReadData(preTokenGeneration);
-        kmsKeyLambdaPermissionAddToResourcePolicy(preTokenGeneration, props.storageResources.encryption.kmsKey);
+        kmsKeyLambdaPermissionAddToResourcePolicy(
+            preTokenGeneration,
+            props.storageResources.encryption.kmsKey
+        );
         globalLambdaEnvironmentsAndPermissions(preTokenGeneration, props.config);
 
         const message =
