@@ -19,6 +19,7 @@ from models.databases import CreateDatabaseRequestModel
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from typing import Dict, List, Optional, Any, Union, Tuple
+from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
 from common.validators import validate
 
@@ -173,6 +174,202 @@ def is_versioning_enabled(bucket_id: str) -> bool:
         return False
     except Exception as e:
         logger.exception(f"Error checking if versioning is enabled: {e}")
+        return False
+
+def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
+    """
+    Determine if file is archived based on S3 delete markers
+    
+    Args:
+        bucket: The S3 bucket name
+        key: The S3 object key
+        version_id: Optional specific version ID to check
+        
+    Returns:
+        True if file is archived (has delete marker), False otherwise
+    """
+    try:
+        if version_id:
+            # Check if specific version is a delete marker
+            response = s3_client.list_object_versions(
+                Bucket=bucket,
+                Prefix=key,
+                MaxKeys=1000
+            )
+            
+            # Check if the specified version is a delete marker
+            for marker in response.get('DeleteMarkers', []):
+                if marker['Key'] == key and marker['VersionId'] == version_id:
+                    return True
+            return False
+        else:
+            # Check if current version is deleted (has delete marker as latest)
+            try:
+                s3_client.head_object(Bucket=bucket, Key=key)
+                return False  # Object exists, not archived
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'NoSuchKey':
+                    # Object doesn't exist, check if it has delete markers
+                    response = s3_client.list_object_versions(
+                        Bucket=bucket,
+                        Prefix=key,
+                        MaxKeys=1
+                    )
+                    return len(response.get('DeleteMarkers', [])) > 0
+                else:
+                    raise
+    except Exception as e:
+        logger.warning(f"Error checking archive status for {key}: {e}")
+        return False
+
+def determine_asset_type(assetId, bucket, prefix):
+    """Determine the asset type based on S3 contents"""
+    try:
+        
+        logger.info(f"Determining asset type from bucket: {bucket}, prefix: {prefix}")
+        
+        # List all objects with the specified prefix
+        response = s3_client.list_objects_v2(
+            Bucket=bucket,
+            Prefix=prefix,
+        )
+        
+        # Get the contents and filter out folder markers (objects ending with '/')
+        contents = response.get('Contents', [])
+        
+        # Filter out archived files
+        non_archived_files = []
+        file_count = 0
+        for item in contents:
+            if item['Key'].endswith('/'):
+                # Skip folder markers
+                continue
+                
+            try:
+                # Check if file is archived using the new method
+                if not is_file_archived(bucket, item['Key']):
+                    non_archived_files.append(item)
+                    file_count += 1
+                    
+                    # Short circuit if we've found more than one file
+                    if file_count > 1:
+                        logger.info(f"Found multiple files, short-circuiting and returning 'folder'")
+                        return 'folder'
+            except Exception as e:
+                logger.warning(f"Error checking if file {item['Key']} is archived: {e}")
+                # If we can't check archive status, include the file by default
+                non_archived_files.append(item)
+                file_count += 1
+                
+                # Short circuit if we've found more than one file
+                if file_count > 1:
+                    logger.info(f"Found multiple files, short-circuiting and returning 'folder'")
+                    return 'folder'
+        
+        # At this point, we have 0 or 1 files
+        logger.info(f"Found {file_count} non-archived files in {bucket}/{prefix} (total objects: {len(contents)})")
+        
+        # Determine asset type
+        if file_count == 0:
+            logger.info("No non-archived files found, returning None")
+            return None  # No files found
+        else:  # file_count == 1
+            # Extract file extension from the single file
+            file_key = non_archived_files[0]['Key']
+            file_name = os.path.basename(file_key)
+            
+            # Skip if the file is just a folder marker
+            if file_name == '':
+                logger.info("Single object is a folder marker, returning 'folder'")
+                return 'folder'
+                
+            if '.' in file_name:
+                extension = '.' + file_name.split('.')[-1].lower()  # Convert to lowercase for consistency
+                logger.info(f"Determined asset type as file with extension: {extension}")
+                return extension
+            else:
+                logger.info("Determined asset type as unknown (no file extension)")
+                return 'unknown'
+    except Exception as e:
+        logger.exception(f"Error determining asset type: {e}")
+        return None
+    
+def update_asset_type(bucket_id: str, asset_id: str, bucket_name: str, asset_base_key: str) -> bool:
+    """
+    Update asset type based on bucket contents
+    
+    Args:
+        bucket_id: The bucket ID
+        asset_id: The asset ID
+        bucket_name: The S3 bucket name
+        asset_base_key: The base key for the asset in S3
+        
+    Returns:
+        bool: True if updated successfully, False otherwise
+    """
+    try:
+        # Look up asset in DynamoDB
+        asset_data = lookup_asset(bucket_id, asset_id)
+        if not asset_data:
+            logger.warning(f"Asset {asset_id} not found in bucket {bucket_id}, cannot update asset type")
+            return False
+        
+        # Determine asset type
+        asset_type = determine_asset_type(asset_id, bucket_name, asset_base_key)
+        logger.info(f"Asset type determined for asset {asset_id}: {asset_type}")
+        
+        # Update asset type if it has changed
+        current_asset_type = asset_data.get('assetType')
+        if asset_type and asset_type != current_asset_type:
+            logger.info(f"Updating asset type for {asset_id} from {current_asset_type} to {asset_type}")
+            
+            # Update asset in DynamoDB
+            table = dynamodb.Table(asset_table_name)
+            table.update_item(
+                Key={
+                    'databaseId': asset_data['databaseId'],
+                    'assetId': asset_id
+                },
+                UpdateExpression="SET assetType = :assetType",
+                ExpressionAttributeValues={
+                    ':assetType': asset_type
+                }
+            )
+            
+            # Update cache
+            cache_key = f"{bucket_id}:{asset_id}"
+            asset_data['assetType'] = asset_type
+            asset_cache.set(cache_key, asset_data)
+            
+            return True
+        elif not asset_type and not current_asset_type:
+            # If both are None/empty, set to 'none'
+            logger.info(f"Setting default asset type 'none' for {asset_id}")
+            
+            # Update asset in DynamoDB
+            table = dynamodb.Table(asset_table_name)
+            table.update_item(
+                Key={
+                    'databaseId': asset_data['databaseId'],
+                    'assetId': asset_id
+                },
+                UpdateExpression="SET assetType = :assetType",
+                ExpressionAttributeValues={
+                    ':assetType': 'none'
+                }
+            )
+            
+            # Update cache
+            cache_key = f"{bucket_id}:{asset_id}"
+            asset_data['assetType'] = 'none'
+            asset_cache.set(cache_key, asset_data)
+            
+            return True
+        
+        logger.info(f"Asset type for {asset_id} remains unchanged: {current_asset_type}")
+        return True
+    except Exception as e:
+        logger.exception(f"Error updating asset type: {e}")
         return False
 
 def lookup_asset(bucket_id: str, asset_id: str) -> Optional[Dict]:
@@ -664,6 +861,11 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
             logger.error(f"Failed to update metadata for {object_key}")
             return False, f"Failed to update metadata for {object_key}"
         
+        # 6. Update asset type based on all files in the bucket
+        # Construct the asset base key (prefix + assetId + /)
+        asset_base_key = f"{prefix}{asset_id}/" if prefix and prefix != '/' else f"{asset_id}/"
+        update_asset_type(bucket_id, asset_id, bucket_name, asset_base_key)
+        
         return True, f"Successfully processed {object_key}"
     except Exception as e:
         logger.exception(f"Error processing S3 record: {e}")
@@ -726,8 +928,8 @@ def on_storage_event_created(event):
     # Log summary of processing results
     logger.info(f"Processed {len(event.get('Records', []))} records: {success_count} successful, {error_count} errors, {skip_count} skipped")
     
-    # Return True if there were no errors, False otherwise
-    return error_count == 0
+    # Return True if there were no errors or some are successful
+    return (error_count == 0 or success_count > 0)
 
 def parse_event(event):
     """
@@ -884,8 +1086,8 @@ def lambda_handler_deleted(event, context):
     Handler for file deleted events from SQS
     
     This function is the entry point for processing file deletion events.
-    For deletions, we only run the OpenSearch indexing lambda to update
-    the search index.
+    For deletions, we update the asset type if the file is not a folder marker,
+    then run the OpenSearch indexing lambda to update the search index.
     
     Args:
         event: The event from the event source (SQS, SNS, or direct S3)
@@ -900,8 +1102,68 @@ def lambda_handler_deleted(event, context):
         # Parse the event to handle different sources
         parsed_event = parse_event(event)
         
-        # For deletions, we just run the OpenSearch indexing lambda
+        # Process records if present
         if parsed_event.get('Records'):
+
+            try:
+                # Check each record for files that are not folder markers
+                for record in parsed_event.get('Records', []):
+                    # Skip records without S3 information
+                    if not record.get('s3'):
+                        logger.warning("Record does not contain S3 information, skipping")
+                        continue
+                    
+                    # Extract bucket name and object key
+                    bucket_name = record['s3']['bucket']['name']
+                    object_key = record['s3']['object']['key']
+                    
+                    # Skip folder markers (objects ending with '/')
+                    if object_key.endswith('/'):
+                        logger.info(f"Skipping folder marker: {object_key}")
+                        continue
+                    
+                    # Copy prefix
+                    prefix = asset_bucket_prefix
+                    
+                    # Make sure prefix doesn't start with a '/'
+                    if prefix and prefix != '/':
+                        prefix = prefix.lstrip('/')
+                    
+                    # Use the configured prefix or empty string
+                    prefix = prefix or ""
+                    
+                    # Get bucket ID
+                    bucket_id = get_bucket_id(bucket_name, prefix)
+                    if not bucket_id:
+                        logger.info(f"No bucket ID found for {bucket_name} with prefix {prefix}, skipping")
+                        continue
+                    
+                    # Extract asset ID from the object key
+                    asset_id = extract_asset_id_from_key(object_key, prefix)
+                    if not asset_id:
+                        logger.info(f"Could not extract asset ID from {object_key}, skipping")
+                        continue
+                    
+                    # Skip special folders
+                    if asset_id in ['temp-uploads', 'preview', 'pipeline']:
+                        logger.info(f"Asset ID {asset_id} is a special folder, skipping")
+                        continue
+                    
+                    # Validate asset ID
+                    if not validate_asset_id(asset_id):
+                        logger.info(f"Asset ID {asset_id} is not valid, skipping")
+                        continue
+                    
+                    # Construct the asset base key (prefix + assetId + /)
+                    asset_base_key = f"{prefix}{asset_id}/" if prefix and prefix != '/' else f"{asset_id}/"
+                    
+                    # Update asset type based on remaining files
+                    logger.info(f"Updating asset type for {asset_id} after file deletion")
+                    update_asset_type(bucket_id, asset_id, bucket_name, asset_base_key)
+            except Exception as e:
+                logger.exception(f"Error processing deletion event.. continueing with index: {e}")
+            
+            # Run OpenSearch indexing
             logger.info("Running OpenSearch indexing for deletion event")
             runOpenSearchIndexingLambda(event)
         else:

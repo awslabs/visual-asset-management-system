@@ -78,6 +78,7 @@ This version includes significant enhancements to VAMS infrastructure, a complet
     -   New DynamoDB table for S3 Asset Buckets is set up with CDK deployment to define available asset S3 buckets
     -   Direct changes to asset S3 buckets are allowed and will be synced back to VAMS. New asset prefix files will create new assets and databases based on configuration details defined. File changes within an asset will be indexed and pulled with any new API requests involving asset file operations
     -   **Web** Pipelines in the navigation menu is now under "Orchestrate and Automate"
+-   Standardized API route paths that had /databases* (plural) to /database* (singular)
 
 ### Bug Fixes
 -   Fixed various bugs with asset comments editing and deleting

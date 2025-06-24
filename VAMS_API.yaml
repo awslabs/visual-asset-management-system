@@ -651,7 +651,7 @@ paths:
                     $ref: '#/components/schemas/id_regex'
             security:
               - DefaultCognitoAuthorizer: []
-    /databases:
+    /database:
         put:
             summary: "Create or update a database."
             requestBody:
@@ -703,7 +703,7 @@ paths:
               - $ref: "#/components/parameters/startingTokenParam"
             security:
               - DefaultCognitoAuthorizer: []
-    /databases/{databaseId}:
+    /database/{databaseId}:
         get:
             summary: "Get a database."
             responses:

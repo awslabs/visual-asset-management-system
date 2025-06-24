@@ -109,7 +109,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         path = event['requestContext']['http']['path']
         
         # Check if this is the correct API route for database creation
-        if http_method == 'POST' and path.endswith('/databases'):
+        if http_method == 'POST' and path.endswith('/database'):
             # Parse request body
             if isinstance(event['body'], str):
                 event['body'] = json.loads(event['body'])

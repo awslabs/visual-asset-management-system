@@ -214,9 +214,7 @@ export const revertAssetVersion = async ({ databaseId, assetId, assetVersionId, 
             return [false, "Database ID, Asset ID, and Asset Version ID are required"];
         }
 
-        const body = {
-            assetVersionId: assetVersionId
-        };
+        const body = {};
         
         if (comment) {
             body.comment = comment;
@@ -224,7 +222,7 @@ export const revertAssetVersion = async ({ databaseId, assetId, assetVersionId, 
 
         const response = await api.post(
             "api",
-            `database/${databaseId}/assets/${assetId}/revertAssetVersion`,
+            `database/${databaseId}/assets/${assetId}/revertAssetVersion/${assetVersionId}`,
             {
                 body: body
             }

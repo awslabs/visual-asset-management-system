@@ -159,6 +159,8 @@ export function generateContentSecurityPolicy(
         "blob:",
         authenticationDomain,
         `https://${apiUrl}`,
+        `https://${Service("S3").PrincipalString}/`,
+        `https://${Service("S3").Endpoint}/`
     ];
 
     const scriptSrc = [
@@ -167,26 +169,17 @@ export function generateContentSecurityPolicy(
         "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
         authenticationDomain,
         `https://${apiUrl}`,
+        `https://${Service("S3").PrincipalString}/`,
+        `https://${Service("S3").Endpoint}/`
     ];
 
     const imgMediaSrc = [
         "'self'",
         "blob:",
         "data:",
+        `https://${Service("S3").PrincipalString}/`,
+        `https://${Service("S3").Endpoint}/`
     ];
-    // Add all asset buckets from the global array
-    const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
-    for (const record of bucketRecords) {
-
-        connectSrc.push(`https://${Service("S3").PrincipalString}/${record.bucket.bucketName}/`);
-        connectSrc.push(`https://${Service("S3").Endpoint}/${record.bucket.bucketName}/`);
-        
-        scriptSrc.push(`https://${Service("S3").PrincipalString}/${record.bucket.bucketName}/`);
-        scriptSrc.push(`https://${Service("S3").Endpoint}/${record.bucket.bucketName}/`);
-        
-        imgMediaSrc.push(`https://${Service("S3").PrincipalString}/${record.bucket.bucketName}/`);
-        imgMediaSrc.push(`https://${Service("S3").Endpoint}/${record.bucket.bucketName}/`);
-    }
 
     if (config.app.authProvider.useCognito.enabled) {
         connectSrc.push(`https://${Service("COGNITO_IDP").Endpoint}/`);

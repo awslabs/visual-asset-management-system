@@ -869,10 +869,16 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
     # Get asset location
     bucket, prefix = get_asset_s3_location(asset)
     
-    # Get target version files
+    # First check if the version metadata exists
+    version_metadata = get_asset_version_metadata(assetId, request_model.assetVersionId)
+    if not version_metadata:
+        raise VAMSGeneralErrorResponse(f"Version {request_model.assetVersionId} not found")
+    
+    # Get target version files - but don't error if no files exist
     target_version = get_asset_file_versions(assetId, request_model.assetVersionId)
     if not target_version:
-        raise VAMSGeneralErrorResponse(f"Version {request_model.assetVersionId} not found")
+        # Create an empty target_version structure if none exists
+        target_version = {'files': []}
     
     # Get current files in S3
     current_files = list_s3_files_with_versions(bucket, prefix, include_archived=True)
@@ -901,6 +907,11 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
         source_version_id = file['versionId']
         full_key = prefix + relative_key.lstrip('/')
         
+        # Check if the file version still exists (wasn't permanently deleted)
+        if not does_file_version_exist(bucket, full_key, source_version_id):
+            skipped_files.append(relative_key)
+            continue
+        
         # Copy the file version to make it current
         new_version_id = copy_s3_object_version(
             bucket, full_key, source_version_id,
@@ -923,9 +934,7 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
             # Skip files that couldn't be copied
             skipped_files.append(relative_key)
     
-    # Ensure we have at least one file
-    if not files_to_version:
-        raise VAMSGeneralErrorResponse("No files could be reverted")
+    # Don't error if no files could be reverted - empty file list is valid
     
     # Save file versions to DynamoDB
     if not save_asset_file_versions(assetId, new_assetVersionId, files_to_version):
@@ -1220,6 +1229,10 @@ def handle_revert_version(event, context) -> APIGatewayProxyResponseV2:
             'assetId': {
                 'value': path_params['assetId'],
                 'validator': 'ASSET_ID'
+            },
+            'assetVersionId': {
+                'value': path_params['assetVersionId'],
+                'validator': 'NUMBER'
             },
         })
         

@@ -472,14 +472,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             return authorization_error()
         
         # Route request to appropriate handler based on path and method
-        if path.endswith('/databases'):
-            # Route: /databases
+        if path.endswith('/database'):
+            # Route: /database
             if http_method == 'GET':
                 return get_databases_handler(query_parameters, claims_and_roles)
             else:
                 return authorization_error(body={'message': 'Method not allowed for this route'})
-        elif '/databases/' in path and path_parameters.get('databaseId'):
-            # Route: /databases/{databaseId}
+        elif '/database/' in path and path_parameters.get('databaseId'):
+            # Route: /database/{databaseId}
             if http_method == 'GET':
                 return get_database_handler(path_parameters, query_parameters, claims_and_roles)
             elif http_method == 'DELETE':

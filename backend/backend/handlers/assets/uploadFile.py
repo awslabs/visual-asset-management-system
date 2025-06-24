@@ -17,6 +17,7 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from botocore.exceptions import ClientError
 from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
 from models.assetsV3 import (
@@ -212,23 +213,50 @@ def delete_upload_details(uploadId, assetId):
         logger.exception(f"Error deleting upload details: {e}")
         # Don't raise here, just log the error
 
-def is_file_archived(metadata):
-    """Determine if file is archived based on S3 metadata
+def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
+    """Determine if file is archived based on S3 delete markers
     
     Args:
-        metadata: The S3 object metadata
+        bucket: The S3 bucket name
+        key: The S3 object key
+        version_id: Optional specific version ID to check
         
     Returns:
-        True if file is archived, False otherwise
+        True if file is archived (has delete marker), False otherwise
     """
-    vams_status = metadata.get('Metadata', {}).get('vams-status', '')
-    storage_class = metadata.get('StorageClass', 'STANDARD')
-    
-    # File is archived if:
-    # 1. Has vams-status=archived or deleted metadata, OR
-    # 2. Storage class is GLACIER/DEEP_ARCHIVE
-    return (vams_status in ['archived', 'deleted'] or 
-            storage_class in ['GLACIER', 'DEEP_ARCHIVE'])
+    try:
+        if version_id:
+            # Check if specific version is a delete marker
+            response = s3.list_object_versions(
+                Bucket=bucket,
+                Prefix=key,
+                MaxKeys=1000
+            )
+            
+            # Check if the specified version is a delete marker
+            for marker in response.get('DeleteMarkers', []):
+                if marker['Key'] == key and marker['VersionId'] == version_id:
+                    return True
+            return False
+        else:
+            # Check if current version is deleted (has delete marker as latest)
+            try:
+                s3.head_object(Bucket=bucket, Key=key)
+                return False  # Object exists, not archived
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'NoSuchKey':
+                    # Object doesn't exist, check if it has delete markers
+                    response = s3.list_object_versions(
+                        Bucket=bucket,
+                        Prefix=key,
+                        MaxKeys=1
+                    )
+                    return len(response.get('DeleteMarkers', [])) > 0
+                else:
+                    raise
+    except Exception as e:
+        logger.warning(f"Error checking archive status for {key}: {e}")
+        return False
 
 def determine_asset_type(assetId, bucket, prefix):
     """Determine the asset type based on S3 contents"""
@@ -247,35 +275,41 @@ def determine_asset_type(assetId, bucket, prefix):
         
         # Filter out archived files
         non_archived_files = []
+        file_count = 0
         for item in contents:
             if item['Key'].endswith('/'):
                 # Skip folder markers
                 continue
                 
             try:
-                # Get object metadata to check if archived
-                head_response = s3.head_object(
-                    Bucket=bucket,
-                    Key=item['Key']
-                )
-                
-                # Only include non-archived files
-                if not is_file_archived(head_response):
+                # Check if file is archived using the new method
+                if not is_file_archived(bucket, item['Key']):
                     non_archived_files.append(item)
+                    file_count += 1
+                    
+                    # Short circuit if we've found more than one file
+                    if file_count > 1:
+                        logger.info(f"Found multiple files, short-circuiting and returning 'folder'")
+                        return 'folder'
             except Exception as e:
                 logger.warning(f"Error checking if file {item['Key']} is archived: {e}")
                 # If we can't check archive status, include the file by default
                 non_archived_files.append(item)
+                file_count += 1
+                
+                # Short circuit if we've found more than one file
+                if file_count > 1:
+                    logger.info(f"Found multiple files, short-circuiting and returning 'folder'")
+                    return 'folder'
         
-        # Count the actual files (excluding folder markers and archived files)
-        file_count = len(non_archived_files)
+        # At this point, we have 0 or 1 files
         logger.info(f"Found {file_count} non-archived files in {bucket}/{prefix} (total objects: {len(contents)})")
         
         # Determine asset type
         if file_count == 0:
             logger.info("No non-archived files found, returning None")
             return None  # No files found
-        elif file_count == 1:
+        else:  # file_count == 1
             # Extract file extension from the single file
             file_key = non_archived_files[0]['Key']
             file_name = os.path.basename(file_key)
@@ -292,9 +326,6 @@ def determine_asset_type(assetId, bucket, prefix):
             else:
                 logger.info("Determined asset type as unknown (no file extension)")
                 return 'unknown'
-        else:
-            logger.info(f"Determined asset type as folder (multiple files: {file_count})")
-            return 'folder'
     except Exception as e:
         logger.exception(f"Error determining asset type: {e}")
         return None

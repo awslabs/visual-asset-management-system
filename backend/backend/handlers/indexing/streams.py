@@ -14,6 +14,7 @@ from boto3.dynamodb.types import TypeDeserializer
 from common import get_ssm_parameter_value
 from boto3.dynamodb.conditions import Key
 from customLogging.logger import safeLogger
+from botocore.exceptions import ClientError
 
 logger = safeLogger(service="IndexingStreams")
 
@@ -524,38 +525,57 @@ def get_asset_fields(keys):
 
     return result.get('Item')
 
-
-def lambda_handler_a(event, context,
-                     index=AOSIndexAssetMetadata.from_env,
-                     s3index=AOSIndexS3Objects.from_env,
-                     metadataTable_fn=MetadataTable.from_env,
-                     get_asset_fields_fn=get_asset_fields):
-
-    logger.info(event)
-
-    # we need to catch delete events here and delete by query on aos.
-    client = index()
-    metadataTable = metadataTable_fn()
-
-    if event.get("eventName") == "REMOVE":
-        client.delete_item_by_query(event['dynamodb']['Keys']['assetId']['S'])
-
-    if 'Records' not in event:
-        return
-
-    for record in event['Records']:
-        if record['eventName'] == 'REMOVE':
-            client.delete_item_by_query(
-                record['dynamodb']['Keys']['assetId']['S'])
-
-        #Asset table inserted / updated
-        #Note: updates metadata table for asset updated which triggers the "lambda_handler_m" handler through DynamoDB streams (hack fix for now)
-        if record['eventName'] == 'MODIFY' or record['eventName'] == 'INSERT':   
-            logger.info("insert or modify asset table record")
-            databaseId = record['dynamodb']['Keys']['databaseId']['S']
-            assetId = record['dynamodb']['Keys']['assetId']['S']
-            metadataTable.write_asset_table_updated_event(
-                databaseId, assetId)
+def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
+    """Determine if file is archived based on S3 delete markers or permanently deleted
+    
+    Args:
+        bucket: The S3 bucket name
+        key: The S3 object key
+        version_id: Optional specific version ID to check
+        
+    Returns:
+        True if file is archived (has delete marker) or permanently deleted, False otherwise
+    """
+    try:
+        if version_id:
+            # Check if specific version is a delete marker
+            response = s3client.list_object_versions(
+                Bucket=bucket,
+                Prefix=key,
+                MaxKeys=1000
+            )
+            
+            # Check if the specified version is a delete marker
+            for marker in response.get('DeleteMarkers', []):
+                if marker['Key'] == key and marker['VersionId'] == version_id:
+                    return True
+            return False
+        else:
+            # Check if current version is deleted (has delete marker as latest)
+            try:
+                s3client.head_object(Bucket=bucket, Key=key)
+                return False  # Object exists, not archived
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'NoSuchKey':
+                    # Object doesn't exist, check if it has delete markers or versions
+                    response = s3client.list_object_versions(
+                        Bucket=bucket,
+                        Prefix=key,
+                        MaxKeys=1
+                    )
+                    
+                    has_delete_markers = len(response.get('DeleteMarkers', [])) > 0
+                    has_versions = len(response.get('Versions', [])) > 0
+                    
+                    # If it has delete markers, it's archived
+                    # If it has no versions and no delete markers, it's permanently deleted
+                    # In both cases, we should return True
+                    return has_delete_markers or not has_versions
+                else:
+                    raise
+    except Exception as e:
+        logger.warning(f"Error checking archive status for {key}: {e}")
+        return False
 
 def handle_s3_event_record_removed(record, s3index_fn):
     if not record.get("eventName", "").startswith("ObjectRemoved:"):
@@ -597,6 +617,11 @@ def handle_s3_event_record(record,
         logger.info("Ignoring pipeline and preview files from assets from indexing")
         return
 
+    #Ignore folders
+    if record.get("s3", {}).get("object", {}).get("key", "").endswith("/"):
+        logger.info("Ignoring folders from indexing")
+        return
+
     handle_s3_event_record_removed(record, s3index_fn)
 
     if not record.get("eventName", "").startswith("ObjectCreated:"):
@@ -613,14 +638,14 @@ def handle_s3_event_record(record,
 
     databaseId = head_result['Metadata'].get('databaseid', None)
     assetId = head_result['Metadata'].get('assetid', None)
-    deleted = head_result['Metadata'].get('vams-status', '')
-
-    # s3 objects are marked with vams-status=deleted in their s3 metadata
-    # by calls to delete assets in assetService.py
-    if deleted == 'deleted':
+    
+    # Check if the file is archived using the more robust method
+    bucket_name = record['s3']['bucket']['name']
+    object_key = record.get("s3", {}).get("object", {}).get("key", "")
+    
+    if is_file_archived(bucket_name, object_key):
         s3index = s3index_fn()
-        s3index.delete_item(
-            record.get("s3", {}).get("object", {}).get("key", ""))
+        s3index.delete_item(object_key)
         return
     
     if databaseId is None or assetId is None:
@@ -665,6 +690,39 @@ def handle_s3_event_record(record,
             "ETag": head_result['ETag'],
         },
     )
+
+def lambda_handler_a(event, context,
+                     index=AOSIndexAssetMetadata.from_env,
+                     s3index=AOSIndexS3Objects.from_env,
+                     metadataTable_fn=MetadataTable.from_env,
+                     get_asset_fields_fn=get_asset_fields):
+
+    logger.info(event)
+
+    # we need to catch delete events here and delete by query on aos.
+    client = index()
+    metadataTable = metadataTable_fn()
+
+    if event.get("eventName") == "REMOVE":
+        client.delete_item_by_query(event['dynamodb']['Keys']['assetId']['S'])
+
+    if 'Records' not in event:
+        return
+
+    for record in event['Records']:
+        if record['eventName'] == 'REMOVE':
+            client.delete_item_by_query(
+                record['dynamodb']['Keys']['assetId']['S'])
+
+        #Asset table inserted / updated
+        #Note: updates metadata table for asset updated which triggers the "lambda_handler_m" handler through DynamoDB streams (hack fix for now)
+        if record['eventName'] == 'MODIFY' or record['eventName'] == 'INSERT':   
+            logger.info("insert or modify asset table record")
+            databaseId = record['dynamodb']['Keys']['databaseId']['S']
+            assetId = record['dynamodb']['Keys']['assetId']['S']
+            metadataTable.write_asset_table_updated_event(
+                databaseId, assetId)
+
 
 
 def lambda_handler_m(event, context,
@@ -722,10 +780,26 @@ def lambda_handler_m(event, context,
             continue
 
         # Coming from SQS by S3 event notification
-        if "EventSource" in record and record['EventSource'] == 'aws:sqs' and 'Records' in json.loads(record["Sqs"]["Message"]):
-            for sqsS3Record in json.loads(record['Sqs']['Message'])['Records']:
-                if (sqsS3Record['eventSource'] == "aws:s3"):
-                    handle_s3_event_record(sqsS3Record, bucketName, bucketPrefix)
+        if "eventSource" in record and record['eventSource'] == 'aws:sqs':
+            try:
+                # Parse the SQS body which contains an SNS notification
+                sqs_body = json.loads(record["body"])
+                
+                # Check if this is an SNS notification
+                if "Type" in sqs_body and sqs_body["Type"] == "Notification" and "Message" in sqs_body:
+                    # Parse the SNS message which contains S3 event
+                    sns_message = json.loads(sqs_body["Message"])
+                    
+                    # Process S3 records if they exist
+                    if "Records" in sns_message:
+                        for s3_record in sns_message["Records"]:
+                            if "eventSource" in s3_record and s3_record["eventSource"] == "aws:s3":
+                                handle_s3_event_record(s3_record, bucketName, bucketPrefix)
+                    else:
+                        logger.info("No Records found in SNS message")
+                        logger.info(sns_message)
+            except Exception as e:
+                logger.exception(f"Error processing SQS message: {e}")
             continue
 
         # Coming directly from S3 event notification
@@ -733,7 +807,7 @@ def lambda_handler_m(event, context,
             handle_s3_event_record(record)
             continue
 
-        if record['eventName'] == 'REMOVE':
+        if "eventName" in record and record['eventName'] == 'REMOVE':
             client.delete_item(record['dynamodb']['Keys']['assetId']['S'])
             continue
 

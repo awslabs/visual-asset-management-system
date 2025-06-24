@@ -216,10 +216,22 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
           <div>
             <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>Version</div>
             <div style={{ marginBottom: "16px" }}>
-              {asset?.currentVersion?.Version}
+              v{asset?.currentVersion?.Version}
             </div>
             <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px" }}>Version Date</div>
-            <div style={{ marginBottom: "16px" }}>{asset?.currentVersion?.DateModified}</div>
+            <div style={{ marginBottom: "16px" }}>
+              {asset?.currentVersion?.DateModified 
+                ? new Date(asset.currentVersion.DateModified).toLocaleString('en-US', {
+                    year: 'numeric',
+                    month: 'numeric',
+                    day: 'numeric',
+                    hour: 'numeric',
+                    minute: 'numeric',
+                    second: 'numeric',
+                    hour12: true
+                  })
+                : ''}
+            </div>
           </div>
         </Grid>
       </Container>

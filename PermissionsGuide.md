@@ -197,10 +197,10 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
--   `/databases` - GET/PUT
+-   `/database` - GET/PUT
 -   -   `Database` (databaseId) - GET (api: GET)
 -   -   `Database` (databaseId) - PUT (api: PUT)
--   `/databases/{databaseId}` - GET/DELETE
+-   `/database/{databaseId}` - GET/DELETE
 -   -   `Database` (databaseId) - GET (api: GET)
 -   -   `Database` (databaseId) - DELETE (api: DELETE)
 -   `/buckets` - GET

@@ -19,7 +19,7 @@ export const useAssetVersions = (databaseId: string, assetId: string) => {
     
     // State for pagination
     const [currentPage, setCurrentPage] = useState<number>(1);
-    const [pageSize, setPageSize] = useState<number>(10);
+    const [pageSize, setPageSize] = useState<number>(5);
     const [nextToken, setNextToken] = useState<string | null>(null);
     const [pageTokens, setPageTokens] = useState<{[key: number]: string | null | undefined}>({1: null});
     const [allVersions, setAllVersions] = useState<AssetVersion[]>([]);

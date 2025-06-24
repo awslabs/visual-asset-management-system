@@ -111,7 +111,7 @@ export const deleteElement = async ({ deleteRoute, elementId, item }, api = API)
         // Handle global pipelines/workflows (no database ID)
         if (item?.databaseId === "" && deleteRoute.includes("{databaseId}")) {
             // For global items, use the global database route
-            route = deleteRoute.replace("{databaseId}", "global");
+            route = deleteRoute.replace("{databaseId}", "GLOBAL");
         } else {
             route = route.replace("{databaseId}", item?.databaseId);
         }
@@ -235,7 +235,7 @@ export const createUpdateElements = async ({ pluralName, config }, api = API) =>
  */
 export const fetchAllDatabases = async (api = API) => {
     try {
-        let response = await api.get("api", "databases", {});
+        let response = await api.get("api", "database", {});
         console.log("Raw databases response:", response);
         
         // If response is directly an array, return it
@@ -251,7 +251,7 @@ export const fetchAllDatabases = async (api = API) => {
             items = items.concat(response.Items);
             while (response.NextToken) {
                 init["queryStringParameters"]["startingToken"] = response.NextToken;
-                response = await api.get("api", "databases", init);
+                response = await api.get("api", "database", init);
                 if (response && response.Items) {
                     items = items.concat(response.Items);
                 }
@@ -262,7 +262,7 @@ export const fetchAllDatabases = async (api = API) => {
             items = items.concat(response.message.Items);
             while (response.message.NextToken) {
                 init["queryStringParameters"]["startingToken"] = response.message.NextToken;
-                response = await api.get("api", "databases", init);
+                response = await api.get("api", "database", init);
                 if (response && response.message && response.message.Items) {
                     items = items.concat(response.message.Items);
                 }
@@ -330,7 +330,7 @@ export const fetchDatabase = async ({ databaseId }, api = API) => {
     try {
         let response;
         if (databaseId) {
-            response = await api.get("api", `databases/${databaseId}`, {});
+            response = await api.get("api", `database/${databaseId}`, {});
             if (response.message) return response.message;
         } else {
             return false;
@@ -1214,7 +1214,7 @@ export const fetchBuckets = async (api = API) => {
  */
 export const createDatabase = async ({ databaseId, description, defaultBucketId }, api = API) => {
     try {
-        const response = await api.post("api", "databases", {
+        const response = await api.post("api", "database", {
             body: {
                 databaseId,
                 description,

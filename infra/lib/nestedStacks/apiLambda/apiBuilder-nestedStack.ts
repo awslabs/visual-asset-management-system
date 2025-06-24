@@ -168,7 +168,7 @@ export function apiBuilder(
         subnets
     );
     attachFunctionToApi(scope, createDatabaseFunction, {
-        routePath: "/databases",
+        routePath: "/database",
         method: apigwv2.HttpMethod.POST,
         api: api,
     });
@@ -182,17 +182,17 @@ export function apiBuilder(
         subnets
     );
     attachFunctionToApi(scope, databaseService, {
-        routePath: "/databases",
+        routePath: "/database",
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
     attachFunctionToApi(scope, databaseService, {
-        routePath: "/databases/{databaseId}",
+        routePath: "/database/{databaseId}",
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
     attachFunctionToApi(scope, databaseService, {
-        routePath: "/databases/{databaseId}",
+        routePath: "/database/{databaseId}",
         method: apigwv2.HttpMethod.DELETE,
         api: api,
     });

@@ -48,7 +48,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
         pageSize: number;
         visibleContent: string[];
     }>({
-        pageSize: 10,
+        pageSize: 5,
         visibleContent: ['version', 'dateModified', 'createdBy', 'comment', 'actions']
     });
     
@@ -499,6 +499,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                         pageSizePreference={{
                             title: "Page size",
                             options: [
+                                { value: 5, label: "5 versions" },
                                 { value: 10, label: "10 versions" },
                                 { value: 20, label: "20 versions" },
                                 { value: 50, label: "50 versions" },

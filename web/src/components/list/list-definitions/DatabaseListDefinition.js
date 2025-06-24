@@ -20,7 +20,7 @@ export const DatabaseListDefinition = new ListDefinition({
         { name: "assetCount", placeholder: `${Synonyms.Asset} Count` },
     ],
     elementId: "databaseId",
-    deleteRoute: "databases/{databaseId}",
+    deleteRoute: "database/{databaseId}",
     columnDefinitions: [
         new ColumnDefinition({
             id: "databaseId",

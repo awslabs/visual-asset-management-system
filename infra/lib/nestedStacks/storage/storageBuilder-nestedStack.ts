@@ -258,17 +258,20 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
     if (config.app.assetBuckets.externalAssetBuckets && config.app.assetBuckets.externalAssetBuckets.length > 0) {
         // Look up each bucket and add to global array
         for (const bucketConfig of config.app.assetBuckets.externalAssetBuckets) {
-            const bucket = s3.Bucket.fromBucketArn(
-                scope,
-                `ImportedAssetBucket-${bucketConfig.bucketArn}`,
-                bucketConfig.bucketArn
-            );
 
             if (!bucketConfig.defaultSyncDatabaseId ||
                 bucketConfig.defaultSyncDatabaseId == "" ||
                 bucketConfig.defaultSyncDatabaseId == "UNDEFINED") {
                 throw new Error(`External bucket ${bucketConfig.bucketArn} is missing defaultSyncDatabaseId`);
             }
+
+            const bucket = s3.Bucket.fromBucketArn(
+                scope,
+                `ImportedAssetBucket-${bucketConfig.bucketArn}`,
+                bucketConfig.bucketArn
+            );
+
+            requireTLSAndAdditionalPolicyAddToResourcePolicy(bucket, config);
 
             s3AssetBuckets.addS3AssetBucket(bucket, bucketConfig.baseAssetsPrefix, bucketConfig.defaultSyncDatabaseId);
         }

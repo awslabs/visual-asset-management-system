@@ -301,11 +301,42 @@ Turn the `app.useAlb.addAlbS3SpecialVpcEndpoint` infrastructure configuration to
 
 During deployment of CDK you can define different asset buckets to create and/or use. The `app.assetBuckets.createNewBucket` and `app.assetBuckets.defaultNewBucketSyncDatabaseId` CDK configuration define if the CDK should create and manage a new bucket and which databaseId it should sync direct S3 changes to. The default prefix it uses for this bucket is `/` for assets.
 
-Or, you can additionally defin external buckets that already exist to use for assets and syncing. This is defined in the `app.assetBuckets.externalAssetBuckets[]` CDK configuration that requires fields for `app.assetBuckets.externalAssetBuckets[].bucketArn`, `app.assetBuckets.externalAssetBuckets[].baseAssetsPrefix`, `app.assetBuckets.externalAssetBuckets[].defaultSyncDatabaseId` per external bucket. See the [Configuration Guide](./ConfigurationGuide.md) for information on these fields
+Or, you can additionally define external buckets that already exist to use for assets and syncing. This is defined in the `app.assetBuckets.externalAssetBuckets[]` CDK configuration that requires fields for `app.assetBuckets.externalAssetBuckets[].bucketArn`, `app.assetBuckets.externalAssetBuckets[].baseAssetsPrefix`, `app.assetBuckets.externalAssetBuckets[].defaultSyncDatabaseId` per external bucket. See the [Configuration Guide](./ConfigurationGuide.md) for information on these fields
 
 At least a new creation or 1 external bucket must be defined.
 
-The system will attempt to add resource policies to the created and external buckets as well as all involved VAMS AWS components to access each bucket, during CDK deployment. 
+For all external buckets, make sure to add the policy below:
+
+Replace <BUCKET NAME> and <ACCOUNT ID> with the approrpiate information for the bucket. 
+```
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "Statement1",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "*"
+            },
+            "Action": [
+                "s3:GetBucketNotification",
+                "s3:PutBucketNotification"
+            ],
+            "Resource": [
+                "arn:aws:s3:::<BUCKET NAME>",
+                "arn:aws:s3:::<BUCKET NAME>/*"
+            ],
+            "Condition": {
+                "ArnEquals": {
+                    "aws:PrincipalArn": "arn:aws:sts::<ACCOUNT ID>:assumed-role/vams*"
+                }
+            }
+        }
+    ]
+}
+```
+
+The system will attempt to add other resource policies to the created and external buckets as well as all involved VAMS AWS components to access each bucket, during CDK deployment. 
 
 During CDK the S3 Assets Buckets dynamoDB table will be populated with the available buckets defined. This table is the basis for VAMS databases to define which bucket / prefix to use. the defaultSyncDatabaseId is used to narrow down on a database (or create one) if multiple for a bucket/prefix are defined or not existing. 
 
