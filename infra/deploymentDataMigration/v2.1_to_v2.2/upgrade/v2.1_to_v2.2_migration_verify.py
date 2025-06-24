@@ -3,16 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Verification script for VAMS v2.2 to v2.3 data migration
+Verification script for VAMS v2.1 to v2.2 data migration
 
-This script verifies that the migration from v2.2 to v2.3 was successful by:
+This script verifies that the migration from v2.1 to v2.2 was successful by:
 1. Checking that all assets have a corresponding version record
 2. Verifying that asset records have been updated correctly with new structure
 3. Verifying that database records have been updated with defaultBucketId
 4. Generating a report of the verification results
 
 Usage:
-    python v2.2_to_v2.3_migration_verify.py --config your_config.json
+    python v2.1_to_v2.2_migration_verify.py --config your_config.json
 
 Requirements:
     - Python 3.6+
@@ -32,7 +32,7 @@ from datetime import datetime
 from botocore.exceptions import ClientError
 
 # Import the migration script for configuration and utility functions
-import v2_2_to_v2_3_migration as migration
+import v2_1_to_v2_2_migration as migration
 
 # Configure logging
 logging.basicConfig(
@@ -410,7 +410,7 @@ def generate_report(version_results, asset_results, database_results, output_fil
 
 def main():
     """Main function to run the verification."""
-    parser = argparse.ArgumentParser(description='VAMS v2.2 to v2.3 Migration Verification Script')
+    parser = argparse.ArgumentParser(description='VAMS v2.1 to v2.2 Migration Verification Script')
     parser.add_argument('--profile', help='AWS profile name to use')
     parser.add_argument('--region', help='AWS region to use')
     parser.add_argument('--limit', type=int, help='Maximum number of assets to verify')
@@ -490,7 +490,7 @@ def main():
         logger.error(f"Error initializing DynamoDB client: {e}")
         return 1
     
-    logger.info("Starting VAMS v2.2 to v2.3 migration verification")
+    logger.info("Starting VAMS v2.1 to v2.2 migration verification")
     logger.info(f"Configuration: {json.dumps(migration.CONFIG, indent=2)}")
     
     try:

@@ -11,7 +11,7 @@
     "batch_size": 25,
     "dry_run": false,
     "comments": [
-        "This is a sample configuration file for the VAMS v2.2 to v2.3 migration script.",
+        "This is a sample configuration file for the VAMS v2.1 to v2.2 migration script.",
         "Replace the placeholder values with your actual values before running the script.",
         "The batch_size parameter controls how many items are processed in each batch.",
         "Set dry_run to true to perform a test run without making any changes.",

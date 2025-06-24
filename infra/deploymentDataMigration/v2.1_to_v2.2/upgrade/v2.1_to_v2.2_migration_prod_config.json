@@ -11,7 +11,7 @@
     "batch_size": 25,
     "dry_run": false,
     "comments": [
-        "This is a template production configuration file for the VAMS v2.2 to v2.3 migration script.",
+        "This is a template production configuration file for the VAMS v2.1 to v2.2 migration script.",
         "Replace the placeholder values with your actual production values before running the migration.",
         "It is recommended to first run with dry_run set to true to verify the changes that would be made.",
         "Then set dry_run to false when you're ready to run the actual migration.",

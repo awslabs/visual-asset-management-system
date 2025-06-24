@@ -2,14 +2,19 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
-## [2.3.0] (2025-11-31)
 
-This version includes significant enhancements to VAMS infrastructure, a complete overhaul of asset management APIs/Backend/UI, and various bug fixes. Key improvements include more flexible naming conventions, separation of assets and files, enhanced file management capabilities, new asset versioning, and improved upload/download functionality.
+## [2.2.0] (2025-09-31)
+
+This version includes significant enhancements to VAMS infrastructure, a complete overhaul of asset management APIs/Backend/UI, addition of supproting external IDP authentication, and various bug fixes. Key improvements include more flexible naming conventions, separation of assets and files, enhanced file management capabilities, new asset versioning, new use-case pipelines, global worksflows/pipelines, and improved upload/download functionality.
 
 ### ⚠ BREAKING CHANGES
 
-    -   CDK Configuration files must be updated to include the new required fields. See ConfigurationGuide.md and template configuration files for new formats.
-    -   Asset and Database table formats have changed which require using the migration scripts after CDK deployment to update the new field values. See v2.2_to_v2.3_migration_README.md for details on using the migration scripts.
+-   CDK Configuration files must be updated to include the new required fields. See ConfigurationGuide.md and template configuration files for new formats.
+-   Asset and Database table formats have changed which require using the migration scripts after CDK deployment to update the new field values. See v2.2_to_v2.3_migration_README.md for details on using the migration scripts.
+-   Due to VPC subnet breakout changes, this may break existing deployments. It is recommended to use an A/B deployment if you run into subnet configuration issues.
+-   Due to Cognito changes, a new Cognito user pool may be generated on stack deployment. To migrate existing users from the previous user pool, follow the following blog instructions: https://aws.amazon.com/blogs/security/approaches-for-migrating-users-to-amazon-cognito-user-pools/
+
+**Recommended Upgrade Path:** A/B Stack Deployment with data migration using staging bucket configuration and upgrade migration scripts for DynamoDB tables in `./infra/upgradeMigrationScripts`
 
 ### Features
 
@@ -80,37 +85,6 @@ This version includes significant enhancements to VAMS infrastructure, a complet
     -   Direct changes to asset S3 buckets are allowed and will be synced back to VAMS. New asset prefix files will create new assets and databases based on configuration details defined. File changes within an asset will be indexed and pulled with any new API requests involving asset file operations
     -   **Web** Pipelines in the navigation menu is now under "Orchestrate and Automate"
 -   Standardized API route paths that had /databases* (plural) to /database* (singular)
-
-### Bug Fixes
-
--   Fixed various bugs with asset comments editing and deleting
--   Fixed various UI and backend bugs related to the asset management overhaul
--   For cognito deployments, email was not getting added to the the token which could cause problems with setting auth profile and subscription email registrations
-
-### Chores
-
--   Added more input variables for use in pipeline lambdas called such as bucketAssetAuxiliary, bucketAsset, and inputAssetFileKey. This is in addition to the predetermined "easy" paths setup for pipeline use
--   Added more error checks and outer workflow abort procedures for workflows/pipelines in use-case pipelines
--   Updated auxiliary asset handling to match the new asset location keys and handling
--   Updated workflow execution to handle new asset location keys, bucket, and handling
--   Created new DynamoDB workflow executions table (old one will remain as deprecated to not lose data) to store better format for lambda storage and retrieval
--   Modified workflow executions API to '/database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}' and also added '/database/{databaseId}/assets/{assetId}/workflows/executions/' to get all executions for an asset
--   Subscription SNS topics now store databaseId along with assetId in the topic name to prevent future conflicts
--   Create/Execute workflow backend update to support new asset management file/bucket/prefix locations, to be more dynamic based on the calling asset and file
--   Updated S3 asset bucket event notifications to be a SNS->SQS fan-out for bucket sync/indexing and other bucket subscriptions like for the PcPotreePreview pipeline
--   Cleaned up and removed backend and UI files and components that were no longer needed and/or deprecated
-
-## [2.2.0] (2025-05-31)
-
-### ⚠ BREAKING CHANGES
-
--   Due to VPC subnet breakout changes, this may break existing deployments. It is recommended to use an A/B deployment if you run into subnet configuration issues.
--   Due to Cognito changes, a new Cognito user pool may be generated on stack deployment. To migrate existing users from the previous user pool, follow the following blog instructions: https://aws.amazon.com/blogs/security/approaches-for-migrating-users-to-amazon-cognito-user-pools/
-
-**Recommended Upgrade Path:** A/B Stack Deployment with data migration using staging bucket configuration and upgrade migration scripts for DynamoDB tables in `./infra/upgradeMigrationScripts`
-
-### Features
-
 -   Changed VPC subnet to now break out subnets for isolated, private, and public. Previously, only private (which was actually isolated) and public existed.
     -   For those using external VPC and subnet import configuration, previously private subnet IDs should now be copied into isolated subnets configuration option.
 -   Added a new use-case pipeline and configuration option for `RapidPipeline` that optimizes 3D assets using mesh decimation & remeshing, texture baking, UV aggregation, and more.
@@ -148,9 +122,21 @@ This version includes significant enhancements to VAMS infrastructure, a complet
 -   Fixed bug where asset search result filters for database may restrict what users can search on based on previous results returned
 -   Fixed scrolling issues with Firefox browser
 -   Fixed bug with PointClouder viewer / pipeline from executing and showing final outputs
+-   Fixed various bugs with asset comments editing and deleting
+-   Fixed various UI and backend bugs related to the asset management overhaul
 
 ### Chores
 
+-   Added more input variables for use in pipeline lambdas called such as bucketAssetAuxiliary, bucketAsset, and inputAssetFileKey. This is in addition to the predetermined "easy" paths setup for pipeline use
+-   Added more error checks and outer workflow abort procedures for workflows/pipelines in use-case pipelines
+-   Updated auxiliary asset handling to match the new asset location keys and handling
+-   Updated workflow execution to handle new asset location keys, bucket, and handling
+-   Created new DynamoDB workflow executions table (old one will remain as deprecated to not lose data) to store better format for lambda storage and retrieval
+-   Modified workflow executions API to '/database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}' and also added '/database/{databaseId}/assets/{assetId}/workflows/executions/' to get all executions for an asset
+-   Subscription SNS topics now store databaseId along with assetId in the topic name to prevent future conflicts
+-   Create/Execute workflow backend update to support new asset management file/bucket/prefix locations, to be more dynamic based on the calling asset and file
+-   Updated S3 asset bucket event notifications to be a SNS->SQS fan-out for bucket sync/indexing and other bucket subscriptions like for the PcPotreePreview pipeline
+-   Cleaned up and removed backend and UI files and components that were no longer needed and/or deprecated related to assets
 -   **Web** Cleaned up unused web files and consolidated functionalities for authentication and amplify configuration setting.
 -   Upgraded lambda and all associated libraries (including use-case pipelines) to use Python 3.12 runtimes.
 -   Upgraded infrastructure NPM package dependencies. Note: This switches CDK to use Node 20.x runtimes for Lambda's used for CustomResources or S3 Bucket deployments.

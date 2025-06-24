@@ -68,9 +68,9 @@ When migrating S3 buckets between stacks:
 
 This section contains instructions for migrating data between specific VAMS versions. Each version upgrade may require specific data transformations or schema changes.
 
-### VAMS v2.2 to v2.3 Migration
+### VAMS v2.1 to v2.2 Migration
 
-The v2.2 to v2.3 migration involves creating a new asset versions table, updating the structure of asset records, and adding bucket information to database records in DynamoDB.
+The v2.1 to v2.2 migration involves creating a new asset versions table, updating the structure of asset records, and adding bucket information to database records in DynamoDB.
 
 #### Migration Overview
 
@@ -93,21 +93,21 @@ The migration script performs the following operations:
 
 #### Running the Migration
 
-The migration scripts are located in the `infra/deploymentDataMigration/v2.2_to_v2.3/upgrade/` directory.
+The migration scripts are located in the `infra/deploymentDataMigration/v2.1_to_v2.2/upgrade/` directory.
 
 **Quick Start:**
 
 1. Navigate to the upgrade directory:
 
     ```bash
-    cd infra/deploymentDataMigration/v2.2_to_v2.3/upgrade/
+    cd infra/deploymentDataMigration/v2.1_to_v2.2/upgrade/
     ```
 
 2. Configure the migration:
 
     - Copy and modify one of the provided configuration templates:
-        - `v2.2_to_v2.3_migration_config.json`: Basic configuration template
-        - `v2.2_to_v2.3_migration_prod_config.json`: Template for production migration
+        - `v2.1_to_v2.2_migration_config.json`: Basic configuration template
+        - `v2.1_to_v2.2_migration_prod_config.json`: Template for production migration
     - Make sure to set the following required parameters:
         - `assets_table_name`: Name of the assets table
         - `asset_versions_table_name`: Name of the asset versions table
@@ -135,7 +135,7 @@ The migration scripts are located in the `infra/deploymentDataMigration/v2.2_to_
     - Use the verification script to check that all data was migrated correctly
     - Manually verify that the application works with the migrated data
 
-For detailed instructions, refer to the [v2.2 to v2.3 Migration README](./v2.2_to_v2.3/upgrade/v2.2_to_v2.3_migration_README.md).
+For detailed instructions, refer to the [v2.1 to v2.2 Migration README](./v2.1_to_v2.2/upgrade/v2.1_to_v2.2_migration_README.md).
 
 ## Migration Script Instructions
 
@@ -176,7 +176,7 @@ These scripts are used to migrate data from one VAMS deployment stack to another
 
 These scripts are used to upgrade data schema within the same stack. Each version upgrade has its own set of scripts located in a version-specific directory under `infra/deploymentDataMigration/`.
 
-For example, the v2.2 to v2.3 upgrade scripts are located in `infra/deploymentDataMigration/v2.2_to_v2.3/upgrade/`.
+For example, the v2.1 to v2.2 upgrade scripts are located in `infra/deploymentDataMigration/v2.1_to_v2.2/upgrade/`.
 
 Refer to the version-specific migration instructions for details on how to run these scripts.
 
@@ -189,7 +189,7 @@ VAMS Upgrade Templates are described below. Copy the template to a new configura
 -   VAMS 1.X -> 1.X - `MigrationSchema_v1.X_to_v2.0.template.json`
 -   VAMS 1.X -> 2.0 - `MigrationSchema_v1.X_to_v2.0.template.json`
 -   VAMS 2.0 -> 2.0 - `MigrationSchema_v2.1_to_v2.1.template.json`
--   VAMS 2.2 -> 2.3 - See the [v2.2 to v2.3 Migration README](./v2.2_to_v2.3/upgrade/v2.2_to_v2.3_migration_README.md)
+-   VAMS 2.1 -> 2.2 - See the [v2.1 to v2.2 Migration README](./v2.1_to_v2.2/upgrade/v2.1_to_v2.2_migration_README.md)
 
 ### Script Notes
 

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Data Migration Script for VAMS v2.2 to v2.3
+Data Migration Script for VAMS v2.1 to v2.2
 
 This script performs the following migrations:
 1. Copy data from assetsTable to assetVersionsTable
@@ -14,7 +14,7 @@ This script performs the following migrations:
 6. Remove specified fields from assetsTable records
 
 Usage:
-    python v2.2_to_v2.3_migration.py --profile <aws-profile-name>
+    python v2.1_to_v2.2_migration.py --profile <aws-profile-name>
 
 Requirements:
     - Python 3.6+
@@ -497,7 +497,7 @@ def update_asset_records(dynamodb, assets_table_name, s3_asset_buckets_table_nam
 
 def main():
     """Main function to run the migration."""
-    parser = argparse.ArgumentParser(description='VAMS v2.2 to v2.3 Data Migration Script')
+    parser = argparse.ArgumentParser(description='VAMS v2.1 to v2.2 Data Migration Script')
     parser.add_argument('--profile', help='AWS profile name to use')
     parser.add_argument('--region', help='AWS region to use')
     parser.add_argument('--limit', type=int, help='Maximum number of assets to process')
@@ -579,7 +579,7 @@ def main():
         logger.error(f"Error initializing DynamoDB client: {e}")
         return 1
     
-    logger.info("Starting VAMS v2.2 to v2.3 data migration")
+    logger.info("Starting VAMS v2.1 to v2.2 data migration")
     logger.info(f"Configuration: {json.dumps(CONFIG, indent=2)}")
     
     if CONFIG.get('dry_run', False):
