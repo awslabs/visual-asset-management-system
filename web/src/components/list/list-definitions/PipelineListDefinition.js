@@ -45,13 +45,7 @@ export const PipelineListDefinition = new ListDefinition({
             header: Synonyms.Database,
             cellWrapper: (props) => {
                 const { item } = props;
-                // If databaseId is "GLOBAL", display "Global" and link to global pipelines
-                if (item.databaseId === "GLOBAL") {
-                    return <Link href={`#/databases/global/pipelines/`}>Global</Link>;
-                }
-                return (
-                    <Link href={`#/databases/${item.databaseId}/pipelines/`}>{props.children}</Link>
-                );
+                return <Link href={`#/databases/${item.databaseId}/pipelines/`}>{props.children}</Link>;
             },
             sortingField: "databaseId",
         }),

@@ -297,8 +297,7 @@ def validate(values):
                 if v['value'] == 'GLOBAL':
                     return (True, "")
                 else:
-                    return (True, "Warning: " + k + " is invalid. GLOBAL must be capitalized for this field is used.")
-                    # return (False, k + " is invalid. GLOBAL must be capitalized for this field is used.")
+                    return (False, k + " is invalid. GLOBAL must be capitalized for this field is used.")
             elif not allowGlobalKeyword and v['value'].lower().strip()  == 'global':
                 return (False, k + " is invalid. GLOBAL is not allowed for this field.")
             

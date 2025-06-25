@@ -34,7 +34,7 @@ const WorkflowEditor = React.lazy(() => import("../interactive/WorkflowEditor"))
 
 export default function CreateUpdateWorkflow(props) {
     // Check if this is a global workflow route
-    const isGlobalWorkflow = window.location.hash.includes('/databases/global/workflows/');
+    const isGlobalWorkflow = window.location.hash.includes('/databases/GLOBAL/workflows/');
     // Get parameters from URL
     const { databaseId: urlDatabaseId, workflowId } = useParams();
     
@@ -244,21 +244,14 @@ export default function CreateUpdateWorkflow(props) {
             <Box padding={{ top: "s", horizontal: "l" }}>
                 <SpaceBetween direction="vertical" size="xs">
                     <BreadcrumbGroup
-                        items={isGlobalWorkflow ?
-                            [
-                                { text: Synonyms.Databases, href: "#/databases/" },
-                                { text: "Global", href: "#/databases/global/workflows/" },
-                                { text: "Create Workflow" }
-                            ] :
-                            [
+                        items={[
                                 { text: Synonyms.Databases, href: "#/databases/" },
                                 {
                                     text: databaseId,
                                     href: "#/databases/" + databaseId + "/workflows/",
                                 },
                                 { text: "Create Workflow" },
-                            ]
-                        }
+                            ]}
                         ariaLabel="Breadcrumbs"
                     />
                     <Container

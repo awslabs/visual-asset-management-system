@@ -224,13 +224,7 @@ def get_handler(event, response, pathParameters, queryParameters, showDeleted):
                 response['statusCode'] = 400
                 return response
             logger.info("Listing Pipelines for Database: " + pathParameters['databaseId'])
-
-            # if global database, adjust path parameter for databaseId
-            if pathParameters['databaseId'] == "global":
-                result = get_pipelines("GLOBAL", queryParameters, showDeleted)
-            else:
-                result = get_pipelines(pathParameters['databaseId'], queryParameters, showDeleted)
-                
+            result = get_pipelines(pathParameters['databaseId'], queryParameters, showDeleted)
             response['body'] = json.dumps({"message": result['message']})
             response['statusCode'] = result['statusCode']
             logger.info(response)
@@ -299,11 +293,7 @@ def delete_handler(event, response, pathParameters, queryParameters):
             return response
 
     logger.info("Deleting Pipeline: "+pathParameters['pipelineId'])
-    # if global database, adjust path parameter for databaseId
-    if pathParameters['databaseId'] == "global":
-        result = delete_pipeline("GLOBAL", pathParameters['pipelineId'])
-    else:
-        result = delete_pipeline(pathParameters['databaseId'], pathParameters['pipelineId'])
+    result = delete_pipeline(pathParameters['databaseId'], pathParameters['pipelineId'])
     response['body'] = json.dumps({"message": result['message']})
     response['statusCode'] = result['statusCode']
     logger.info(response)

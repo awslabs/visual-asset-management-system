@@ -333,9 +333,11 @@ def lambda_handler(event, context):
                     # Check if workflow is Global 
                     isGlobalWorkflow = is_global_workflow(pathParams['workflowId'])
 
-                    # If global workflow, override parameter
+                    # Path parameter for databaseId matches the asset's databaseId
+                    # If workflow is global, need to replace parameter with workflow's databaseId
                     if isGlobalWorkflow:
                         workflowResponse = get_workflow("GLOBAL", pathParams['workflowId'])
+                        # workflowResponse = get_workflow(request_body.get('workflowDatabaseId'), pathParams['workflowId'])
                     else:
                         workflowResponse = get_workflow(pathParams['databaseId'], pathParams['workflowId'])
                     logger.info(workflowResponse)
@@ -352,9 +354,10 @@ def lambda_handler(event, context):
                                 workflow_allowed = True
 
                         if workflow_allowed:
-                            # If global workflow, use request body to get workflow database ID
-                            if request_body.get('workflowDatabaseId'):
-                                (status, pipelineName) = validate_pipelines(request_body.get('workflowDatabaseId'), workflow)
+                            # If workflow is global, need to replace parameter with workflow's databaseId
+                            if isGlobalWorkflow:
+                                (status, pipelineName) = validate_pipelines("GLOBAL", workflow)
+                                # (status, pipelineName) = validate_pipelines(request_body.get('workflowDatabaseId'), workflow)
                             else:
                                 (status, pipelineName) = validate_pipelines(pathParams['databaseId'], workflow)
                             if not status:
@@ -374,11 +377,7 @@ def lambda_handler(event, context):
 
                             ##Formulate pipeline input metadata for VAMS
                             #TODO: Implement additional user input fields on execute (from a new UX popup?)
-                            # If global workflow, adjust path parameter
-                            if pathParams['databaseId'] == "global":
-                                metadataResponse = get_asset_metadata("GLOBAL", pathParams['assetId'], asset['assetLocation']['Key'], event)
-                            else:
-                                metadataResponse = get_asset_metadata(pathParams['databaseId'], pathParams['assetId'], asset['assetLocation']['Key'], event)
+                            metadataResponse = get_asset_metadata(pathParams['databaseId'], pathParams['assetId'], asset['assetLocation']['Key'], event)
                             metadata = metadataResponse.get("metadata", {})
 
                             #remove databaseId/assetId from metadata if exists
@@ -398,15 +397,9 @@ def lambda_handler(event, context):
                             }
 
                             logger.info("Launching Workflow:")
-                            # If global workflow, adjust path parameter
-                            if pathParams['databaseId'] == "global":
-                                executionId = launchWorkflow(asset['assetLocation']['Key'], workflow['workflow_arn'],
-                                                            pathParams['assetId'], workflow['workflowId'],
-                                                            "GLOBAL", executingUserName, executingRequestContext, inputMetadata)
-                            else: 
-                                executionId = launchWorkflow(asset['assetLocation']['Key'], workflow['workflow_arn'],
-                                                            pathParams['assetId'], workflow['workflowId'],
-                                                            pathParams['databaseId'], executingUserName, executingRequestContext, inputMetadata)
+                            executionId = launchWorkflow(asset['assetLocation']['Key'], workflow['workflow_arn'],
+                                                        pathParams['assetId'], workflow['workflowId'],
+                                                        pathParams['databaseId'], executingUserName, executingRequestContext, inputMetadata)
                             response["statusCode"] = 200
                             response['body'] = json.dumps({'message': executionId})
                             return response
