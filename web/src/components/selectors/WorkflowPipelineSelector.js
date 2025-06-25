@@ -76,7 +76,7 @@ useEffect(() => {
                 setWorkflowPipelines(newPipelines);
                 setActiveTab("pipelines");
             }}
-            placeholder={<>Select pipeline from {database === "GLOBAL" ? "Global" : database} database.</>}
+            placeholder={<>Select pipeline from {database} database.</>}
             options={allItems.map((item) => {
                 return {
                     label: item.pipelineId,
