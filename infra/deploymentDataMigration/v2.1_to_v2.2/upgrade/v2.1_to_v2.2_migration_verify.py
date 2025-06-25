@@ -622,6 +622,7 @@ def main():
     
     # Initialize DynamoDB client
     try:
+        # Use the updated get_dynamodb_resource function that handles empty profile_name
         dynamodb = migration.get_dynamodb_resource(
             profile_name=migration.CONFIG.get('aws_profile'), 
             region=migration.CONFIG.get('aws_region')

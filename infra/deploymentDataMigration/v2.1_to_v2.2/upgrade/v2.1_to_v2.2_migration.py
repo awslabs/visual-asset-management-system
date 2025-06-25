@@ -112,6 +112,7 @@ FIELDS_TO_REMOVE = [
 def get_dynamodb_client(profile_name=None, region=None):
     """
     Create a boto3 DynamoDB client with the specified profile and region.
+    If no profile is provided, use the current environment's AWS access credentials.
     
     Args:
         profile_name (str, optional): AWS profile name to use
@@ -120,12 +121,19 @@ def get_dynamodb_client(profile_name=None, region=None):
     Returns:
         boto3.client: DynamoDB client
     """
-    session = boto3.Session(profile_name=profile_name, region_name=region)
+    session_args = {}
+    if profile_name:
+        session_args['profile_name'] = profile_name
+    if region:
+        session_args['region_name'] = region
+        
+    session = boto3.Session(**session_args)
     return session.client('dynamodb')
 
 def get_dynamodb_resource(profile_name=None, region=None):
     """
     Create a boto3 DynamoDB resource with the specified profile and region.
+    If no profile is provided, use the current environment's AWS access credentials.
     
     Args:
         profile_name (str, optional): AWS profile name to use
@@ -134,7 +142,13 @@ def get_dynamodb_resource(profile_name=None, region=None):
     Returns:
         boto3.resource: DynamoDB resource
     """
-    session = boto3.Session(profile_name=profile_name, region_name=region)
+    session_args = {}
+    if profile_name:
+        session_args['profile_name'] = profile_name
+    if region:
+        session_args['region_name'] = region
+        
+    session = boto3.Session(**session_args)
     return session.resource('dynamodb')
 
 def scan_table(dynamodb, table_name, limit=None):
