@@ -49,6 +49,7 @@ export default function Workflows(props) {
                     open={openModal}
                     setOpen={setOpenModal}
                     onSelectorChange={handleSelectWorkflowDatabase}
+                    showGlobal={true}
                 />
             )}
         </>

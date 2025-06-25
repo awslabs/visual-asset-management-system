@@ -123,15 +123,16 @@ export const deleteElement = async ({ deleteRoute, elementId, item }, api = API)
 export const runWorkflow = async ({ databaseId, assetId, workflowId, isGlobalWorkflow = false }, api = API) => {
     try {
         let endpoint;
-        
-        // If it's a global workflow, use the global database route
+        let eventBody; 
+        endpoint = `database/${databaseId}/assets/${assetId}/workflows/${workflowId}`
+
         if (isGlobalWorkflow) {
-            endpoint = `database/global/assets/${assetId}/workflows/${workflowId}`;
-        } else {
-            endpoint = `database/${databaseId}/assets/${assetId}/workflows/${workflowId}`;
+            eventBody = {workflowDatabaseId: "GLOBAL"}
         }
         
-        const response = await api.post("api", endpoint, {});
+        const response = await api.post("api", endpoint, {
+            body: eventBody
+        });
         
         if (response.message) {
             if (

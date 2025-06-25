@@ -267,7 +267,8 @@ def lambda_handler(event, context, create_pipeline_fn=CreatePipeline.from_env):
         (valid, message) = validate({
             'databaseId': {
                 'value': event['body']['databaseId'],
-                'validator': 'ID'
+                'validator': 'ID',
+                'allowGlobalKeyword': True
             },
             'pipelineId': {
                 'value': event['body']['pipelineId'],

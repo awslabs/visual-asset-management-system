@@ -47,6 +47,7 @@ export default function CreateUpdateWorkflow(props) {
     const [reloadPipelines, setReloadPipelines] = useState(true);
     const [openCreatePipeline, setOpenCreatePipeline] = useState(false);
     const [asset, setAsset] = useState(null);
+    const [assetDatabaseId, setAssetDatabaseId] = useState(null);
     const [pipelines, setPipelines] = useState([]);
     const [workflowPipelines, setWorkflowPipelines] = useState([null]);
     const [loadedWorkflowPipelines, setLoadedWorkflowPipelines] = useState([]);
@@ -79,6 +80,7 @@ export default function CreateUpdateWorkflow(props) {
                 const loadedPipelines = currentItem?.specifiedPipelines?.functions.map((item) => {
                     return {
                         value: item.name,
+                        databaseId: item.databaseId,
                         pipelineType: item.pipelineType,
                         pipelineExecutionType: item.pipelineExecutionType,
                         outputType: item.outputType,
@@ -148,8 +150,11 @@ export default function CreateUpdateWorkflow(props) {
             setActiveTab("pipelines");
         } else {
             const functions = workflowPipelines.map((item) => {
+                console.log("CHECKPOINT")
+                console.log(item)
                 return {
                     name: item.value,
+                    databaseId: item.databaseId,
                     pipelineType: item.pipelineType,
                     pipelineExecutionType: item.pipelineExecutionType,
                     outputType: item.outputType,
@@ -187,8 +192,9 @@ export default function CreateUpdateWorkflow(props) {
         // reset all workflow-related error messages when either save or run workflow is executed
         clearWorkflowErrors();
         setActiveTab("asset");
+
         const result = await runWorkflow({
-            databaseId: databaseId,
+            databaseId: assetDatabaseId,
             assetId: asset?.value,
             workflowId: workflowId,
             isGlobalWorkflow: isGlobalWorkflow
@@ -209,6 +215,7 @@ export default function CreateUpdateWorkflow(props) {
             value={{
                 asset,
                 setAsset,
+                setAssetDatabaseId,
                 pipelines,
                 setPipelines,
                 workflowPipelines,

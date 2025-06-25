@@ -158,6 +158,7 @@ def delete_pipeline(databaseId, pipelineId):
     table = dynamodb.Table(pipeline_database)
     if "#deleted" in databaseId:
         return response
+    
     db_response = table.get_item(Key={'databaseId': databaseId, 'pipelineId': pipelineId})
     pipeline = db_response.get("Item", {})
 
@@ -213,7 +214,8 @@ def get_handler(event, response, pathParameters, queryParameters, showDeleted):
             (valid, message) = validate({
                 'databaseId': {
                     'value': pathParameters['databaseId'],
-                    'validator': 'ID'
+                    'validator': 'ID',
+                    'allowGlobalKeyword': True
                 },
             })
             if not valid:
@@ -222,11 +224,13 @@ def get_handler(event, response, pathParameters, queryParameters, showDeleted):
                 response['statusCode'] = 400
                 return response
             logger.info("Listing Pipelines for Database: " + pathParameters['databaseId'])
+
             # if global database, adjust path parameter for databaseId
             if pathParameters['databaseId'] == "global":
                 result = get_pipelines("GLOBAL", queryParameters, showDeleted)
             else:
                 result = get_pipelines(pathParameters['databaseId'], queryParameters, showDeleted)
+                
             response['body'] = json.dumps({"message": result['message']})
             response['statusCode'] = result['statusCode']
             logger.info(response)
@@ -250,7 +254,8 @@ def get_handler(event, response, pathParameters, queryParameters, showDeleted):
         (valid, message) = validate({
             'databaseId': {
                 'value': pathParameters['databaseId'],
-                'validator': 'ID'
+                'validator': 'ID',
+                'allowGlobalKeyword': True
             },
             'pipelineId': {
                 'value': pathParameters['pipelineId'],
@@ -283,7 +288,8 @@ def delete_handler(event, response, pathParameters, queryParameters):
         (valid, message) = validate({
             parameter: {
                 'value': pathParameters[parameter],
-                'validator': 'ID'
+                'validator': 'ID',
+                'allowGlobalKeyword': True
             }
         })
         if not valid:

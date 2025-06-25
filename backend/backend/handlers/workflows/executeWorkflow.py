@@ -5,6 +5,7 @@ import json
 import boto3
 import botocore
 from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr
 import os
 from common.validators import validate
 from common.constants import STANDARD_JSON_RESPONSE
@@ -145,6 +146,15 @@ def get_workflow(databaseId, workflowId):
     )
     return response['Items']
 
+def is_global_workflow(workflowId):
+    table = dynamodb.Table(workflow_database)
+    
+    response = table.query(
+        KeyConditionExpression=Key('databaseId').eq('GLOBAL') & Key('workflowId').eq(workflowId)
+    )
+    
+    return len(response.get('Items', [])) > 0
+
 
 def validate_pipelines(databaseId, workflow):
     for pipeline in workflow['specifiedPipelines']['functions']:
@@ -250,6 +260,16 @@ def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
     claims_and_roles = request_to_claims(event)
     logger.info(event)
+
+    # Parse request body if present
+    request_body = {}
+    if event.get('body'):
+        try:
+            request_body = json.loads(event['body'])
+            logger.info("Request body: %s", request_body)
+        except:
+            logger.warning("Failed to parse request body as JSON")
+
     try:
         pathParams = event.get('pathParameters', {})
         logger.info(pathParams)
@@ -292,11 +312,7 @@ def lambda_handler(event, context):
                 method_allowed_on_api = True
 
         if method_allowed_on_api:
-            # If global workflow, adjust path parameter
-            if pathParams['databaseId'] == "global":
-                assetResponse = get_asset("GLOBAL", pathParams['assetId'])
-            else:
-                assetResponse = get_asset(pathParams['databaseId'], pathParams['assetId'])
+            assetResponse = get_asset(pathParams['databaseId'], pathParams['assetId'])
             logger.info(assetResponse)
             if bool(assetResponse):
                 asset = assetResponse[0]
@@ -314,8 +330,11 @@ def lambda_handler(event, context):
                         asset_allowed = True
                         executingUserName = claims_and_roles["tokens"][0]
                 if asset_allowed:
+                    # Check if workflow is Global 
+                    isGlobalWorkflow = is_global_workflow(pathParams['workflowId'])
+
                     # If global workflow, adjust path parameter
-                    if pathParams['databaseId'] == "global":
+                    if isGlobalWorkflow:
                         workflowResponse = get_workflow("GLOBAL", pathParams['workflowId'])
                     else:
                         workflowResponse = get_workflow(pathParams['databaseId'], pathParams['workflowId'])
@@ -333,9 +352,9 @@ def lambda_handler(event, context):
                                 workflow_allowed = True
 
                         if workflow_allowed:
-                            # If global workflow, adjust path parameter
-                            if pathParams['databaseId'] == "global":
-                                (status, pipelineName) = validate_pipelines("GLOBAL", workflow)
+                            # If global workflow, use request body to get workflow database ID
+                            if request_body.get('workflowDatabaseId'):
+                                (status, pipelineName) = validate_pipelines(request_body.get('workflowDatabaseId'), workflow)
                             else:
                                 (status, pipelineName) = validate_pipelines(pathParams['databaseId'], workflow)
                             if not status:
@@ -343,8 +362,7 @@ def lambda_handler(event, context):
                                 response['statusCode'] = 400
                                 response['body'] = json.dumps({'message': f'{pipelineName} is not enabled/accessible'})
                             else:
-                                logger.info("All pipelines are enabled. Continuing to run run workflow")
-
+                                logger.info("All pipelines are enabled. Continuing to run workflow")
 
                             #Get current executions for workflow on asset. If currently one running, error.
                             executionResults = get_workflow_executions(pathParams['assetId'], pathParams['workflowId'])

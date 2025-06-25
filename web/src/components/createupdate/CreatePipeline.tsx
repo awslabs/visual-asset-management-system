@@ -89,29 +89,6 @@ const waitForCallbackOptions = [
     },
 ];
 
-// const formatState = (initState: any) => {
-//     let initPipelineType: OptionDefinition = {label: pipelineTypeOptions[0].label, value: pipelineTypeOptions[0].value};
-//     let initPipelineExecutionType: OptionDefinition = {label: pipelineExecutionTypeOptions[0].label, value: pipelineExecutionTypeOptions[0].value};
-//     let initWaitForCallback: OptionDefinition = {label: waitForCallbackOptions[0].label, value: waitForCallbackOptions[0].value};
-//     let initAssetType: OptionDefinition = {label: fileTypeOptions[0].label, value: fileTypeOptions[0].value};
-//     let initOutputType: OptionDefinition = {label: fileTypeOptions[0].label, value: fileTypeOptions[0].value};
-
-//     if (initState) {
-//         let type = pipelineTypeOptions.find(item => item.value ===  initState.pipelineType)
-//         initPipelineType = {label: type?.label, value: type?.value}
-//         type = pipelineExecutionTypeOptions.find(item => item.value === initState.pipelineExecutionType)
-//         initPipelineExecutionType = {label: type?.label, value: type?.value}
-//         type = waitForCallbackOptions.find(item => item.value === initState.waitForCallback)
-//         initWaitForCallback = {label: type?.label, value: type?.value}
-//         type = fileTypeOptions.find(item => item.value === initState.assetType)
-//         initAssetType = {label: type?.label, value: type?.value}
-//         type = fileTypeOptions.find(item => item.value === initState.outputType)
-//         initOutputType = {label: type?.label, value: type?.value}
-//     }
-
-//     return (initPipelineType, initPipelineExecutionType, initWaitForCallback, initAssetType, initOutputType);
-// }
-
 export default function CreatePipeline({
     open,
     setOpen,
@@ -402,6 +379,7 @@ export default function CreatePipeline({
                                     }
                                     selectedOption={formState.databaseId}
                                     onChange={handleDatabaseChange}
+                                    showGlobal={true}
                                 />
                             </FormField>
                             <FormField label="Pipeline Type">

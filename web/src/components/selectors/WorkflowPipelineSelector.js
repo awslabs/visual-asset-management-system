@@ -89,6 +89,7 @@ useEffect(() => {
                     taskHeartbeatTimeout: item.taskHeartbeatTimeout,
                     userProvidedResource: item.userProvidedResource,
                     inputParameters: item.inputParameters,
+                    databaseId: item.databaseId,
                     tags: [
                         `input:${item.assetType}`,
                         `output:${item.outputType}`,
