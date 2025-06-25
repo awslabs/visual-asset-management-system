@@ -12,6 +12,7 @@ This script performs the following migrations:
 4. Add defaultBucketId to all records in the databases table
 5. Move version number from currentVersion.Version to currentVersionId
 6. Remove specified fields from assetsTable records
+7. Migrate comments to reference current asset versions (optional)
 
 Usage:
     python v2.1_to_v2.2_migration.py --profile <aws-profile-name>
@@ -53,6 +54,7 @@ CONFIG = {
     "asset_versions_table_name": "YOUR_ASSET_VERSIONS_TABLE_NAME",
     "s3_asset_buckets_table_name": "YOUR_S3_ASSET_BUCKETS_TABLE_NAME",
     "databases_table_name": "YOUR_DATABASES_TABLE_NAME",
+    "comment_storage_table_name": "YOUR_COMMENT_STORAGE_TABLE_NAME",
     
     # Asset configuration
     "base_assets_prefix": "YOUR_BASE_ASSETS_PREFIX",
@@ -470,6 +472,112 @@ def migrate_asset_versions(dynamodb, assets_table_name, asset_versions_table_nam
     logger.info(f"Completed migration of asset versions: {success_count} successful, {error_count} errors")
     return success_count, error_count
 
+def migrate_comments(dynamodb, comments_table_name, assets_table_name, limit=None):
+    """
+    Migrate comments to ensure they reference the current version of assets.
+    
+    For each comment:
+    1. Extract assetId and the composite sort key (assetVersionId:commentId)
+    2. Get the corresponding asset record
+    3. If assetVersionId in comment doesn't match currentVersionId of asset:
+       - Create new comment with updated sort key using asset's currentVersionId
+       - Insert new comment and delete old one
+    
+    Args:
+        dynamodb: DynamoDB resource
+        comments_table_name (str): Name of the comments table
+        assets_table_name (str): Name of the assets table
+        limit (int, optional): Maximum number of comments to process
+        
+    Returns:
+        tuple: (success_count, error_count, migrated_count)
+    """
+    logger.info(f"Starting migration of comments in {comments_table_name}")
+    
+    # Get all comments
+    comments = scan_table(dynamodb, comments_table_name, limit)
+    logger.info(f"Found {len(comments)} comments to process")
+    
+    success_count = 0
+    error_count = 0
+    migrated_count = 0
+    
+    # Process each comment
+    for comment in comments:
+        asset_id = comment.get('assetId')
+        sort_key = comment.get('assetVersionId:commentId')
+        
+        if not asset_id or not sort_key:
+            error_count += 1
+            logger.warning(f"Skipped migrating comment - missing assetId or assetVersionId:commentId: {comment}")
+            continue
+        
+        try:
+            # Split the sort key to get assetVersionId and commentId
+            try:
+                asset_version_id, comment_id = sort_key.split(':', 1)
+            except ValueError:
+                error_count += 1
+                logger.warning(f"Skipped migrating comment - invalid sort key format: {sort_key}")
+                continue
+            
+            # Get the asset record
+            assets_table = dynamodb.Table(assets_table_name)
+            response = assets_table.get_item(
+                Key={
+                    'assetId': asset_id
+                }
+            )
+            
+            if 'Item' not in response:
+                error_count += 1
+                logger.warning(f"Skipped migrating comment - asset {asset_id} not found")
+                continue
+            
+            asset = response['Item']
+            
+            # Check if the asset has currentVersionId
+            if 'currentVersionId' not in asset:
+                error_count += 1
+                logger.warning(f"Skipped migrating comment - asset {asset_id} does not have currentVersionId")
+                continue
+            
+            current_version_id = asset['currentVersionId']
+            
+            # Check if the assetVersionId from the comment matches the currentVersionId of the asset
+            if asset_version_id == current_version_id:
+                # No migration needed
+                success_count += 1
+                logger.info(f"Comment for asset {asset_id} with version {asset_version_id} is already current")
+                continue
+            
+            # Create a new comment record with updated sort key
+            new_comment = comment.copy()
+            new_comment['assetVersionId:commentId'] = f"{current_version_id}:{comment_id}"
+            
+            # Put the new comment into the table
+            comments_table = dynamodb.Table(comments_table_name)
+            comments_table.put_item(Item=new_comment)
+            
+            # Delete the old comment
+            comments_table.delete_item(
+                Key={
+                    'assetId': asset_id,
+                    'assetVersionId:commentId': sort_key
+                }
+            )
+            
+            migrated_count += 1
+            success_count += 1
+            logger.info(f"Successfully migrated comment for asset {asset_id} from version {asset_version_id} to {current_version_id}")
+            
+        except Exception as e:
+            error_count += 1
+            logger.error(f"Error migrating comment for asset {asset_id}: {e}")
+    
+    logger.info(f"Completed migration of comments: {success_count} successful, {error_count} errors, {migrated_count} comments migrated")
+    return success_count, error_count, migrated_count
+
 def update_asset_records(dynamodb, assets_table_name, bucket_id, base_assets_prefix, limit=None):
     """
     Update asset records in the assets table.
@@ -532,6 +640,7 @@ def main():
     parser.add_argument('--asset-versions-table', help='Name of the asset versions table')
     parser.add_argument('--s3-asset-buckets-table', help='Name of the S3_Asset_Buckets table')
     parser.add_argument('--databases-table', help='Name of the databases table')
+    parser.add_argument('--comments-table', help='Name of the comments table for migrating comments')
     parser.add_argument('--base-assets-prefix', help='Base assets prefix to use in assetLocation.Key')
     parser.add_argument('--asset-bucket-name', help='Name of the asset bucket to use for lookup')
     parser.add_argument('--dry-run', action='store_true', help='Perform a dry run without making changes')
@@ -556,6 +665,8 @@ def main():
         CONFIG['s3_asset_buckets_table_name'] = args.s3_asset_buckets_table
     if args.databases_table:
         CONFIG['databases_table_name'] = args.databases_table
+    if args.comments_table:
+        CONFIG['comment_storage_table_name'] = args.comments_table
     if args.base_assets_prefix:
         CONFIG['base_assets_prefix'] = args.base_assets_prefix
     if args.asset_bucket_name:
@@ -656,13 +767,29 @@ def main():
             args.limit if args.limit else None
         )
         
+        # Step 4: Migrate comments to reference current asset versions
+        comment_success = 0
+        comment_errors = 0
+        comment_migrated = 0
+        if CONFIG['comment_storage_table_name'] != 'YOUR_COMMENT_STORAGE_TABLE_NAME':
+            comment_success, comment_errors, comment_migrated = migrate_comments(
+                dynamodb,
+                CONFIG['comment_storage_table_name'],
+                CONFIG['assets_table_name'],
+                args.limit if args.limit else None
+            )
+        else:
+            logger.info("Skipping comment migration - no comments table specified")
+        
         # Print summary
         logger.info("Migration completed")
         logger.info(f"Asset versions migration: {version_success} successful, {version_errors} errors")
         logger.info(f"Asset records update: {asset_success} successful, {asset_errors} errors")
         logger.info(f"Database records update: {db_success} successful, {db_errors} errors")
+        if CONFIG['comment_storage_table_name'] != 'YOUR_COMMENT_STORAGE_TABLE_NAME':
+            logger.info(f"Comment migration: {comment_success} successful, {comment_errors} errors, {comment_migrated} comments migrated")
         
-        if version_errors > 0 or asset_errors > 0 or db_errors > 0:
+        if version_errors > 0 or asset_errors > 0 or db_errors > 0 or comment_errors > 0:
             logger.warning("Migration completed with errors - check the logs for details")
             return 1
         else:

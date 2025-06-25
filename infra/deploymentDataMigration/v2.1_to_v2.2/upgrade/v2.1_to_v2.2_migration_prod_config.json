@@ -3,6 +3,7 @@
     "asset_versions_table_name": "PROD_ASSET_VERSIONS_TABLE_NAME",
     "s3_asset_buckets_table_name": "PROD_S3_ASSET_BUCKETS_TABLE_NAME",
     "databases_table_name": "PROD_DATABASES_TABLE_NAME",
+    "comment_storage_table_name": "PROD_COMMENT_STORAGE_TABLE_NAME",
     "base_assets_prefix": "/",
     "asset_bucket_name": "PROD_ASSETS_BUCKET_NAME",
     "aws_profile": "prod-profile",
@@ -17,6 +18,7 @@
         "Then set dry_run to false when you're ready to run the actual migration.",
         "Make sure to back up your data before running the migration in production.",
         "base_assets_prefix should end with a slash (/) for proper path construction.",
-        "asset_bucket_name is the name of the S3 bucket used for asset storage."
+        "asset_bucket_name is the name of the S3 bucket used for asset storage.",
+        "comment_storage_table_name is optional and used for migrating comments to reference current asset versions."
     ]
 }

@@ -48,6 +48,122 @@ logger = logging.getLogger(__name__)
 # VERIFICATION FUNCTIONS
 # =====================================================================
 
+def verify_comment_migration(dynamodb, comments_table_name, assets_table_name, limit=None):
+    """
+    Verify that comments have been properly migrated to reference current asset versions.
+    
+    Args:
+        dynamodb: DynamoDB resource
+        comments_table_name (str): Name of the comments table
+        assets_table_name (str): Name of the assets table
+        limit (int, optional): Maximum number of comments to verify
+        
+    Returns:
+        tuple: (success_count, error_count, errors)
+    """
+    logger.info(f"Verifying comment migration")
+    
+    # Get all comments
+    comments = migration.scan_table(dynamodb, comments_table_name, limit)
+    logger.info(f"Found {len(comments)} comments to verify")
+    
+    success_count = 0
+    error_count = 0
+    errors = []
+    
+    # Process each comment
+    for comment in comments:
+        asset_id = comment.get('assetId')
+        sort_key = comment.get('assetVersionId:commentId')
+        
+        if not asset_id or not sort_key:
+            error_count += 1
+            error_msg = f"Comment is missing assetId or assetVersionId:commentId: {comment}"
+            logger.warning(error_msg)
+            errors.append({
+                'asset_id': asset_id,
+                'error_type': 'missing_required_fields',
+                'error_message': error_msg
+            })
+            continue
+        
+        try:
+            # Split the sort key to get assetVersionId and commentId
+            try:
+                asset_version_id, comment_id = sort_key.split(':', 1)
+            except ValueError:
+                error_count += 1
+                error_msg = f"Invalid sort key format: {sort_key}"
+                logger.warning(error_msg)
+                errors.append({
+                    'asset_id': asset_id,
+                    'error_type': 'invalid_sort_key',
+                    'error_message': error_msg
+                })
+                continue
+            
+            # Get the asset record
+            assets_table = dynamodb.Table(assets_table_name)
+            response = assets_table.get_item(
+                Key={
+                    'assetId': asset_id
+                }
+            )
+            
+            if 'Item' not in response:
+                error_count += 1
+                error_msg = f"Asset {asset_id} not found for comment"
+                logger.warning(error_msg)
+                errors.append({
+                    'asset_id': asset_id,
+                    'error_type': 'asset_not_found',
+                    'error_message': error_msg
+                })
+                continue
+            
+            asset = response['Item']
+            
+            # Check if the asset has currentVersionId
+            if 'currentVersionId' not in asset:
+                error_count += 1
+                error_msg = f"Asset {asset_id} does not have currentVersionId"
+                logger.warning(error_msg)
+                errors.append({
+                    'asset_id': asset_id,
+                    'error_type': 'missing_current_version_id',
+                    'error_message': error_msg
+                })
+                continue
+            
+            current_version_id = asset['currentVersionId']
+            
+            # Check if the assetVersionId from the comment matches the currentVersionId of the asset
+            if asset_version_id != current_version_id:
+                error_count += 1
+                error_msg = f"Comment for asset {asset_id} references version {asset_version_id} but current version is {current_version_id}"
+                logger.warning(error_msg)
+                errors.append({
+                    'asset_id': asset_id,
+                    'error_type': 'version_mismatch',
+                    'error_message': error_msg
+                })
+                continue
+            
+            success_count += 1
+            
+        except Exception as e:
+            error_count += 1
+            error_msg = f"Error verifying comment for asset {asset_id}: {e}"
+            logger.error(error_msg)
+            errors.append({
+                'asset_id': asset_id,
+                'error_type': 'exception',
+                'error_message': error_msg
+            })
+    
+    logger.info(f"Completed verification of comment migration: {success_count} successful, {error_count} errors")
+    return success_count, error_count, errors
+
 def verify_asset_versions(dynamodb, assets_table_name, asset_versions_table_name, limit=None):
     """
     Verify that all assets have a corresponding version record.
@@ -332,7 +448,7 @@ def verify_database_updates(dynamodb, databases_table_name, limit=None):
     logger.info(f"Completed verification of database updates: {success_count} successful, {error_count} errors")
     return success_count, error_count, errors
 
-def generate_report(version_results, asset_results, database_results, output_file=None):
+def generate_report(version_results, asset_results, database_results, comment_results=None, output_file=None):
     """
     Generate a report of the verification results.
     
@@ -340,6 +456,7 @@ def generate_report(version_results, asset_results, database_results, output_fil
         version_results (tuple): Results from verify_asset_versions
         asset_results (tuple): Results from verify_asset_updates
         database_results (tuple): Results from verify_database_updates
+        comment_results (tuple, optional): Results from verify_comment_migration
         output_file (str, optional): Path to output file
         
     Returns:
@@ -348,6 +465,12 @@ def generate_report(version_results, asset_results, database_results, output_fil
     version_success, version_errors, version_error_details = version_results
     asset_success, asset_errors, asset_error_details = asset_results
     db_success, db_errors, db_error_details = database_results
+    
+    comment_success = 0
+    comment_errors = 0
+    comment_error_details = []
+    if comment_results:
+        comment_success, comment_errors, comment_error_details = comment_results
     
     # Create report directory if it doesn't exist
     report_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'reports')
@@ -376,6 +499,11 @@ def generate_report(version_results, asset_results, database_results, output_fil
         # Write database errors
         for error in db_error_details:
             writer.writerow(error)
+            
+        # Write comment errors if available
+        if comment_results:
+            for error in comment_error_details:
+                writer.writerow(error)
     
     # Generate summary
     summary = {
@@ -396,6 +524,15 @@ def generate_report(version_results, asset_results, database_results, output_fil
         'total_errors': version_errors + asset_errors + db_errors,
         'report_file': output_file
     }
+    
+    # Add comment verification results if available
+    if comment_results:
+        summary['comment_verification'] = {
+            'success_count': comment_success,
+            'error_count': comment_errors
+        }
+        summary['total_success'] += comment_success
+        summary['total_errors'] += comment_errors
     
     # Write summary to JSON file
     summary_file = output_file.replace('.csv', '_summary.json')
@@ -418,6 +555,7 @@ def main():
     parser.add_argument('--asset-versions-table', help='Name of the asset versions table')
     parser.add_argument('--s3-asset-buckets-table', help='Name of the S3_Asset_Buckets table')
     parser.add_argument('--databases-table', help='Name of the databases table')
+    parser.add_argument('--comments-table', help='Name of the comments table for verifying comment migration')
     parser.add_argument('--base-assets-prefix', help='Base assets prefix to use in assetLocation.Key')
     parser.add_argument('--asset-bucket-name', help='Name of the asset bucket used for storage')
     parser.add_argument('--config', help='Path to configuration file')
@@ -441,6 +579,8 @@ def main():
         migration.CONFIG['s3_asset_buckets_table_name'] = args.s3_asset_buckets_table
     if args.databases_table:
         migration.CONFIG['databases_table_name'] = args.databases_table
+    if args.comments_table:
+        migration.CONFIG['comment_storage_table_name'] = args.comments_table
     if args.base_assets_prefix:
         migration.CONFIG['base_assets_prefix'] = args.base_assets_prefix
     if args.bucket_name:
@@ -517,11 +657,22 @@ def main():
             args.limit
         )
         
+        # Verify comment migration if comments table is specified
+        comment_results = None
+        if migration.CONFIG['comment_storage_table_name'] != 'YOUR_COMMENT_STORAGE_TABLE_NAME':
+            comment_results = verify_comment_migration(
+                dynamodb,
+                migration.CONFIG['comment_storage_table_name'],
+                migration.CONFIG['assets_table_name'],
+                args.limit
+            )
+        
         # Generate report
         report_file, summary_file = generate_report(
             version_results, 
             asset_results, 
             database_results, 
+            comment_results,
             args.output
         )
         
@@ -529,15 +680,21 @@ def main():
         version_success, version_errors, _ = version_results
         asset_success, asset_errors, _ = asset_results
         db_success, db_errors, _ = database_results
+        comment_success = 0
+        comment_errors = 0
+        if comment_results:
+            comment_success, comment_errors, _ = comment_results
         
         logger.info("Verification completed")
         logger.info(f"Asset versions verification: {version_success} successful, {version_errors} errors")
         logger.info(f"Asset updates verification: {asset_success} successful, {asset_errors} errors")
         logger.info(f"Database updates verification: {db_success} successful, {db_errors} errors")
+        if comment_results:
+            logger.info(f"Comment migration verification: {comment_success} successful, {comment_errors} errors")
         logger.info(f"Report saved to: {report_file}")
         logger.info(f"Summary saved to: {summary_file}")
         
-        if version_errors > 0 or asset_errors > 0 or db_errors > 0:
+        if version_errors > 0 or asset_errors > 0 or db_errors > 0 or comment_errors > 0:
             logger.warning("Verification completed with errors - check the report for details")
             return 1
         else:
