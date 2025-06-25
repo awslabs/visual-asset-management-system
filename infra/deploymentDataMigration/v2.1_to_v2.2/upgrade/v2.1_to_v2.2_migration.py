@@ -282,27 +282,59 @@ def create_asset_version_record(asset):
     Returns:
         dict: Asset version record for the asset versions table
     """
-    # Check if currentVersion exists
-    if 'currentVersion' not in asset:
-        logger.warning(f"Asset {asset.get('assetId')} does not have a currentVersion field")
-        return None
-    
-    current_version = asset['currentVersion']
     asset_id = asset.get('assetId')
     
-    # Map fields from currentVersion to the new record
-    version_record = {
-        'assetId': asset_id,
-        'assetVersionId': current_version.get('Version', '0'),
-        'isCurrentVersion': True,
-        'dateCreated': current_version.get('DateModified', datetime.now().isoformat()),
-        'comment': current_version.get('Comment', f'Initial asset creation - Version {current_version.get("Version", "0")}'),
-        'description': current_version.get('description', ''),
-        'createdBy': 'system',
-        'specifiedPipelines': current_version.get('specifiedPipelines', []),
-    }
+    # Case 1: If currentVersion exists, use that (original behavior)
+    if 'currentVersion' in asset:
+        current_version = asset['currentVersion']
+        
+        version_record = {
+            'assetId': asset_id,
+            'assetVersionId': current_version.get('Version', '0'),
+            'isCurrentVersion': True,
+            'dateCreated': current_version.get('DateModified', datetime.now().isoformat()),
+            'comment': current_version.get('Comment', f'Initial asset creation - Version {current_version.get("Version", "0")}'),
+            'description': current_version.get('description', ''),
+            'createdBy': current_version.get('CreatedBy', 'system'),
+            'specifiedPipelines': current_version.get('specifiedPipelines', []),
+        }
+        
+        return version_record
     
-    return version_record
+    # Case 2: If versions array exists and has records, use the top record
+    elif 'versions' in asset and asset['versions'] and len(asset['versions']) > 0:
+        top_version = asset['versions'][0]  # Get the first version in the array
+        
+        version_record = {
+            'assetId': asset_id,
+            'assetVersionId': top_version.get('Version', '0'),
+            'isCurrentVersion': True,
+            'dateCreated': top_version.get('DateModified', datetime.now().isoformat()),
+            'comment': top_version.get('Comment', f'Initial asset creation - From versions array'),
+            'description': top_version.get('description', ''),
+            'createdBy': top_version.get('CreatedBy', 'system'),
+            'specifiedPipelines': top_version.get('specifiedPipelines', []),
+        }
+        
+        return version_record
+    
+    # Case 3: If neither currentVersion nor versions array has usable data,
+    # create a new version "0" with current date and system-migration user
+    else:
+        logger.warning(f"Asset {asset_id} has no version information - creating default version")
+        
+        version_record = {
+            'assetId': asset_id,
+            'assetVersionId': '0',
+            'isCurrentVersion': True,
+            'dateCreated': datetime.now().isoformat(),
+            'comment': 'Initial asset creation - Migration generated version',
+            'description': '',
+            'createdBy': 'system-migration',
+            'specifiedPipelines': [],
+        }
+        
+        return version_record
 
 def update_asset_location(asset, base_assets_prefix, bucket_id):
     """
@@ -332,9 +364,16 @@ def update_asset_location(asset, base_assets_prefix, bucket_id):
     if bucket_id:
         updated_asset['bucketId'] = bucket_id
     
-    # Add currentVersionId if currentVersion exists
+    # Add currentVersionId based on available version information
     if 'currentVersion' in updated_asset and 'Version' in updated_asset['currentVersion']:
+        # Case 1: Use Version from currentVersion
         updated_asset['currentVersionId'] = updated_asset['currentVersion']['Version']
+    elif 'versions' in updated_asset and updated_asset['versions'] and len(updated_asset['versions']) > 0:
+        # Case 2: Use Version from the first record in versions array
+        updated_asset['currentVersionId'] = updated_asset['versions'][0].get('Version', '0')
+    else:
+        # Case 3: Default to '0' if no version information is available
+        updated_asset['currentVersionId'] = '0'
     
     # Remove specified fields
     for field in FIELDS_TO_REMOVE:
@@ -420,14 +459,10 @@ def migrate_asset_versions(dynamodb, assets_table_name, asset_versions_table_nam
             # Create asset version record
             version_record = create_asset_version_record(asset)
             
-            if version_record:
-                # Put the version record into the asset versions table
-                put_item(dynamodb, asset_versions_table_name, version_record)
-                success_count += 1
-                logger.info(f"Successfully created version record for asset {asset_id}")
-            else:
-                error_count += 1
-                logger.warning(f"Skipped creating version record for asset {asset_id} - no currentVersion field")
+            # Put the version record into the asset versions table
+            put_item(dynamodb, asset_versions_table_name, version_record)
+            success_count += 1
+            logger.info(f"Successfully created version record for asset {asset_id}")
         except Exception as e:
             error_count += 1
             logger.error(f"Error creating version record for asset {asset_id}: {e}")
@@ -435,33 +470,25 @@ def migrate_asset_versions(dynamodb, assets_table_name, asset_versions_table_nam
     logger.info(f"Completed migration of asset versions: {success_count} successful, {error_count} errors")
     return success_count, error_count
 
-def update_asset_records(dynamodb, assets_table_name, s3_asset_buckets_table_name, asset_bucket_name, base_assets_prefix, limit=None):
+def update_asset_records(dynamodb, assets_table_name, bucket_id, base_assets_prefix, limit=None):
     """
     Update asset records in the assets table.
     
     Args:
         dynamodb: DynamoDB resource
         assets_table_name (str): Name of the assets table
-        s3_asset_buckets_table_name (str): Name of the S3_Asset_Buckets table
-        asset_bucket_name (str): Name of the asset bucket to use for lookup
+        bucket_id (str): Bucket ID to add to the asset records
         base_assets_prefix (str): Base assets prefix to use in the Key
         limit (int, optional): Maximum number of assets to process
         
     Returns:
-        tuple: (success_count, error_count, bucket_id)
+        tuple: (success_count, error_count)
     """
     logger.info(f"Starting update of asset records in {assets_table_name}")
     
     # Get all assets
     assets = scan_table(dynamodb, assets_table_name, limit)
     logger.info(f"Found {len(assets)} assets to update")
-    
-    # Look up the bucket ID once
-    bucket_id = query_bucket_id(dynamodb, s3_asset_buckets_table_name, asset_bucket_name, base_assets_prefix)
-    if bucket_id:
-        logger.info(f"Found bucket ID {bucket_id} for bucket {asset_bucket_name} with prefix {base_assets_prefix}")
-    else:
-        logger.warning(f"Could not find bucket ID for bucket {asset_bucket_name} with prefix {base_assets_prefix}")
     
     success_count = 0
     error_count = 0
@@ -489,7 +516,7 @@ def update_asset_records(dynamodb, assets_table_name, s3_asset_buckets_table_nam
             logger.error(f"Error updating asset {asset_id}: {e}")
     
     logger.info(f"Completed update of asset records: {success_count} successful, {error_count} errors")
-    return success_count, error_count, bucket_id
+    return success_count, error_count
 
 # =====================================================================
 # MAIN FUNCTION
@@ -588,6 +615,22 @@ def main():
     
     # Perform the migration
     try:
+        # Step 0: Look up the bucket ID - this is critical for the migration
+        logger.info(f"Looking up bucket ID for bucket {CONFIG['asset_bucket_name']} with prefix {CONFIG['base_assets_prefix']}")
+        bucket_id = query_bucket_id(
+            dynamodb, 
+            CONFIG['s3_asset_buckets_table_name'], 
+            CONFIG['asset_bucket_name'], 
+            CONFIG['base_assets_prefix']
+        )
+        
+        if not bucket_id:
+            logger.error(f"Could not find bucket ID for bucket {CONFIG['asset_bucket_name']} with prefix {CONFIG['base_assets_prefix']}")
+            logger.error("Migration cannot proceed without a valid bucket ID")
+            return 1
+            
+        logger.info(f"Found bucket ID {bucket_id} - proceeding with migration")
+        
         # Step 1: Migrate asset versions
         version_success, version_errors = migrate_asset_versions(
             dynamodb, 
@@ -596,28 +639,22 @@ def main():
             args.limit if args.limit else None
         )
         
-        # Step 2: Update asset records and get bucket ID
-        asset_success, asset_errors, bucket_id = update_asset_records(
+        # Step 2: Update asset records with the bucket ID
+        asset_success, asset_errors = update_asset_records(
             dynamodb, 
             CONFIG['assets_table_name'],
-            CONFIG['s3_asset_buckets_table_name'],
-            CONFIG['asset_bucket_name'],
+            bucket_id,
             CONFIG['base_assets_prefix'],
             args.limit if args.limit else None
         )
         
         # Step 3: Update database records with the bucket ID
-        if bucket_id:
-            db_success, db_errors = update_database_records(
-                dynamodb,
-                CONFIG['databases_table_name'],
-                bucket_id,
-                args.limit if args.limit else None
-            )
-        else:
-            logger.error("Could not find bucket ID, skipping database updates")
-            db_success = 0
-            db_errors = 0
+        db_success, db_errors = update_database_records(
+            dynamodb,
+            CONFIG['databases_table_name'],
+            bucket_id,
+            args.limit if args.limit else None
+        )
         
         # Print summary
         logger.info("Migration completed")
