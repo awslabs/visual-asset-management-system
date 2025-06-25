@@ -333,7 +333,7 @@ def lambda_handler(event, context):
                     # Check if workflow is Global 
                     isGlobalWorkflow = is_global_workflow(pathParams['workflowId'])
 
-                    # If global workflow, adjust path parameter
+                    # If global workflow, override parameter
                     if isGlobalWorkflow:
                         workflowResponse = get_workflow("GLOBAL", pathParams['workflowId'])
                     else:

@@ -150,8 +150,6 @@ export default function CreateUpdateWorkflow(props) {
             setActiveTab("pipelines");
         } else {
             const functions = workflowPipelines.map((item) => {
-                console.log("CHECKPOINT")
-                console.log(item)
                 return {
                     name: item.value,
                     databaseId: item.databaseId,

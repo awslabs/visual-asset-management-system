@@ -83,7 +83,6 @@ const AssetSelector = (props) => {
                     const assetDatabaseId = allItems.find(
                         (item) => item.assetId === assetId
                     )?.databaseId;
-                    console.log("CHECKPOINT, inside ASSET SELECTOR");
                     console.log("assetDatabaseId", assetDatabaseId);
                     setAsset(detail.selectedOption);
                     setAssetDatabaseId(assetDatabaseId);
