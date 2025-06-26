@@ -4,7 +4,7 @@
     "s3_asset_buckets_table_name": "YOUR_S3_ASSET_BUCKETS_TABLE_NAME",
     "databases_table_name": "YOUR_DATABASES_TABLE_NAME",
     "comment_storage_table_name": "YOUR_COMMENT_STORAGE_TABLE_NAME",
-    "base_assets_prefix": "YOUR_BASE_ASSETS_PREFIX",
+    "base_assets_prefix": "/",
     "asset_bucket_name": "YOUR_ASSET_BUCKET_NAME",
     "aws_profile": "YOUR_AWS_PROFILE",
     "aws_region": "YOUR_AWS_REGION",

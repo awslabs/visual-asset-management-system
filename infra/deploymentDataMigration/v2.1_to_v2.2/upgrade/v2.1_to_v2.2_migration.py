@@ -308,8 +308,8 @@ def create_asset_version_record(asset):
             'assetId': asset_id,
             'assetVersionId': current_version.get('Version', '0'),
             'isCurrentVersion': True,
-            'dateCreated': current_version.get('DateModified', datetime.now().isoformat()),
-            'comment': current_version.get('Comment', f'Initial asset creation - Version {current_version.get("Version", "0")}'),
+            'dateCreated': datetime.now().isoformat(),
+            'comment': current_version.get('Comment', f'Asset migration - Version {current_version.get("Version", "0")}'),
             'description': current_version.get('description', ''),
             'createdBy': current_version.get('CreatedBy', 'system'),
             'specifiedPipelines': current_version.get('specifiedPipelines', []),
@@ -325,8 +325,8 @@ def create_asset_version_record(asset):
             'assetId': asset_id,
             'assetVersionId': top_version.get('Version', '0'),
             'isCurrentVersion': True,
-            'dateCreated': top_version.get('DateModified', datetime.now().isoformat()),
-            'comment': top_version.get('Comment', f'Initial asset creation - From versions array'),
+            'dateCreated': datetime.now().isoformat(),
+            'comment': top_version.get('Comment', f'Asset migration'),
             'description': top_version.get('description', ''),
             'createdBy': top_version.get('CreatedBy', 'system'),
             'specifiedPipelines': top_version.get('specifiedPipelines', []),
@@ -370,10 +370,24 @@ def update_asset_location(asset, base_assets_prefix, bucket_id):
     # Update assetLocation if it exists
     if 'assetLocation' in updated_asset:
         asset_id = updated_asset.get('assetId')
+
+        finalKey =f"{base_assets_prefix}{asset_id}/"
+
+        #remove any starting slashes from the finalkey
+        if(finalKey.startswith('/')):
+            finalKey = finalKey[1:]
+
+        #add forward slash as end if not exists. 
+        if(not finalKey.endswith('/')):
+            finalKey = finalKey + '/'
+
+        #if only a slash, make it empty
+        if (finalKey == '/'):
+            finalKey = ''
         
         # Transform assetLocation to use baseAssetsPrefix
         updated_asset['assetLocation'] = {
-            'Key': f"{base_assets_prefix}{asset_id}/"
+            'Key': finalKey
         }
     
     # Add bucketId to the asset record
@@ -492,7 +506,7 @@ def migrate_comments(dynamodb, comments_table_name, assets_table_name, limit=Non
     
     For each comment:
     1. Extract assetId and the composite sort key (assetVersionId:commentId)
-    2. Get the corresponding asset record
+    2. Find the corresponding asset record from a scan of the assets table
     3. If assetVersionId in comment doesn't match currentVersionId of asset:
        - Create new comment with updated sort key using asset's currentVersionId
        - Insert new comment and delete old one
@@ -511,6 +525,15 @@ def migrate_comments(dynamodb, comments_table_name, assets_table_name, limit=Non
     # Get all comments
     comments = scan_table(dynamodb, comments_table_name, limit)
     logger.info(f"Found {len(comments)} comments to process")
+    
+    # Scan the assets table once and store the results in memory
+    logger.info(f"Scanning assets table {assets_table_name} to build asset lookup")
+    assets = scan_table(dynamodb, assets_table_name)
+    logger.info(f"Found {len(assets)} assets in the scan")
+    
+    # Create a dictionary for quick asset lookup by assetId
+    asset_lookup = {asset.get('assetId'): asset for asset in assets if asset.get('assetId')}
+    logger.info(f"Created asset lookup with {len(asset_lookup)} entries")
     
     success_count = 0
     error_count = 0
@@ -535,20 +558,13 @@ def migrate_comments(dynamodb, comments_table_name, assets_table_name, limit=Non
                 logger.warning(f"Skipped migrating comment - invalid sort key format: {sort_key}")
                 continue
             
-            # Get the asset record
-            assets_table = dynamodb.Table(assets_table_name)
-            response = assets_table.get_item(
-                Key={
-                    'assetId': asset_id
-                }
-            )
+            # Find the asset in our lookup dictionary
+            asset = asset_lookup.get(asset_id)
             
-            if 'Item' not in response:
+            if not asset:
                 error_count += 1
-                logger.warning(f"Skipped migrating comment - asset {asset_id} not found")
+                logger.warning(f"Skipped migrating comment - asset {asset_id} not found in asset lookup")
                 continue
-            
-            asset = response['Item']
             
             # Check if the asset has currentVersionId
             if 'currentVersionId' not in asset:

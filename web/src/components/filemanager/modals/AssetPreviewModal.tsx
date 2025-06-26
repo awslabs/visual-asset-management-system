@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { Box, Button, Modal, SpaceBetween } from "@cloudscape-design/components";
+import { Box, Button, Modal, SpaceBetween, Spinner } from "@cloudscape-design/components";
 import { downloadAsset } from "../../../services/APIService";
 import "./AssetPreviewModal.css";
 
@@ -173,11 +173,7 @@ export const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
                     {loading && (
                         <div className="asset-preview-loading" style={{ textAlign: "center" }}>
                             <Box margin={{ bottom: "l" }}>
-                                <img
-                                    src="/spinner.gif"
-                                    alt="Loading"
-                                    style={{ width: "50px", height: "50px" }}
-                                />
+                                <Spinner size="large" />
                             </Box>
                             <div>Loading preview...</div>
                         </div>

@@ -10,7 +10,7 @@ This version includes significant enhancements to VAMS infrastructure, a complet
 ### ⚠ BREAKING CHANGES
 
 -   CDK Configuration files must be updated to include the new required fields. See ConfigurationGuide.md and template configuration files for new formats.
--   Asset and Database table formats have changed which require using the migration scripts after CDK deployment to update the new field values. See v2.2_to_v2.3_migration_README.md for details on using the migration scripts.
+-   Asset and Database DynamoDB table fields and formats have changed which require using the migration scripts after CDK deployment to update the new field values. See /infra/deploymentDataMigration/v2.1_to_v2.2/upgrade/v2.2_to_v2.3_migration_README.md for details on using the migration scripts to upgrade your DynamoDB databases after deployment. 
 -   Due to VPC subnet breakout changes, this may break existing deployments. It is recommended to use an A/B deployment if you run into subnet configuration issues.
 -   Due to Cognito changes, a new Cognito user pool may be generated on stack deployment. To migrate existing users from the previous user pool, follow the following blog instructions: https://aws.amazon.com/blogs/security/approaches-for-migrating-users-to-amazon-cognito-user-pools/
 
