@@ -544,7 +544,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         {
             ...dynamodbDefaultProps,
             partitionKey: {
-                name: "assetId",
+                name: "databaseId:assetId",
                 type: dynamodb.AttributeType.STRING,
             },
             sortKey: {
@@ -554,14 +554,24 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         }
     );
 
+    workflowExecutionsStorageTable.addLocalSecondaryIndex(
+        {
+            indexName: "WorkflowLSI",
+            sortKey: {
+                name: "workflowDatabaseId:workflowId",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    )
+
     workflowExecutionsStorageTable.addGlobalSecondaryIndex({
-        indexName: "WorkflowIdGSI",
+        indexName: "WorkflowGSI",
         partitionKey: {
-            name: "assetId",
+            name: "workflowDatabaseId:workflowId",
             type: dynamodb.AttributeType.STRING,
         },
         sortKey: {
-            name: "workflowId",
+            name: "executionId",
             type: dynamodb.AttributeType.STRING,
         },
     });

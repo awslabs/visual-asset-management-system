@@ -45,7 +45,7 @@ export default function ListPage(props) {
             setLoading(true);
             let items;
             if (databaseId !== undefined) {
-                // This handles both specific database IDs and empty string (Global)
+                // This handles both specific database IDs and Global
                 items = await fetchElements({ databaseId: databaseId });
             } else {
                 // This is for the main pipelines page showing all pipelines

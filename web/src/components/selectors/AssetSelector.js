@@ -25,22 +25,21 @@ const AssetSelector = (props) => {
     const [reload, setReload] = useState(true);
     const [allItems, setAllItems] = useState([]);
     const navigate = useNavigate();
-    let asset, setAsset, setActiveTab;
+    let asset, setAsset, setActiveTab, setAssetDatabaseId;
     const context = useContext(WorkflowContext);
     if (!pathViewType) {
         asset = context.asset;
         setAsset = context.setAsset;
         setActiveTab = context.setActiveTab;
+        setAssetDatabaseId = context.setAssetDatabaseId;
     }
 
     useEffect(() => {
         const getData = async () => {
             let items;
-            if (database) {
-                items = await fetchDatabaseAssets({ databaseId: database });
-            } else {
-                items = await fetchAllAssets();
-            }
+            items = database && database.toUpperCase() !== "GLOBAL"
+                ? await fetchDatabaseAssets({ databaseId: database })
+                : await fetchAllAssets();
             if (items !== false && Array.isArray(items)) {
                 setReload(false);
                 if (pathViewType) {
@@ -80,7 +79,13 @@ const AssetSelector = (props) => {
                     )?.databaseId;
                     navigate(`/databases/${databaseId}/assets/${assetId}/file`);
                 } else {
+                    const assetId = detail.selectedOption.value;
+                    const assetDatabaseId = allItems.find(
+                        (item) => item.assetId === assetId
+                    )?.databaseId;
+                    console.log("assetDatabaseId", assetDatabaseId);
                     setAsset(detail.selectedOption);
+                    setAssetDatabaseId(assetDatabaseId);
                     setActiveTab("asset");
                 }
             }}

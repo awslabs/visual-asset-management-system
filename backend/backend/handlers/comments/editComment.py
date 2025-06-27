@@ -131,7 +131,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
         global claims_and_roles
         claims_and_roles = request_to_claims(event)
         method_allowed_on_api = False
-        asset_object = get_asset_object_from_id(pathParameters["assetId"])
+        asset_object = get_asset_object_from_id(None, pathParameters["assetId"])
         asset_object.update({"object__type": "asset"})
 
         # Add Casbin Enforcer to check if the current user has permissions to POST the Comment

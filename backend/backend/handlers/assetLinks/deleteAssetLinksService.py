@@ -36,8 +36,8 @@ def delete_asset_link(relation_id):
     items = relation.get('Items', [])
     if items:
         for item in items:
-            asset_link_from_object = get_asset_object_from_id(item['assetIdFrom'])
-            asset_link_to_object = get_asset_object_from_id(item['assetIdTo'])
+            asset_link_from_object = get_asset_object_from_id(None, item['assetIdFrom'])
+            asset_link_to_object = get_asset_object_from_id(None, item['assetIdTo'])
 
             # Add Casbin Enforcer to check if the current user has permissions to POST the both the assets
             asset_link_from_object.update({"object__type": "asset"})

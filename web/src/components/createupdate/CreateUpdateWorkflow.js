@@ -33,13 +33,13 @@ import Synonyms from "../../synonyms";
 const WorkflowEditor = React.lazy(() => import("../interactive/WorkflowEditor"));
 
 export default function CreateUpdateWorkflow(props) {
-    // Check if this is a global workflow route
-    const isGlobalWorkflow = window.location.hash.includes("/databases/global/workflows/");
     // Get parameters from URL
     const { databaseId: urlDatabaseId, workflowId } = useParams();
-
-    // If this is a global workflow, use empty string as databaseId
-    const databaseId = isGlobalWorkflow ? "" : urlDatabaseId;
+    
+    // If this is a global workflow, use "GLOBAL" as databaseId
+    const databaseId = urlDatabaseId;
+    
+    const isGlobalWorkflow = (databaseId === "GLOBAL");
     const navigate = useNavigate();
     const [reload, setReload] = useState(true);
     const [loaded, setLoaded] = useState(!workflowId);
@@ -47,6 +47,7 @@ export default function CreateUpdateWorkflow(props) {
     const [reloadPipelines, setReloadPipelines] = useState(true);
     const [openCreatePipeline, setOpenCreatePipeline] = useState(false);
     const [asset, setAsset] = useState(null);
+    const [assetDatabaseId, setAssetDatabaseId] = useState(null);
     const [pipelines, setPipelines] = useState([]);
     const [workflowPipelines, setWorkflowPipelines] = useState([null]);
     const [loadedWorkflowPipelines, setLoadedWorkflowPipelines] = useState([]);
@@ -79,6 +80,7 @@ export default function CreateUpdateWorkflow(props) {
                 const loadedPipelines = currentItem?.specifiedPipelines?.functions.map((item) => {
                     return {
                         value: item.name,
+                        databaseId: item.databaseId,
                         pipelineType: item.pipelineType,
                         pipelineExecutionType: item.pipelineExecutionType,
                         outputType: item.outputType,
@@ -150,6 +152,7 @@ export default function CreateUpdateWorkflow(props) {
             const functions = workflowPipelines.map((item) => {
                 return {
                     name: item.value,
+                    databaseId: item.databaseId,
                     pipelineType: item.pipelineType,
                     pipelineExecutionType: item.pipelineExecutionType,
                     outputType: item.outputType,
@@ -209,6 +212,7 @@ export default function CreateUpdateWorkflow(props) {
             value={{
                 asset,
                 setAsset,
+                setAssetDatabaseId,
                 pipelines,
                 setPipelines,
                 workflowPipelines,
@@ -239,22 +243,14 @@ export default function CreateUpdateWorkflow(props) {
             <Box padding={{ top: "s", horizontal: "l" }}>
                 <SpaceBetween direction="vertical" size="xs">
                     <BreadcrumbGroup
-                        items={
-                            isGlobalWorkflow
-                                ? [
-                                      { text: Synonyms.Databases, href: "#/databases/" },
-                                      { text: "Global", href: "#/databases/global/workflows/" },
-                                      { text: "Create Workflow" },
-                                  ]
-                                : [
-                                      { text: Synonyms.Databases, href: "#/databases/" },
-                                      {
-                                          text: databaseId,
-                                          href: "#/databases/" + databaseId + "/workflows/",
-                                      },
-                                      { text: "Create Workflow" },
-                                  ]
-                        }
+                        items={[
+                                { text: Synonyms.Databases, href: "#/databases/" },
+                                {
+                                    text: databaseId,
+                                    href: "#/databases/" + databaseId + "/workflows/",
+                                },
+                                { text: "Create Workflow" },
+                            ]}
                         ariaLabel="Breadcrumbs"
                     />
                     <Container

@@ -28,8 +28,9 @@ const DatabaseSelector = (props) => {
     return (
         <Select
             {...restProps}
+            {...restProps}
             options={[
-                ...(showGlobal ? [{ label: "Global", value: "" }] : []),
+                ...(showGlobal ? [{ label: "GLOBAL", value: "GLOBAL" }] : []),
                 ...allItems.map((item) => {
                     return {
                         label: item.databaseId,

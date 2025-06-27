@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Modal, Select, SpaceBetween, FormField, Button, Box } from "@cloudscape-design/components";
+import { Modal, Select, SpaceBetween, FormField, Button, Box, Alert } from "@cloudscape-design/components";
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { fetchDatabaseWorkflows, runWorkflow } from "../../services/APIService";
@@ -18,14 +18,18 @@ export default function WorkflowSelectorWithModal(props) {
     const { databaseId, assetId, setOpen, open, assetFiles = [], onWorkflowExecuted } = props;
     const [reload, setReload] = useState(true);
     const [allItems, setAllItems] = useState([]);
-    const [workflowId, setWorkflowId] = useState(null);
+    const [selectedWorkflow, setSelectedWorkflow] = useState(null);
     const [selectedFileKey, setSelectedFileKey] = useState(null);
     const [filteredFiles, setFilteredFiles] = useState([]);
+    const [apiError, setApiError] = useState(null);
+    const [isExecuting, setIsExecuting] = useState(false);
     const navigate = useNavigate();
 
     useEffect(() => {
         const getData = async () => {
-            const items = await fetchDatabaseWorkflows({ databaseId: databaseId });
+            const itemsGlobal = await fetchDatabaseWorkflows({ databaseId: "GLOBAL" });
+            const itemsDb = await fetchDatabaseWorkflows({ databaseId: databaseId });
+            const items = [...itemsDb, ...itemsGlobal]
             if (items !== false && Array.isArray(items)) {
                 setReload(false);
                 setAllItems(items);
@@ -52,30 +56,51 @@ export default function WorkflowSelectorWithModal(props) {
     }, [assetFiles]);
 
     const handleWorkflowSelection = (event) => {
-        const newWorkflowId = event.detail.selectedOption.value;
-        setWorkflowId(newWorkflowId);
+        const selectedOption = event.detail.selectedOption.value;
+        setSelectedWorkflow(selectedOption);
     };
 
     const handleExecuteWorkflow = async () => {
-        if (!workflowId) return;
+        if (!selectedWorkflow) return;
 
-        const result = await runWorkflow({
-            databaseId: databaseId,
-            assetId: assetId,
-            workflowId: workflowId,
-            fileKey: selectedFileKey, // Pass the selected file key
-        });
-        if (result !== false && Array.isArray(result)) {
-            if (result[0] === false) {
-                // TODO: error handling
-            } else {
-                // Instead of reloading the entire page, call the onWorkflowExecuted callback if provided
-                if (typeof onWorkflowExecuted === "function") {
-                    onWorkflowExecuted();
+        // Clear any previous errors
+        setApiError(null);
+        setIsExecuting(true);
+
+        const isGlobalWorkflow = selectedWorkflow.databaseId === "GLOBAL";
+        
+        try {
+            const result = await runWorkflow({
+                databaseId: databaseId,
+                assetId: assetId,
+                workflowId: selectedWorkflow.workflowId,
+                fileKey: selectedFileKey, // Pass the selected file key
+                isGlobalWorkflow: isGlobalWorkflow
+            });
+            
+            if (result !== false && Array.isArray(result)) {
+                if (result[0] === false) {
+                    // Handle error from API
+                    const errorMessage = result[1] || "Failed to execute workflow. Please try again.";
+                    setApiError(errorMessage);
+                } else {
+                    // Success case - call the callback and close the modal
+                    if (typeof onWorkflowExecuted === "function") {
+                        onWorkflowExecuted();
+                    }
+                    handleClose();
                 }
+            } else {
+                // Handle unexpected response format
+                setApiError("Received an invalid response from the server. Please try again.");
             }
+        } catch (error) {
+            // Handle unexpected errors
+            console.error("Error executing workflow:", error);
+            setApiError(`An unexpected error occurred: ${error.message || "Unknown error"}`);
+        } finally {
+            setIsExecuting(false);
         }
-        handleClose();
     };
 
     const handleFileSelection = (event) => {
@@ -83,6 +108,8 @@ export default function WorkflowSelectorWithModal(props) {
     };
 
     const handleClose = () => {
+        // Clear any errors when closing the modal
+        setApiError(null);
         setOpen(false);
     };
 
@@ -95,20 +122,25 @@ export default function WorkflowSelectorWithModal(props) {
             header="Execute Workflow"
         >
             <SpaceBetween direction="vertical" size="l">
+                {apiError && (
+                    <Alert type="error" header="Error executing workflow">
+                        {apiError}
+                    </Alert>
+                )}
                 <FormField label="Select Workflow">
                     <Select
                         onChange={handleWorkflowSelection}
                         options={allItems.map((item) => {
                             return {
-                                label: item.workflowId,
-                                value: item.workflowId,
+                                label: `${item.workflowId} (${item.databaseId})`,
+                                value: {workflowId: item.workflowId, databaseId: item.databaseId},
                             };
                         })}
                         selectedOption={
-                            workflowId
+                            selectedWorkflow
                                 ? {
-                                      value: workflowId,
-                                      label: workflowId,
+                                      value: selectedWorkflow,
+                                      label:`${selectedWorkflow.workflowId} (${selectedWorkflow.databaseId})`,
                                   }
                                 : null
                         }
@@ -152,7 +184,8 @@ export default function WorkflowSelectorWithModal(props) {
                     <Button
                         variant="primary"
                         onClick={handleExecuteWorkflow}
-                        disabled={!workflowId}
+                        disabled={!selectedWorkflow || isExecuting}
+                        loading={isExecuting}
                     >
                         Execute Workflow
                     </Button>

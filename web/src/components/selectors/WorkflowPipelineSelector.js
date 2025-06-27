@@ -20,45 +20,45 @@ const WorkflowPipelineSelector = (props) => {
         setActiveTab,
     } = useContext(WorkflowContext);
     const [allItems, setAllItems] = useState([]);
-    useEffect(() => {
-        const getData = async () => {
-            let items = [];
-
-            // If database is empty string (Global workflow), only fetch global pipelines
-            if (database === "") {
-                const globalItems = await fetchDatabasePipelines({ databaseId: "" });
-                if (globalItems !== false && Array.isArray(globalItems)) {
-                    items = globalItems;
-                }
-            } else {
-                // For database-specific workflows, fetch both database-specific and global pipelines
-                const databaseItems = await fetchDatabasePipelines({ databaseId: database });
-                const globalItems = await fetchDatabasePipelines({ databaseId: "" });
-
-                if (databaseItems !== false && Array.isArray(databaseItems)) {
-                    items = [...databaseItems];
-                }
-
-                if (globalItems !== false && Array.isArray(globalItems)) {
-                    items = [...items, ...globalItems];
-                }
+useEffect(() => {
+    const getData = async () => {
+        let items = [];
+        
+        // If database is "GLOBAL" (Global workflow), only fetch global pipelines
+        if (database === "GLOBAL") {
+            const globalItems = await fetchDatabasePipelines({ databaseId: "GLOBAL" });
+            if (globalItems !== false && Array.isArray(globalItems)) {
+                items = globalItems;
             }
-
-            if (items.length > 0) {
-                setReload(false);
-                setAllItems(items);
-                setPipelines(
-                    items.reduce((acc, cur) => {
-                        acc[cur.pipelineId] = cur;
-                        return acc;
-                    }, {})
-                );
+        } else {
+            // For database-specific workflows, fetch both database-specific and global pipelines
+            const databaseItems = await fetchDatabasePipelines({ databaseId: database });
+            const globalItems = await fetchDatabasePipelines({ databaseId: "GLOBAL" });
+            
+            if (databaseItems !== false && Array.isArray(databaseItems)) {
+                items = [...databaseItems];
             }
-        };
-        if (reload) {
-            getData();
+            
+            if (globalItems !== false && Array.isArray(globalItems)) {
+                items = [...items, ...globalItems];
+            }
         }
-    }, [database, reload, setPipelines]);
+        
+        if (items.length > 0) {
+            setReload(false);
+            setAllItems(items);
+            setPipelines(
+                items.reduce((acc, cur) => {
+                    acc[cur.pipelineId] = cur;
+                    return acc;
+                }, {})
+            );
+        }
+    };
+    if (reload) {
+        getData();
+    }
+}, [database, reload, setPipelines]);
 
     useEffect(() => {
         if (reloadPipelines) {
@@ -76,12 +76,11 @@ const WorkflowPipelineSelector = (props) => {
                 setWorkflowPipelines(newPipelines);
                 setActiveTab("pipelines");
             }}
-            placeholder={
-                <>Select pipeline from {database === "" ? "Global" : database} database.</>
-            }
+            placeholder={<>Select pipeline from {database} database.</>}
             options={allItems.map((item) => {
+                const isGlobal = item.databaseId === "GLOBAL";
                 return {
-                    label: item.pipelineId,
+                    label: isGlobal ? `(GLOBAL) ${item.pipelineId}` : item.pipelineId,
                     value: item.pipelineId,
                     pipelineType: item.pipelineType,
                     pipelineExecutionType: item.pipelineExecutionType,
@@ -91,6 +90,7 @@ const WorkflowPipelineSelector = (props) => {
                     taskHeartbeatTimeout: item.taskHeartbeatTimeout,
                     userProvidedResource: item.userProvidedResource,
                     inputParameters: item.inputParameters,
+                    databaseId: item.databaseId,
                     tags: [
                         `input:${item.assetType}`,
                         `output:${item.outputType}`,

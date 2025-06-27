@@ -74,7 +74,7 @@ def lambda_handler(event, context):
             databaseId = event['pathParameters']['databaseId']
             assetId = event['pathParameters']['assetId']
 
-            asset_of_metadata = get_asset_object_from_id(assetId)
+            asset_of_metadata = get_asset_object_from_id(databaseId, assetId)
             if asset_of_metadata:
                 allowed = False
                 # Add Casbin Enforcer to check if the current user has permissions to POST the asset:

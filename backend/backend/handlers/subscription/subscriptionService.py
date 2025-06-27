@@ -80,7 +80,7 @@ def get_subscriptions(query_params):
         }
 
         # Add Casbin Enforcer to check if the user has access to GET subscription of specific Assets
-        asset_object = get_asset_object_from_id(entity_id)
+        asset_object = get_asset_object_from_id(None, entity_id)
         asset_object.update({"object__type": "asset"})
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
@@ -439,7 +439,7 @@ def lambda_handler(event, context):
 
         if event['body']["entityName"] == "Asset":
             allowed = False
-            asset_object = get_asset_object_from_id(event['body']["entityId"])
+            asset_object = get_asset_object_from_id(None, event['body']["entityId"])
             asset_object.update({"object__type": "asset"})
 
             if len(claims_and_roles["tokens"]) > 0:

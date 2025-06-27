@@ -24,12 +24,7 @@ export default function Workflows(props) {
 
     const handleSelectWorkflowDatabase = (event) => {
         const newDatabaseId = event?.detail?.selectedOption?.value;
-        // If the selected database is Global (empty string), use the global database route
-        if (newDatabaseId === "") {
-            navigate(`/databases/global/workflows/create`);
-        } else {
-            navigate(`/databases/${newDatabaseId}/workflows/create`);
-        }
+        navigate(`/databases/${newDatabaseId}/workflows/create`);
     };
 
     return (
@@ -49,6 +44,7 @@ export default function Workflows(props) {
                     open={openModal}
                     setOpen={setOpenModal}
                     onSelectorChange={handleSelectWorkflowDatabase}
+                    showGlobal={true}
                 />
             )}
         </>

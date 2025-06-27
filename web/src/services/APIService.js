@@ -110,16 +110,13 @@ export const downloadAsset = async (
 export const deleteElement = async ({ deleteRoute, elementId, item }, api = API) => {
     try {
         let route = deleteRoute;
-
-        // Handle global pipelines/workflows (no database ID)
-        if (item?.databaseId === "" && deleteRoute.includes("{databaseId}")) {
-            // For global items, use the global database route
-            route = deleteRoute.replace("{databaseId}", "GLOBAL");
-        } else {
-            route = route.replace("{databaseId}", item?.databaseId);
-        }
-
-        const response = await api.del("api", route.replace(`{${elementId}}`, item[elementId]), {});
+        route = route.replace("{databaseId}", item?.databaseId);
+        
+        const response = await api.del(
+            "api",
+            route.replace(`{${elementId}}`, item[elementId]),
+            {}
+        );
         if (response.message) {
             console.log(response.message);
             return [true, response.message, ""];
@@ -142,18 +139,20 @@ export const runWorkflow = async (
 ) => {
     try {
         let endpoint;
+        let eventBody = {}; 
+        endpoint = `database/${databaseId}/assets/${assetId}/workflows/${workflowId}`
 
-        // If it's a global workflow, use the global database route
         if (isGlobalWorkflow) {
-            endpoint = `database/global/assets/${assetId}/workflows/${workflowId}`;
-        } else {
-            endpoint = `database/${databaseId}/assets/${assetId}/workflows/${workflowId}`;
+            eventBody = {workflowDatabaseId: "GLOBAL", fileKey: fileKey}
         }
-
-        // Include fileKey in request body if provided
-        const body = fileKey ? { fileKey } : {};
-        const response = await api.post("api", endpoint, { body });
-
+        else {
+            eventBody = {workflowDatabaseId: databaseId, fileKey: fileKey}
+        }
+        
+        const response = await api.post("api", endpoint, {
+            body: eventBody
+        });
+        
         if (response.message) {
             if (
                 response.message.indexOf("error") !== -1 ||
@@ -179,13 +178,7 @@ export const runWorkflow = async (
  */
 export const saveWorkflow = async ({ config }, api = API) => {
     try {
-        // Check if this is a global workflow (databaseId is empty string)
-        const isGlobalWorkflow = config?.body?.databaseId === "";
-
-        // Use different endpoint for global workflows
-        const endpoint = isGlobalWorkflow ? "database/global/workflows" : "workflows";
-
-        const response = await api.put("api", endpoint, config || config.body);
+        const response = await api.put("api", "workflows", config || config.body);
         if (response.message) {
             if (
                 response.message.indexOf("error") !== -1 ||
@@ -756,14 +749,8 @@ export const fetchDatabasePipelines = async ({ databaseId }, api = API) => {
             return false;
         }
 
-        // If databaseId is an empty string, fetch global pipelines using the global database route
-        if (databaseId === "") {
-            response = await api.get("api", `database/global/pipelines`, {});
-        } else {
-            // Otherwise fetch database-specific pipelines
-            response = await api.get("api", `database/${databaseId}/pipelines`, {});
-        }
-
+        response = await api.get("api", `database/${databaseId}/pipelines`, {});
+        
         let items = [];
         const init = { queryStringParameters: { startingToken: null } };
         if (response.message) {
@@ -771,11 +758,7 @@ export const fetchDatabasePipelines = async ({ databaseId }, api = API) => {
                 items = items.concat(response.message.Items);
                 while (response.message.NextToken) {
                     init["queryStringParameters"]["startingToken"] = response.message.NextToken;
-                    if (databaseId === "") {
-                        response = await api.get("api", `database/global/pipelines`, init);
-                    } else {
-                        response = await api.get("api", `database/${databaseId}/pipelines`, init);
-                    }
+                    response = await api.get("api", `database/${databaseId}/pipelines`, init);
                     items = items.concat(response.message.Items);
                 }
                 return items;
@@ -802,14 +785,8 @@ export const fetchDatabaseWorkflows = async ({ databaseId }, api = API) => {
             return false;
         }
 
-        // If databaseId is an empty string, fetch global workflows using the global database route
-        if (databaseId === "") {
-            response = await api.get("api", `database/global/workflows`, {});
-        } else {
-            // Otherwise fetch database-specific workflows
-            response = await api.get("api", `database/${databaseId}/workflows`, {});
-        }
-
+        response = await api.get("api", `database/${databaseId}/workflows`, {});
+        
         let items = [];
         const init = { queryStringParameters: { startingToken: null } };
         if (response.message) {
@@ -817,11 +794,7 @@ export const fetchDatabaseWorkflows = async ({ databaseId }, api = API) => {
                 items = items.concat(response.message.Items);
                 while (response.message.NextToken) {
                     init["queryStringParameters"]["startingToken"] = response.message.NextToken;
-                    if (databaseId === "") {
-                        response = await api.get("api", `database/global/workflows`, init);
-                    } else {
-                        response = await api.get("api", `database/${databaseId}/workflows`, init);
-                    }
+                    response = await api.get("api", `database/${databaseId}/workflows`, init);
                     items = items.concat(response.message.Items);
                 }
                 return items;
@@ -870,25 +843,19 @@ export const fetchAllWorkflows = async (api = API) => {
  * @returns {Promise<boolean|{message}|any>}
  */
 export const fetchWorkflowExecutions = async (
-    { databaseId, assetId, workflowId = "", isGlobalWorkflow = false },
+    { databaseId, assetId, workflowId = ""},
     api = API
 ) => {
     try {
         let response;
         let endpoint;
 
-        // Use a different variable name to avoid redeclaration
-        let dbId = databaseId;
-        if (isGlobalWorkflow) {
-            dbId = "GLOBAL";
-        }
-
         if (assetId) {
             // Determine the endpoint based on whether it's a global workflow
             if (workflowId == "") {
-                endpoint = `database/${dbId}/assets/${assetId}/workflows/executions`;
+                endpoint = `database/${databaseId}/assets/${assetId}/workflows/executions`;
             } else {
-                endpoint = `database/${dbId}/assets/${assetId}/workflows/executions/${workflowId}`;
+                endpoint = `database/${databaseId}/assets/${assetId}/workflows/executions/${workflowId}`;
             }
 
             response = await api.get("api", endpoint, {});

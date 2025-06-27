@@ -78,6 +78,7 @@ This version includes significant enhancements to VAMS infrastructure, a complet
 -   Added infra configuration option for basic GovCloud IL6 compliance checks for features/services enabled or disabled
 -   Added presignedUrlTimeoutSeconds configuration to infra config, moved credTokenTimeoutSeconds under useCognito configuration option (previously used one configuration value for both)
 -   Changed metadata API paths (to standardize) from '/metadata/{databaseId}/{assetId}/' to '/database/{databaseId}/assets/{assetId}/metadata'
+-   Created new DynamoDB table for workflow executions, migration of old jobs will not occur. The new table has better fields for tracking of workflow database ID to now cause conflicts of same name between databases.
 -   Added capability to support multiple S3 buckets for assets now for a solution
     -   (Breaking Change) New CDK configuration options are added and required for defining asset buckets (created with solution or external load), see DeveloperGuide and ConfigurationGuide for details
     -   **Web** Databases now allow you to select which bucket/prefix the database will use for its assets
@@ -106,6 +107,7 @@ This version includes significant enhancements to VAMS infrastructure, a complet
 -   Added new feature that gives users the ability to edit pipelines after initial creation. Users also have the option to update all workflows that contain the edited pipeline. The EDIT feature can be found as a button on the Pipelines page.
 -   Added a new use-case pipeline and configuration option for `ModelOps` complex tasks such as file format conversions, optimizations for 3D assets, and generating image captures of 3D models.
     -   VAMS pipeline registration `inputParameters` will define for each pipeline registration what the output file extension type(s) will be. ModelOps can output multiple file types in one execution. Pipeline can be called by registering 'vamsExecuteModelOps' lambda function with VAMS pipelines / workflows.
+-   Pipelines and workflows can now be created under a GLOBAL database. GLOBAL database workflows can be executed across all assets across all databases. The GLOBAL database is a reserved keyword now which implies that an entity applies to all databases (right now only workflows/pipelines) This now allows for the capability of registering pipelines/workflows automatically as part of use-case pipeline deployments as a database no longer needs to exist (GLOBAL). 
 -   (Draft Implementation) Started overhaul of lambda backend unit tests that were previously outdated and non-functioning. Unit tests as of 2.2 still have many non-functioning (skipped) tests that will need to be corrected. Passed tests will also need additional validation and coverage evaluation.
 
 ### Bug Fixes
@@ -149,6 +151,10 @@ This version includes significant enhancements to VAMS infrastructure, a complet
 -   Added logic to prefilter asset OpenSearch querying to only databases the user has access in order to increase performance for final asset permission checks for large asset databases
 -   Added Stack Formation Template descriptions
 -   Updated documentation for developer deployment machines to use Node version 20.18.1
+
+### Known Oustanding Issues
+-   With updating to support multiple S3 buckets, there are scenarios that can occur where if there are multiple buckets/prefixes across different databases where the assetId are now the same, there will be lookup conflicts within assetLinks, Comments, and subscriptions functionality. This can only occur right now with manual changes/updates as done directly to S3 as assetIds generated from VAMS uploads still generate unique GUIDs. 
+-   Using the same pipeline ID in a GLOBAL and non-GLOBAL database will cause overlap conflicts and issues. 
 
 ## [2.1.1] (2025-01-17)
 

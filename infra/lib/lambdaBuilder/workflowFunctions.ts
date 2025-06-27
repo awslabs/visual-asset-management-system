@@ -334,6 +334,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
                 storageResources.dynamo.workflowExecutionsStorageTable.tableName,
+            ASSET_UPLOAD_TABLE_NAME: storageResources.dynamo.assetUploadsStorageTable.tableName,
             FILE_UPLOAD_LAMBDA_FUNCTION_NAME: fileUploadLambdaFunction.functionName,
             READ_METADATA_LAMBDA_FUNCTION_NAME: readMetadataLambdaFunction.functionName,
             CREATE_METADATA_LAMBDA_FUNCTION_NAME: createMetadataLambdaFunction.functionName,
@@ -351,6 +352,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetUploadsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);

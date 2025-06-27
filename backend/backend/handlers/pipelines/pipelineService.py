@@ -158,7 +158,7 @@ def delete_pipeline(databaseId, pipelineId):
     table = dynamodb.Table(pipeline_database)
     if "#deleted" in databaseId:
         return response
-
+    
     db_response = table.get_item(Key={'databaseId': databaseId, 'pipelineId': pipelineId})
     pipeline = db_response.get("Item", {})
 

@@ -35,12 +35,10 @@ export const WorkflowListDefinition = new ListDefinition({
             header: Synonyms.Database,
             cellWrapper: (props) => {
                 const { item } = props;
-                // If databaseId is empty string, display "Global" and link to global workflows
-                if (item.databaseId === "") {
-                    return <Link href={`#/databases/global/workflows/`}>Global</Link>;
-                }
                 return (
-                    <Link href={`#/databases/${item.databaseId}/workflows/`}>{props.children}</Link>
+                    <Link href={`#/databases/${item.databaseId}/workflows/`}>
+                        {props.children}
+                    </Link>
                 );
             },
             sortingField: "databaseId",

@@ -50,9 +50,14 @@ function validateDatabaseNameLength(name: string) {
     return name.length >= 3 && name.length <= 64 ? null : "Between 3 and 64 characters";
 }
 
+// databaseId cannot be named "GLOBAL" (case insenstive)
+function validateDatabaseNameGlobal(name: string) {
+    return name.toLowerCase() !== "global" ? null : "DatabaseId cannot be named GLOBAL";
+}
+
 // chain together the above three functions, when they return null, then return null
 function validateDatabaseName(name: string) {
-    return validateDatabaseNameLowercase(name) || validateDatabaseNameLength(name);
+    return validateDatabaseNameLowercase(name) || validateDatabaseNameLength(name) || validateDatabaseNameGlobal(name);
 }
 
 // when a string is between the given min and max characters, return null, otherwise return an error message including the range

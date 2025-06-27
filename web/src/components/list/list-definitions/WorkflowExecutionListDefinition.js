@@ -10,8 +10,8 @@ import ColumnDefinition from "./types/ColumnDefinition";
 import Synonyms from "../../../synonyms";
 
 export const WorkflowExecutionListDefinition = new ListDefinition({
-    pluralName: "workflows",
-    pluralNameTitleCase: "Workflows",
+    pluralName: "workflow executions",
+    pluralNameTitleCase: "Workflow Executions",
     visibleColumns: [
         "name",
         "databaseId",
@@ -36,9 +36,11 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
                 }
                 // If this is a workflow (has no parentId), make it a link
                 if (!item.parentId) {
+                    // Use displayName if available, otherwise fall back to name
+                    const displayText = item.displayName || item.name;
                     return (
-                        <Link href={`#/databases/${item?.databaseId}/workflows/${item?.name}`}>
-                            {props.children}
+                        <Link href={`#/databases/${item?.databaseId}/workflows/${item?.workflowId}`}>
+                            {item.displayName ? displayText : props.children}
                         </Link>
                     );
                 }

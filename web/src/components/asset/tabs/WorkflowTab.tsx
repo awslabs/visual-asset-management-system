@@ -106,10 +106,12 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                     workflows = allItems.filter((item) => !item.parentId);
                 } else {
                     // Fetch all workflows for the database for initial or manual refreshes
-                    workflows = await fetchDatabaseWorkflows({ databaseId });
+                    const workflowsDatabase = await fetchDatabaseWorkflows({ databaseId });
+                    const workflowGlobal = await fetchDatabaseWorkflows({ databaseId: "GLOBAL" });
+                    workflows = [...workflowsDatabase, ...workflowGlobal]
                 }
 
-                if (workflows !== false && Array.isArray(workflows)) {
+                if (workflows && Array.isArray(workflows)) {
                     const newRows = [];
 
                     // Create a map to organize executions by workflow
@@ -137,24 +139,29 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
 
                         console.log("Fetched executions:", executionItems);
 
-                        // Group executions by their workflow ID
+                        // Group executions by their workflow ID and workflowDatabaseId
                         for (let j = 0; j < executionItems.length; j++) {
                             const execution = executionItems[j];
 
-                            // In the new format, workflowId is directly included in each execution
+                            // In the new format, workflowId and workflowDatabaseId are directly included in each execution
                             const workflowId = String(execution.workflowId || "");
+                            const workflowDatabaseId = String(execution.workflowDatabaseId || "");
+                            
+                            // Create a unique key combining workflowDatabaseId and workflowId
+                            const workflowKey = `${workflowDatabaseId}:${workflowId}`;
 
                             console.log(`Execution ${j}:`, execution);
                             console.log(`Execution ${j} workflowId:`, workflowId);
+                            console.log(`Execution ${j} workflowDatabaseId:`, workflowDatabaseId);
 
-                            if (!workflowMap.has(workflowId)) {
-                                workflowMap.set(workflowId, []);
+                            if (!workflowMap.has(workflowKey)) {
+                                workflowMap.set(workflowKey, []);
                             }
 
                             const newParentRowChild = Object.assign({}, execution);
 
-                            // Set the parentId to match with the workflow
-                            newParentRowChild.parentId = workflowId;
+                            // Set the parentId to match with the workflow's unique key
+                            newParentRowChild.parentId = workflowKey;
                             newParentRowChild.name = newParentRowChild.executionId;
 
                             if (newParentRowChild.stopDate === "") {
@@ -170,7 +177,7 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                                 hasRunningJobs = true;
                             }
 
-                            workflowMap.get(workflowId).push(newParentRowChild);
+                            workflowMap.get(workflowKey).push(newParentRowChild);
                         }
 
                         // Now add workflows and their executions in the correct order
@@ -178,19 +185,30 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                             const workflow = workflows[i];
                             // Make sure workflowId is a string
                             const workflowId = String(workflow.workflowId || "");
+                            const workflowDatabaseId = String(workflow.databaseId || "");
+                            
+                            // Create a unique key combining workflowDatabaseId and workflowId
+                            const workflowKey = `${workflowDatabaseId}:${workflowId}`;
 
                             console.log(`Workflow ${i}:`, workflow);
                             console.log(`Workflow ${i} workflowId:`, workflowId);
+                            console.log(`Workflow ${i} workflowDatabaseId:`, workflowDatabaseId);
 
                             // Add the workflow parent row
                             const newParentRow = Object.assign({}, workflow);
-                            newParentRow.name = workflowId;
+                          
+                            // Set the name property to the workflowKey for unique identification
+                            // This is what child executions will reference in their parentId
+                            newParentRow.name = workflowKey;
+                            
+                            // Set a displayName property that will be shown in the UI
+                            newParentRow.displayName = `${workflowId} (${workflowDatabaseId})`;
                             newRows.push(newParentRow);
 
                             // Add all executions for this workflow
-                            const workflowExecutions = workflowMap.get(workflowId) || [];
+                            const workflowExecutions = workflowMap.get(workflowKey) || [];
                             console.log(
-                                `Executions for workflow ${workflowId}:`,
+                                `Executions for workflow ${workflowKey}:`,
                                 workflowExecutions
                             );
                             newRows.push(...workflowExecutions);
@@ -208,7 +226,7 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                     setLoading(false);
                     setReload(false);
                     setBackgroundRefresh(false);
-                } else if (typeof workflows === "string" && workflows.includes("not found")) {
+                } else if (typeof workflows === "string" && (workflows as string).indexOf("not found") !== -1) {
                     setError(
                         "Workflow data not found. The requested asset may have been deleted or you may not have permission to access it."
                     );
@@ -270,7 +288,7 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
     if (error) {
         return (
             <ErrorBoundary componentName="Workflows">
-                <Container header={<Header variant="h2">Workflows</Header>}>
+                <Container header={<Header variant="h2">Workflow Executions</Header>}>
                     <div className="error-message">
                         {error}
                         <Button onClick={() => setReload(true)}>Retry</Button>
@@ -283,7 +301,7 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
     return (
         <ErrorBoundary componentName="Workflows">
             {loading ? (
-                <LoadingSpinner text="Loading workflows..." />
+                <LoadingSpinner text="Loading workflow executions..." />
             ) : (
                 <RelatedTableList
                     allItems={allItems}

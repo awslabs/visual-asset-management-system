@@ -151,6 +151,7 @@ def create_step_function(pipelines, databaseId, workflowId):
             "body": {
                 "databaseId.$": "$.databaseId",
                 "assetId.$": "$.assetId",
+                "workflowDatabaseId.$": "$.workflowDatabaseId",
                 "workflowId.$": "$.workflowId",
                 "filesPathKey.$": "States.Format('pipelines/" + pipeline["name"] + "/" + job_names[
                     i] + "/output/{}/files/', $$.Execution.Name)",
@@ -278,8 +279,7 @@ def create_lambda_step(pipeline, input_s3_asset_file_uri, output_s3_asset_files_
             "bucketAssetAuxiliary.$": "$.bucketAssetAuxiliary",
             "bucketAsset.$": "$.bucketAsset",
             "inputAssetFileKey.$": "$.inputAssetFileKey",
-            "outputType": pipeline["outputType"],
-            
+            "outputType": pipeline["outputType"],           
             "inputMetadata.$": "$.inputMetadata",
             "inputParameters": inputParameters,
             "executingUserName.$": "$.executingUserName",
@@ -347,6 +347,12 @@ def lambda_handler(event, context):
             for pipeline in event['body']['specifiedPipelines']['functions']:
                 logger.info("pipeline in workflow creation: ")
                 logger.info(pipeline)
+                # If global workflow, included pipeline should also be global
+                if event['body']['databaseId'] == "GLOBAL":
+                    if pipeline['databaseId'] != "GLOBAL":
+                        response['statusCode'] = 400
+                        response['body'] = json.dumps({"message": "Only global pipelines are allowed in global workflows."})
+                        return response
                 # Add Casbin Enforcer to check if the current user has permissions to GET the pipeline:
                 pipeline_allowed = False
                 pipeline.update({

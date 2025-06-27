@@ -1,7 +1,7 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-def get_asset_object_from_id(asset_id):
+def get_asset_object_from_id(database_id, asset_id):
     """
     Mock implementation of the get_asset_object_from_id function for testing purposes.
     
@@ -14,7 +14,7 @@ def get_asset_object_from_id(asset_id):
     # In the mock implementation, we return a simple asset object
     return {
         "assetId": asset_id,
-        "databaseId": "test-database-id",
+        "databaseId": database_id,
         "assetName": "Test Asset",
         "assetType": "model/gltf-binary",
         "assetSize": 1024,
