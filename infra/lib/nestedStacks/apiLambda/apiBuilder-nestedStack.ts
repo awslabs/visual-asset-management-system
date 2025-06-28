@@ -23,20 +23,18 @@ import {
     buildListWorkflowExecutionsFunction,
     buildWorkflowService,
     buildCreateWorkflowFunction,
-    buildRunWorkflowFunction,
+    buildExecuteWorkflowFunction,
     buildProcessWorkflowExecutionOutputFunction,
 } from "../../lambdaBuilder/workflowFunctions";
 import {
-    buildAssetColumnsFunction,
-    buildAssetMetadataFunction,
     buildAssetService,
-    buildUploadAssetFunction,
     buildStreamAuxiliaryPreviewAssetFunction,
     buildDownloadAssetFunction,
-    buildRevertAssetFunction,
-    buildUploadAssetWorkflowFunction,
     buildAssetFiles,
     buildIngestAssetFunction,
+    buildCreateAssetFunction,
+    buildUploadFileFunction,
+    buildAssetVersionsFunction,
 } from "../../lambdaBuilder/assetFunctions";
 import {
     buildAddCommentLambdaFunction,
@@ -53,7 +51,6 @@ import { NestedStack } from "aws-cdk-lib";
 import { buildMetadataSchemaService } from "../../lambdaBuilder/metadataSchemaFunctions";
 
 import { buildMetadataFunctions } from "../../lambdaBuilder/metadataFunctions";
-import { buildUploadAssetWorkflow } from "./constructs/uploadAssetWorkflowBuilder";
 import { buildAuthFunctions } from "../../lambdaBuilder/authFunctions";
 import { buildTagService, buildCreateTagFunction } from "../../lambdaBuilder/tagFunctions";
 import {
@@ -66,14 +63,14 @@ import {
     buildGetAssetLinksFunction,
     buildDeleteAssetLinksFunction,
 } from "../../lambdaBuilder/assetsLinkFunctions";
-import { buildSearchFunction } from "../../lambdaBuilder/searchFunctions";
+import { buildSearchFunction } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
 import {
     buildTagTypeService,
     buildCreateTagTypeFunction,
 } from "../../lambdaBuilder/tagTypeFunctions";
 import { buildRoleService, buildCreateRoleFunction } from "../../lambdaBuilder/roleFunctions";
 import { buildUserRolesService } from "../../lambdaBuilder/userRoleFunctions";
-
+import { buildSendEmailFunction } from "../../lambdaBuilder/sendEmailFunctions";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../config/config";
 import { generateUniqueNameHash } from "../../helper/security";
@@ -148,7 +145,6 @@ export function apiBuilder(
     const createConfigFunction = buildConfigService(
         scope,
         lambdaCommonBaseLayer,
-        storageResources.s3.assetBucket,
         storageResources.dynamo.appFeatureEnabledStorageTable,
         config,
         vpc,
@@ -172,8 +168,8 @@ export function apiBuilder(
         subnets
     );
     attachFunctionToApi(scope, createDatabaseFunction, {
-        routePath: "/databases",
-        method: apigwv2.HttpMethod.PUT,
+        routePath: "/database",
+        method: apigwv2.HttpMethod.POST,
         api: api,
     });
 
@@ -186,20 +182,36 @@ export function apiBuilder(
         subnets
     );
     attachFunctionToApi(scope, databaseService, {
-        routePath: "/databases",
+        routePath: "/database",
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
     attachFunctionToApi(scope, databaseService, {
-        routePath: "/databases/{databaseId}",
+        routePath: "/database/{databaseId}",
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
     attachFunctionToApi(scope, databaseService, {
-        routePath: "/databases/{databaseId}",
+        routePath: "/database/{databaseId}",
         method: apigwv2.HttpMethod.DELETE,
         api: api,
     });
+
+    attachFunctionToApi(scope, databaseService, {
+        routePath: "/buckets",
+        method: apigwv2.HttpMethod.GET,
+        api: api,
+    });
+
+    //Email Resources
+    const sendEmailFunction = buildSendEmailFunction(
+        scope,
+        lambdaCommonBaseLayer,
+        storageResources,
+        config,
+        vpc,
+        subnets
+    );
 
     //Comment Resources
     const commentService = buildCommentService(
@@ -566,6 +578,7 @@ export function apiBuilder(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
+        sendEmailFunction,
         config,
         vpc,
         subnets
@@ -580,9 +593,21 @@ export function apiBuilder(
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
+
+    attachFunctionToApi(scope, assetService, {
+        routePath: "/database/{databaseId}/assets/{assetId}/archiveAsset",
+        method: apigwv2.HttpMethod.DELETE,
+        api: api,
+    });
+
+    attachFunctionToApi(scope, assetService, {
+        routePath: "/database/{databaseId}/assets/{assetId}/deleteAsset",
+        method: apigwv2.HttpMethod.DELETE,
+        api: api,
+    });
     attachFunctionToApi(scope, assetService, {
         routePath: "/database/{databaseId}/assets/{assetId}",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigwv2.HttpMethod.PUT,
         api: api,
     });
     attachFunctionToApi(scope, assetService, {
@@ -591,49 +616,65 @@ export function apiBuilder(
         api: api,
     });
 
-    const listAssetFiles = buildAssetFiles(
+    const assetFilesFunction = buildAssetFiles(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
+        sendEmailFunction,
         config,
         vpc,
         subnets
     );
-    attachFunctionToApi(scope, listAssetFiles, {
+    attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/listFiles",
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
 
-    const assetMetadataFunction = buildAssetMetadataFunction(
-        scope,
-        lambdaCommonBaseLayer,
-        storageResources,
-        config,
-        vpc,
-        subnets
-    );
-    attachFunctionToApi(scope, assetMetadataFunction, {
-        routePath: "/database/{databaseId}/assets/{assetId}/metadata",
+    // Add new file operation routes
+    attachFunctionToApi(scope, assetFilesFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/fileInfo",
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
 
-    const assetColumnsFunction = buildAssetColumnsFunction(
-        scope,
-        lambdaCommonBaseLayer,
-        storageResources,
-        config,
-        vpc,
-        subnets
-    );
-    attachFunctionToApi(scope, assetColumnsFunction, {
-        routePath: "/database/{databaseId}/assets/{assetId}/columns",
-        method: apigwv2.HttpMethod.GET,
+    attachFunctionToApi(scope, assetFilesFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/moveFile",
+        method: apigwv2.HttpMethod.POST,
         api: api,
     });
 
-    const uploadAssetFunction = buildUploadAssetFunction(
+    attachFunctionToApi(scope, assetFilesFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/copyFile",
+        method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+
+    attachFunctionToApi(scope, assetFilesFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/archiveFile",
+        method: apigwv2.HttpMethod.DELETE,
+        api: api,
+    });
+
+    attachFunctionToApi(scope, assetFilesFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/deleteFile",
+        method: apigwv2.HttpMethod.DELETE,
+        api: api,
+    });
+
+    attachFunctionToApi(scope, assetFilesFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}",
+        method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+
+    attachFunctionToApi(scope, assetFilesFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/unarchiveFile",
+        method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+
+    const createAssetFunction = buildCreateAssetFunction(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
@@ -641,9 +682,36 @@ export function apiBuilder(
         vpc,
         subnets
     );
-    attachFunctionToApi(scope, uploadAssetFunction, {
+    attachFunctionToApi(scope, createAssetFunction, {
         routePath: "/assets",
-        method: apigwv2.HttpMethod.PUT,
+        method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+
+    const uploadFileFunction = buildUploadFileFunction(
+        scope,
+        lambdaCommonBaseLayer,
+        storageResources,
+        sendEmailFunction,
+        config,
+        vpc,
+        subnets
+    );
+    attachFunctionToApi(scope, uploadFileFunction, {
+        routePath: "/uploads",
+        method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+
+    attachFunctionToApi(scope, uploadFileFunction, {
+        routePath: "/uploads/{uploadId}/complete",
+        method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+
+    attachFunctionToApi(scope, uploadFileFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/createFolder",
+        method: apigwv2.HttpMethod.POST,
         api: api,
     });
 
@@ -656,7 +724,7 @@ export function apiBuilder(
         subnets
     );
     attachFunctionToApi(scope, streamAuxiliaryPreviewAssetFunction, {
-        routePath: "/auxiliaryPreviewAssets/stream/{proxy+}",
+        routePath: "/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}",
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
@@ -675,17 +743,38 @@ export function apiBuilder(
         api: api,
     });
 
-    const assetRevertFunction = buildRevertAssetFunction(
+    // Asset Versions Function
+    const assetVersionsFunction = buildAssetVersionsFunction(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
+        sendEmailFunction,
         config,
         vpc,
         subnets
     );
-    attachFunctionToApi(scope, assetRevertFunction, {
-        routePath: "/database/{databaseId}/assets/{assetId}/revert",
+    // Attach to createVersion endpoint
+    attachFunctionToApi(scope, assetVersionsFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/createVersion",
         method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+    // Attach to revertVersion endpoint
+    attachFunctionToApi(scope, assetVersionsFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/revertAssetVersion/{assetVersionId}",
+        method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+    // Attach to getVersions endpoint
+    attachFunctionToApi(scope, assetVersionsFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/getVersions",
+        method: apigwv2.HttpMethod.GET,
+        api: api,
+    });
+    // Attach to getVersion endpoint
+    attachFunctionToApi(scope, assetVersionsFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}",
+        method: apigwv2.HttpMethod.GET,
         api: api,
     });
 
@@ -706,7 +795,7 @@ export function apiBuilder(
     ];
     for (let i = 0; i < methods.length; i++) {
         attachFunctionToApi(scope, metadataCrudFunctions[i], {
-            routePath: "/metadata/{databaseId}/{assetId}",
+            routePath: "/database/{databaseId}/assets/{assetId}/metadata",
             method: methods[i],
             api: api,
         });
@@ -832,7 +921,13 @@ export function apiBuilder(
         subnets
     );
     attachFunctionToApi(scope, listWorkflowExecutionsFunction, {
-        routePath: "/database/{databaseId}/assets/{assetId}/workflows/{workflowId}/executions",
+        routePath: "/database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}",
+        method: apigwv2.HttpMethod.GET,
+        api: api,
+    });
+
+    attachFunctionToApi(scope, listWorkflowExecutionsFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/workflows/executions",
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
@@ -841,7 +936,7 @@ export function apiBuilder(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
-        uploadAssetFunction,
+        uploadFileFunction,
         metadataCrudFunctions[1],
         metadataCrudFunctions[0],
         config,
@@ -865,7 +960,7 @@ export function apiBuilder(
         api: api,
     });
 
-    const runWorkflowFunction = buildRunWorkflowFunction(
+    const runWorkflowFunction = buildExecuteWorkflowFunction(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
@@ -880,54 +975,19 @@ export function apiBuilder(
         method: apigwv2.HttpMethod.POST,
         api: api,
     });
-    //Enabling API Gateway Access Logging: Currently the only way to do this is via V1 constructs
-    //https://github.com/aws/aws-cdk/issues/11100#issuecomment-904627081
 
-    const uploadAssetWorkflowStateMachine = buildUploadAssetWorkflow(
-        scope,
-        config,
-        uploadAssetFunction,
-        metadataCrudFunctions[2],
-        runWorkflowFunction,
-        storageResources.s3.assetStagingBucket
-        //storageResources.s3.assetAuxiliaryStagingBucket
-    );
-    uploadAssetFunction.grantInvoke(uploadAssetWorkflowStateMachine);
-    storageResources.s3.assetBucket.grantReadWrite(uploadAssetWorkflowStateMachine);
-    if (storageResources.s3.assetStagingBucket) {
-        storageResources.s3.assetStagingBucket.grantRead(uploadAssetWorkflowStateMachine);
-    }
-
-    // if (storageResources.s3.assetAuxiliaryStagingBucket) {
-    //     storageResources.s3.assetAuxiliaryStagingBucket.grantRead(uploadAssetStagingMigrationWorkflowStateMachine);
-    // }
     const ingestAssetFunction = buildIngestAssetFunction(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
-        uploadAssetFunction,
+        uploadFileFunction,
+        createAssetFunction,
         config,
         vpc,
         subnets
     );
     attachFunctionToApi(scope, ingestAssetFunction, {
         routePath: "/ingest-asset",
-        method: apigwv2.HttpMethod.POST,
-        api: api,
-    });
-
-    const uploadAssetWorkflowFunction = buildUploadAssetWorkflowFunction(
-        scope,
-        lambdaCommonBaseLayer,
-        uploadAssetWorkflowStateMachine,
-        storageResources,
-        config,
-        vpc,
-        subnets,
-        storageResources.encryption.kmsKey
-    );
-    attachFunctionToApi(scope, uploadAssetWorkflowFunction, {
-        routePath: "/assets/uploadAssetWorkflow",
         method: apigwv2.HttpMethod.POST,
         api: api,
     });
@@ -941,12 +1001,6 @@ export function apiBuilder(
         vpc,
         subnets
     );
-
-    attachFunctionToApi(scope, authFunctions.scopeds3access, {
-        routePath: "/auth/scopeds3access",
-        method: apigwv2.HttpMethod.POST,
-        api: api,
-    });
 
     attachFunctionToApi(scope, authFunctions.authConstraintsService, {
         routePath: "/auth/constraints",

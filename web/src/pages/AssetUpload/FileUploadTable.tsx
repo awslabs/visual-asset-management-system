@@ -59,10 +59,13 @@ const FileUploadTableColumnDefinitions = [
 interface FileUploadTableProps {
     allItems: FileUploadTableItem[];
     onRetry?: () => void;
+    onRetryItem?: (index: number) => void;
     resume: boolean;
     columnDefinitions?: typeof FileUploadTableColumnDefinitions;
     showCount?: boolean;
     mode?: "Upload" | "Download" | "Delete";
+    onRemoveItem?: (index: number) => void;
+    allowRemoval?: boolean;
 }
 
 /**
@@ -205,18 +208,12 @@ function getActions(
     onRetry?: () => void,
     mode: "Upload" | "Download" | "Delete" = "Upload"
 ) {
+    // Only show retry button for failed items when onRetry is provided
     const failed = allItems.filter((item) => item.status === "Failed").length;
-    const notCompleted = allItems.filter((item) => item.status !== "Completed").length;
-    if (failed > 0) {
+    if (failed > 0 && onRetry) {
         return (
             <Button variant={"primary"} onClick={onRetry}>
-                {mode} {failed} failed Items
-            </Button>
-        );
-    } else if (resume) {
-        return (
-            <Button variant={"primary"} onClick={onRetry}>
-                {mode} {notCompleted} Items
+                Retry {failed} failed Items
             </Button>
         );
     } else {
@@ -227,15 +224,55 @@ function getActions(
 export const FileUploadTable = ({
     allItems,
     onRetry,
+    onRetryItem,
     resume,
     columnDefinitions,
     showCount,
     mode = "Upload",
+    onRemoveItem,
+    allowRemoval = false,
 }: FileUploadTableProps) => {
     let visibleContent = ["filesize", "status", "progress"];
+
+    // If no custom column definitions are provided, add actions column if needed
     if (!columnDefinitions) {
-        columnDefinitions = FileUploadTableColumnDefinitions;
-    } else {
+        // Start with the default column definitions
+        let customColumnDefinitions = [...FileUploadTableColumnDefinitions];
+
+        // Add actions column if we need retry or removal functionality
+        if (onRetryItem || (allowRemoval && onRemoveItem)) {
+            customColumnDefinitions.push({
+                id: "actions",
+                header: "Actions",
+                cell: (item: FileUploadTableItem) => (
+                    <SpaceBetween direction="horizontal" size="xs">
+                        {item.status === "Failed" && onRetryItem && (
+                            <Button
+                                iconName="refresh"
+                                variant="icon"
+                                onClick={() => onRetryItem(item.index)}
+                                ariaLabel={`Retry ${item.name}`}
+                            />
+                        )}
+                        {allowRemoval && onRemoveItem && (
+                            <Button
+                                iconName="remove"
+                                variant="icon"
+                                onClick={() => onRemoveItem(item.index)}
+                                ariaLabel={`Remove ${item.name}`}
+                            />
+                        )}
+                    </SpaceBetween>
+                ),
+                sortingField: "actions",
+                isRowHeader: false,
+            });
+        }
+
+        columnDefinitions = customColumnDefinitions;
+    }
+
+    if (columnDefinitions) {
         visibleContent = columnDefinitions.map((definition) => definition.id);
     }
     const [preferences, setPreferences] = useState({

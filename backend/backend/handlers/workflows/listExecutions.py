@@ -7,7 +7,6 @@ import boto3
 import botocore
 from boto3.dynamodb.conditions import Key
 from common.constants import STANDARD_JSON_RESPONSE
-from common.dynamodb import get_asset_object_from_id
 from common.validators import validate
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -23,13 +22,34 @@ main_rest_response = STANDARD_JSON_RESPONSE
 
 try:
     workflow_execution_database = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_NAME"]
+    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
 except:
     logger.exception("Failed loading environment variables")
     main_rest_response['body'] = json.dumps({"message": "Failed Loading Environment Variables"})
 
+asset_table = dynamodb.Table(asset_storage_table_name)
 
-def get_executions(asset_id, workflow_id, query_params):
-    asset_of_workflow = get_asset_object_from_id(asset_id)
+
+def get_asset_details(databaseId, assetId):
+    """Get asset details from DynamoDB"""
+    try:
+        response = asset_table.query(
+            KeyConditionExpression=Key('databaseId').eq(databaseId) & Key('assetId').eq(assetId),
+            ScanIndexForward=False
+        )
+        
+        if not response.get('Items'):
+            return None
+            
+        # Return the first (most recent) item
+        return response['Items'][0]
+    except Exception as e:
+        logger.exception(f"Error getting asset details: {e}")
+        raise Exception(f"Error retrieving asset: {str(e)}")
+
+
+def get_executions(database_id, asset_id, workflow_database_id, workflow_id, query_params):
+    asset_of_workflow = get_asset_details(database_id, asset_id)
 
     # Add Casbin Enforcer to check if the current user has permissions to GET the asset
     asset_of_workflow.update({
@@ -45,12 +65,20 @@ def get_executions(asset_id, workflow_id, query_params):
 
     if asset_of_workflow_allowed:
         logger.info("Listing executions")
-        pk = f'{asset_id}-{workflow_id}'
 
         paginator = dynamodb.meta.client.get_paginator('query')
+
+        partitionKey = f'${database_id}:${asset_id}'
+        if workflow_id == '':
+            keyExpression = Key('databaseId:assetId').eq(partitionKey)
+        else:
+            workflowLsi = f"${workflow_database_id}:${workflow_id}"
+            keyExpression = Key('databaseId:assetId').eq(partitionKey) & Key('workflowDatabaseId:workflowId').eq(workflowLsi)
+
         page_iterator = paginator.paginate(
             TableName=workflow_execution_database,
-            KeyConditionExpression=Key('pk').eq(pk),
+            IndexName='WorkflowLSI',
+            KeyConditionExpression=keyExpression,
             ScanIndexForward=False,
             PaginationConfig={
                 'MaxItems': int(query_params['maxItems']),
@@ -74,16 +102,15 @@ def get_executions(asset_id, workflow_id, query_params):
                 if len(claims_and_roles["tokens"]) > 0:
                     casbin_enforcer = CasbinEnforcer(claims_and_roles)
                     if casbin_enforcer.enforce(item, "GET"):
-                        assets = item.get('assets', [])
                         workflow_arn = item['workflow_arn']
                         execution_arn = workflow_arn.replace("stateMachine", "execution")
-                        execution_arn = execution_arn + ":" + item['execution_id']
+                        execution_arn = execution_arn + ":" + item['executionId']
                         logger.info(execution_arn)
 
                         startDate = item.get('startDate', "")
                         stopDate = item.get('stopDate', "")
                         executionStatus = item.get('executionStatus', "")
-                        executionId = item['execution_id']
+                        executionId = item['executionId']
 
                         #If we don't have start/stop information, this means we could still have a running process (or now stopped).
                         # Fetch it from step functions.
@@ -102,32 +129,26 @@ def get_executions(asset_id, workflow_id, query_params):
                             if stopDate:
                                 stopDate = stopDate.strftime("%m/%d/%Y, %H:%M:%S")
 
+                                item.update({
+                                    'startDate': startDate,
+                                    'stopDate': stopDate,
+                                    'executionStatus': execution['status']
+                                })
+
                                 #Update the execution table to add start/end date and Status once something is found to have stopped running
                                 logger.info("Update Execution Table")
                                 table = dynamodb.Table(workflow_execution_database)
                                 table.put_item(
-                                    Item={
-                                        'pk': f'{asset_id}-{workflow_id}',
-                                        'sk': item['execution_id'],
-                                        'database_id': asset_of_workflow.get("databaseId"),
-                                        'asset_id': asset_id,
-                                        'workflow_id': workflow_id,
-                                        'workflow_arn': workflow_arn,
-                                        'execution_arn': execution_arn,
-                                        'execution_id': item['execution_id'],
-                                        'startDate': startDate,
-                                        'stopDate': stopDate,
-                                        'executionStatus': execution['status'],
-                                        'assets': []
-                                    }
+                                    Item=item
                                 )
 
                         result["Items"].append({
+                            'workflowDatabaseId': item['workflowDatabaseId'],
+                            'workflowId': item['workflowId'],
                             'executionId': executionId,
                             'executionStatus': executionStatus,
                             'startDate': startDate,
                             'stopDate': stopDate,
-                            'Items': assets
                         })
             except Exception as e:
                 logger.exception(e)
@@ -152,24 +173,47 @@ def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
     logger.info(event)
 
+    request_body = {}
+    if event.get('body'):
+        try:
+            request_body = json.loads(event['body'])
+            logger.info("Request body: %s", request_body)
+        except:
+            logger.warning("Failed to parse request body as JSON")
+
     pathParams = event.get('pathParameters', {})
     queryParameters = event.get('queryStringParameters', {})
 
     #Set 50 maxitems/page size to avoid performance issues with state machine API call throttling
     validate_pagination_info(queryParameters, 50)
 
+    #Workflow ID not required in path parameters (get all workflow executions for asset)
+    workflowId = pathParams.get('workflowId', '')
+
     try:
 
         logger.info("Validating Parameters")
         (valid, message) = validate({
             'workflowId': {
-                'value': pathParams.get('workflowId', ''),
-                'validator': 'ID'
+                'value': workflowId,
+                'validator': 'ID',
+                'optional': True
             },
             'assetId': {
                 'value': pathParams.get('assetId', ''),
+                'validator': 'ASSET_ID'
+            },
+            'databaseId': {
+                'value': pathParams.get('databaseId', ''),
                 'validator': 'ID'
             },
+            'workflowDatabaseId': {
+                'value': request_body.get('workflowDatabaseId', ''),
+                'validator': 'ID',
+                'allowGlobalKeyword': True,
+                'optional': True
+
+            }
         })
 
         if not valid:
@@ -187,7 +231,7 @@ def lambda_handler(event, context):
 
         if method_allowed_on_api:
             logger.info("Listing Workflow Executions")
-            result = get_executions(pathParams['assetId'], pathParams['workflowId'], queryParameters)
+            result = get_executions(pathParams.get('databaseId'), pathParams['assetId'], request_body.get('workflowDatabaseId'), workflowId, queryParameters)
             response['body'] = json.dumps({"message": result['message']})
             response['statusCode'] = result['statusCode']
             logger.info(response)

@@ -5,27 +5,36 @@ import re
 import json
 
 #Define patterns as global constants
-id_pattern = '^[a-z]([-_a-z0-9]){3,63}$'
+id_pattern = r'^[-_a-zA-Z0-9]{3,63}$'
 uuid_pattern = r'^[0-9a-fA-F]{8}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{4}\b\-[0-9a-fA-F]{12}$'
-file_type_pattern = '^[\\.]([a-z0-9]){1,7}$'
-filename_pattern = r'^[a-zA-Z0-9_\-.\s]+$'
+
 sagemaker_notebook_name_pattern = '^[a-zA-Z0-9](-*[a-zA-Z0-9])*'
 email_pattern = r'^[\w\-\.\+]+@([\w-]+\.)+[\w-]{2,4}$'
-relative_file_path_pattern = r'^(\/[a-zA-Z0-9_\-.\s]+){1,63}$'
-asset_path_pattern = r'^[a-z]([-_a-z0-9]){3,63}(\/[a-zA-Z0-9_\-.\s]+){1,63}$'
-asset_folder_path_pattern = r'^[a-z]([-_a-z0-9]){3,63}(\/[a-zA-Z0-9_\-.\s]*){0,63}(\/)$'
-asset_auxiliarypreview_path_pattern = r'^[a-z]([-_a-z0-9]){3,63}(\/[a-zA-Z0-9_\-.\s]+){1,63}\/preview(\/[a-zA-Z0-9_\-.\s]+){1,63}(\/?)$'
-asset_path_pipeline_pattern = r'^pipelines\/([a-zA-Z0-9_\-.\s]){1,63}\/([a-zA-Z0-9_\-.\s]){1,63}\/output(\/[a-zA-Z0-9_\-.\s]+){1,63}(\/)$'
+
+file_type_pattern = '^[\\.]([a-zA-Z0-9]){1,7}$'
+filename_pattern = r'^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$'
+
+relative_file_path_pattern = r'^\/.*$'
+asset_path_pattern = r'^.+\/.+$'
+asset_folder_path_pattern = r'^.+\/.+\/$'
+asset_auxiliarypreview_path_pattern = r'^.+\/preview\/.+$'
+asset_path_pipeline_pattern = r'^pipelines\/.+\/.+\/outputs\/.+\/$'
+
 object_name_pattern = r'^[a-zA-Z0-9\-._\s]{1,256}$'
 userid_pattern = r'^[\w\-\.\+\@]{3,256}$'
 
 #Define local regexes that use the patterns
 id_regex = re.compile(id_pattern)
 uuid_regex = re.compile(uuid_pattern)
-file_type_regex = re.compile(file_type_pattern)
-filename_regex = re.compile(filename_pattern)
+
+
 sagemaker_notebook_name_regex = re.compile(sagemaker_notebook_name_pattern)
 email_regex = re.compile(email_pattern)
+
+file_type_regex = re.compile(file_type_pattern)
+filename_regex = re.compile(filename_pattern)
+asset_id_regex = re.compile(filename_pattern)
+
 relative_file_path_regex = re.compile(relative_file_path_pattern)
 asset_path_regex = re.compile(asset_path_pattern)
 asset_folder_path_regex = re.compile(asset_folder_path_pattern)
@@ -34,9 +43,15 @@ asset_path_pipeline_regex = re.compile(asset_path_pipeline_pattern)
 object_name_regex = re.compile(object_name_pattern)
 userid_regex = re.compile(userid_pattern)
 
+
 def validate_id(name, value):
     if not id_regex.fullmatch(value):
         return (False, name + " is invalid. Must follow the regexp "+id_pattern)
+    return (True, '')
+
+def validate_asset_id(name, value):
+    if not asset_id_regex.fullmatch(value):
+        return (False, name + " is invalid. Must follow the regexp "+asset_id_regex)
     return (True, '')
 
 def validate_uuid(name, value):
@@ -49,6 +64,8 @@ def validate_relative_file_path(name, value):
         return (False, name + " is invalid. Must follow the regexp "+relative_file_path_pattern)
     elif value.count('..') > 0:
         return (False, name + " is invalid. Cannot contain more than one '.' in sequence.")
+    elif len(value) < 3:
+        return (False, name + " is invalid. Must be at least 3 characters long.")
     return (True, '')
 
 def validate_asset_path(name, value, isFolder):
@@ -58,20 +75,67 @@ def validate_asset_path(name, value, isFolder):
         return (False, name + " is invalid. Must follow the regexp "+asset_path_pattern)
     elif value.count('..') > 0:
         return (False, name + " is invalid. Cannot contain more than one '.' in sequence.")
+    elif not isFolder and len(value) < 4:
+        return (False, name + " is invalid. Must be at least 4 characters long.")
+    elif isFolder and len(value) < 4:
+        return (False, name + " is invalid. Must be at least 4 characters long.")
+    elif isFolder and '//' in value:
+        return (False, name + " is invalid. Cannot contain consecutive forward slashes (//).")
     return (True, '')
 
 def validate_asset_auxiliarypreview_path(name, value):
     if not asset_auxiliarypreview_path_regex.fullmatch(value):
         return (False, name + " is invalid. Must follow the regexp "+asset_auxiliarypreview_path_pattern)
     elif value.count('..') > 0:
-            return (False, name + " is invalid. Cannot contain more than one '.' in sequence.")
+        return (False, name + " is invalid. Cannot contain more than one '.' in sequence.")
+    elif '//' in value:
+        return (False, name + " is invalid. Cannot contain consecutive forward slashes (//).")
+    
+    # Check for minimum length requirements
+    preview_parts = value.split('/preview/', 1)
+    if len(preview_parts) != 2:
+        return (False, name + " is invalid. Must contain '/preview/' exactly once.")
+    
+    prefix = preview_parts[0]
+    suffix = preview_parts[1]
+    
+    if len(prefix) < 4:
+        return (False, name + " is invalid. Path before '/preview/' must be at least 4 characters long.")
+    if len(suffix) < 2:
+        return (False, name + " is invalid. Path after '/preview/' must be at least 2 characters long.")
+    
     return (True, '')
 
 def validate_asset_path_pipeline(name, value):
     if not asset_path_pipeline_regex.fullmatch(value):
         return (False, name + " is invalid. Must follow the regexp "+asset_path_pipeline_pattern)
     elif value.count('..') > 0:
-            return (False, name + " is invalid. Cannot contain more than one '.' in sequence.")
+        return (False, name + " is invalid. Cannot contain more than one '.' in sequence.")
+    elif '//' in value:
+        return (False, name + " is invalid. Cannot contain consecutive forward slashes (//).")
+    
+    # Check for the required structure and minimum lengths
+    if not value.startswith('pipelines/'):
+        return (False, name + " is invalid. Must start with 'pipelines/'.")
+    
+    # Split the path into sections
+    remaining = value[len('pipelines/'):]
+    outputs_parts = remaining.split('/outputs/', 1)
+    
+    if len(outputs_parts) != 2:
+        return (False, name + " is invalid. Must contain '/outputs/' exactly once.")
+    
+    middle_section = outputs_parts[0]
+    end_section = outputs_parts[1]
+    
+    # Check middle section has at least one forward slash and is at least 4 characters
+    if '/' not in middle_section or len(middle_section) < 4:
+        return (False, name + " is invalid. Section between 'pipelines/' and '/outputs/' must contain at least one forward slash and be at least 4 characters long.")
+    
+    # Check end section is at least 2 characters (not counting the trailing slash)
+    if not end_section.endswith('/') or len(end_section.rstrip('/')) < 2:
+        return (False, name + " is invalid. Section after '/outputs/' must be at least 2 characters long and end with a forward slash.")
+    
     return (True, '')
 
 def validate_filename(name, value):
@@ -201,6 +265,13 @@ def validate(values):
                 optional = True
             if not isinstance(v['optional'], bool):
                 raise Exception("The optional field in validator for " + k + " field must be of type bool")
+            
+        allowGlobalKeyword = False
+        if 'allowGlobalKeyword' in v:
+            if isinstance(v['allowGlobalKeyword'], bool) and v['allowGlobalKeyword'] == True:
+                allowGlobalKeyword = True
+            if not isinstance(v['allowGlobalKeyword'], bool):
+                raise Exception("The allowGlobalKeyword field in validator for " + k + " field must be of type bool")
 
         #Empty checks across types. If optional, return success. Otherwise error on empty. 
         if v['value'] is None:
@@ -219,6 +290,17 @@ def validate(values):
             else:
                 return (False, k + " is a required field.")
             
+        #Check and allow for global keyword (initially case insensitive)
+        if isinstance(v['value'], str):
+            if allowGlobalKeyword and v['value'].lower().strip() == 'global':
+                #additional check to make sure final value is capitalized or not
+                if v['value'] == 'GLOBAL':
+                    return (True, "")
+                else:
+                    return (False, k + " is invalid. GLOBAL must be capitalized for this field is used.")
+            elif not allowGlobalKeyword and v['value'].lower().strip()  == 'global':
+                return (False, k + " is invalid. GLOBAL is not allowed for this field.")
+            
         #Check input types first. If not string or array for respective validator, error.
         if isinstance(v['value'], dict):
             return (False, k + " is invalid. Must be a string or an array of strings for validator, not a dict.")
@@ -230,6 +312,10 @@ def validate(values):
         #Type checks after we check for empties.
         if v['validator'] == 'ID':
             (valid, message) = validate_id(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'ASSET_ID':
+            (valid, message) = validate_asset_id(k, v['value'])
             if not valid:
                 return (valid, message)
         if v['validator'] == 'UUID':

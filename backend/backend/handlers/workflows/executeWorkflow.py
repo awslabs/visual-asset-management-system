@@ -5,6 +5,7 @@ import json
 import boto3
 import botocore
 from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr
 import os
 from common.validators import validate
 from common.constants import STANDARD_JSON_RESPONSE
@@ -24,20 +25,55 @@ try:
 except Exception as e:
     logger.exception("Failed Loading Error Functions")
 
-bucket_name_asset = None
 bucket_name_assetAuxiliary = None
 
 try:
+    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
     asset_Database = os.environ["ASSET_STORAGE_TABLE_NAME"]
     pipeline_Database = os.environ["PIPELINE_STORAGE_TABLE_NAME"]
     workflow_database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
     workflow_execution_database = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_NAME"]
-    bucket_name_asset = os.environ["S3_ASSET_STORAGE_BUCKET"]
     bucket_name_assetAuxiliary = os.environ["S3_ASSETAUXILIARY_STORAGE_BUCKET"]
     metadata_read_function = os.environ['METADATA_READ_LAMBDA_FUNCTION_NAME']
 except:
     logger.exception("Failed loading environment variables")
 
+buckets_table = dynamodb.Table(s3_asset_buckets_table)
+
+def get_default_bucket_details(bucketId):
+    """Get default S3 bucket details from database default bucket DynamoDB"""
+    try:
+
+        bucket_response = buckets_table.query(
+            KeyConditionExpression=Key('bucketId').eq(bucketId),
+            Limit=1
+        )
+        # Use the first item from the query results
+        bucket = bucket_response.get("Items", [{}])[0] if bucket_response.get("Items") else {}
+        bucket_id = bucket.get('bucketId')
+        bucket_name = bucket.get('bucketName')
+        base_assets_prefix = bucket.get('baseAssetsPrefix')
+
+        #Check to make sure we have what we need
+        if not bucket_name or not base_assets_prefix:
+            raise Exception(f"Error getting database default bucket details: {str(e)}")
+        
+        #Make sure we end in a slash for the path
+        if not base_assets_prefix.endswith('/'):
+            base_assets_prefix += '/'
+
+        # Remove leading slash from file path if present
+        if base_assets_prefix.startswith('/'):
+            base_assets_prefix = base_assets_prefix[1:]
+
+        return {
+            'bucketId': bucket_id,
+            'bucketName': bucket_name,
+            'baseAssetsPrefix': base_assets_prefix
+        }
+    except Exception as e:
+        logger.exception(f"Error getting bucket details: {e}")
+        raise Exception(f"Error getting bucket details: {str(e)}")
 
 def get_pipelines(databaseId, pipelineId):
     table = dynamodb.Table(pipeline_Database)
@@ -52,17 +88,53 @@ def _metadata_lambda(payload): return client.invoke(FunctionName=metadata_read_f
                                            InvocationType='RequestResponse', Payload=json.dumps(payload).encode('utf-8'))
 
 
+def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
+    """
+    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
+    
+    Args:
+        asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
+        file_path: The file path from the request (may or may not include the base key)
+        
+    Returns:
+        The properly resolved S3 key without duplication
+    """
+    # Normalize the asset base key to ensure it ends with '/'
+    if asset_base_key and not asset_base_key.endswith('/'):
+        asset_base_key = asset_base_key + '/'
+    
+    # Remove leading slash from file path if present
+    if file_path.startswith('/'):
+        file_path = file_path[1:]
+    
+    # Check if file_path already starts with the asset_base_key
+    if file_path.startswith(asset_base_key):
+        # File path already contains the base key, use as-is
+        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
+        return file_path
+    else:
+        # File path doesn't contain base key, combine them
+        resolved_path = asset_base_key + file_path
+        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
+        return resolved_path
+
 def get_asset_metadata(databaseId, assetId, keyPrefix, event):
     try:
         l_payload = {
             "pathParameters": {
                 "databaseId": databaseId,
                 "assetId": assetId
-            },
-            "queryStringParameters": {
-                "prefix": keyPrefix
             }
         }
+
+        #If keyprefix doesn't end-with a /, add additional data to get the files specific metadata too
+        if not keyPrefix.endswith("/"):
+            l_payload.update({
+                "queryStringParameters": {
+                "prefix": keyPrefix
+            }
+            })
+        
         l_payload.update({
             "requestContext": {
                 "http": {
@@ -72,6 +144,7 @@ def get_asset_metadata(databaseId, assetId, keyPrefix, event):
                 "authorizer": event['requestContext']['authorizer']
             }
         })
+
         logger.info("Fetching metadata:")
         logger.info(l_payload)
         metadata_response = _metadata_lambda(l_payload)
@@ -94,7 +167,7 @@ def get_asset_metadata(databaseId, assetId, keyPrefix, event):
         return {}
 
 
-def launchWorkflow(inputAssetFileKey, workflow_arn, asset_id, workflow_id, database_id, executingUserName, executingRequestContext, inputMetadata = {}):
+def launchWorkflow(inputAssetBucket, inputAssetFileKey, workflow_arn, database_id, asset_id, workflow_database_id, workflow_id, executingUserName, executingRequestContext, inputMetadata = {}):
 
     logger.info("Launching workflow with arn: "+workflow_arn)
 
@@ -103,8 +176,8 @@ def launchWorkflow(inputAssetFileKey, workflow_arn, asset_id, workflow_id, datab
 
     response = sfn_client.start_execution(
         stateMachineArn=workflow_arn,
-        input=json.dumps({'bucketAsset': bucket_name_asset, 'bucketAssetAuxiliary': bucket_name_assetAuxiliary, 'inputAssetFileKey': inputAssetFileKey, 'databaseId': database_id,
-                          'assetId': asset_id, 'inputMetadata': json.dumps(inputMetadata),
+        input=json.dumps({'bucketAsset': inputAssetBucket, 'bucketAssetAuxiliary': bucket_name_assetAuxiliary, 'inputAssetFileKey': inputAssetFileKey, 'databaseId': database_id,
+                          'assetId': asset_id, 'inputMetadata': json.dumps(inputMetadata), 'workflowDatabaseId': workflow_database_id,
                           'workflowId': workflow_id, 'executingUserName': executingUserName, 'executingRequestContext': executingRequestContext})
     )
     # response = {
@@ -113,18 +186,27 @@ def launchWorkflow(inputAssetFileKey, workflow_arn, asset_id, workflow_id, datab
     logger.info("Workflow Response: ")
     logger.info(response)
     executionId = response['executionArn'].split(":")[-1]
+
+    #Create compiled partition key
+    partitionKey = f"${database_id}:${asset_id}"
+    #Create compiled workflow LSI key
+    workflowLsi = f"${workflow_database_id}:${workflow_id}"
+
     table = dynamodb.Table(workflow_execution_database)
     table.put_item(
         Item={
-            'pk': f'{asset_id}-{workflow_id}',
-            'sk': executionId,
-            'database_id': database_id,
-            'asset_id': asset_id,
-            'workflow_id': workflow_id,
+            'databaseId:assetId': partitionKey, #pk
+            'executionId': executionId, #sk
+            'workflowDatabaseId:workflowId': workflowLsi, #sk LSI
+            'databaseId': database_id,
+            'assetId': asset_id,
+            'workflowId': workflow_id,
+            'workflowDatabaseId': workflow_database_id,
             'workflow_arn': workflow_arn,
             'execution_arn': response['executionArn'],
-            'execution_id': executionId,
-            'assets': []
+            'startDate': "",
+            'stopDate': "",
+            'executionStatus': "NEW"
         }
     )
     return executionId
@@ -138,17 +220,17 @@ def get_asset(databaseId, assetId):
     return response['Items']
 
 
-def get_workflow(databaseId, workflowId):
+def get_workflow(workflowDatabaseId, workflowId):
     table = dynamodb.Table(workflow_database)
     response = table.query(
-        KeyConditionExpression=Key('databaseId').eq(databaseId) & Key('workflowId').eq(workflowId)
+        KeyConditionExpression=Key('databaseId').eq(workflowDatabaseId) & Key('workflowId').eq(workflowId)
     )
     return response['Items']
 
 
-def validate_pipelines(databaseId, workflow):
+def validate_pipelines(workflow):
     for pipeline in workflow['specifiedPipelines']['functions']:
-        pipeline_state = get_pipelines(databaseId, pipeline["name"])[0]
+        pipeline_state = get_pipelines(workflow['databaseId'], pipeline["name"])[0]
         if not pipeline_state['enabled']:
             logger.warning(f"Pipeline {pipeline['name']} is disabled")
             return (False, pipeline["name"])
@@ -169,14 +251,22 @@ def validate_pipelines(databaseId, workflow):
 
     return (True, '')
 
-def get_workflow_executions(assetId, workflowId):
+def get_workflow_executions(databaseId, assetId, workflowDatabaseId, workflowId):
         logger.info("Getting current executions")
-        pk = f'{assetId}-{workflowId}'
 
         paginator = dynamodb.meta.client.get_paginator('query')
+
+        partitionKey = f'${databaseId}:${assetId}'
+        if workflowId == '':
+            keyExpression = Key('databaseId:assetId').eq(partitionKey)
+        else:
+            workflowLsi = f"${workflowDatabaseId}:${workflowId}"
+            keyExpression = Key('databaseId:assetId').eq(partitionKey) & Key('workflowDatabaseId:workflowId').eq(workflowLsi)
+
         page_iterator = paginator.paginate(
             TableName=workflow_execution_database,
-            KeyConditionExpression=Key('pk').eq(pk),
+            IndexName='WorkflowLSI',
+            KeyConditionExpression=keyExpression,
             ScanIndexForward=False,
             PaginationConfig={
                 'MaxItems': 500,
@@ -184,7 +274,6 @@ def get_workflow_executions(assetId, workflowId):
                 'StartingToken': None
             }
         ).build_full_result()
-
         items = []
         items.extend(page_iterator['Items'])
 
@@ -192,7 +281,8 @@ def get_workflow_executions(assetId, workflowId):
             nextToken = page_iterator['NextToken']
             page_iterator = paginator.paginate(
                 TableName=workflow_execution_database,
-                KeyConditionExpression=Key('pk').eq(pk),
+                IndexName='WorkflowLSI',
+                KeyConditionExpression=keyExpression,
                 ScanIndexForward=False,
                 PaginationConfig={
                     'MaxItems': 500,
@@ -211,13 +301,13 @@ def get_workflow_executions(assetId, workflowId):
             try:
                 workflow_arn = item['workflow_arn']
                 execution_arn = workflow_arn.replace("stateMachine", "execution")
-                execution_arn = execution_arn + ":" + item['execution_id']
+                execution_arn = execution_arn + ":" + item['executionId']
 
                 startDate = item.get('startDate', "")
                 stopDate = item.get('stopDate', "")
 
                 #If our table doesn't have a stopDate on a execution, continue to look for a running execution
-                if not stopDate:
+                if not stopDate or stopDate == "":
                     logger.info("Fetching SFN execution information")
                     execution = sfn_client.describe_execution(
                         executionArn=execution_arn
@@ -233,6 +323,8 @@ def get_workflow_executions(assetId, workflowId):
                     if not stopDate:
                         logger.info("Adding to results: " + execution['name'])
                         result["Items"].append({
+                            'workflowDatabaseId': item['workflowDatabaseId'],
+                            'workflowId': item['workflowId'],
                             'executionId': execution['name'],
                             'executionStatus': execution['status'],
                             'startDate': startDate,
@@ -242,6 +334,7 @@ def get_workflow_executions(assetId, workflowId):
                 logger.exception(e)
                 logger.info("Continuing with trying to fetch exceutions...")
 
+        logger.info(f"Returning existing execution results: {result}")
         return result
 
 
@@ -250,6 +343,16 @@ def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
     claims_and_roles = request_to_claims(event)
     logger.info(event)
+    
+    # Parse request body if present
+    request_body = {}
+    if event.get('body'):
+        try:
+            request_body = json.loads(event['body'])
+            logger.info("Request body: %s", request_body)
+        except:
+            logger.warning("Failed to parse request body as JSON")
+
     try:
         pathParams = event.get('pathParameters', {})
         logger.info(pathParams)
@@ -275,7 +378,18 @@ def lambda_handler(event, context):
             },
             'assetId': {
                 'value': pathParams.get('assetId', ''),
-                'validator': 'ID'
+                'validator': 'ASSET_ID'
+            },
+            'workflowDatabaseId': {
+                'value': request_body.get('workflowDatabaseId', ''),
+                'validator': 'ID',
+                'allowGlobalKeyword': True
+            },
+            'assetKey': {
+                'value': request_body.get('fileKey', ''),
+                'validator': 'ASSET_PATH',
+                'isFolder': False,
+                'optional': True
             },
         })
 
@@ -310,7 +424,10 @@ def lambda_handler(event, context):
                         asset_allowed = True
                         executingUserName = claims_and_roles["tokens"][0]
                 if asset_allowed:
-                    workflowResponse = get_workflow(pathParams['databaseId'], pathParams['workflowId'])
+                    # Check if workflow is Global 
+
+
+                    workflowResponse = get_workflow(request_body.get('workflowDatabaseId'), pathParams['workflowId'])
                     logger.info(workflowResponse)
                     if bool(workflowResponse):
                         workflow = workflowResponse[0]
@@ -325,17 +442,16 @@ def lambda_handler(event, context):
                                 workflow_allowed = True
 
                         if workflow_allowed:
-                            (status, pipelineName) = validate_pipelines(pathParams['databaseId'], workflow)
+                            (status, pipelineName) = validate_pipelines(workflow)
                             if not status:
                                 logger.error("Not all pipelines are enabled/accessible")
                                 response['statusCode'] = 400
                                 response['body'] = json.dumps({'message': f'{pipelineName} is not enabled/accessible'})
                             else:
-                                logger.info("All pipelines are enabled. Continuing to run run workflow")
-
+                                logger.info("All pipelines are enabled. Continuing to run workflow")
 
                             #Get current executions for workflow on asset. If currently one running, error.
-                            executionResults = get_workflow_executions(pathParams['assetId'], pathParams['workflowId'])
+                            executionResults = get_workflow_executions(pathParams['databaseId'], pathParams['assetId'], request_body.get('workflowDatabaseId'), pathParams['workflowId'], )
                             if len(executionResults['Items']) > 0:
                                 logger.error("Workflow has a currently running execution on the asset")
                                 response['statusCode'] = 400
@@ -344,7 +460,22 @@ def lambda_handler(event, context):
 
                             ##Formulate pipeline input metadata for VAMS
                             #TODO: Implement additional user input fields on execute (from a new UX popup?)
-                            metadataResponse = get_asset_metadata(pathParams['databaseId'], pathParams['assetId'], asset['assetLocation']['Key'], event)
+                            
+                            # Determine which file key to use
+                            # If fileKey is provided in request body, use it, otherwise use asset's base prefix key
+                            file_key = asset['assetLocation']['Key']
+                            
+                            # Get bucket name from bucketId using get_default_bucket_details
+                            bucketDetails = get_default_bucket_details(asset['bucketId'])
+                            asset_bucket = bucketDetails['bucketName']
+                            
+                            if request_body and 'fileKey' in request_body:
+                                file_key = resolve_asset_file_path(file_key, request_body['fileKey'])
+                                logger.info(f"Using file key from request: {file_key}")
+                            else:
+                                logger.info(f"Using asset's base prefix key (no particular file): {file_key}")
+                            
+                            metadataResponse = get_asset_metadata(pathParams['databaseId'], pathParams['assetId'], file_key, event)
                             metadata = metadataResponse.get("metadata", {})
 
                             #remove databaseId/assetId from metadata if exists
@@ -363,11 +494,10 @@ def lambda_handler(event, context):
                                 #"User": {}
                             }
 
-                            logger.info("Launching Workflow:"
-                                        )
-                            executionId = launchWorkflow(asset['assetLocation']['Key'], workflow['workflow_arn'],
-                                                         pathParams['assetId'], workflow['workflowId'],
-                                                         pathParams['databaseId'], executingUserName, executingRequestContext, inputMetadata)
+                            logger.info("Launching Workflow:")
+                            executionId = launchWorkflow(asset_bucket, file_key, workflow['workflow_arn'], pathParams['databaseId'],
+                                                         pathParams['assetId'], request_body.get('workflowDatabaseId'), workflow['workflowId'],
+                                                         executingUserName, executingRequestContext, inputMetadata)
                             response["statusCode"] = 200
                             response['body'] = json.dumps({'message': executionId})
                             return response

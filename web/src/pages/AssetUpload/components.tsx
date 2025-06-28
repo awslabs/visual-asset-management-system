@@ -20,8 +20,9 @@ function getLang() {
 class FileUploadProps {
     label?: string;
     errorText?: string;
+    description?: string;
     fileFormats!: string;
-    setFile!: (file: File) => void;
+    setFile!: (file: File | null) => void;
     file: File | undefined;
     disabled!: boolean;
 }
@@ -33,11 +34,16 @@ export const FileUpload = ({
     setFile,
     file,
     label,
+    description,
 }: FileUploadProps) => {
     const inputRef = useRef<HTMLInputElement>(null);
 
     return (
-        <FormField errorText={errorText} label={label} description={"File types: " + fileFormats}>
+        <FormField
+            errorText={errorText}
+            label={label}
+            description={description || "File types: " + fileFormats}
+        >
             <input
                 ref={inputRef}
                 type="file"
@@ -50,16 +56,33 @@ export const FileUpload = ({
                 }}
             />
             <SpaceBetween size="l">
-                <Button
-                    disabled={disabled}
-                    variant="normal"
-                    iconName="upload"
-                    onClick={(e) => {
-                        inputRef?.current?.click();
-                    }}
-                >
-                    Choose File
-                </Button>
+                <SpaceBetween direction="horizontal" size="xs">
+                    <Button
+                        disabled={disabled}
+                        variant="normal"
+                        iconName="upload"
+                        onClick={(e) => {
+                            inputRef?.current?.click();
+                        }}
+                    >
+                        Choose File
+                    </Button>
+                    {file && (
+                        <Button
+                            variant="normal"
+                            iconName="remove"
+                            onClick={() => {
+                                setFile(null);
+                                // Reset the input value to allow reselecting the same file
+                                if (inputRef.current) {
+                                    inputRef.current.value = "";
+                                }
+                            }}
+                        >
+                            Remove File
+                        </Button>
+                    )}
+                </SpaceBetween>
                 <DisplayFileMeta file={file} />
             </SpaceBetween>
         </FormField>

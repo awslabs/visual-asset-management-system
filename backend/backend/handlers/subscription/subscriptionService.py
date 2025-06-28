@@ -80,7 +80,7 @@ def get_subscriptions(query_params):
         }
 
         # Add Casbin Enforcer to check if the user has access to GET subscription of specific Assets
-        asset_object = get_asset_object_from_id(entity_id)
+        asset_object = get_asset_object_from_id(None, entity_id)
         asset_object.update({"object__type": "asset"})
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
@@ -114,8 +114,8 @@ def get_subscriptions(query_params):
     return response
 
 
-def create_sns_topic(asset_id):
-    topic_response = sns_client.create_topic(Name=f'AssetTopic-{asset_id}')
+def create_sns_topic(asset_id, database_id):
+    topic_response = sns_client.create_topic(Name=f'AssetTopic{database_id}-{asset_id}')
     return topic_response['TopicArn']
 
 
@@ -184,7 +184,7 @@ def create_sns_subscriptions(asset_id, emails):
     asset_sns_topic = asset_obj.get("snsTopic")
 
     if not asset_sns_topic:
-        asset_sns_topic = create_sns_topic(asset_id)
+        asset_sns_topic = create_sns_topic(asset_id, asset_obj["databaseId"])
         add_sns_topic_in_asset(asset_id, asset_obj["databaseId"], asset_sns_topic)
 
     for subscriber in emails:
@@ -232,6 +232,8 @@ def get_userProfile_Email(userId):
 
         if not valid:
             email = "INVALID_FORMAT"
+        else: 
+            email = userId
 
     return email
 
@@ -437,7 +439,7 @@ def lambda_handler(event, context):
 
         if event['body']["entityName"] == "Asset":
             allowed = False
-            asset_object = get_asset_object_from_id(event['body']["entityId"])
+            asset_object = get_asset_object_from_id(None, event['body']["entityId"])
             asset_object.update({"object__type": "asset"})
 
             if len(claims_and_roles["tokens"]) > 0:

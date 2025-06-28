@@ -12,7 +12,9 @@ from opensearchpy import OpenSearch, \
     RequestsHttpConnection, AWSV4SignerAuth, NotFoundError
 from boto3.dynamodb.types import TypeDeserializer
 from common import get_ssm_parameter_value
+from boto3.dynamodb.conditions import Key
 from customLogging.logger import safeLogger
+from botocore.exceptions import ClientError
 
 logger = safeLogger(service="IndexingStreams")
 
@@ -20,6 +22,9 @@ s3client = boto3.client("s3")
 dynamodbClient = boto3.client("dynamodb")
 dynamodbResource = boto3.resource('dynamodb')
 deserialize = TypeDeserializer().deserialize
+
+s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+buckets_table = dynamodbResource.Table(s3_asset_buckets_table)
 
 #
 # Single doc Example
@@ -146,16 +151,14 @@ class MetadataTable():
         )
 
 class AOSIndexS3Objects():
-    def __init__(self, bucketName,
+    def __init__(self,
                  aosclient, indexName, metadataTable=MetadataTable.from_env):
-        self.bucketName = bucketName
         self.aosclient = aosclient
         self.indexName = indexName
         self.metadataTable = metadataTable()
 
     @staticmethod
     def from_env(env=os.environ):
-        bucketName = env.get("ASSET_BUCKET_NAME")
         region = env.get('AWS_REGION')
         service = env.get('AOS_TYPE')  # aoss (serverless) or es (provisioned)
         credentials = boto3.Session().get_credentials()
@@ -171,11 +174,46 @@ class AOSIndexS3Objects():
             connection_class=RequestsHttpConnection,
             pool_maxsize=20,
         )
-        return AOSIndexS3Objects(bucketName, aosclient, indexName)
+        return AOSIndexS3Objects(aosclient, indexName)
+    
+    def _get_default_bucket_details(self, bucketId):
+        """Get default S3 bucket details from database default bucket DynamoDB"""
+        try:
 
-    def _get_s3_object_keys_generator(self, prefix):
-        paginator = s3client.get_paginator('list_objects')
-        page_iterator = paginator.paginate(Bucket=self.bucketName,
+            bucket_response = buckets_table.query(
+                KeyConditionExpression=Key('bucketId').eq(bucketId),
+                Limit=1
+            )
+            # Use the first item from the query results
+            bucket = bucket_response.get("Items", [{}])[0] if bucket_response.get("Items") else {}
+            bucket_id = bucket.get('bucketId')
+            bucket_name = bucket.get('bucketName')
+            base_assets_prefix = bucket.get('baseAssetsPrefix')
+
+            #Check to make sure we have what we need
+            if not bucket_name or not base_assets_prefix:
+                raise Exception(f"Error getting database default bucket details: {str(e)}")
+            
+            #Make sure we end in a slash for the path
+            if not base_assets_prefix.endswith('/'):
+                base_assets_prefix += '/'
+
+            # Remove leading slash from file path if present
+            if base_assets_prefix.startswith('/'):
+                base_assets_prefix = base_assets_prefix[1:]
+
+            return {
+                'bucketId': bucket_id,
+                'bucketName': bucket_name,
+                'baseAssetsPrefix': base_assets_prefix
+            }
+        except Exception as e:
+            logger.exception(f"Error getting bucket details: {e}")
+            raise Exception(f"Error getting bucket details: {str(e)}")
+
+    def _get_s3_object_keys_generator(self, prefix, bucket):
+        paginator = s3client.get_paginator('list_objects_v2')
+        page_iterator = paginator.paginate(Bucket=bucket,
                                            Prefix=prefix)
         for page in page_iterator:
             for obj in page.get('Contents', []):
@@ -212,7 +250,7 @@ class AOSIndexS3Objects():
                 "databaseId": databaseId,
             },
             AttributesToGet=[
-                'assetName', "description", "assetType", "tags"
+                'assetName', "description", "assetType", "tags", "bucketId"
             ],
         )
 
@@ -264,7 +302,10 @@ class AOSIndexS3Objects():
             logger.info("prefix is None")
             logger.info(assetIdOrPrefix)
 
-        for s3object in self._get_s3_object_keys_generator(assetIdOrPrefix):
+        bucket_details = self._get_default_bucket_details(asset_fields['bucketId'])
+        bucket = bucket_details['bucketName']
+
+        for s3object in self._get_s3_object_keys_generator(assetIdOrPrefix, bucket):
             self.process_single_s3_object(databaseId, assetId,
                                           s3object, asset_fields)
 
@@ -484,38 +525,57 @@ def get_asset_fields(keys):
 
     return result.get('Item')
 
-
-def lambda_handler_a(event, context,
-                     index=AOSIndexAssetMetadata.from_env,
-                     s3index=AOSIndexS3Objects.from_env,
-                     metadataTable_fn=MetadataTable.from_env,
-                     get_asset_fields_fn=get_asset_fields):
-
-    logger.info(event)
-
-    # we need to catch delete events here and delete by query on aos.
-    client = index()
-    metadataTable = metadataTable_fn()
-
-    if event.get("eventName") == "REMOVE":
-        client.delete_item_by_query(event['dynamodb']['Keys']['assetId']['S'])
-
-    if 'Records' not in event:
-        return
-
-    for record in event['Records']:
-        if record['eventName'] == 'REMOVE':
-            client.delete_item_by_query(
-                record['dynamodb']['Keys']['assetId']['S'])
-
-        #Asset table inserted / updated
-        #Note: updates metadata table for asset updated which triggers the "lambda_handler_m" handler through DynamoDB streams (hack fix for now)
-        if record['eventName'] == 'MODIFY' or record['eventName'] == 'INSERT':   
-            logger.info("insert or modify asset table record")
-            databaseId = record['dynamodb']['Keys']['databaseId']['S']
-            assetId = record['dynamodb']['Keys']['assetId']['S']
-            metadataTable.write_asset_table_updated_event(
-                databaseId, assetId)
+def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
+    """Determine if file is archived based on S3 delete markers or permanently deleted
+    
+    Args:
+        bucket: The S3 bucket name
+        key: The S3 object key
+        version_id: Optional specific version ID to check
+        
+    Returns:
+        True if file is archived (has delete marker) or permanently deleted, False otherwise
+    """
+    try:
+        if version_id:
+            # Check if specific version is a delete marker
+            response = s3client.list_object_versions(
+                Bucket=bucket,
+                Prefix=key,
+                MaxKeys=1000
+            )
+            
+            # Check if the specified version is a delete marker
+            for marker in response.get('DeleteMarkers', []):
+                if marker['Key'] == key and marker['VersionId'] == version_id:
+                    return True
+            return False
+        else:
+            # Check if current version is deleted (has delete marker as latest)
+            try:
+                s3client.head_object(Bucket=bucket, Key=key)
+                return False  # Object exists, not archived
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'NoSuchKey':
+                    # Object doesn't exist, check if it has delete markers or versions
+                    response = s3client.list_object_versions(
+                        Bucket=bucket,
+                        Prefix=key,
+                        MaxKeys=1
+                    )
+                    
+                    has_delete_markers = len(response.get('DeleteMarkers', [])) > 0
+                    has_versions = len(response.get('Versions', [])) > 0
+                    
+                    # If it has delete markers, it's archived
+                    # If it has no versions and no delete markers, it's permanently deleted
+                    # In both cases, we should return True
+                    return has_delete_markers or not has_versions
+                else:
+                    raise
+    except Exception as e:
+        logger.warning(f"Error checking archive status for {key}: {e}")
+        return False
 
 def handle_s3_event_record_removed(record, s3index_fn):
     if not record.get("eventName", "").startswith("ObjectRemoved:"):
@@ -528,15 +588,38 @@ def handle_s3_event_record_removed(record, s3index_fn):
 
 
 def handle_s3_event_record(record,
+                           bucketName = '',
+                           bucketPrefix = '',
                            metadata_fn=MetadataTable.from_env,
                            get_asset_fields_fn=get_asset_fields,
                            s3index_fn=AOSIndexS3Objects.from_env,
                            sleep_fn=time.sleep):
     
+
+    if bucketName and bucketName != '' and record.get("s3", {}).get("bucket", {}).get("name", "") != bucketName:
+        logger.info("Buckets don't match. Ignoring")
+        logger.info(record)
+        return
+    
+    if bucketPrefix and bucketPrefix != '' and not record.get("s3", {}).get("object", {}).get("key", "").startswith(bucketPrefix):
+        logger.info("Bucket prefix doesn't match records we care to index. Ignoring")
+        logger.info(record)
+        return
+
+    #Now set it to empty so we can do proper starts with checks
+    if not bucketPrefix:
+        bucketPrefix = ''
+    
     #Ignore pipeline and preview files from assets
-    if record.get("s3", {}).get("object", {}).get("key", "").startswith("pipeline") or \
-            record.get("s3", {}).get("object", {}).get("key", "").startswith("preview"):
+    if record.get("s3", {}).get("object", {}).get("key", "").startswith(bucketPrefix+"pipeline") or \
+            record.get("s3", {}).get("object", {}).get("key", "").startswith(bucketPrefix+"preview") or \
+            record.get("s3", {}).get("object", {}).get("key", "").startswith(bucketPrefix+"temp-uploads"):
         logger.info("Ignoring pipeline and preview files from assets from indexing")
+        return
+
+    #Ignore folders
+    if record.get("s3", {}).get("object", {}).get("key", "").endswith("/"):
+        logger.info("Ignoring folders from indexing")
         return
 
     handle_s3_event_record_removed(record, s3index_fn)
@@ -553,17 +636,20 @@ def handle_s3_event_record(record,
         Key=record['s3']['object']['key'],
     )
 
-    databaseId = head_result['Metadata']['databaseid']
-    assetId = head_result['Metadata']['assetid']
-    deleted = head_result['Metadata'].get('vams-status')
-
-    # s3 objects are marked with vams-status=deleted in their s3 metadata
-    # by calls to delete assets in assetService.py
-    if deleted == 'deleted':
+    databaseId = head_result['Metadata'].get('databaseid', None)
+    assetId = head_result['Metadata'].get('assetid', None)
+    
+    # Check if the file is archived using the more robust method
+    bucket_name = record['s3']['bucket']['name']
+    object_key = record.get("s3", {}).get("object", {}).get("key", "")
+    
+    if is_file_archived(bucket_name, object_key):
         s3index = s3index_fn()
-        s3index.delete_item(
-            record.get("s3", {}).get("object", {}).get("key", ""))
+        s3index.delete_item(object_key)
         return
+    
+    if databaseId is None or assetId is None:
+        logger.info("databaseId or assetId not found in s3 metadata, skipping file as we may not we ingested yet or external")
 
     # see if records exist for the asset and metadata tables
     metadata_record = None
@@ -605,6 +691,39 @@ def handle_s3_event_record(record,
         },
     )
 
+def lambda_handler_a(event, context,
+                     index=AOSIndexAssetMetadata.from_env,
+                     s3index=AOSIndexS3Objects.from_env,
+                     metadataTable_fn=MetadataTable.from_env,
+                     get_asset_fields_fn=get_asset_fields):
+
+    logger.info(event)
+
+    # we need to catch delete events here and delete by query on aos.
+    client = index()
+    metadataTable = metadataTable_fn()
+
+    if event.get("eventName") == "REMOVE":
+        client.delete_item_by_query(event['dynamodb']['Keys']['assetId']['S'])
+
+    if 'Records' not in event:
+        return
+
+    for record in event['Records']:
+        if record['eventName'] == 'REMOVE':
+            client.delete_item_by_query(
+                record['dynamodb']['Keys']['assetId']['S'])
+
+        #Asset table inserted / updated
+        #Note: updates metadata table for asset updated which triggers the "lambda_handler_m" handler through DynamoDB streams (hack fix for now)
+        if record['eventName'] == 'MODIFY' or record['eventName'] == 'INSERT':   
+            logger.info("insert or modify asset table record")
+            databaseId = record['dynamodb']['Keys']['databaseId']['S']
+            assetId = record['dynamodb']['Keys']['assetId']['S']
+            metadataTable.write_asset_table_updated_event(
+                databaseId, assetId)
+
+
 
 def lambda_handler_m(event, context,
                      index=AOSIndexAssetMetadata.from_env,
@@ -621,17 +740,66 @@ def lambda_handler_m(event, context,
     else:
         logger.info("Not a DynamoDB remove record")
 
-    if 'Records' not in event:
-        return
+    #Parse various formats depending on where the event could be fired from
+    records = []
+    if 'Records' in event:
+        records = event['Records']
+    elif 'Message' in event:
+        message = json.loads(event['Message'])
+        if 'Records' in message:
+            records = message['Records']
 
-    for record in event['Records']:
+    bucketName = None
+    bucketPrefix = None
+    
+    if 'ASSET_BUCKET_NAME' in event:
+        bucketName = event['ASSET_BUCKET_NAME']
+
+    if 'ASSET_BUCKET_PREFIX' in event:
+        bucketPrefix = event['ASSET_BUCKET_PREFIX']
+
+        if bucketPrefix == '/':
+            bucketPrefix = None
+
+        if bucketPrefix is not None and bucketPrefix != '':
+            # Remove leading slash from file path if present
+            if bucketPrefix.startswith('/'):
+                bucketPrefix = bucketPrefix[1:]
+
+            if not bucketPrefix.endswith('/'):
+                bucketPrefix = bucketPrefix + '/'
+
+    for record in records:
         logger.info(record)
 
         # Coming from SNS by S3 event notification
         if "EventSource" in record and record['EventSource'] == 'aws:sns' and 'Records' in json.loads(record["Sns"]["Message"]):
             for snsS3Record in json.loads(record['Sns']['Message'])['Records']:
                 if (snsS3Record['eventSource'] == "aws:s3"):
-                    handle_s3_event_record(snsS3Record)
+                    handle_s3_event_record(snsS3Record, bucketName, bucketPrefix)
+            continue
+
+        # Coming from SQS by S3 event notification
+        if "eventSource" in record and record['eventSource'] == 'aws:sqs':
+            try:
+                # Parse the SQS body which contains an SNS notification
+                sqs_body = json.loads(record["body"])
+                
+                # Check if this is an SNS notification
+                if "Type" in sqs_body and sqs_body["Type"] == "Notification" and "Message" in sqs_body:
+                    # Parse the SNS message which contains S3 event
+                    sns_message = json.loads(sqs_body["Message"])
+                    
+                    # Process S3 records if they exist
+                    if "Records" in sns_message:
+                        for s3_record in sns_message["Records"]:
+                            if "eventSource" in s3_record and s3_record["eventSource"] == "aws:s3":
+                                handle_s3_event_record(s3_record, bucketName, bucketPrefix)
+                    else:
+                        logger.info("No Records found in SNS message")
+                        logger.info(sns_message)
+            except Exception as e:
+                logger.exception(f"Error processing SQS message: {e}")
             continue
 
         # Coming directly from S3 event notification
@@ -639,7 +807,7 @@ def lambda_handler_m(event, context,
             handle_s3_event_record(record)
             continue
 
-        if record['eventName'] == 'REMOVE':
+        if "eventName" in record and record['eventName'] == 'REMOVE':
             client.delete_item(record['dynamodb']['Keys']['assetId']['S'])
             continue
 

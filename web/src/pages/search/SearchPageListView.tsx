@@ -7,17 +7,16 @@ import {
     Box,
     Button,
     SpaceBetween,
-    Modal,
     Alert,
     Input,
     Grid,
     Select,
     FormField,
 } from "@cloudscape-design/components";
+import AssetDeleteModal from "../../components/modals/AssetDeleteModal";
 import {
     changeFilter,
     changeRectype,
-    deleteSelected,
     paginateSearch,
     search,
     sortSearch,
@@ -27,7 +26,7 @@ import Synonyms from "../../synonyms";
 import { EmptyState } from "../../common/common-components";
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { fetchtagTypes, fetchAllDatabases } from "../../services/APIService";
+import { fetchtagTypes } from "../../services/APIService";
 
 var tagTypes: any;
 //let databases: any;
@@ -79,15 +78,12 @@ function columnRender(e: any, name: string, value: any) {
 function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
     // identify all the names of columns from state.result.hits.hits
     // create a column definition for each column
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
 
     useEffect(() => {
         fetchtagTypes().then((res) => {
             tagTypes = res;
         });
-
-        // fetchAllDatabases().then((res) => {
-        //     databases = res;
-        // });
     }, []);
 
     const navigate = useNavigate();
@@ -312,8 +308,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                                             state?.disableSelection
                                         }
                                         onClick={() => {
-                                            // deleteSelected({ state, dispatch });
-                                            dispatch({ type: "clicked-initial-delete" });
+                                            setShowDeleteModal(true);
                                         }}
                                     >
                                         Delete Selected
@@ -429,7 +424,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                                                 { label: "All", value: "all" },
                                                 //List every database from "databases" variable and then map to result aggregation to display (doc_count) next to each
                                                 //We do this because opensearch has a max items it will return in a query which may not be everything across aggregated databases
-                                                //Without this, you wouldn't be able to search on other databases not listed due to trimmed results. 
+                                                //Without this, you wouldn't be able to search on other databases not listed due to trimmed results.
                                                 // ...(databases?.map((b: any) => {
                                                 //     var count = 0
                                                 //     //Map through result aggregation to find doc_count for each database
@@ -466,45 +461,17 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                     }
                 />
             </SpaceBetween>
-            <Modal
-                visible={state?.showDeleteModal}
-                onDismiss={() => dispatch({ type: "clicked-cancel-delete" })}
-                header={`Delete ${
-                    state?.selectedItems?.length > 1 ? Synonyms.Assets : Synonyms.Asset
-                }`}
-                footer={
-                    <Box float="right">
-                        <SpaceBetween direction="horizontal" size="xs">
-                            <Button
-                                variant="link"
-                                onClick={() => dispatch({ type: "clicked-cancel-delete" })}
-                            >
-                                No
-                            </Button>
-                            <Button
-                                variant="primary"
-                                onClick={() => deleteSelected({ state, dispatch })}
-                            >
-                                Yes
-                            </Button>
-                        </SpaceBetween>
-                    </Box>
-                }
-            >
-                <SpaceBetween direction="vertical" size="xs">
-                    <Box variant="p">
-                        Do you want to delete{" "}
-                        {state?.selectedItems?.length > 1 ? (
-                            <b>
-                                {state?.selectedItems?.length} {Synonyms.Assets}
-                            </b>
-                        ) : (
-                            <b>{state?.selectedItems?.[0]?.str_assetname}</b>
-                        )}
-                        ?
-                    </Box>
-                </SpaceBetween>
-            </Modal>
+            <AssetDeleteModal
+                visible={showDeleteModal}
+                onDismiss={() => setShowDeleteModal(false)}
+                mode="asset"
+                selectedAssets={state?.selectedItems || []}
+                onSuccess={(operation) => {
+                    setShowDeleteModal(false);
+                    // Refresh the search results
+                    search({}, { state, dispatch });
+                }}
+            />
         </>
     );
 }

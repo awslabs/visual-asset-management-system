@@ -17,6 +17,15 @@ sfn = boto3.client(
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
 
+external_sfn_task_token = ""
+
+def abort_external_workflow(error):
+    if (external_sfn_task_token != None and external_sfn_task_token != ""):
+        sfn.send_task_failure(
+            taskToken=external_sfn_task_token,
+            error='Pipeline Failure: ' + error,
+            cause='See AWS cloudwatch logs for error cause.'
+        )
 
 def lambda_handler(event, context):
     """
@@ -54,11 +63,22 @@ def lambda_handler(event, context):
     inputOutput_s3_assetAuxiliary_files_uri = event['inputOutputS3AssetAuxiliaryFilesPath']
     output_file_type = event['outputFileType']
 
+    #Folder check
+    if (input_s3_asset_files_uri.endswith("/")):
+        abort_external_workflow("Input S3 URI cannot be a folder for this pipeline")
+        return {
+            'statusCode': 400,
+            'body': {
+                "message": "Input S3 URI cannot be a folder"
+            }
+        }
+
     # Extract the root name and extension from the input key
     file_root, extension = os.path.splitext(input_s3_asset_files_uri)
 
     # Check to make sure we are working with the right file types (if not, exit)
-    if (extension.lower() not in ALLOWED_INPUT_FILEEXTENSIONS):
+    if (not extension or extension == '' or extension.lower() not in ALLOWED_INPUT_FILEEXTENSIONS):
+        abort_external_workflow("Pipeline cannot process file type provided")
         return {
             'statusCode': 400,
             'body': {
@@ -107,6 +127,7 @@ def lambda_handler(event, context):
             }
         })
     except Exception as e:
+        abort_external_workflow("Internal Server Error")
         logger.exception(e)
         responses.append({
             'statusCode': 500,

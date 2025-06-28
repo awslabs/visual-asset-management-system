@@ -104,6 +104,25 @@ os.environ["ASSET_STORAGE_TABLE_NAME"] = "assetStorageTable"
 os.environ["ASSET_BUCKET_NAME"] = "test-asset-bucket"
 os.environ["REGION"] = "us-east-1"
 
+# Add new environment variables required by updated handlers
+os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"] = "s3AssetBucketsStorageTable"
+os.environ["DATABASE_STORAGE_TABLE_NAME"] = "databaseStorageTable"
+os.environ["S3_ASSET_AUXILIARY_BUCKET"] = "test-asset-auxiliary-bucket"
+os.environ["ASSET_UPLOAD_TABLE_NAME"] = "assetUploadTable"
+os.environ["ASSET_LINKS_STORAGE_TABLE_NAME"] = "assetLinksStorageTable"
+os.environ["ASSET_VERSIONS_STORAGE_TABLE_NAME"] = "assetVersionsStorageTable"
+os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"] = "assetFileVersionsStorageTable"
+os.environ["SUBSCRIPTIONS_STORAGE_TABLE_NAME"] = "subscriptionsStorageTable"
+os.environ["SEND_EMAIL_FUNCTION_NAME"] = "sendEmailFunction"
+
+# Add environment variables for ingestAsset.py
+os.environ["CREATE_ASSET_LAMBDA_FUNCTION_NAME"] = "createAssetLambdaFunction"
+os.environ["FILE_UPLOAD_LAMBDA_FUNCTION_NAME"] = "fileUploadLambdaFunction"
+
+# Add environment variables for databaseService.py
+os.environ["WORKFLOW_STORAGE_TABLE_NAME"] = "workflowStorageTable"
+os.environ["PIPELINE_STORAGE_TABLE_NAME"] = "pipelineStorageTable"
+
 
 @pytest.fixture(scope="function")
 def lambda_context():

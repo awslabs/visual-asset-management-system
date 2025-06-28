@@ -55,7 +55,7 @@ if (config.app.useWaf) {
             region: wafRegion,
         },
         wafScope: wafScope,
-        description: STACK_WAF_DESCRIPTION
+        description: STACK_WAF_DESCRIPTION,
     });
 
     // ssmWafArn = cfWafStack.wafArn;
@@ -69,7 +69,7 @@ if (config.app.useWaf) {
         },
         ssmWafArn: cfWafStack.wafArn,
         config: config,
-        description: STACK_CORE_DESCRIPTION
+        description: STACK_CORE_DESCRIPTION,
     });
 
     coreVamsStack.addDependency(cfWafStack);
@@ -102,7 +102,7 @@ else {
         },
         ssmWafArn: "",
         config: config,
-        description: STACK_CORE_DESCRIPTION
+        description: STACK_CORE_DESCRIPTION,
     });
 
     //Stack level NAG supressions

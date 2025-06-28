@@ -13,17 +13,46 @@ import { API } from "aws-amplify";
 import { useState } from "react";
 import { generateUUID } from "../../common/utils/utils";
 
+// Interface for file upload part
+interface UploadPart {
+    PartNumber: number;
+    ETag: string;
+}
+
+// Interface for file upload URL
+interface PartUploadUrl {
+    PartNumber: number;
+    UploadUrl: string;
+}
+
+// Interface for file upload response
+interface FileUploadResponse {
+    relativeKey: string;
+    uploadIdS3: string;
+    numParts: number;
+    partUploadUrls: PartUploadUrl[];
+}
+
 export default function AssetIngestion() {
     const [file, setFile] = useState<File | null>(null);
     const [errorMessage, setErrorMessage] = useState("");
     const [jsonBody, setJsonBody] = useState("");
     const [uploading, setUploading] = useState(false);
     const [statusMessage, setStatusMessage] = useState("");
-    let fileBody = {
-        key: "",
-        file_size: 0,
-        assetId: "",
+
+    // State for tracking upload process
+    const [uploadId, setUploadId] = useState("");
+    const [fileResponses, setFileResponses] = useState<FileUploadResponse[]>([]);
+
+    // Request body for API calls
+    let requestBody = {
         databaseId: "",
+        assetId: "",
+        assetName: "",
+        description: "",
+        isDistributable: true,
+        tags: [] as string[],
+        files: [] as { relativeKey: string; file_size: number }[],
     };
 
     const splitFile = async (file: File, numParts: number) => {
@@ -43,12 +72,15 @@ export default function AssetIngestion() {
         return fileParts;
     };
 
-    const uploadPart = async (url: string, partNumber: number, filePart: Blob) => {
-        const file = new File([filePart], fileBody.key, { lastModified: Date.now() });
-        console.log(file);
+    const uploadPart = async (
+        url: string,
+        partNumber: number,
+        filePart: Blob,
+        fileName: string
+    ) => {
+        const file = new File([filePart], fileName, { lastModified: Date.now() });
 
         setStatusMessage(`Uploading part ${partNumber}...`);
-        console.log(file);
         try {
             const response = await Promise.race([
                 fetch(url, {
@@ -82,50 +114,81 @@ export default function AssetIngestion() {
         }
     };
 
-    const uploadFile = async (
+    const uploadFileParts = async (
         file: File,
-        uploadId: string,
-        numParts: number,
-        partUploadUrls: any,
-        assetIdForAsset: string
-    ) => {
-        const fileParts = await splitFile(file, numParts);
-        const etags = [];
+        fileResponse: FileUploadResponse
+    ): Promise<UploadPart[] | null> => {
+        const fileParts = await splitFile(file, fileResponse.numParts);
+        const parts: UploadPart[] = [];
 
-        for (let i = 0; i < numParts; i++) {
-            const partNumber = i + 1;
-            const url = partUploadUrls[i];
+        for (let i = 0; i < fileResponse.numParts; i++) {
+            const partUploadUrl = fileResponse.partUploadUrls.find((p) => p.PartNumber === i + 1);
+            if (!partUploadUrl) {
+                console.error(`Missing upload URL for part ${i + 1}`);
+                return null;
+            }
+
+            const partNumber = partUploadUrl.PartNumber;
+            const url = partUploadUrl.UploadUrl;
             const filePart = fileParts[i];
-            const etag = await uploadPart(url, partNumber, filePart);
+            const etag = await uploadPart(url, partNumber, filePart, file.name);
 
             if (etag) {
-                etags.push(etag);
+                parts.push({
+                    PartNumber: partNumber,
+                    ETag: etag,
+                });
             } else {
                 console.error("Aborting multipart upload due to part failure");
-                return;
+                return null;
             }
         }
 
-        setStatusMessage("Uploading asset...");
-        const assetBody = {
-            parts: etags.map((etag, index) => ({
-                PartNumber: index + 1,
-                ETag: etag,
-            })),
-            upload_id: uploadId,
-            ...fileBody,
-        };
+        return parts;
+    };
+
+    const completeUpload = async (
+        uploadId: string,
+        assetId: string,
+        databaseId: string,
+        fileResponse: FileUploadResponse,
+        parts: UploadPart[],
+        jsonData: any
+    ) => {
+        setStatusMessage("Completing asset upload...");
+
         try {
+            const completeBody = {
+                databaseId,
+                assetId,
+                assetName: jsonData.assetName,
+                description: jsonData.description,
+                isDistributable:
+                    jsonData.isDistributable !== undefined ? jsonData.isDistributable : true,
+                tags: jsonData.tags || [],
+                uploadId,
+                files: [
+                    {
+                        relativeKey: fileResponse.relativeKey,
+                        uploadIdS3: fileResponse.uploadIdS3,
+                        parts,
+                    },
+                ],
+            };
+
             const response = await API.post("api", "/ingest-asset", {
-                body: assetBody,
+                body: completeBody,
             });
+
             let msg: any = (
                 <div>
-                    <strong>Asset uploaded.</strong>
+                    <strong>Asset uploaded successfully.</strong>
                     <br />
-                    <strong>Database Id-</strong> {assetBody.databaseId}
+                    <strong>Database Id:</strong> {databaseId}
                     <br />
-                    <strong>Asset Id / File -</strong> {assetBody.key}
+                    <strong>Asset Id:</strong> {assetId}
+                    <br />
+                    <strong>Asset Name:</strong> {jsonData.assetName}
                     <br />
                     <strong>Message:</strong> {response.message}
                 </div>
@@ -133,53 +196,111 @@ export default function AssetIngestion() {
             setStatusMessage(msg);
 
             console.log("Asset Upload Success", response);
+            return true;
         } catch (error) {
-            console.error("Error uploading asset:", error);
-            setUploading(false);
-            setStatusMessage(`Error uploading asset.\nMessage: ${error}`);
-        } finally {
-            setUploading(false);
-            setTimeout(() => {
-                setStatusMessage("");
-            }, 10000);
+            console.error("Error completing asset upload:", error);
+            setStatusMessage(`Error completing asset upload.\nMessage: ${error}`);
+            return false;
         }
     };
 
-    const uploadObjectStart = async () => {
+    const initializeUpload = async () => {
         setUploading(true);
-        setStatusMessage("");
-        let assetIdForAsset = `i${generateUUID()}`;
+        setStatusMessage("Initializing upload...");
+
         try {
             if (!file) {
                 setErrorMessage("Please choose a file.");
                 setUploading(false);
                 return;
             }
-            const additionalBody = jsonBody ? JSON.parse(jsonBody) : {};
-            fileBody = {
-                key: assetIdForAsset + "/" + file.name,
-                file_size: file.size,
-                assetId: assetIdForAsset,
-                ...additionalBody,
-            };
 
-            const response = await API.post("api", "ingest-asset", {
-                body: fileBody,
-            });
-
-            const { message } = response;
-            const { uploadId, numParts, partUploadUrls } = message;
-            const partUrlsArray: string[] = [];
-
-            for (let i = 0; i < numParts; i++) {
-                partUrlsArray.push(partUploadUrls[i]);
+            // Parse JSON body for all fields
+            let jsonData;
+            try {
+                jsonData = jsonBody ? JSON.parse(jsonBody) : {};
+            } catch (error) {
+                setErrorMessage("Invalid JSON format in the JSON body.");
+                setUploading(false);
+                return;
             }
 
-            uploadFile(file, uploadId, numParts, partUploadUrls, assetIdForAsset);
+            const assetId = `i${generateUUID()}`;
+            const databaseId = jsonData.databaseId || "";
 
-            return response;
+            if (!databaseId) {
+                setErrorMessage("Please provide a databaseId in the JSON body.");
+                setUploading(false);
+                return;
+            }
+
+            if (!jsonData.assetName) {
+                setErrorMessage("Please provide an assetName in the JSON body.");
+                setUploading(false);
+                return;
+            }
+
+            if (!jsonData.description) {
+                setErrorMessage("Please provide a description in the JSON body.");
+                setUploading(false);
+                return;
+            }
+
+            // Prepare request body for initialization
+            requestBody = {
+                databaseId,
+                assetId,
+                assetName: jsonData.assetName,
+                description: jsonData.description,
+                isDistributable:
+                    jsonData.isDistributable !== undefined ? jsonData.isDistributable : true,
+                tags: jsonData.tags || [],
+                files: [
+                    {
+                        relativeKey: `${assetId}/${file.name}`,
+                        file_size: file.size,
+                    },
+                ],
+            };
+
+            // Call the API to initialize the upload
+            const response = await API.post("api", "/ingest-asset", {
+                body: requestBody,
+            });
+
+            // Store upload ID and file responses for the next stage
+            setUploadId(response.uploadId);
+            setFileResponses(response.files);
+
+            setStatusMessage("Upload initialized. Starting file upload...");
+
+            // Start uploading file parts
+            if (response.files && response.files.length > 0) {
+                const fileResponse = response.files[0];
+                const parts = await uploadFileParts(file, fileResponse);
+
+                if (parts) {
+                    // Complete the upload with the parts information
+                    await completeUpload(
+                        response.uploadId,
+                        assetId,
+                        databaseId,
+                        fileResponse,
+                        parts,
+                        jsonData
+                    );
+                } else {
+                    setStatusMessage("Failed to upload file parts.");
+                    setUploading(false);
+                }
+            } else {
+                setStatusMessage("No file information received from server.");
+                setUploading(false);
+            }
         } catch (error) {
-            console.error("Error uploading objects:", error);
+            console.error("Error initializing upload:", error);
+            setStatusMessage(`Error initializing upload: ${error}`);
+            setUploading(false);
         }
     };
 
@@ -187,6 +308,7 @@ export default function AssetIngestion() {
     "databaseId": "<database-name>",
     "assetName": "<name of asset>",
     "description": "<Enter Asset description here>",
+    "isDistributable": true,
     "tags": ["optional", "tags", "to", "add"]
 }`;
 
@@ -218,25 +340,26 @@ export default function AssetIngestion() {
                             <Button
                                 variant="primary"
                                 onClick={() => {
-                                    uploadObjectStart();
+                                    initializeUpload();
                                 }}
                                 loading={uploading}
+                                disabled={!file}
                             >
-                                {uploading ? "Uploading..." : "Upload Object"}
+                                {uploading ? "Uploading..." : "Upload Asset"}
                             </Button>
                         </FormField>
                     </Grid>
                     <Grid gridDefinition={[{ colspan: 3 }]}>
-                        <FormField label="JSON Body - Additional Data">
+                        <FormField label="JSON Body - Asset Data">
                             <Textarea
                                 onChange={({ detail }) => setJsonBody(detail.value)}
                                 value={jsonBody || defaultPlaceholder}
                                 placeholder={defaultPlaceholder}
                                 rows={10}
                             />
-                            <div style={{ marginTop: "1em" }}>{statusMessage}</div>
                         </FormField>
                     </Grid>
+                    <div style={{ marginTop: "1em" }}>{statusMessage}</div>
                 </SpaceBetween>
             </Container>
         </Box>

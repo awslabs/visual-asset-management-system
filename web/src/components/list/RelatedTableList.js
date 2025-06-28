@@ -19,7 +19,7 @@ import ListDefinition from "./list-definitions/types/ListDefinition";
 
 export default function RelatedTableList(props) {
     //props
-    const { allItems, loading, listDefinition, databaseId, HeaderControls } = props;
+    const { allItems, loading, listDefinition, databaseId, HeaderControls = () => <></> } = props;
     const { columnDefinitions, visibleColumns, filterColumns, pluralName, pluralNameTitleCase } =
         listDefinition;
 
@@ -83,7 +83,11 @@ export default function RelatedTableList(props) {
                 <EmptyState
                     title={`No ${pluralName}`}
                     subtitle={`No ${pluralName} to display.`}
-                    action={<Button>Create {pluralName}</Button>}
+                    action={
+                        listDefinition.createAction !== false ? (
+                            <Button>Create {pluralName}</Button>
+                        ) : null
+                    }
                 />
             ),
             noMatch: (

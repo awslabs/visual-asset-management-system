@@ -1,0 +1,87 @@
+/*
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+.commentsHeader {
+    margin-bottom: 20px;
+}
+
+.commentSectionDiv {
+    width: 100%;
+}
+
+.commentSectionTable {
+    width: 100%;
+}
+
+.commentSectionTableBorder {
+    border: 1px solid #eaeded;
+    border-radius: 8px;
+}
+
+.commentSectionAssetsContainerTable {
+    vertical-align: top;
+    height: 400px;
+}
+
+.populateCommentsDiv {
+    height: 400px;
+    overflow-y: auto;
+    padding: 10px;
+}
+
+.commentSectionTextBoxContainer {
+    padding: 10px;
+    width: 100%;
+}
+
+.commentSectionSubmitButton {
+    padding: 10px;
+    text-align: right;
+}
+
+.center {
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+    width: 50px;
+}
+
+.commentContainer {
+    margin-bottom: 20px;
+    padding: 10px;
+    border: 1px solid #eaeded;
+    border-radius: 4px;
+    background-color: #f8f8f8;
+}
+
+.commentHeader {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.commentOwner {
+    font-weight: bold;
+}
+
+.commentDate {
+    color: #666;
+    font-size: 0.9em;
+}
+
+.commentBody {
+    margin-bottom: 10px;
+}
+
+.commentActions {
+    text-align: right;
+    margin-top: 5px;
+}
+
+.noCommentsDiv {
+    padding: 10px;
+    color: #666;
+    font-style: italic;
+}

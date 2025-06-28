@@ -152,7 +152,7 @@ def lambda_handler(event, context):
         claims_and_roles = request_to_claims(event)
         method_allowed_on_api = False
 
-        asset_object = get_asset_object_from_id(event['body']["entityId"])
+        asset_object = get_asset_object_from_id(None, event['body']["entityId"])
         asset_object.update({"object__type": "asset"})
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)

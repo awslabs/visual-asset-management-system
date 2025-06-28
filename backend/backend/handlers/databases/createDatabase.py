@@ -1,157 +1,162 @@
-#  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-#  SPDX-License-Identifier: Apache-2.0
+# Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
 
 import os
 import boto3
 import json
-from botocore.exceptions import ClientError
 import datetime
+from botocore.exceptions import ClientError
+from aws_lambda_powertools.utilities.typing import LambdaContext
+from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
-from common.validators import validate
 from common.dynamodb import to_update_expr
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, authorization_error, VAMSGeneralErrorResponse
+from models.databases import CreateDatabaseRequestModel, CreateDatabaseResponseModel
 
-claims_and_roles = {}
-logger = safeLogger(service="CreateDatabase")
-
+# Configure AWS clients
 dynamodb = boto3.resource('dynamodb')
-s3c = boto3.client('s3')
+logger = safeLogger(service_name="CreateDatabase")
 
-main_rest_response = STANDARD_JSON_RESPONSE
-
-unitTest = {
-    "body": {
-        "databaseId": "Unit_Test",
-        "description": "Testing Out Lambda Functions",
-    }
-}
-unitTest['body'] = json.dumps(unitTest['body'])
-db_Database = None
-
+# Load environment variables
 try:
-    db_Database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-except:
+    db_database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
+    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+except Exception as e:
     logger.exception("Failed loading environment variables")
-    main_rest_response['statusCode'] = 500
-    main_rest_response['body'] = json.dumps({
-        "message": "Failed Loading Environment Variables"
-    })
+    raise e
 
+#######################
+# Utility Functions
+#######################
 
-def upload_Asset(body):
-    logger.info("Setting Table")
-    table = dynamodb.Table(db_Database)
-    logger.info("Setting Time Stamp")
-    dtNow = datetime.datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
-
-    item = {
-        'description': body['description'],
-        # 'dateCreated': json.dumps(dtNow),
-        # 'assetCount': json.dumps(0)
-    }
-    keys_map, values_map, expr = to_update_expr(item)
-    table.update_item(
-        Key={
-            'databaseId': body['databaseId'],
-        },
-        UpdateExpression=expr,
-        ExpressionAttributeNames=keys_map,
-        ExpressionAttributeValues=values_map,
-    )
-
-    keys_map, values_map, expr = to_update_expr({
-        'assetCount': json.dumps(0),
-        'dateCreated': json.dumps(dtNow),
-    })
+def create_database(request_model: CreateDatabaseRequestModel):
+    """Create a new database entry in DynamoDB"""
     try:
+        table = dynamodb.Table(db_database)
+        dtNow = datetime.datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
+        
+        # Check if the bucket exists in S3_ASSET_BUCKETS_STORAGE_TABLE
+        # Using query instead of get_item because the table has a sort key
+        buckets_table = dynamodb.Table(s3_asset_buckets_table)
+        from boto3.dynamodb.conditions import Key
+        bucket_response = buckets_table.query(
+            KeyConditionExpression=Key('bucketId').eq(request_model.defaultBucketId)
+        )
+        
+        if not bucket_response.get('Items') or len(bucket_response['Items']) == 0:
+            raise VAMSGeneralErrorResponse(f"Bucket with ID {request_model.defaultBucketId} not found")
+        
+
+        # First update the description and defaultBucketId
+        item = {
+            'description': request_model.description,
+            'defaultBucketId': request_model.defaultBucketId
+        }
+        keys_map, values_map, expr = to_update_expr(item)
         table.update_item(
             Key={
-                'databaseId': body['databaseId'],
+                'databaseId': request_model.databaseId,
             },
             UpdateExpression=expr,
             ExpressionAttributeNames=keys_map,
             ExpressionAttributeValues=values_map,
-            ConditionExpression="attribute_not_exists(assetCount)"
         )
-    except ClientError as ex:
-        # this just means the record already exists, and we are updating an existing record
-        if ex.response['Error']['Code'] == 'ConditionalCheckFailedException':
-            pass
-        else:
-            raise ex
 
-    return json.dumps({"message": 'Succeeded'})
-
-
-def lambda_handler(event, context):
-
-    global claims_and_roles
-    response = STANDARD_JSON_RESPONSE
-    claims_and_roles = request_to_claims(event)
-
-    logger.info(event)
-    if isinstance(event['body'], str):
-        event['body'] = json.loads(event['body'])
-    try:
-        if 'databaseId' not in event['body']:
-            message = "No databaseId in API Call"
-            response['statusCode'] = 400
-            response['body'] = json.dumps({"message": message})
-            logger.info(response['body'])
-            return response
-
-        logger.info("Validating parameters")
-        (valid, message) = validate({
-            'databaseId': {
-                'value': event['body']['databaseId'],
-                'validator': 'ID'
-            },
-            'description': {
-                'value': event['body']['description'],
-                'validator': 'STRING_256'
-            }
+        # Then update the assetCount and dateCreated if they don't exist
+        keys_map, values_map, expr = to_update_expr({
+            'assetCount': json.dumps(0),
+            'dateCreated': json.dumps(dtNow),
         })
+        try:
+            table.update_item(
+                Key={
+                    'databaseId': request_model.databaseId,
+                },
+                UpdateExpression=expr,
+                ExpressionAttributeNames=keys_map,
+                ExpressionAttributeValues=values_map,
+                ConditionExpression="attribute_not_exists(assetCount)"
+            )
+        except ClientError as ex:
+            # This just means the record already exists, and we are updating an existing record
+            if ex.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                pass
+            else:
+                raise ex
 
-        if not valid:
-            logger.error(message)
-            response['body'] = json.dumps({"message": message})
-            response['statusCode'] = 400
-            return response
-
-        logger.info("Trying to get Data")
-
-        allowed = False
-        # Add Casbin Enforcer to check if the current user has permissions to PUT the database:
-        database = {
-            "object__type": "database",
-            "databaseId": event['body']['databaseId']
-        }
-        if len(claims_and_roles["tokens"]) > 0:
-            # There should be a constraint which allows PUT on this (or all)
-            # databases (can use contains .* in the constraint to allow for all)
-            # AND also allow PUT method on this API
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if (casbin_enforcer.enforce(database, "PUT")
-                    and casbin_enforcer.enforceAPI(event)):
-                allowed = True
-
-        if allowed:
-            response['body'] = upload_Asset(event['body'])
-        else:
-            response['body'] = json.dumps({"message": "Not allowed to create/update database"})
-            response['statusCode'] = 403
-        logger.info(response)
-        return response
+        return CreateDatabaseResponseModel(
+            databaseId=request_model.databaseId,
+            message="Database created successfully"
+        )
     except Exception as e:
-        logger.exception(e)
-        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
-            response['statusCode'] = 400
-            response['body'] = json.dumps(
-                {"message": "Database " + str(event['body']['databaseId'] + " already exists.")})
+        logger.exception(f"Error creating database: {e}")
+        raise VAMSGeneralErrorResponse(f"Error creating database: {str(e)}")
+
+#######################
+# Lambda Handler
+#######################
+
+def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    """Lambda handler for database creation API"""
+    claims_and_roles = request_to_claims(event)
+    
+    try:
+        # Get HTTP method and path
+        http_method = event['requestContext']['http']['method']
+        path = event['requestContext']['http']['path']
+        
+        # Check if this is the correct API route for database creation
+        if http_method == 'POST' and path.endswith('/database'):
+            # Parse request body
+            if isinstance(event['body'], str):
+                event['body'] = json.loads(event['body'])
+            
+            # Validate required fields in the request body
+            required_fields = ['databaseId', 'description', 'defaultBucketId']
+            for field in required_fields:
+                if field not in event['body']:
+                    return validation_error(body={'message': f"Missing required field: {field}"})
+            
+            # Parse request model
+            request_model = parse(event['body'], model=CreateDatabaseRequestModel)
+            
+            # Check authorization
+            database = {
+                "object__type": "database",
+                "databaseId": request_model.databaseId
+            }
+            
+            if len(claims_and_roles["tokens"]) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if not (casbin_enforcer.enforce(database, "POST") and casbin_enforcer.enforceAPI(event)):
+                    return authorization_error()
+            
+            # Process request
+            response = create_database(request_model)
+            return success(body=response.dict())
         else:
-            response['statusCode'] = 500
-            logger.exception(e)
-            response['body'] = json.dumps({"message": "Internal Server Error"})
-        return response
+            # Not a route handled by this function
+            logger.error(f"Unsupported route: {http_method} {path}")
+            return validation_error(status_code=404, body={'message': 'Route not found'})
+            
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except ValueError as v:
+        logger.exception(f"Value error: {v}")
+        return validation_error(body={'message': str(v)})
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+            logger.exception(f"Database already exists: {e}")
+            return validation_error(body={'message': f"Database {event['body']['databaseId']} already exists."})
+        logger.exception(f"AWS error: {e}")
+        return internal_error()
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return validation_error(body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Internal error: {e}")
+        return internal_error()

@@ -23,13 +23,19 @@ except:
 
 def lambda_handler(event, context):
 
+    assetId = event["assetId"]
+    databaseId = event["databaseId"]
+
     response = STANDARD_JSON_RESPONSE
     try:
-        resp = dynamodb_client.scan(
+        resp = dynamodb_client.query(
             TableName=asset_table_name,
-            ProjectionExpression='assetId, assetName, snsTopic, description, currentVersion',
-            FilterExpression='assetId = :asset_id',
-            ExpressionAttributeValues={':asset_id': {'S': event["asset_id"]}},
+            ProjectionExpression='assetId, assetName, snsTopic, description, currentVersionId',
+            KeyConditionExpression='assetId = :asset_id AND databaseId = :database_id',
+            ExpressionAttributeValues={
+                ':asset_id': {'S': assetId},
+                ':database_id': {'S': databaseId}
+            },
         )
 
         items = resp.get('Items', [])
@@ -37,17 +43,15 @@ def lambda_handler(event, context):
             asset_obj = items[0]
             topic_name = asset_obj.get("snsTopic").get("S")
             asset_name = asset_obj.get("assetName").get("S")
-            version = asset_obj.get("currentVersion").get("M").get("Version").get("S")
-            release_date = asset_obj.get("currentVersion").get("M").get("DateModified").get("S")
+            currentVersionId = asset_obj.get("currentVersionId").get("S")
 
             try:
                 message = f'''
     Dear Subscriber,
 
-    We are excited to inform you that a new version of {asset_name} is now available. Below are some details about the latest version:
+    We are excited to inform you that a change in a file or asset version of {asset_name} has occured. 
 
-    Version Number: {version}
-    Release Date: {release_date}
+    Current Version Number: {currentVersionId}
 
     Thank you for staying updated!
 
@@ -57,7 +61,7 @@ def lambda_handler(event, context):
                 sns_client.publish(
                     TopicArn=topic_name,
                     Message=message,
-                    Subject=f'[{asset_name}] - New Version {version} Available'
+                    Subject=f'[{asset_name}] - File or Asset Changed ({currentVersionId})'
                 )
                 response['statusCode'] = 200
                 response['body'] = json.dumps({"message": 'Email sent successfully'})
@@ -67,7 +71,7 @@ def lambda_handler(event, context):
                 response['body'] = json.dumps({"message": 'Internal Server Error'})
         else:
             response['statusCode'] = 400
-            response['body'] = json.dumps({"message": f"Asset - {event['asset_id']} doesn't exits."})
+            response['body'] = json.dumps({"message": f"Asset - {event['assetId']} with database ID - {event['databaseId']} doesn't exist."})
         return response
     except Exception as e:
         logger.exception(e)

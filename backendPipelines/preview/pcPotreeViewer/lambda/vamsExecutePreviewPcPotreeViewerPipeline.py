@@ -95,10 +95,12 @@ def lambda_handler(event, context):
 
         logger.info(data)
 
-        # Starts excution of pipeline 
-        execute_pipeline(data['inputS3AssetFilePath'], data['outputS3AssetFilesPath'], data['outputS3AssetPreviewPath']
-                                            , data['outputS3AssetMetadataPath'], data['inputOutputS3AssetAuxiliaryFilesPath']
-                                            , input_metadata, input_parameters, external_task_token, executing_userName, executing_requestContext)
+        inputOutputS3AssetAuxiliaryFilesPath = f"s3://{data['bucketAssetAuxiliary']}/{data['inputAssetFileKey']}/preview/PotreeViewer" #override to proper preview location output
+
+        # Starts excution of pipeline   
+        execute_pipeline(data['inputS3AssetFilePath'], '', '', '', inputOutputS3AssetAuxiliaryFilesPath
+                                            , input_metadata, input_parameters, external_task_token
+                                            , executing_userName, executing_requestContext)
 
         return {
             'statusCode': 200,

@@ -233,57 +233,6 @@ function searchReducer(state: any, action: any) {
                 map: action.map,
             };
 
-        case "set-delete-in-progress":
-            return {
-                ...state,
-                disableSelection: true,
-                showDeleteModal: false,
-                notifications: [
-                    {
-                        type: "info",
-                        dismissible: false,
-                        loading: true,
-                        dismissLabel: "Dismiss message",
-                        content: `Deleting ${state.selectedItems.length} ${Synonyms.Assets}`,
-                    },
-                ],
-            };
-
-        case "end-delete-in-progress":
-            return {
-                ...state,
-                disableSelection: false,
-                showDeleteModal: false,
-                notifications: [],
-            };
-
-        case "delete-item-failed":
-            return {
-                ...state,
-                loading: false,
-                error: action.error,
-                notifications: [
-                    {
-                        type: "error",
-                        header: "Failed to Delete",
-                        content: action.payload.response,
-                    },
-                ],
-            };
-
-        case "clicked-initial-delete":
-            return {
-                ...state,
-                disableSelection: true,
-                showDeleteModal: true,
-            };
-        case "clicked-cancel-delete":
-            return {
-                ...state,
-                disableSelection: false,
-                showDeleteModal: false,
-            };
-
         default:
             return state;
     }
@@ -470,23 +419,22 @@ function SearchPage(props: SearchPageProps) {
                                                     { label: "All", value: "all" },
                                                     //List every database from "databases" variable and then map to result aggregation to display (doc_count) next to each
                                                     //We do this because opensearch has a max items it will return in a query which may not be everything across aggregated databases
-                                                    //Without this, you wouldn't be able to search on other databases not listed due to trimmed results. 
+                                                    //Without this, you wouldn't be able to search on other databases not listed due to trimmed results.
                                                     ...(databases?.map((b: any) => {
-                                                        var count = 0
+                                                        var count = 0;
                                                         //Map through result aggregation to find doc_count for each database
                                                         state?.result?.aggregations?.str_databaseid?.buckets.map(
                                                             (c: any) => {
                                                                 if (c.key === b.databaseId) {
-                                                                    count = c.doc_count
+                                                                    count = c.doc_count;
                                                                 }
                                                             }
-                                                        )
-    
+                                                        );
+
                                                         return {
                                                             label: `${b.databaseId} (Results: ${count} / Total: ${b.assetCount})`,
                                                             value: b.databaseId,
                                                         };
-    
                                                     }) || []),
                                                 ]}
                                                 onChange={({ detail }) =>

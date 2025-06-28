@@ -113,11 +113,6 @@ interface Config {
     externalOAuthIdpDiscoveryEndpoint?: string;
 
     /**
-     * S3 Asset bucket
-     */
-    bucket?: string;
-
-    /**
      * VAMS Features that are enabled
      */
     featuresEnabled?: string;
@@ -174,15 +169,6 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
                 redirectSignIn: window.location.origin, // config.cognitoFederatedConfig?.redirectSignIn,
                 redirectSignOut: window.location.origin, // config.cognitoFederatedConfig?.redirectSignOut,
                 responseType: "code",
-            },
-        },
-        Storage: {
-            region: config.region,
-            identityPoolId: window.DISABLE_COGNITO ? undefined : config.cognitoIdentityPoolId,
-            bucket: config.bucket,
-            customPrefix: {
-                public: "",
-                private: "",
             },
         },
         API: {
@@ -527,10 +513,9 @@ const Auth: React.FC<AuthProps> = (props) => {
     //Once logged in, get/set other configuration and profile information
     useEffect(() => {
         //Secure Config Fetch
-        if (config && (!config.bucket || !config.featuresEnabled) && isLoggedIn) {
+        if (config && !config.featuresEnabled && isLoggedIn) {
             getSecureConfig()
                 .then((value) => {
-                    config.bucket = value.bucket;
                     config.featuresEnabled = value.featuresEnabled;
                     Cache.setItem("config", config);
                     setConfig(config);

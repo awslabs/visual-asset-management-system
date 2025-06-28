@@ -79,8 +79,8 @@ def create_asset_links(body):
                 "relationshipType": body["relationshipType"]
             }
 
-            asset_link_from_object = get_asset_object_from_id(body["assetIdFrom"])
-            asset_link_to_object = get_asset_object_from_id(body["assetIdTo"])
+            asset_link_from_object = get_asset_object_from_id(None, body["assetIdFrom"])
+            asset_link_to_object = get_asset_object_from_id(None, body["assetIdTo"])
 
             # Add Casbin Enforcer to check if the current user has permissions to POST the both the assets
             asset_link_from_object.update({"object__type": "asset"})
@@ -139,11 +139,11 @@ def lambda_handler(event, context):
         (valid, message) = validate({
             'assetIdFrom': {
                 'value': event['body']['assetIdFrom'],
-                'validator': 'ID'
+                'validator': 'ASSET_ID'
             },
             'assetIdTo': {
                 'value': event['body']['assetIdTo'],
-                'validator': 'ID'
+                'validator': 'ASSET_ID'
             },
             'relationshipType': {
                 'value': event['body']['relationshipType'],

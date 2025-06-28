@@ -130,8 +130,13 @@ export default function ControlledMetadata({
 
         const getMetadata = async () => {
             if (initialState === undefined) {
-                let path = `metadata/${databaseId}/${assetId}`;
+                let path = `database/${databaseId}/assets/${assetId}/metadata`;
                 if (prefix) {
+                    //If prefix doesn't start with a forward slash, add it
+                    if (!prefix.startsWith("/")) {
+                        prefix = "/" + prefix;
+                    }
+
                     path += `?prefix=${prefix}`;
                 }
 
@@ -206,16 +211,6 @@ export default function ControlledMetadata({
     useEffect(() => {
         if (schema === null || schema.schemas.length === 0) return;
         if (controlledLists !== null) return;
-        // try {
-        //     storageget(`metadataschema/${databaseId}/controlledlist.csv`).then((url: string) => {
-        //         console.info("S3 Controlled List Lookup URL: " + url);
-        //         handleCSVControlData(url, schema, setControlledLists, setRawControlData);
-        //     });
-        // } catch (error) {
-        //     setControlledLists({});
-        //     setRawControlData([]);
-        //     console.warn("No S3 database controlled metadata list found. Gracefully Continue Without It.");
-        // }
 
         //TODO: Alter business logic to use fixed set schema as fixed entries on top and then allow also allow additional meta schema fields beneath
         setControlledLists({});

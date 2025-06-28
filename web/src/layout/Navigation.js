@@ -51,7 +51,6 @@ export function Navigation({
                 { type: "link", text: Synonyms.Databases, href: "#/databases/" },
                 { type: "link", text: Synonyms.Assets, href: "#/assets/" },
                 { type: "link", text: `Upload ${Synonyms.Asset}`, href: "#/upload/" },
-                { type: "link", text: Synonyms.Comments, href: "#/comments/" },
             ],
         },
         // {
@@ -65,15 +64,18 @@ export function Navigation({
         //         { type: "link", text: "Columnar Viewer", href: "#/visualizers/column" },
         //     ],
         // },
-        {
-            type: "section",
-            text: "Transform",
-            items: [{ type: "link", text: "Pipelines", href: "#/pipelines/" }],
-        },
+        // {
+        //     type: "section",
+        //     text: "Transform",
+        //     items: [],
+        // },
         {
             type: "section",
             text: "Orchestrate & Automate",
-            items: [{ type: "link", text: "Workflows", href: "#/workflows/" }],
+            items: [
+                { type: "link", text: "Pipelines", href: "#/pipelines/" },
+                { type: "link", text: "Workflows", href: "#/workflows/" },
+            ],
         },
         {
             type: "divider",

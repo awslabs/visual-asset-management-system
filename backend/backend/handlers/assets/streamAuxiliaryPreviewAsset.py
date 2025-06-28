@@ -7,16 +7,82 @@ import json
 import base64
 import sys
 from botocore.exceptions import ClientError
+from botocore.config import Config
+from boto3.dynamodb.conditions import Key
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from common.s3 import validateUnallowedFileExtensionAndContentType
-from common.dynamodb import get_asset_object_from_id
 
-s3_client = boto3.client('s3')
+# Standardized retry configuration merged with existing S3 config
+s3_config = Config(
+    signature_version='s3v4', 
+    s3={'addressing_style': 'path'},
+    retries={
+        'max_attempts': 3,
+        'mode': 'adaptive'
+    }
+)
+
+s3_client = boto3.client('s3', config=s3_config)
+dynamodb = boto3.resource('dynamodb', config=s3_config)
 logger = safeLogger(service_name="StreamAuxiliaryPreviewAsset")
+
+try:
+    auxasset_bucket_name = os.environ["ASSET_AUXILIARY_BUCKET_NAME"]
+    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+except Exception as e:
+    logger.exception("Failed loading environment variables")
+    raise e
+
+# Initialize DynamoDB tables
+asset_table = dynamodb.Table(asset_storage_table_name)
+
+def get_asset_details(databaseId, assetId):
+    """Get asset details from DynamoDB"""
+    try:
+        response = asset_table.get_item(
+            Key={
+                'databaseId': databaseId,
+                'assetId': assetId
+            }
+        )
+        return response.get('Item')
+    except Exception as e:
+        logger.exception(f"Error getting asset details: {e}")
+        raise Exception(f"Error retrieving asset: {str(e)}")
+
+def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
+    """
+    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
+    
+    Args:
+        asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
+        file_path: The file path from the request (may or may not include the base key)
+        
+    Returns:
+        The properly resolved S3 key without duplication
+    """
+    # Normalize the asset base key to ensure it ends with '/'
+    if asset_base_key and not asset_base_key.endswith('/'):
+        asset_base_key = asset_base_key + '/'
+    
+    # Remove leading slash from file path if present
+    if file_path.startswith('/'):
+        file_path = file_path[1:]
+    
+    # Check if file_path already starts with the asset_base_key
+    if file_path.startswith(asset_base_key):
+        # File path already contains the base key, use as-is
+        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
+        return file_path
+    else:
+        # File path doesn't contain base key, combine them
+        resolved_path = asset_base_key + file_path
+        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
+        return resolved_path
 
 def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
@@ -56,11 +122,13 @@ def lambda_handler(event, context):
     # except:
     #     content_type_header = ""
 
-    # Extract the bucket name and object key from the API Gateway event
-    bucket_name = os.environ["ASSET_AUXILIARY_BUCKET_NAME"]
+    path_parameters = event.get('pathParameters', {})
 
     # Get the object key which comes after the base path of the API Call
-    object_key = event['pathParameters']['proxy']  # "/".join(event['rawPath'].strip("/").split('/')[1:])
+    assetId = path_parameters.get('assetId', "") 
+    databaseId = path_parameters.get('databaseId', "") 
+    object_key = path_parameters.get('proxy', "")  
+
 
     # Error if no object key in path
     if not object_key or object_key == None or object_key == "":
@@ -77,6 +145,14 @@ def lambda_handler(event, context):
 
     logger.info("Validating parameters")
     (valid, message) = validate({
+        'databaseId': {
+            'value': databaseId,
+            'validator': 'ID'
+        },
+        'assetId': {
+            'value': assetId,
+            'validator': 'ASSET_ID'
+        },
         'auxiliaryPreviewAssetPathKey': {
             'value': object_key,
             'validator': 'ASSET_AUXILIARYPREVIEW_PATH'
@@ -88,29 +164,11 @@ def lambda_handler(event, context):
         response['statusCode'] = 400
         return response
 
-    # Prepare the S3 GetObject request parameters
-    s3_params = {
-        'Bucket': bucket_name,
-        'Key': object_key
-    }
-
-    # Add the "Range" header to the S3 GetObject request if it exists
-    if range_header and range_header != None and range_header != "":
-        s3_params['Range'] = range_header
-
-    # # Add the "content-type" header to the S3 GetObject request if it exists
-    # if content_type_header and content_type_header != None and content_type_header != "":
-    #     s3_params['ResponseContentType'] = content_type_header
-
-    #logger.info(s3_params)
-
-    #Split object key by path and return the first value (the asset ID)
-    asset_id = object_key.split("/")[0]
 
     http_method = "GET"
     operation_allowed_on_asset = False
 
-    asset_object = get_asset_object_from_id(asset_id)
+    asset_object = get_asset_details(databaseId, assetId)
     asset_object.update({"object__type": "asset"})
 
     logger.info(asset_object)
@@ -122,6 +180,26 @@ def lambda_handler(event, context):
 
     if operation_allowed_on_asset:
         try:
+            #Get the location of the base asset key and normalize the object_key we are passing in (also ensures security of not fetching an asset key files outside of provided asset ID)
+            assetLocationKey = asset_object.get('assetLocation').get("Key")
+            object_key = resolve_asset_file_path(assetLocationKey, object_key)
+
+            # Prepare the S3 GetObject request parameters
+            s3_params = {
+                'Bucket': auxasset_bucket_name,
+                'Key': object_key
+            }
+
+            # Add the "Range" header to the S3 GetObject request if it exists
+            if range_header and range_header != None and range_header != "":
+                s3_params['Range'] = range_header
+
+            # # Add the "content-type" header to the S3 GetObject request if it exists
+            # if content_type_header and content_type_header != None and content_type_header != "":
+            #     s3_params['ResponseContentType'] = content_type_header
+
+            #logger.info(s3_params)
+
             # Fetch the file from S3
             response = s3_client.get_object(**s3_params)
             logger.info(response)

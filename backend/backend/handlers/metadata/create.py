@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from handlers.metadata import build_response, create_or_update, validate_event, validate_body, ValidationError
+from handlers.metadata import build_response, create_or_update, validate_event, validate_body, ValidationError, normalize_s3_path
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -30,7 +30,7 @@ def lambda_handler(event, context):
                 method_allowed_on_api = True
 
         if method_allowed_on_api:
-            asset_of_metadata = get_asset_object_from_id(assetId)
+            asset_of_metadata = get_asset_object_from_id(databaseId, assetId)
             if asset_of_metadata:
                 allowed = False
                 # Add Casbin Enforcer to check if the current user has permissions to POST the asset:

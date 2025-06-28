@@ -88,7 +88,6 @@ def setup_assets():
             "description": "Changed boundary color",
             "executionId": "",
             "isDistributable": True,
-            "isMultiFile": False,
             "pipelineId": "",
             "previewLocation": {
                 "Key": "previews/Admin Asset 1/Preview.png"
@@ -139,7 +138,6 @@ def setup_assets():
             "description": "Changed boundary color",
             "executionId": "",
             "isDistributable": True,
-            "isMultiFile": False,
             "pipelineId": "",
             "previewLocation": {
                 "Key": "previews/Defense Asset 1/Preview.png"
@@ -190,7 +188,6 @@ def setup_assets():
             "description": "Changed boundary color",
             "executionId": "",
             "isDistributable": True,
-            "isMultiFile": False,
             "pipelineId": "",
             "previewLocation": {
                 "Key": "previews/Low Sensitivity Asset 1/Preview.png"

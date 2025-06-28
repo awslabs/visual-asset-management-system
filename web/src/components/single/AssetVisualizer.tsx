@@ -7,7 +7,6 @@ const ColumnarViewer = React.lazy(() => import("../viewers/ColumnarViewer"));
 const HTMLViewer = React.lazy(() => import("../viewers/HTMLViewer"));
 const ModelViewer = React.lazy(() => import("../viewers/ModelViewer"));
 const PointCloudViewer = React.lazy(() => import("../viewers/PointCloudViewer"));
-const FolderViewer = React.lazy(() => import("../viewers/FolderViewer"));
 
 interface AssetVisualizerPropTypes {
     viewType: any;
@@ -15,6 +14,7 @@ interface AssetVisualizerPropTypes {
     viewerMode: string;
     onViewerModeChange: (viewMode: string) => void;
     assetKey?: string;
+    multiFileKeys?: string[];
 }
 
 function AssetVisualizer(props: AssetVisualizerPropTypes) {
@@ -62,12 +62,15 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                             assetId={props.asset.assetId}
                             databaseId={props.asset.databaseId}
                             assetKey={props.assetKey || props.asset?.assetLocation?.Key}
+                            multiFileKeys={props.multiFileKeys}
                             className="visualizer-container-canvas"
                         />
                     )}
                     {props.viewType === "pc" && (
                         <PointCloudViewer
-                            assetKey={props.assetKey || props.asset?.assetLocation?.Key}
+                            assetId={props.asset.assetId}
+                            databaseId={props.asset.databaseId}
+                            relativeFileKey={props.assetKey || props.asset?.assetLocation?.Key}
                             className="visualizer-container-canvas"
                         />
                     )}
@@ -91,14 +94,6 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                             assetId={props.asset.assetId}
                             databaseId={props.asset.databaseId}
                             assetKey={props.assetKey || props.asset?.assetLocation?.Key}
-                        />
-                    )}
-                    {props.viewType === "folder" && (
-                        <FolderViewer
-                            assetId={props.asset?.assetId}
-                            databaseId={props.asset?.databaseId}
-                            assetName={props.asset?.assetName}
-                            isDistributable={props.assetKey || props.asset?.isDistributable}
                         />
                     )}
                 </div>

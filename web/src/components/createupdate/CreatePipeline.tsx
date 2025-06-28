@@ -54,9 +54,9 @@ interface PipelineFields {
 
 // when a string is all lower case, return null, otherwise return the string "All lower case letters only"
 function validatePipelineNameLowercase(name: string) {
-    return name.match(/^[a-z0-9_-]+$/) !== null
+    return name.match(/^[a-zA-Z0-9_-]+$/) !== null
         ? null
-        : "All lower case letters only. No special characters except - and _";
+        : "No special characters or spaces except - and _";
 }
 
 // when a string is between 4 and 64 characters, return null, otherwise return the string "Between 4 and 64 characters"
@@ -89,29 +89,6 @@ const waitForCallbackOptions = [
     },
 ];
 
-// const formatState = (initState: any) => {
-//     let initPipelineType: OptionDefinition = {label: pipelineTypeOptions[0].label, value: pipelineTypeOptions[0].value};
-//     let initPipelineExecutionType: OptionDefinition = {label: pipelineExecutionTypeOptions[0].label, value: pipelineExecutionTypeOptions[0].value};
-//     let initWaitForCallback: OptionDefinition = {label: waitForCallbackOptions[0].label, value: waitForCallbackOptions[0].value};
-//     let initAssetType: OptionDefinition = {label: fileTypeOptions[0].label, value: fileTypeOptions[0].value};
-//     let initOutputType: OptionDefinition = {label: fileTypeOptions[0].label, value: fileTypeOptions[0].value};
-
-//     if (initState) {
-//         let type = pipelineTypeOptions.find(item => item.value ===  initState.pipelineType)
-//         initPipelineType = {label: type?.label, value: type?.value}
-//         type = pipelineExecutionTypeOptions.find(item => item.value === initState.pipelineExecutionType)
-//         initPipelineExecutionType = {label: type?.label, value: type?.value}
-//         type = waitForCallbackOptions.find(item => item.value === initState.waitForCallback)
-//         initWaitForCallback = {label: type?.label, value: type?.value}
-//         type = fileTypeOptions.find(item => item.value === initState.assetType)
-//         initAssetType = {label: type?.label, value: type?.value}
-//         type = fileTypeOptions.find(item => item.value === initState.outputType)
-//         initOutputType = {label: type?.label, value: type?.value}
-//     }
-
-//     return (initPipelineType, initPipelineExecutionType, initWaitForCallback, initAssetType, initOutputType);
-// }
-
 export default function CreatePipeline({
     open,
     setOpen,
@@ -134,9 +111,8 @@ export default function CreatePipeline({
         ...initState,
     });
 
-    // if initState is detected, format initState and set form state
+    // if initState is detected, format initial state definitions, and set form state
     useEffect(() => {
-        // (initPipelineType, initPipelineExecutionType, etc.) = formatState(initState)
         let initPipelineType: OptionDefinition = {
             label: pipelineTypeOptions[0].label,
             value: pipelineTypeOptions[0].value,
@@ -189,7 +165,7 @@ export default function CreatePipeline({
         }));
     }, [initState]);
 
-    // TODO: need to refactor this approach, either move handlers to separate file (utils.js) or combine into one handleChange function
+    // TODO: can refactor this approach, move handlers to separate file (utils.js) or combine into one change function
     const handlePipelineTypeChange = (e: any) => {
         setFormState((prev) => ({
             ...prev,
@@ -234,9 +210,6 @@ export default function CreatePipeline({
 
     // eslint-disable-next-line no-mixed-operators
     const createOrUpdate = (initState && initState.pipelineId && "Update") || "Create";
-    const [selectedOptions, setSelectedOptions] = useState<MultiselectProps.Option[]>([]);
-    const [groupOptions, setGroupOptions] = useState<MultiselectProps.Option[]>([]);
-    const [loadingGroups, setLoadingGroups] = useState(true);
     const [inProgress, setInProgress] = useState(false);
     const [formError, setFormError] = useState("");
     const [openWorkflowModal, setOpenWorkflowModal] = useState(false);
@@ -256,7 +229,6 @@ export default function CreatePipeline({
         inputParameters: "",
         ...initState,
     });
-    const [pipelineId, setPipelineId] = useState("");
 
     return (
         <div>
@@ -374,7 +346,7 @@ export default function CreatePipeline({
                             <FormField
                                 label="Pipeline Name"
                                 errorText={validatePipelineName(formState.pipelineId)}
-                                constraintText="Required. All lower case, no special chars or spaces except - and _ only letters for first character min 4 and max 64"
+                                constraintText="Required. No special chars or spaces except - and _ min 3 and max 64"
                             >
                                 <Input
                                     value={formState.pipelineId}
@@ -399,6 +371,7 @@ export default function CreatePipeline({
                                     }
                                     selectedOption={formState.databaseId}
                                     onChange={handleDatabaseChange}
+                                    showGlobal={true}
                                 />
                             </FormField>
                             <FormField label="Pipeline Type">

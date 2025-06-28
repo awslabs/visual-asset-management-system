@@ -18,6 +18,7 @@ import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as kms from "aws-cdk-lib/aws-kms";
+import * as s3AssetBuckets from "../helper/s3AssetBuckets";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
@@ -36,7 +37,6 @@ export function buildCreatePipelineFunction(
     const name = "createPipeline";
     const newPipelineLambdaRole = createRoleToAttachToLambdaPipelines(
         scope,
-        storageResources.s3.assetBucket,
         storageResources.encryption.kmsKey
     );
     const newPipelineSubnetIds = buildPipelineLambdaSubnetIds(scope, subnets, config);
@@ -59,8 +59,6 @@ export function buildCreatePipelineFunction(
         environment: {
             PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
             WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
-            S3_BUCKET: storageResources.s3.artefactsBucket.bucketName,
-            ASSET_BUCKET_ARN: storageResources.s3.assetBucket.bucketArn,
             ENABLE_PIPELINE_FUNCTION_NAME: enablePipelineFunction.functionName,
             ENABLE_PIPELINE_FUNCTION_ARN: enablePipelineFunction.functionArn,
             LAMBDA_PIPELINE_SAMPLE_FUNCTION_BUCKET: storageResources.s3.artefactsBucket.bucketName,
@@ -138,25 +136,32 @@ export function buildCreatePipelineFunction(
     return createPipelineFunction;
 }
 
-function createRoleToAttachToLambdaPipelines(
-    scope: Construct,
-    assetBucket: s3.Bucket,
-    kmsKey?: kms.IKey
-) {
+function createRoleToAttachToLambdaPipelines(scope: Construct, kmsKey?: kms.IKey) {
     const newPipelineLambdaRole = new iam.Role(scope, "lambdaPipelineRole", {
         assumedBy: Service("LAMBDA").Principal,
         inlinePolicies: {
             ReadWriteAssetBucketPolicy: new iam.PolicyDocument({
                 statements: [
-                    new iam.PolicyStatement({
-                        actions: [
-                            "s3:PutObject",
-                            "s3:GetObject",
-                            "s3:ListBucket",
-                            "s3:DeleteObject",
-                            "s3:GetObjectVersion",
-                        ],
-                        resources: [`${assetBucket.bucketArn}`, `${assetBucket.bucketArn}/*`],
+                    // Add permissions for all asset buckets from the global array
+                    ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
+                        const prefix = record.prefix || "/";
+                        // Ensure the prefix ends with a slash for proper path construction
+                        const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+
+                        return new iam.PolicyStatement({
+                            effect: iam.Effect.ALLOW,
+                            actions: [
+                                "s3:PutObject",
+                                "s3:GetObject",
+                                "s3:ListBucket",
+                                "s3:DeleteObject",
+                                "s3:GetObjectVersion",
+                            ],
+                            resources: [
+                                record.bucket.bucketArn,
+                                `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                            ],
+                        });
                     }),
                 ],
             }),

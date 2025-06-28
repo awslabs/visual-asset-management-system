@@ -541,60 +541,6 @@ def setup_mock_imports():
             CreatePipeline=CreatePipeline
         )
     
-    # Add mock modules for models
-    if 'backend.models.assets' not in sys.modules:
-        # Create classes needed for test_common.py
-        class AssetPreviewLocationModel:
-            def __init__(self, Key=None):
-                self.Key = Key
-                
-        class ExecuteWorkflowModel:
-            def __init__(self, workflowIds=None):
-                self.workflowIds = workflowIds or []
-                
-        class GetUploadAssetWorkflowStepFunctionInput:
-            def __init__(self, request):
-                self.uploadAssetBody = request.uploadAssetBody if hasattr(request, 'uploadAssetBody') else None
-                self.copyObjectBody = request.copyFrom if hasattr(request, 'copyFrom') else None
-                self.updateMetadataBody = request.updateMetadataBody if hasattr(request, 'updateMetadataBody') else None
-                self.executeWorkflowBody = request.executeWorkflowBody if hasattr(request, 'executeWorkflowBody') else None
-                
-        class UpdateMetadataModel:
-            def __init__(self, version=None, metadata=None):
-                self.version = version
-                self.metadata = metadata or {}
-                
-        class UploadAssetModel:
-            def __init__(self, databaseId=None, assetId=None, assetName=None, key=None, 
-                         assetType=None, description=None, isDistributable=None, 
-                         specifiedPipelines=None, Comment=None, previewLocation=None):
-                self.databaseId = databaseId
-                self.assetId = assetId
-                self.assetName = assetName
-                self.key = key
-                self.assetType = assetType
-                self.description = description
-                self.isDistributable = isDistributable
-                self.specifiedPipelines = specifiedPipelines or []
-                self.Comment = Comment
-                self.previewLocation = previewLocation
-                
-        class UploadAssetWorkflowRequestModel:
-            def __init__(self, uploadAssetBody=None, copyFrom=None, updateMetadataBody=None, executeWorkflowBody=None):
-                self.uploadAssetBody = uploadAssetBody
-                self.copyFrom = copyFrom
-                self.updateMetadataBody = updateMetadataBody
-                self.executeWorkflowBody = executeWorkflowBody
-        
-        sys.modules['backend.models.assets'] = MockModule(
-            common=MockModule(),
-            AssetPreviewLocationModel=AssetPreviewLocationModel,
-            ExecuteWorkflowModel=ExecuteWorkflowModel,
-            GetUploadAssetWorkflowStepFunctionInput=GetUploadAssetWorkflowStepFunctionInput,
-            UpdateMetadataModel=UpdateMetadataModel,
-            UploadAssetModel=UploadAssetModel,
-            UploadAssetWorkflowRequestModel=UploadAssetWorkflowRequestModel
-        )
     
     # Add mock modules for metadata
     if 'backend.handlers.metadata' not in sys.modules:

@@ -10,8 +10,8 @@ import ColumnDefinition from "./types/ColumnDefinition";
 import Synonyms from "../../../synonyms";
 
 export const WorkflowExecutionListDefinition = new ListDefinition({
-    pluralName: "workflows",
-    pluralNameTitleCase: "Workflows",
+    pluralName: "workflow executions",
+    pluralNameTitleCase: "Workflow Executions",
     visibleColumns: [
         "name",
         "databaseId",
@@ -23,7 +23,8 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
     ],
     filterColumns: [{ name: "databaseId", placeholder: Synonyms.Database }],
     elementId: "workflowId",
-    deleteRoute: "database/{databaseId}/workflows/{workflowId}",
+    //deleteRoute: "database/{databaseId}/workflows/{workflowId}",
+    createAction: false,
     columnDefinitions: [
         new ColumnDefinition({
             id: "name",
@@ -33,22 +34,20 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
                 if (!item.name) {
                     return <></>;
                 }
-                if (!item.workflowId) {
-                    if (
-                        !item.Items ||
-                        !Array.isArray(item.Items) ||
-                        !Array.isArray(item.Items[0]) ||
-                        item.Items[0].length === 0
-                    ) {
-                        return <>Execution ID:</>;
-                    }
-                    return <>outputs:</>;
+                // If this is a workflow (has no parentId), make it a link
+                if (!item.parentId) {
+                    // Use displayName if available, otherwise fall back to name
+                    const displayText = item.displayName || item.name;
+                    return (
+                        <Link
+                            href={`#/databases/${item?.databaseId}/workflows/${item?.workflowId}`}
+                        >
+                            {item.displayName ? displayText : props.children}
+                        </Link>
+                    );
                 }
-                return (
-                    <Link href={`#/databases/${item?.databaseId}/workflows/${item?.name}`}>
-                        {props.children}
-                    </Link>
-                );
+                // If this is an execution (has parentId), don't make it a link
+                return <>{props.children}</>;
             },
             sortingField: "assetName",
         }),

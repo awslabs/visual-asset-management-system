@@ -20,8 +20,10 @@ export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_20_X;
 export const LAMBDA_MEMORY_SIZE = 3003;
 export const OPENSEARCH_VERSION = cdk.aws_opensearchservice.EngineVersion.OPENSEARCH_2_7;
 
-export const STACK_WAF_DESCRIPTION = "WAF Components for the Visual Asset Management Systems (VAMS) (SO9299)"
-export const STACK_CORE_DESCRIPTION = "Primary Components for the Visual Asset Management Systems (VAMS) (SO9299)"
+export const STACK_WAF_DESCRIPTION =
+    "WAF Components for the Visual Asset Management Systems (VAMS) (SO9299)";
+export const STACK_CORE_DESCRIPTION =
+    "Primary Components for the Visual Asset Management Systems (VAMS) (SO9299)";
 
 export function getConfig(app: cdk.App): Config {
     const file: string = readFileSync(join(__dirname, "config.json"), {
@@ -59,14 +61,6 @@ export function getConfig(app: cdk.App): Config {
         "-" +
         config.env.region;
 
-    config.app.bucketMigrationStaging.assetBucketName = <string>(app.node.tryGetContext(
-        "staging-bucket"
-    ) || //here to keep backwards compatability
-        app.node.tryGetContext("asset-staging-bucket") ||
-        config.app.bucketMigrationStaging.assetBucketName ||
-        process.env.STAGING_BUCKET || //here to keep backwards compatability
-        process.env.ASSET_STAGING_BUCKET);
-
     config.app.adminEmailAddress = <string>(
         (app.node.tryGetContext("adminEmailAddress") ||
             config.app.adminEmailAddress ||
@@ -77,12 +71,21 @@ export function getConfig(app: cdk.App): Config {
         config.app.adminUserId ||
         process.env.ADMIN_EMAIL_ADDRESS || //user email in this case for ENV backwards compatibility
         process.env.ADMIN_USER_ID);
-    config.app.authProvider.credTokenTimeoutSeconds = <number>(
+
+    config.app.authProvider.useCognito.credTokenTimeoutSeconds = <number>(
         (app.node.tryGetContext("credTokenTimeoutSeconds") ||
-            config.app.authProvider.credTokenTimeoutSeconds ||
+            config.app.authProvider.useCognito.credTokenTimeoutSeconds ||
             process.env.CRED_TOKEN_TIMEOUT_SECONDS ||
             3600)
     );
+
+    config.app.authProvider.presignedUrlTimeoutSeconds = <number>(
+        (app.node.tryGetContext("presignedUrlTimeoutSeconds") ||
+            config.app.authProvider.presignedUrlTimeoutSeconds ||
+            process.env.PRESIGNED_URL_TIMEOUT_SECONDS ||
+            86400)
+    );
+
     config.app.useFips = <boolean>(
         (app.node.tryGetContext("useFips") ||
             config.app.useFips ||
@@ -151,6 +154,10 @@ export function getConfig(app: cdk.App): Config {
         config.app.useAlb.addAlbS3SpecialVpcEndpoint = true;
     }
 
+    if (config.app.assetBuckets.createNewBucket == undefined) {
+        config.app.assetBuckets.createNewBucket = true;
+    }
+
     //Load S3 Policy statements JSON
     const s3AdditionalBucketPolicyFile: string = readFileSync(
         join(__dirname, "policy", "s3AdditionalBucketPolicyConfig.json"),
@@ -166,24 +173,61 @@ export function getConfig(app: cdk.App): Config {
         config.s3AdditionalBucketPolicyJSON = undefined;
     }
 
-    //If we are govCloud, we always use VPC, ALB deploy, use OpenSearch Provisioned (serverless not available in GovCloud), and disable location service (currently not supported in GovCloud 08-29-2023)
+    //If we are govCloud, check for certain features that are required to be on or off.
     //Note: FIP not required for use in GovCloud. Some GovCloud endpoints are natively FIPS compliant regardless of this flag to use specific FIPS endpoints.
     //Note: FedRAMP best practices require all Lambdas/OpenSearch behind VPC but not required for GovCloud
     if (config.app.govCloud.enabled) {
-        if (
-            !config.app.useGlobalVpc.enabled ||
-            !config.app.useAlb.enabled ||
-            config.app.openSearch.useServerless.enabled ||
-            config.app.useLocationService.enabled
-        ) {
-            console.warn(
-                "Configuration Warning: Due to GovCloud being enabled, auto-enabling Use Global VPC, Use ALB, Use OpenSearch Provisioned, and disable Use Location Services"
+        if (!config.app.useGlobalVpc.enabled) {
+            throw new Error(
+                "Configuration Error: GovCloud must have useGlobalVpc.enabled set to true"
             );
         }
-        config.app.useGlobalVpc.enabled = true;
-        config.app.useAlb.enabled = true;
-        config.app.openSearch.useServerless.enabled = false;
-        config.app.useLocationService.enabled = false;
+
+        if (!config.app.useAlb.enabled) {
+            throw new Error(
+                "Configuration Error: GovCloud must have app.useAlb.enabled set to true"
+            );
+        }
+
+        if (config.app.openSearch.useServerless.enabled) {
+            throw new Error(
+                "Configuration Error: GovCloud must have openSearch.useServerless.enabled set to false"
+            );
+        }
+
+        if (config.app.useLocationService.enabled) {
+            throw new Error(
+                "Configuration Error: GovCloud must have app.useLocationService.enabled set to false"
+            );
+        }
+
+        //Now check additional IL6 compliance
+        // https://aws.amazon.com/compliance/services-in-scope/DoD_CC_SRG/
+        if (config.app.govCloud.il6Compliant) {
+            if (config.app.authProvider.useCognito.enabled) {
+                throw new Error(
+                    "Configuration Error: GovCloud IL6 must have app.authProvider.useCognito.enabled set to false"
+                );
+            }
+
+            if (config.app.useWaf) {
+                throw new Error(
+                    "Configuration Error: GovCloud IL6 must have config.app.useWaf set to false"
+                );
+            }
+
+            if (!config.app.useGlobalVpc.useForAllLambdas) {
+                throw new Error(
+                    "Configuration Error: GovCloud IL6 must have app.useGlobalVpc.useForAllLambdas set to true"
+                );
+            }
+
+            if (!config.app.useKmsCmkEncryption.enabled) {
+                throw new Error(
+                    "Configuration Error: GovCloud IL6 must have config.app.useKmsCmkEncryption.enabled set to true"
+                );
+            }
+        }
     }
 
     //If using ALB, data pipelines , or opensearch provisioned, make sure Global VPC is on as this needs to be in a VPC
@@ -205,6 +249,24 @@ export function getConfig(app: cdk.App): Config {
     }
 
     //Any configuration warnings/errors checks
+    if (
+        config.app.assetBuckets.createNewBucket &&
+        (!config.app.assetBuckets.defaultNewBucketSyncDatabaseId ||
+            config.app.assetBuckets.defaultNewBucketSyncDatabaseId == "" ||
+            config.app.assetBuckets.defaultNewBucketSyncDatabaseId == "UNDEFINED")
+    ) {
+        throw new Error(
+            "Configuration Error: Must define a app.assetBuckets.defaultNewBucketSyncDatabaseId if app.assetBuckets.createNewBucke is true"
+        );
+    }
+
+    //If we aren't creating a new bucket and aren't adding any external asset buckets throw an error
+    if (!config.app.assetBuckets.createNewBucket && !config.app.assetBuckets.externalAssetBuckets) {
+        throw new Error(
+            "Configuration Error: Must define at least a new asset bucket and/or app.assetBuckets.externalAssetBuckets"
+        );
+    }
+
     if (
         config.app.useGlobalVpc.enabled &&
         config.app.useGlobalVpc.optionalExternalVpcId &&
@@ -413,6 +475,12 @@ export function getConfig(app: cdk.App): Config {
     return config;
 }
 
+export interface ConfigPublicAssetS3Buckets {
+    bucketArn: string;
+    baseAssetsPrefix: string;
+    defaultSyncDatabaseId: string;
+}
+
 //Public config values that should go into a configuration file
 export interface ConfigPublic {
     name: string;
@@ -427,8 +495,10 @@ export interface ConfigPublic {
     //autoDelete: boolean;
     app: {
         baseStackName: string;
-        bucketMigrationStaging: {
-            assetBucketName: string;
+        assetBuckets: {
+            createNewBucket: boolean;
+            defaultNewBucketSyncDatabaseId: string;
+            externalAssetBuckets: [ConfigPublicAssetS3Buckets];
         };
         adminUserId: string;
         adminEmailAddress: string;
@@ -441,6 +511,7 @@ export interface ConfigPublic {
         };
         govCloud: {
             enabled: boolean;
+            il6Compliant: boolean;
         };
         useGlobalVpc: {
             enabled: boolean;
@@ -494,11 +565,12 @@ export interface ConfigPublic {
             };
         };
         authProvider: {
-            credTokenTimeoutSeconds: number;
+            presignedUrlTimeoutSeconds: number;
             useCognito: {
                 enabled: boolean;
                 useSaml: boolean;
                 useUserPasswordAuthFlow: boolean;
+                credTokenTimeoutSeconds: number;
             };
             useExternalOAuthIdp: {
                 enabled: boolean;

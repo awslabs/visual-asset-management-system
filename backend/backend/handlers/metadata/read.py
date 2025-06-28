@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from handlers.metadata import build_response, table, validate_event, ValidationError
+from handlers.metadata import build_response, metadata_table, validate_event, ValidationError, normalize_s3_path
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -26,12 +26,12 @@ def generate_prefixes(path):
         prefixes.insert(0, path)
     return prefixes
 
-
 def get_metadata_with_prefix(databaseId, assetId, prefix):
     result = {}
     if prefix is not None:
+
         for paths in generate_prefixes(prefix):
-            resp = table.get_item(
+            resp = metadata_table.get_item(
                 Key={
                     "databaseId": databaseId,
                     "assetId": paths,
@@ -50,7 +50,7 @@ def get_metadata_with_prefix(databaseId, assetId, prefix):
 
 
 def get_metadata(databaseId, assetId):
-    resp = table.get_item(
+    resp = metadata_table.get_item(
         Key={
             "databaseId": databaseId,
             "assetId": assetId,
@@ -91,7 +91,7 @@ def lambda_handler(event, context):
                 method_allowed_on_api = True
 
         if method_allowed_on_api:
-            asset_of_metadata = get_asset_object_from_id(assetId)
+            asset_of_metadata = get_asset_object_from_id(databaseId, assetId)
             if asset_of_metadata:
                 allowed = False
                 # Add Casbin Enforcer to check if the current user has permissions to GET the asset:

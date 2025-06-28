@@ -15,9 +15,8 @@ import { useNavigate } from "react-router";
 const Databases = React.lazy(() => import("./pages/Databases"));
 const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
 //const Assets = React.lazy(() => import("./pages/Assets")); //Deprecated
-const Comments = React.lazy(() => import("./pages/Comments/Comments"));
-const AssetUploadPage = React.lazy(() => import("./pages/AssetUpload"));
-const ViewAsset = React.lazy(() => import("./components/single/ViewAsset"));
+const AssetUploadPage = React.lazy(() => import("./pages/AssetUpload/AssetUpload"));
+const ViewAsset = React.lazy(() => import("./components/asset/ViewAsset"));
 const Pipelines = React.lazy(() => import("./pages/Pipelines"));
 const ViewPipeline = React.lazy(() => import("./components/single/ViewPipeline"));
 const Workflows = React.lazy(() => import("./pages/Workflows"));
@@ -29,7 +28,7 @@ const Tags = React.lazy(() => import("./pages/Tag/Tags"));
 const Subscriptions = React.lazy(() => import("./pages/Subscription/Subscriptions"));
 const Roles = React.lazy(() => import("./pages/auth/Roles"));
 const UserRoles = React.lazy(() => import("./pages/auth/UserRoles"));
-const FinishUploadsPage = React.lazy(() => import("./pages/FinishUploads"));
+const ModifyAssetsUploadsPage = React.lazy(() => import("./pages/AssetUpload/ModifyAssetsUploads"));
 const MetadataSchema = React.lazy(() => import("./pages/MetadataSchema"));
 const ViewFile = React.lazy(() => import("./components/single/ViewFile"));
 const AssetIngestion = React.lazy(() => import("./components/single/AssetIngestion"));
@@ -64,7 +63,7 @@ export const routeTable: RouteOption[] = [
     },
     {
         path: "/databases/:databaseId/assets/:assetId/uploads",
-        Page: FinishUploadsPage,
+        Page: ModifyAssetsUploadsPage,
         active: "#/assets/",
     },
     {
@@ -78,7 +77,6 @@ export const routeTable: RouteOption[] = [
         Page: AssetUploadPage,
         active: "#/upload/",
     },
-    { path: "/comments", Page: Comments, active: "#/comments/" },
     { path: "/upload", Page: AssetUploadPage, active: "#/upload/" },
     //{ path: "/visualizers/:pathViewType", Page: ViewAsset, active: "/assets"},
     {

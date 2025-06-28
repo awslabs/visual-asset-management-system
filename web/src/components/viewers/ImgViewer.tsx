@@ -23,7 +23,8 @@ export default function ImgViewer({ assetId, databaseId, assetKey, altAssetKey }
                 assetId: assetId,
                 databaseId: databaseId,
                 key: assetKey,
-                version: "",
+                versionId: "",
+                downloadType: "assetFile",
             }).then((response) => {
                 if (response !== false && Array.isArray(response)) {
                     if (response[0] === false) {
@@ -48,7 +49,8 @@ export default function ImgViewer({ assetId, databaseId, assetKey, altAssetKey }
                 assetId: assetId,
                 databaseId: databaseId,
                 key: altAssetKey,
-                version: "",
+                versionId: "",
+                downloadType: "assetFile",
             }).then((response) => {
                 if (response !== false && Array.isArray(response)) {
                     if (response[0] === false) {

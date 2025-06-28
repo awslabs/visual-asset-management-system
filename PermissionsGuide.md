@@ -149,12 +149,12 @@ Below are the web routes possible as part of a `GET` method type. Requests for t
 -   `/auth/subscriptions`
 -   `/auth/tags`
 -   `/auth/userroles`
--   `/comments`
 -   `/databases`
 -   `/databases/:databaseId/assets`
 -   `/databases/:databaseId/assets/:assetId`
 -   `/databases/:databaseId/assets/:assetId/file`
 -   `/databases/:databaseId/assets/:assetId/uploads`
+-   `/databases/:databaseId/assets/:assetId/download`
 -   `/databases/:databaseId/pipelines`
 -   `/databases/:databaseId/workflows`
 -   `/databases/:databaseId/workflows/:workflowId`
@@ -176,6 +176,8 @@ Below are the API routes with the current supported method types. It uses the fi
 Additionally it shows which object authorization checks it does for a particular object type and field.
 
 -   `/api/amplify-config` - GET (No authentication or API authorization logic checks on base call)
+-   `/assets` - POST
+-   -   `Asset` (assetName, databaseId, tags) - POST (api: POST)
 -   `/asset-links/{assetId}` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/asset-links/{relationId}` - DELETE
@@ -186,8 +188,6 @@ Additionally it shows which object authorization checks it does for a particular
 -   `/auth/constraints/{constraintId}` - GET/PUT/POST/DELETE
 -   `/auth/loginProfile/{userId}` - GET/POST
 -   `/auth/routes` - POST (No API authorization logic checks on base call) (POST considered non-mutating to retrieve data only)
--   `/auth/scopeds3access` - POST
--   -   `Asset` (assetId, databaseId) - POST (api: POST)
 -   `/comments/assets/{assetId}` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/comments/assets/{assetId}/assetVersionId/{assetVersionId}` - GET
@@ -197,33 +197,67 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
--   `/databases` - GET/PUT
+-   `/database` - GET/PUT
 -   -   `Database` (databaseId) - GET (api: GET)
 -   -   `Database` (databaseId) - PUT (api: PUT)
--   `/databases/{databaseId}` - GET/DELETE
+-   `/database/{databaseId}` - GET/DELETE
 -   -   `Database` (databaseId) - GET (api: GET)
 -   -   `Database` (databaseId) - DELETE (api: DELETE)
+-   `/buckets` - GET
 -   `/database/{databaseId}/assets` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
--   `/database/{databaseId}/assets/{assetId}` - GET/DELETE
+-   `/database/{databaseId}/assets/{assetId}` - GET/PUT
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
+-   `/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}` - GET
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
+-   `/database/{databaseId}/assets/{assetId}/createFolder` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: POST)
 -   `/database/{databaseId}/assets/{assetId}/listFiles` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
--   `/database/{databaseId}/assets/{assetId}/columns` - GET
+-   `/database/{databaseId}/assets/{assetId}/fileInfo` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
--   `/database/{databaseId}/assets/{assetId}/metadata` - GET
--   `/database/{databaseId}/assets/{assetId}/revert` - POST
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/moveFile` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/copyFile` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/archiveFile` - DELETE
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
+-   `/database/{databaseId}/assets/{assetId}/unarchiveFile` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/deleteFile` - DELETE
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
+-   `/database/{databaseId}/assets/{assetId}/archiveAsset` - DELETE
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
+-   `/database/{databaseId}/assets/{assetId}/deleteAsset` - DELETE
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
+-   `/database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/createVersion` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/revertAssetVersion/{assetVersionId}` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/getVersions` - GET
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
+-   `/database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}` - GET
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/database/{databaseId}/assets/{assetId}/download` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: POST)
 -   `/database/{databaseId}/assets/{assetId}/workflows/{workflowId}` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
 -   -   `Workflow` (databaseId, workflowId) - POST (api: POST)
 -   -   `Pipeline` (databaseId, pipelineId, pipelineType, pipelineExecutionType) - POST (api: POST)
--   `/database/{databaseId}/assets/{assetId}/workflows/{workflowId}/executions` - GET
+-   `/database/{databaseId}/assets/{assetId}/workflows/executions` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   -   `Workflow` (databaseId, workflowId) - GET (api: GET)
+-   `/database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}` - GET
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
+-   -   `Workflow` (databaseId, workflowId) - GET (api: GET)
+-   `/database/{databaseId}/assets/{assetId}/metadata` - GET/PUT/POST/DELETE
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   `/database/{databaseId}/pipelines` - GET
 -   -   `Pipeline` (databaseId, pipelineId, pipelineType, pipelineExecutionType) - GET (api: GET)
 -   `/database/{databaseId}/workflows` - GET
@@ -237,16 +271,8 @@ Additionally it shows which object authorization checks it does for a particular
 -   `/assets` - GET/PUT
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
--   `/assets/uploadAssetWorkflow` - POST
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: POST)
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
 -   `/ingest-asset` - POST
 -   -   `Asset` (assetId, assetName databaseId) - PUT (api: POST)
--   `/metadata/{databaseId}/{assetId}` - GET/PUT/POST/DELETE
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   `/metadataschema/{databaseId}` - GET/PUT/POST
 -   -   `MetadataSchema` (databaseId, field) - GET (api: GET)
 -   -   `MetadataSchema` (databaseId, field) - POST (api: PUT)
@@ -286,13 +312,15 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `TagType` (tagTypeName) - PUT (api: PUT)
 -   `/tag-types/{tagTypeId}` - DELETE
 -   -   `TagType` (tagTypeName) - DELETE (api: DELETE)
+-   `/uploads` - POST
+-   -   `Asset` (assetId, assetName, assetType, databaseId, tags) - POST (api: POST)
+-   `/uploads/{uploadId}/complete` - POST
+-   -   `Asset` (assetId, assetName, assetType, databaseId, tags) - POST (api: POST)
 -   `/user-roles` - GET/PUT/POST/DELETE
 -   -   `UserRole` (roleName, userId) - GET (api: GET)
 -   -   `UserRole` (roleName, userId) - POST (api: POST)
 -   -   `UserRole` (roleName, userId) - PUT (api: PUT)
 -   -   `UserRole` (roleName, userId) - DELETE (api: DELETE)
--   `/auxiliaryPreviewAssets/stream/{proxy+}` - GET
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/workflows` - GET/PUT
 -   -   `Pipeline` (databaseId, pipelineId, pipelineType, pipelineExecutionType) - GET (api: PUT)
 -   -   `Workflow` (databaseId, workflowId) - GET (api: GET)

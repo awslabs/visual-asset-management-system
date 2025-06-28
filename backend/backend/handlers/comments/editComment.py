@@ -33,7 +33,7 @@ except:
     main_rest_response["body"] = json.dumps({"message": "Failed Loading Environment Variables"})
 
 
-def edit_comment(assetId: str, assetVersionIdAndCommentId: str, event: dict) -> dict:
+def edit_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, event: dict) -> dict:
     """
     Checks comment ownership then edits the comment to reflect the changes
     :param assetId: string containing the assetId of the comment
@@ -54,9 +54,10 @@ def edit_comment(assetId: str, assetVersionIdAndCommentId: str, event: dict) -> 
         logger.info(item)
         logger.info("Validating owner")
 
-        if item["commentOwnerID"] != event["requestContext"]["authorizer"]["jwt"]["claims"]["sub"]:
+
+        if item["commentOwnerID"] != userId:
             response["statusCode"] = 403
-            response["message"] = "Unauthorized"
+            response["message"] = "Unauthorized - only the creator can edit the comment"
             return response
 
         try:
@@ -130,7 +131,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
         global claims_and_roles
         claims_and_roles = request_to_claims(event)
         method_allowed_on_api = False
-        asset_object = get_asset_object_from_id(pathParameters["assetId"])
+        asset_object = get_asset_object_from_id(None, pathParameters["assetId"])
         asset_object.update({"object__type": "asset"})
 
         # Add Casbin Enforcer to check if the current user has permissions to POST the Comment
@@ -174,9 +175,12 @@ def lambda_handler(event: dict, context: dict) -> dict:
                 response['body'] = json.dumps({"message": message})
                 response['statusCode'] = 400
                 return response
+            
+            #Get user ID of person making request
+            userId = claims_and_roles.get("tokens", ["system"])[0]
 
             # call the edit_comment function if everything is valid
-            returned = edit_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], event)
+            returned = edit_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], userId, event)
             response["statusCode"] = returned["statusCode"]
             response["body"] = json.dumps({"message": returned["message"]})
             logger.info(response)

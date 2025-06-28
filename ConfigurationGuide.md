@@ -17,17 +17,24 @@ Some configuration options can be overriden at time of deployment with either en
 -   `env.loadContextIgnoreVPCStacks` | default: false | #Mode to ignore synth and deployments of any nested stack that needs a VPC in order to first load context through a first synth run.
 
 -   `app.baseStackName` | default: prod | #Base stack stage environment name to use when creating full CDK stack name.
--   `app.bucketMigrationStaging.assetBucketName` | default: NULL | #Staging bucket for transfering assets between deployment. If null, no staging bucket will be configured for use.
 -   `app.adminUserId` | default: < administrator > | #Administrator username to use for the initial super admin account. This can also be in the form of an email address.
 -   `app.adminEmailAddress` | default: < adminEmail@example.com > | #Administrator email address to use for the initial super admin account. A temporary password will be sent here for an initial solution standup.
+
+-   `app.assetBuckets.createNewBucket` | default: true | #Controls whether to create a new S3 bucket for assets. If set to false, you must define external asset buckets.
+-   `app.assetBuckets.defaultNewBucketSyncDatabaseId` | default: default | #Specifies the database ID to sync with the new bucket. Required when createNewBucket is true.
+-   `app.assetBuckets.externalAssetBuckets[]` | default: NULL | #Configuration for defining use of preeixsting external asset buckets (array). Buckets can be added over time through deployments. External buckets need additional IAM bucket policies added, see DeveloperGuide.md for more information.
+-   `app.assetBuckets.externalAssetBuckets[].bucketArn` | default: NULL | #The ARN of the existing bucket to add to VAMS
+-   `app.assetBuckets.externalAssetBuckets[].baseAssetsPrefix` | default: NULL | #The base prefix to start using for catalogging and syncing assets. If at the base of the S3 bucket, use `/`
+-   `app.assetBuckets.externalAssetBuckets[].defaultSyncDatabaseId` | default: NULL | #The database ID to sync asset changes to if adding new asset folders direct to S3. If database ID does
+    not exist when syncing, the system will attempt to create a new database with this ID and bucket/prefix.
 
 -   `app.useWaf` | default: true | #Feature to turn use of Amazon Web Application Firewall on/off for VAMS deployment. This is used for Cloudfront or ALB + API Gateway attachment points. Warning: We reccomend you keep this on unless your organization has other firewalls in-use.
 -   `app.useFips` | default: false | #Feature to use FIPS compliant AWS partition endpoints. Must combine with AWS CLI FIPS Environment variable `AWS_USE_FIPS_ENDPOINT`.
 -   `app.addStackCloudTrailLogs` | default: true | #Feature to turn the creating of a new CloudWatch logs group and associated CloudTrail trail for this stack deployment.
 -   `app.useKmsCmkEncryption.enabled` | default: false | #Feature to use a custom customer managed encryption key (KMS). Key and associated VAMS permissions will be auto-generated for the deployment without providing an external key. KMS key (generated or imported) will be used for S3*, DynamoDB, SQS/SNS, and OpenSearch data at rest. If false, use default or AWS-managed (as-available) encryption settings for all data-at-rest services.*The WebAppBucket S3 bucket will not use the KMS CMK key as the the ALB has no way to provide SigV4 signature to S3 without authentication and CloudFront OAC KMS encryption hasn't been implemented yet with native CDK.
 -   `app.useKmsCmkEncryption.optionalExternalCmkArn` | default: NULL | #Ability to import an optional external custom customer managed encryption key (KMS) if KMS encryption is true. ARN must be provided of key imported to KMS in the same region as the VAMS deployment. See additional configuration notes on the permission policy to have on the key.
--   `app.govCloud.enabled` | default: false | #Feature to deploy to the AWS GovCloud partition. Will automatically turn VAMS features on/off based on service support (see below on additional configuration notes).
-
+-   `app.govCloud.enabled` | default: false | #Feature to deploy to the AWS GovCloud partitions. Will turn certain VAMS features on/off based on service support and/or throw errors for bad configurations (see below on additional configuration notes).
+-   `app.govCloud.il6Compliant` | default: false | #Feature to check for AWS GovCloud IL6 partition compliance. Will turn certain VAMS features on/off based on service support and/or throw errors for bad configurations (see below on additional configuration notes).
 -   `app.useGlobalVpc.enabled` | default: false | #Will create a global VPC to use for various configuration feature options. Using an ALB, OpenSearch Provisioned, or the Point Cloud Visualization Pipeline will force this setting to true. All options under this section only apply if this setting is set/force to 'true'.
 -   `app.useGlobalVpc.useForAllLambdas` | default: false | #Feature will deploy all lambdas created behind the VPC and create needed interface endpoints to support communications. Reccomended only for select deployments based on security (FedRamp) or external component VPC-only access (e.g. RDS).
 -   `app.useGlobalVpc.addVpcEndpoints` | default: true | #Will generate all needed VPC endpoints on either newly created VPC or imported VPC (if VPC enabled). Note: ALB S3 VPCe will be created if using an ALB regardless of this setting due to unique setup nature of that VPCe and ALB listeners tie.
@@ -57,10 +64,11 @@ Some configuration options can be overriden at time of deployment with either en
 -   `app.pipelines.useRapidPipeline.enabled` | default: false | #Feature to use DGG's RapidPipeline solution within VAMS. This solution requires an active subscription to RapidPipeline 3D Processor on AWS Marketplace. [Click here](https://aws.amazon.com/marketplace/pp/prodview-zdg4blxeviyyi?sr=0-1&ref_=beagle&applicationId=AWSMPContessa) to find the AWS Marketplace listing, and then select **Continue to Subscribe**.
 -   `app.pipelines.useModelOps.enabled` | default: false | #Feature to use VNTANA's ModelOps solution within VAMS. This solution requires an active subscription to VNTANA Intelligent 3D Optimization Engine Container on AWS Marketplace. [Click here](https://aws.amazon.com/marketplace/pp/prodview-ooio3bidshgy4?applicationId=AWSMPContessa&ref_=beagle&sr=0-1) to find the AWS Marketplace listing, and then select **Continue to Subscribe**.
 
--   `app.authProvider.credTokenTimeoutSeconds` | default: 3600 | #Used to specify authentication token timeouts for access, ID, and presigned upload/download URLs. Adjust this if you have issues with upload/download timeouts.
+-   `app.authProvider.presignedUrlTimeoutSeconds` | default: 86400 | #Used to specify timeouts for upload/download presigned URLs.
 -   `app.authProvider.useCognito.enabled` | default: true | #Feature to use Cognito Use Pools should be used for VAMS user management and authentication. At least 1 authProvider must be enabled in the configuration.
 -   `app.authProvider.useCognito.useSaml` | default: false | #Specifies if Cognito User Pools use a federated SAML from an external IDP integration.
 -   `app.authProvider.useCognito.useUserPasswordAuthFlow` | default: false | #Specifies if Cognito User Pools enable `USER_PASSWORD_AUTH` authentication flow that allow USERNAME/PASSWORD to be sent directly for authentication verses using only SRP caluclated authentication. Some organizations may use this when cognito SRP calculation libraries are not available for system-to-system integrations or user interfaces.
+-   `app.authProvider.useCognito.credTokenTimeoutSeconds` | default: 3600 | #Used to specify authentication token timeouts for cognito issued tokens. Refresh token is fixed to 24 hours.
 -   `app.authProvider.useExternalOauthIdp.enabled` | default: false | Feature to use an external OAUTH IDP. Switches front-end web to use new IDP from Cognito. Cannot currently use location services with this option. Switches API gateway authorizers to an external JWT authorizer hook. At least 1 authProvider must be enabled in the configuration.
 -   `app.authProvider.useExternalOauthIdp.idpAuthProviderUrl` | default: NULL | URL for external OAUTH IDP authentication endpoint such as https://ping-federate.com
 -   `app.authProvider.useExternalOauthIdp.idpAuthClientId` | default: NULL | The clientId provided by the external IDP system to recognize this application deployment
@@ -73,9 +81,12 @@ Some configuration options can be overriden at time of deployment with either en
 -   `app.authProvider.useExternalOauthIdp.lambdaAuthorizorJWTIssuerUrl` | default: NULL | URL for external OAUTH IDP authentication endpoint for authorizer verification
 -   `app.authProvider.useExternalOauthIdp.lambdaAuthorizorJWTAudience` | default: NULL | The audience provided by the external IDP system to recognize this application deployment for JWT token verification
 
+-   `app.webUi.optionalBannerHtmlMessage` | default: NULL | #Optional HTML message to display as a banner in the web UI. Can be used for system notifications or compliance messages.
+
 ### Additional configuration notes
 
--   `Gov Cloud` - This will auto-enable Use Global VPC, use VPC For All Lambdas, Use ALB, Use OpenSearch Provisioned, and will disable Use Location Services
+-   `Gov Cloud` - This will check for Use Global VPC, Use ALB, Use OpenSearch Provisioned, and Use Location Services. Additionally does some small implementation changes for components that are different in GovCloud partitions.
+-   `Gov Cloud - IL6 Compliant` - This will check for Use Cognito, Use WAF, Use VPC for all Lambdas, and Use KMS CMK Encryption. Additionally does some small implementation changes for components that are different in GovCloud IL6 partition.
 -   `OpenSearch` - If both serverless and provisioned are not enabled, no OpenSearch will be enabled which will reduce the functionality in the application to not have any search capabilities on assets. All authorized assets will be returned always on the assets page.
 -   `OpenSearch - Provisioned` - This service is very sensitive to VPC Subnet Availabilty Zone selection. If using an external VPC, make sure the provided private subnets are a minimum of 3 and are each in their own availability zone. OpenSearch Provisioned CDK creates service-linked roles althoguh sometimes these don't get recognized right away during a first-time deployment by receiving the following error: `Invalid request provided: Before you can proceed, you must enable a service-linked role to give Amazon OpenSearch Service permissions to access your VPC.`. Wait 5 minutes minutes after your first run and then re-run your deployment (after clearing out any previous stack in CloudFormation). If you continue seeing issues, run the following CLI command manually to try to create these roles by hand: `aws iam create-service-linked-role --aws-service-name es.amazonaws.com`, `aws iam create-service-linked-role --aws-service-name opensearchservice.amazonaws.com`
 
@@ -109,6 +120,8 @@ Some configuration options can be overriden at time of deployment with either en
 -   -   Actions: `["kms:GenerateDataKey*", "kms:Decrypt", "kms:ReEncrypt*", "kms:DescribeKey",  "kms:ListKeys", "kms:CreateGrant"]`
 -   -   Resources: `["*"]`
 -   -   Principals: `S3, DYNAMODB, STS, SQS, SNS, ECS, ECS_TASKS, LOGS, LAMBDA, CLOUDFRONT, ES, AOSS` - Note: ES: OpenSearch Provisioned, AOSS - OpenSearch Serverless
+
+-   `Asset Buckets` - If `app.assetBuckets.createNewBucket` is set to false, you must define at least one external asset bucket in `app.assetBuckets.externalAssetBuckets`. Each external bucket configuration requires a bucketArn, baseAssetsPrefix, and defaultSyncDatabaseId.
 
 ### Misc Troubleshooting
 

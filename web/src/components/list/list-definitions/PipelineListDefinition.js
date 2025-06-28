@@ -29,6 +29,7 @@ export const PipelineListDefinition = new ListDefinition({
         { name: "outputType", placeholder: "Output" },
     ],
     elementId: "pipelineId",
+    // The deleteElement function in APIService.js will handle the route modification for global pipelines
     deleteRoute: "database/{databaseId}/pipelines/{pipelineId}",
     columnDefinitions: [
         new ColumnDefinition({

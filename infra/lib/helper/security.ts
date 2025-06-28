@@ -13,6 +13,7 @@ import { Construct } from "constructs";
 import { Service } from "../helper/service-helper";
 import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
+import * as s3AssetBuckets from "./s3AssetBuckets";
 
 export function globalLambdaEnvironmentsAndPermissions(
     lambdaFunction: lambda.Function,
@@ -113,6 +114,7 @@ export function kmsKeyPolicyStatementPrincipalGenerator(
             Service("LAMBDA").Principal,
             Service("STS").Principal,
         ],
+        resources: ["*"],
     });
 
     if (!config.app.useAlb.enabled) {
@@ -157,10 +159,8 @@ export function generateContentSecurityPolicy(
         "blob:",
         authenticationDomain,
         `https://${apiUrl}`,
-        //`https://${props.storageResources.s3.assetBucket.bucketRegionalDomainName}/`, //Virtual Host Format Connection
-        //`https://${props.storageResources.s3.assetBucket.bucketDomainName}/`, //Virtual Host Format Connection
-        `https://${Service("S3").PrincipalString}/${storageResources.s3.assetBucket.bucketName}/`, //Path Addressable Format Connection
-        `https://${Service("S3").Endpoint}/${storageResources.s3.assetBucket.bucketName}/`, //Path Addressable Format Connection
+        `https://${Service("S3").PrincipalString}/`,
+        `https://${Service("S3").Endpoint}/`,
     ];
 
     const scriptSrc = [
@@ -169,18 +169,16 @@ export function generateContentSecurityPolicy(
         "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
         authenticationDomain,
         `https://${apiUrl}`,
-        //`https://${props.storageResources.s3.assetBucket.bucketRegionalDomainName}/`, //Virtual Host Format Connection
-        `https://${Service("S3").PrincipalString}/${storageResources.s3.assetBucket.bucketName}/`, //Path Addressable Format Connection
-        `https://${Service("S3").Endpoint}/${storageResources.s3.assetBucket.bucketName}/`, //Path Addressable Format Connection
+        `https://${Service("S3").PrincipalString}/`,
+        `https://${Service("S3").Endpoint}/`,
     ];
 
     const imgMediaSrc = [
         "'self'",
         "blob:",
         "data:",
-        //`https://${props.storageResources.s3.assetBucket.bucketRegionalDomainName}/`, //Virtual Host Format Connection
-        `https://${Service("S3").PrincipalString}/${storageResources.s3.assetBucket.bucketName}/`, //Path Addressable Format Connection
-        `https://${Service("S3").Endpoint}/${storageResources.s3.assetBucket.bucketName}/`, //Path Addressable Format Connection
+        `https://${Service("S3").PrincipalString}/`,
+        `https://${Service("S3").Endpoint}/`,
     ];
 
     if (config.app.authProvider.useCognito.enabled) {
@@ -210,7 +208,7 @@ export function generateContentSecurityPolicy(
 
 export function suppressCdkNagErrorsByGrantReadWrite(scope: Construct) {
     const reason =
-        "This lambda owns the data in this bucket and should have full access to control its assets.";
+        "This lambda needs access to the data in this bucket and should have full access to control its assets.";
     NagSuppressions.addResourceSuppressions(
         scope,
         [
@@ -236,4 +234,52 @@ export function suppressCdkNagErrorsByGrantReadWrite(scope: Construct) {
         ],
         true
     );
+}
+
+/**
+ * Grants read permissions to a lambda function for all asset buckets defined in s3AssetBuckets
+ * @param lambdaFunction The lambda function to grant permissions to
+ */
+export function grantReadPermissionsToAllAssetBuckets(lambdaFunction: lambda.Function): void {
+    const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
+
+    for (const record of bucketRecords) {
+        record.bucket.grantRead(lambdaFunction);
+    }
+
+    // // Add CDK Nag suppressions
+    // const reason = "Lambda needs read access to all asset buckets to perform its operations";
+    // NagSuppressions.addResourceSuppressions(
+    //     lambdaFunction,
+    //     [
+    //         {
+    //             id: "AwsSolutions-IAM5",
+    //             reason: reason,
+    //             appliesTo: [
+    //                 {
+    //                     regex: "/Action::s3:Get.*/g",
+    //                 },
+    //                 {
+    //                     regex: "/Action::s3:List.*/g",
+    //                 },
+    //             ],
+    //         },
+    //     ],
+    //     true
+    // );
+}
+
+/**
+ * Grants read/write permissions to a lambda function for all asset buckets defined in s3AssetBuckets
+ * @param lambdaFunction The lambda function to grant permissions to
+ */
+export function grantReadWritePermissionsToAllAssetBuckets(lambdaFunction: lambda.Function): void {
+    const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
+
+    for (const record of bucketRecords) {
+        record.bucket.grantReadWrite(lambdaFunction);
+    }
+
+    // Add CDK Nag suppressions
+    //suppressCdkNagErrorsByGrantReadWrite(lambdaFunction);
 }
