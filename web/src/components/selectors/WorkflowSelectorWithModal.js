@@ -3,7 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Modal, Select, SpaceBetween, FormField, Button, Box, Alert } from "@cloudscape-design/components";
+import {
+    Modal,
+    Select,
+    SpaceBetween,
+    FormField,
+    Button,
+    Box,
+    Alert,
+} from "@cloudscape-design/components";
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { fetchDatabaseWorkflows, runWorkflow } from "../../services/APIService";
@@ -29,7 +37,7 @@ export default function WorkflowSelectorWithModal(props) {
         const getData = async () => {
             const itemsGlobal = await fetchDatabaseWorkflows({ databaseId: "GLOBAL" });
             const itemsDb = await fetchDatabaseWorkflows({ databaseId: databaseId });
-            const items = [...itemsDb, ...itemsGlobal]
+            const items = [...itemsDb, ...itemsGlobal];
             if (items !== false && Array.isArray(items)) {
                 setReload(false);
                 setAllItems(items);
@@ -68,20 +76,21 @@ export default function WorkflowSelectorWithModal(props) {
         setIsExecuting(true);
 
         const isGlobalWorkflow = selectedWorkflow.databaseId === "GLOBAL";
-        
+
         try {
             const result = await runWorkflow({
                 databaseId: databaseId,
                 assetId: assetId,
                 workflowId: selectedWorkflow.workflowId,
                 fileKey: selectedFileKey, // Pass the selected file key
-                isGlobalWorkflow: isGlobalWorkflow
+                isGlobalWorkflow: isGlobalWorkflow,
             });
-            
+
             if (result !== false && Array.isArray(result)) {
                 if (result[0] === false) {
                     // Handle error from API
-                    const errorMessage = result[1] || "Failed to execute workflow. Please try again.";
+                    const errorMessage =
+                        result[1] || "Failed to execute workflow. Please try again.";
                     setApiError(errorMessage);
                 } else {
                     // Success case - call the callback and close the modal
@@ -133,14 +142,14 @@ export default function WorkflowSelectorWithModal(props) {
                         options={allItems.map((item) => {
                             return {
                                 label: `${item.workflowId} (${item.databaseId})`,
-                                value: {workflowId: item.workflowId, databaseId: item.databaseId},
+                                value: { workflowId: item.workflowId, databaseId: item.databaseId },
                             };
                         })}
                         selectedOption={
                             selectedWorkflow
                                 ? {
                                       value: selectedWorkflow,
-                                      label:`${selectedWorkflow.workflowId} (${selectedWorkflow.databaseId})`,
+                                      label: `${selectedWorkflow.workflowId} (${selectedWorkflow.databaseId})`,
                                   }
                                 : null
                         }

@@ -35,11 +35,11 @@ const WorkflowEditor = React.lazy(() => import("../interactive/WorkflowEditor"))
 export default function CreateUpdateWorkflow(props) {
     // Get parameters from URL
     const { databaseId: urlDatabaseId, workflowId } = useParams();
-    
+
     // If this is a global workflow, use "GLOBAL" as databaseId
     const databaseId = urlDatabaseId;
-    
-    const isGlobalWorkflow = (databaseId === "GLOBAL");
+
+    const isGlobalWorkflow = databaseId === "GLOBAL";
     const navigate = useNavigate();
     const [reload, setReload] = useState(true);
     const [loaded, setLoaded] = useState(!workflowId);
@@ -244,13 +244,13 @@ export default function CreateUpdateWorkflow(props) {
                 <SpaceBetween direction="vertical" size="xs">
                     <BreadcrumbGroup
                         items={[
-                                { text: Synonyms.Databases, href: "#/databases/" },
-                                {
-                                    text: databaseId,
-                                    href: "#/databases/" + databaseId + "/workflows/",
-                                },
-                                { text: "Create Workflow" },
-                            ]}
+                            { text: Synonyms.Databases, href: "#/databases/" },
+                            {
+                                text: databaseId,
+                                href: "#/databases/" + databaseId + "/workflows/",
+                            },
+                            { text: "Create Workflow" },
+                        ]}
                         ariaLabel="Breadcrumbs"
                     />
                     <Container

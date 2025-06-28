@@ -111,12 +111,8 @@ export const deleteElement = async ({ deleteRoute, elementId, item }, api = API)
     try {
         let route = deleteRoute;
         route = route.replace("{databaseId}", item?.databaseId);
-        
-        const response = await api.del(
-            "api",
-            route.replace(`{${elementId}}`, item[elementId]),
-            {}
-        );
+
+        const response = await api.del("api", route.replace(`{${elementId}}`, item[elementId]), {});
         if (response.message) {
             console.log(response.message);
             return [true, response.message, ""];
@@ -139,20 +135,19 @@ export const runWorkflow = async (
 ) => {
     try {
         let endpoint;
-        let eventBody = {}; 
-        endpoint = `database/${databaseId}/assets/${assetId}/workflows/${workflowId}`
+        let eventBody = {};
+        endpoint = `database/${databaseId}/assets/${assetId}/workflows/${workflowId}`;
 
         if (isGlobalWorkflow) {
-            eventBody = {workflowDatabaseId: "GLOBAL", fileKey: fileKey}
+            eventBody = { workflowDatabaseId: "GLOBAL", fileKey: fileKey };
+        } else {
+            eventBody = { workflowDatabaseId: databaseId, fileKey: fileKey };
         }
-        else {
-            eventBody = {workflowDatabaseId: databaseId, fileKey: fileKey}
-        }
-        
+
         const response = await api.post("api", endpoint, {
-            body: eventBody
+            body: eventBody,
         });
-        
+
         if (response.message) {
             if (
                 response.message.indexOf("error") !== -1 ||
@@ -750,7 +745,7 @@ export const fetchDatabasePipelines = async ({ databaseId }, api = API) => {
         }
 
         response = await api.get("api", `database/${databaseId}/pipelines`, {});
-        
+
         let items = [];
         const init = { queryStringParameters: { startingToken: null } };
         if (response.message) {
@@ -786,7 +781,7 @@ export const fetchDatabaseWorkflows = async ({ databaseId }, api = API) => {
         }
 
         response = await api.get("api", `database/${databaseId}/workflows`, {});
-        
+
         let items = [];
         const init = { queryStringParameters: { startingToken: null } };
         if (response.message) {
@@ -843,7 +838,7 @@ export const fetchAllWorkflows = async (api = API) => {
  * @returns {Promise<boolean|{message}|any>}
  */
 export const fetchWorkflowExecutions = async (
-    { databaseId, assetId, workflowId = ""},
+    { databaseId, assetId, workflowId = "" },
     api = API
 ) => {
     try {

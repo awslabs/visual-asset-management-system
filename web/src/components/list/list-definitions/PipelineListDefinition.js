@@ -45,7 +45,9 @@ export const PipelineListDefinition = new ListDefinition({
             header: Synonyms.Database,
             cellWrapper: (props) => {
                 const { item } = props;
-                return <Link href={`#/databases/${item.databaseId}/pipelines/`}>{props.children}</Link>;
+                return (
+                    <Link href={`#/databases/${item.databaseId}/pipelines/`}>{props.children}</Link>
+                );
             },
             sortingField: "databaseId",
         }),

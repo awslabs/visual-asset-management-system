@@ -108,7 +108,7 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                     // Fetch all workflows for the database for initial or manual refreshes
                     const workflowsDatabase = await fetchDatabaseWorkflows({ databaseId });
                     const workflowGlobal = await fetchDatabaseWorkflows({ databaseId: "GLOBAL" });
-                    workflows = [...workflowsDatabase, ...workflowGlobal]
+                    workflows = [...workflowsDatabase, ...workflowGlobal];
                 }
 
                 if (workflows && Array.isArray(workflows)) {
@@ -146,7 +146,7 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                             // In the new format, workflowId and workflowDatabaseId are directly included in each execution
                             const workflowId = String(execution.workflowId || "");
                             const workflowDatabaseId = String(execution.workflowDatabaseId || "");
-                            
+
                             // Create a unique key combining workflowDatabaseId and workflowId
                             const workflowKey = `${workflowDatabaseId}:${workflowId}`;
 
@@ -186,7 +186,7 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                             // Make sure workflowId is a string
                             const workflowId = String(workflow.workflowId || "");
                             const workflowDatabaseId = String(workflow.databaseId || "");
-                            
+
                             // Create a unique key combining workflowDatabaseId and workflowId
                             const workflowKey = `${workflowDatabaseId}:${workflowId}`;
 
@@ -196,11 +196,11 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
 
                             // Add the workflow parent row
                             const newParentRow = Object.assign({}, workflow);
-                          
+
                             // Set the name property to the workflowKey for unique identification
                             // This is what child executions will reference in their parentId
                             newParentRow.name = workflowKey;
-                            
+
                             // Set a displayName property that will be shown in the UI
                             newParentRow.displayName = `${workflowId} (${workflowDatabaseId})`;
                             newRows.push(newParentRow);
@@ -226,7 +226,10 @@ export const WorkflowTab: React.FC<WorkflowTabProps> = ({
                     setLoading(false);
                     setReload(false);
                     setBackgroundRefresh(false);
-                } else if (typeof workflows === "string" && (workflows as string).indexOf("not found") !== -1) {
+                } else if (
+                    typeof workflows === "string" &&
+                    (workflows as string).indexOf("not found") !== -1
+                ) {
                     setError(
                         "Workflow data not found. The requested asset may have been deleted or you may not have permission to access it."
                     );

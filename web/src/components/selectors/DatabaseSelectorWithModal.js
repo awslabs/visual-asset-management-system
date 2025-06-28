@@ -23,7 +23,7 @@ export default function DatabaseSelectorWithModal(props) {
             size="medium"
             header={`Select ${Synonyms.Database}`}
         >
-            <DatabaseSelector onChange={onSelectorChange} showGlobal={showGlobal}/>
+            <DatabaseSelector onChange={onSelectorChange} showGlobal={showGlobal} />
         </Modal>
     );
 }

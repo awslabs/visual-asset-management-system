@@ -39,7 +39,9 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
                     // Use displayName if available, otherwise fall back to name
                     const displayText = item.displayName || item.name;
                     return (
-                        <Link href={`#/databases/${item?.databaseId}/workflows/${item?.workflowId}`}>
+                        <Link
+                            href={`#/databases/${item?.databaseId}/workflows/${item?.workflowId}`}
+                        >
                             {item.displayName ? displayText : props.children}
                         </Link>
                     );

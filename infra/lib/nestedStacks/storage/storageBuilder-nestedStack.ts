@@ -554,15 +554,13 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         }
     );
 
-    workflowExecutionsStorageTable.addLocalSecondaryIndex(
-        {
-            indexName: "WorkflowLSI",
-            sortKey: {
-                name: "workflowDatabaseId:workflowId",
-                type: dynamodb.AttributeType.STRING,
-            },
-        }
-    )
+    workflowExecutionsStorageTable.addLocalSecondaryIndex({
+        indexName: "WorkflowLSI",
+        sortKey: {
+            name: "workflowDatabaseId:workflowId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
 
     workflowExecutionsStorageTable.addGlobalSecondaryIndex({
         indexName: "WorkflowGSI",

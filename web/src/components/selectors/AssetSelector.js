@@ -37,9 +37,10 @@ const AssetSelector = (props) => {
     useEffect(() => {
         const getData = async () => {
             let items;
-            items = database && database.toUpperCase() !== "GLOBAL"
-                ? await fetchDatabaseAssets({ databaseId: database })
-                : await fetchAllAssets();
+            items =
+                database && database.toUpperCase() !== "GLOBAL"
+                    ? await fetchDatabaseAssets({ databaseId: database })
+                    : await fetchAllAssets();
             if (items !== false && Array.isArray(items)) {
                 setReload(false);
                 if (pathViewType) {

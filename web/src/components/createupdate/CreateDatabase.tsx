@@ -57,7 +57,11 @@ function validateDatabaseNameGlobal(name: string) {
 
 // chain together the above three functions, when they return null, then return null
 function validateDatabaseName(name: string) {
-    return validateDatabaseNameLowercase(name) || validateDatabaseNameLength(name) || validateDatabaseNameGlobal(name);
+    return (
+        validateDatabaseNameLowercase(name) ||
+        validateDatabaseNameLength(name) ||
+        validateDatabaseNameGlobal(name)
+    );
 }
 
 // when a string is between the given min and max characters, return null, otherwise return an error message including the range

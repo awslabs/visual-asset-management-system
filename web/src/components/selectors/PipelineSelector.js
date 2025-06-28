@@ -15,12 +15,14 @@ const PipelineSelector = (props) => {
     useEffect(() => {
         const getData = async () => {
             let items;
+            let db_items;
+            let global_items;
             if (databaseId === "GLOBAL") {
                 items = await fetchDatabasePipelines({ databaseId: "GLOBAL" });
             } else {
                 db_items = await fetchDatabasePipelines({ databaseId: databaseId });
                 global_items = await fetchDatabasePipelines({ databaseId: "GLOBAL" });
-                items = [...db_items, ...global_items]
+                items = [...db_items, ...global_items];
             }
             if (items !== false && Array.isArray(items)) {
                 setReload(false);
@@ -54,7 +56,7 @@ const PipelineSelector = (props) => {
                                 `input:${item.assetType}`,
                                 `output:${item.outputType}`,
                                 `pipelineType:${item.pipelineType}`,
-                                `pipelineExecutionType:${item.pipelineExecutionType}`
+                                `pipelineExecutionType:${item.pipelineExecutionType}`,
                             ],
                         };
                     })}
