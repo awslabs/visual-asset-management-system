@@ -31,6 +31,8 @@ lambda_client = boto3.client('lambda')
 dynamodb_client = boto3.client('dynamodb')
 logger = safeLogger(service_name="sqsBucketSync")
 
+reservedPrefixFolders = ['temp-upload', 'temp-uploads', 'preview','previews', 'pipeline', 'piplines']
+
 # Environment variables
 try:
     asset_bucket_name = os.environ.get('ASSET_BUCKET_NAME')
@@ -719,7 +721,7 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
     This function implements the core business logic for processing S3 events:
     1. Validates bucket and prefix against environment variables
     2. Checks if bucket and prefix have a record in S3 asset buckets table
-    3. Skips special folders (temp-uploads, preview, pipeline)
+    3. Skips special folders (temp-uploads, preview, pipeline, etc.)
     4. Validates asset ID format
     5. Looks up or creates assets/databases as needed
     6. Handles "init" files by deleting them
@@ -777,7 +779,7 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
             return False, f"Could not extract asset ID from {object_key}"
         
         # 1.c Check if asset ID is a special folder to skip
-        if asset_id in ['temp-uploads', 'preview', 'pipeline']:
+        if asset_id in reservedPrefixFolders:
             logger.info(f"Asset ID {asset_id} is a special folder, skipping")
             return False, f"Asset ID {asset_id} is a special folder"
         
@@ -1145,7 +1147,7 @@ def lambda_handler_deleted(event, context):
                         continue
                     
                     # Skip special folders
-                    if asset_id in ['temp-uploads', 'preview', 'pipeline']:
+                    if asset_id in reservedPrefixFolders:
                         logger.info(f"Asset ID {asset_id} is a special folder, skipping")
                         continue
                     

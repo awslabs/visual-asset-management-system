@@ -519,9 +519,12 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 >
                     {isFolder ? (
                         <SpaceBetween direction="horizontal" size="xs">
-                            <Button iconName="remove" onClick={() => setShowDeleteModal(true)}>
-                                Delete Folder
-                            </Button>
+                            {/* Only show Delete Folder button if not top-level asset node */}
+                            {!(selectedItem.relativePath === "/" && selectedItem.level === 0) && (
+                                <Button iconName="remove" onClick={() => setShowDeleteModal(true)}>
+                                    Delete Folder
+                                </Button>
+                            )}
                             <Button
                                 iconName="folder"
                                 onClick={() => setCreateFolderModalVisible(true)}

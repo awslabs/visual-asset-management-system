@@ -612,7 +612,10 @@ def handle_s3_event_record(record,
     
     #Ignore pipeline and preview files from assets
     if record.get("s3", {}).get("object", {}).get("key", "").startswith(bucketPrefix+"pipeline") or \
+            record.get("s3", {}).get("object", {}).get("key", "").startswith(bucketPrefix+"pipelines") or \
             record.get("s3", {}).get("object", {}).get("key", "").startswith(bucketPrefix+"preview") or \
+            record.get("s3", {}).get("object", {}).get("key", "").startswith(bucketPrefix+"previews") or \
+            record.get("s3", {}).get("object", {}).get("key", "").startswith(bucketPrefix+"temp-upload") or \
             record.get("s3", {}).get("object", {}).get("key", "").startswith(bucketPrefix+"temp-uploads"):
         logger.info("Ignoring pipeline and preview files from assets from indexing")
         return

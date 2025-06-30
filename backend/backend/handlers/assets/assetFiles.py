@@ -1141,6 +1141,10 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     # Get asset and verify permissions (need POST permission to modify)
     asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
     
+    # Check if trying to delete the top-level folder
+    if file_path == "/" or file_path == "":
+        raise VAMSGeneralErrorResponse("Cannot delete the top-level asset folder")
+    
     # Get asset location
     bucket, base_key = get_asset_s3_location(asset)
     
@@ -1241,6 +1245,10 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
     """
     # Get asset and verify permissions (need POST permission to modify)
     asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
+    
+    # Check if trying to archive the top-level folder
+    if file_path == "/" or file_path == "":
+        raise VAMSGeneralErrorResponse("Cannot archive the top-level asset folder")
     
     # Get asset location
     bucket, base_key = get_asset_s3_location(asset)

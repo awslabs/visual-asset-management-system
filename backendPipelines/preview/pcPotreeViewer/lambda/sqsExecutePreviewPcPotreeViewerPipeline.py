@@ -148,7 +148,7 @@ def lambda_handler(event, context):
 
 
                 #Ignore pipeline and preview files from assets
-                if "pipeline" in s3_source_key or "preview" in s3_source_key or "temp-upload" in s3_source_key:
+                if "pipeline" in s3_source_key or "pipelines" in s3_source_key or "preview" in s3_source_key or "previews" in s3_source_key or"temp-upload" in s3_source_key or "temp-uploads" in s3_source_key:
                     logger.info("Ignoring pipeline and preview files from assets for this use-case pipeline run")
                     continue
 
