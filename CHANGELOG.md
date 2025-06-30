@@ -150,6 +150,7 @@ This version includes significant enhancements to VAMS infrastructure, a complet
 -   Added logic to prefilter asset OpenSearch querying to only databases the user has access in order to increase performance for final asset permission checks for large asset databases
 -   Added Stack Formation Template descriptions
 -   Updated documentation for developer deployment machines to use Node version 20.18.1
+-   Updated README documentation with new application screenshots
 
 ### Known Oustanding Issues
 
