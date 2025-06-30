@@ -17,7 +17,7 @@ _VAMS is considered a sample project that is non-production-grade_
 
 _Visual Asset Management System (VAMS)_ is a purpose-built, AWS native solution for the management and distribution of specialized visual assets used in spatial computing. VAMS offers a simplified solution for organizations to ingest, store, and manage visual assets in the cloud, which empowers any user with a web browser to upload, manage, visualize, transform, and retrieve visual assets. Existing workflows that leverage both custom code and pre-built or third-party applications can also be migrated to VAMS and ran in the AWS cloud, as opposed to being limited by the on-premise capacity available. VAMS is customizable and expandable with option of being further tailored to specific use-cases by development teams.
 
-_Customer Value:_ VAMS addresses challenges faced by customers embarking on Spatial Computing initiatives, such as Augmented and Virtual Reality (AR/VR). Organizations that previously had to manage these assets on local systems can now do so from a web-based application.
+_Customer Value:_ VAMS addresses challenges faced by customers embarking on Spatial Computing initiatives, such as Robotics, Digital Twins, Augmented and Virtual Reality (AR/VR), or other 3D-data related technologies. Organizations that previously had to manage these assets on local systems can now do so from a web-based application.
 
 Leveraging Amazon Simple Storage Service (Amazon S3) as a low-cost, high availability storage layer, VAMS provides a purpose-built API for 3D asset management. This API provides a layer of abstraction, allowing custom integrations to be built. Custom integrations allow workloads and applications to be moved to the cloud, unlocking access to the entire breadth and depth of the AWS ecosystem.
 
@@ -43,55 +43,6 @@ Sample use cases that have leveraged early iterations of VAMS include:
 ## Architecture Overview
 
 ![VAMS Configuration Architecture](./diagrams/Commercial-GovCloud-VAMS_Architecture.png)
-
-## 3D Asset Types Supported for In-Browser Viewing
-
-VAMS currently integrates with several different asset viewers and supports the following formats for viewing 3D assets interactively.
-
-| Name                              | Extension | Type   | Viewer             | Excluded Library | Notes                                                                                        |
-| :-------------------------------- | :-------- | :----- | :----------------- | :--------------- | -------------------------------------------------------------------------------------------- |
-| Wavefront                         | obj       | text   | Online 3D Viewer   |                  |                                                                                              |
-| 3D Studio                         | 3ds       | binary | Online 3D Viewer   |                  |                                                                                              |
-| Stereolithography                 | stl       | text   | Online 3D Viewer   |                  |                                                                                              |
-| Stereolithography                 | stl       | binary | Online 3D Viewer   |                  |                                                                                              |
-| glTF                              | gltf      | text   | Online 3D Viewer   |                  |                                                                                              |
-| glTF                              | glb       | binary | Online 3D Viewer   |                  |                                                                                              |
-| Object File Format                | off       | text   | Online 3D Viewer   |                  |                                                                                              |
-| Object File Format                | off       | binary | Online 3D Viewer   |                  |                                                                                              |
-| Dotbim                            | bim       | text   | Online 3D Viewer   |                  |                                                                                              |
-| Rhinoceros 3D                     | 3dm       | binary | Online 3D Viewer   |                  |                                                                                              |
-| Filmbox                           | fbx       | text   | Online 3D Viewer   |                  |                                                                                              |
-| Filmbox                           | fbx       | binary | Online 3D Viewer   |                  |                                                                                              |
-| Collada                           | dae       | text   | Online 3D Viewer   |                  |                                                                                              |
-| Virtual Reality Modeling Language | wrl       | text   | Online 3D Viewer   |                  |                                                                                              |
-| 3D Manufacturing Format           | 3mf       | text   | Online 3D Viewer   |                  |                                                                                              |
-| Additive Manufacturing            | amf       | text   | Online 3D Viewer   |                  |                                                                                              |
-| (Excluded\*) Dotbim               | ifc       | text   | Online 3D Viewer\* | web-ifc          |                                                                                              |
-| (Excluded\*) FreeCad              | fcstd     | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
-| (Excluded\*) Boundary Rep         | brep      | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
-| (Excluded\*) ISO 10303 CAD        | step      | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
-| (Excluded\*) Graphics Exchange    | iges      | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
-| Point Cloud - LiDAR Data Exchange | laz       | binary | Potree Viewer      |                  |                                                                                              |
-| Point Cloud - LiDAR Data Exchange | las       | binary | Potree Viewer      |                  |                                                                                              |
-| Point Cloud - LiDAR Data Exchange | e57       | binary | Potree Viewer      |                  |                                                                                              |
-| Polygon File Format               | ply       | binary | Potree Viewer      |                  | Type stores meshes and point clouds - VAMS currently showing only point cloud viewer for PLY |
-| Polygon File Format               | ply       | text   | Potree Viewer      |                  |                                                                                              |
-
-Viewers available include:
-
--   [Online 3D Viewer](https://github.com/kovacsv/Online3DViewer)
--   [Potree Viewer](https://github.com/potree/potree)
-
-Please take note:
-
--   While we are limited to these formats to view assets, any file format may be uploaded to VAMS.
--   There are some limitations with formats that leverage multiple files such as glTF that uses json with references to other files.
--   Some viewers like Potree Viewer requires additional pipelines to be deployed to fully generate and view point cloud files.
-
-Exclusion\* notes:
-
--   Online 3D Viewer requires the more restrivi licensed opencascade sub-library to view these file types. They are excluded due to VAMS license restrictions on carrying LGPL libraries.
--   -   If an organizations wishes to implement this sub-library and view these excluded file types with Online 3D viewer, add the excluded file types to the `onlineViewer3DFileFormats` constants array in `./web/src/common/constants/fileFormats.js`. Then add the listed excluded npm library in the web folder through `yarn add`.
 
 ## Install
 
@@ -191,49 +142,7 @@ See [Permissions Guide](./PermissionsGuide.md) for how to use the VAMS permissio
 
 ## Architecture components
 
-### Backend
-
-VAMS Backend is composed of AWS Lambda functions that are accessed through an AWS API Gateway.
-
-#### Architecture diagrams for Individual components
-
-#### Asset Management
-
-![asset_management](./diagrams/asset_management.jpeg)
-
-#### Pipelines Creation
-
-Pipelines are a feature in VAMS that allow you to edit
-![pipelines_creation](./diagrams/pipeline_creation.jpeg)
-
-#### Workflows Execution
-
-![Workflows Execution](/diagrams/workflow_execution.jpeg)
-
-### Frontend WebApp
-
-VAMS Frontend is a single page ReactJS application. It can be deployed via CloudFront or ALB
-
-![Web App Network CloudFront](./diagrams/web_app_network_cf.jpeg)
-
-![Web App Network ALB](./diagrams/web_app_network_alb.jpeg)
-
-### Security
-
-VAMS API and frontend are authorized through AWS Cognito user accounts by default.
-
-![Security](./diagrams/security.jpeg)
-
-Federated authentication with SAML is available with additional configuration. See [SAML Authentication in the developer guide](./DeveloperGuide.md#saml-authentication) for instructions.
-
-### Code Layout
-
-| component                 | folder           |
-| ------------------------- | ---------------- |
-| web application           | web              |
-| cdk deployment            | infra            |
-| api and backend           | backend          |
-| use-case pipeline backend | backendPipelines |
+Refer to the ![Architecture Components in the Developer Guide](./DeveloperGuide.md/#architecture-components).
 
 ## Demo and Workshop
 
