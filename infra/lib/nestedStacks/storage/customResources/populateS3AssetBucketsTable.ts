@@ -99,6 +99,10 @@ def lambda_handler(event, context):
             bucket_name = bucket.get('bucketName')
             prefix = bucket.get('prefix')
             sort_key = f"{bucket_name}:{prefix}"
+
+            #if prefix doesn't end in a slash, add a slash at the end
+            if prefix and not prefix.endswith("/"):
+                prefix = prefix + "/"
             
             # Check if an entry with this sort key already exists
             if sort_key in existing_entries:

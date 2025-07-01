@@ -24,7 +24,7 @@ Some configuration options can be overriden at time of deployment with either en
 -   `app.assetBuckets.defaultNewBucketSyncDatabaseId` | default: default | #Specifies the database ID to sync with the new bucket. Required when createNewBucket is true.
 -   `app.assetBuckets.externalAssetBuckets[]` | default: NULL | #Configuration for defining use of preeixsting external asset buckets (array). Buckets can be added over time through deployments. External buckets need additional IAM bucket policies added, see DeveloperGuide.md for more information.
 -   `app.assetBuckets.externalAssetBuckets[].bucketArn` | default: NULL | #The ARN of the existing bucket to add to VAMS
--   `app.assetBuckets.externalAssetBuckets[].baseAssetsPrefix` | default: NULL | #The base prefix to start using for catalogging and syncing assets. If at the base of the S3 bucket, use `/`
+-   `app.assetBuckets.externalAssetBuckets[].baseAssetsPrefix` | default: NULL | #The base prefix to start using for catalogging and syncing assets. If at the base of the S3 bucket, use `/`. Prefix must end in a `/`.
 -   `app.assetBuckets.externalAssetBuckets[].defaultSyncDatabaseId` | default: NULL | #The database ID to sync asset changes to if adding new asset folders direct to S3. If database ID does
     not exist when syncing, the system will attempt to create a new database with this ID and bucket/prefix.
 

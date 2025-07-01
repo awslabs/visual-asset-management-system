@@ -80,7 +80,7 @@ export function buildWorkflowService(
                 "states:DescribeStateMachine",
                 "states:UpdateStateMachine",
             ],
-            resources: [IAMArn("*vams*").statemachine],
+            resources: [IAMArn("*"+config.name+"*").statemachine],
         })
     );
     return workflowService;
@@ -130,7 +130,7 @@ export function buildListWorkflowExecutionsFunction(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["states:DescribeExecution"],
-            resources: [IAMArn("*vams*").statemachine, IAMArn("*vams*").statemachineExecution],
+            resources: [IAMArn("*"+config.name+"*").statemachine, IAMArn("*"+config.name+"*").statemachineExecution],
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(
@@ -168,6 +168,7 @@ export function buildCreateWorkflowFunction(
     const role = buildWorkflowRole(
         scope,
         processWorkflowExecutionOutputFunction,
+        config,
         storageResources.encryption.kmsKey
     );
     const name = "createWorkflow";
@@ -210,14 +211,14 @@ export function buildCreateWorkflowFunction(
                 "states:DescribeStateMachine",
                 "states:UpdateStateMachine",
             ],
-            resources: [IAMArn("*vams*").statemachine],
+            resources: [IAMArn("*"+config.name+"*").statemachine],
         })
     );
     createWorkflowFunction.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["iam:PassRole"],
-            resources: [IAMArn("*vams*").role],
+            resources: [IAMArn("*"+config.name+"*").role],
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(
@@ -294,7 +295,7 @@ export function buildExecuteWorkflowFunction(
                 "states:DescribeStateMachine",
                 "states:DescribeExecution",
             ],
-            resources: [IAMArn("*vams*").statemachine, IAMArn("*vams*").statemachineExecution],
+            resources: [IAMArn("*"+config.name+"*").statemachine, IAMArn("*"+config.name+"*").statemachineExecution],
         })
     );
     return fun;
@@ -367,6 +368,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
 export function buildWorkflowRole(
     scope: Construct,
     processWorkflowExecutionOutputFunction: lambda.Function,
+    config: Config.Config,
     kmsKey?: kms.IKey
 ): iam.Role {
     const createWorkflowPolicy = new iam.PolicyDocument({
@@ -374,12 +376,12 @@ export function buildWorkflowRole(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["states:CreateStateMachine"],
-                resources: [IAMArn("*vams*").statemachine],
+                resources: [IAMArn("*"+config.name+"*").statemachine],
             }),
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["events:PutTargets", "events:PutRule", "events:DescribeRule"],
-                resources: [IAMArn("*vams*").stateMachineEvents],
+                resources: [IAMArn("*"+config.name+"*").stateMachineEvents],
             }),
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
@@ -445,17 +447,17 @@ export function buildWorkflowRole(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["lambda:InvokeFunction"],
-                resources: [IAMArn("*vams*").lambda],
+                resources: [IAMArn("*"+config.name+"*").lambda],
             }),
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["iam:PassRole"],
-                resources: [IAMArn("*VAMS*").role],
+                resources: [IAMArn("*"+config.name+"*").role],
             }),
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["iam:PassRole"],
-                resources: [IAMArn("*vams*").role],
+                resources: [IAMArn("*"+config.name+"*").role],
             }),
         ],
     });

@@ -279,6 +279,18 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
                 );
             }
 
+            //If bucketConfig.baseAssetsPrefix doesn't end in a slash, error
+            if (
+                bucketConfig.baseAssetsPrefix &&
+                bucketConfig.baseAssetsPrefix != "" &&
+                bucketConfig.baseAssetsPrefix != "/" &&
+                !bucketConfig.baseAssetsPrefix.endsWith("/")
+            ) {
+                throw new Error(
+                    `External bucket ${bucketConfig.bucketArn} baseAssetsPrefix must end in a slash`
+                );
+            }  
+
             const bucket = s3.Bucket.fromBucketArn(
                 scope,
                 `ImportedAssetBucket-${bucketConfig.bucketArn}`,

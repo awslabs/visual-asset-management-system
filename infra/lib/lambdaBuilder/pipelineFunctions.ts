@@ -24,6 +24,7 @@ import {
     globalLambdaEnvironmentsAndPermissions,
     kmsKeyPolicyStatementGenerator,
 } from "../helper/security";
+import { PropagatedTagSource } from "aws-cdk-lib/aws-ecs";
 
 export function buildCreatePipelineFunction(
     scope: Construct,
@@ -99,7 +100,7 @@ export function buildCreatePipelineFunction(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["lambda:CreateFunction", "lambda:UpdateFunctionConfiguration"],
-            resources: [IAMArn("*vams*").lambda],
+            resources: [IAMArn("*"+config.name+"*").lambda],
         })
     );
 
@@ -120,7 +121,7 @@ export function buildCreatePipelineFunction(
                 "states:DescribeStateMachine",
                 "states:UpdateStateMachine",
             ],
-            resources: [IAMArn("*vams*").statemachine],
+            resources: [IAMArn("*"+config.name+"*").statemachine],
         })
     );
 
@@ -128,7 +129,7 @@ export function buildCreatePipelineFunction(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["iam:PassRole"],
-            resources: [IAMArn("*vams*").role],
+            resources: [IAMArn("*"+config.name+"*").role],
         })
     );
 
@@ -220,7 +221,7 @@ export function buildPipelineService(
     kmsKeyLambdaPermissionAddToResourcePolicy(pipelineService, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(pipelineService, config);
 
-    const deletePipelineResources = [IAMArn("*vams*").lambda];
+    const deletePipelineResources = [IAMArn("*"+config.name+"*").lambda];
 
     pipelineService.addToRolePolicy(
         new iam.PolicyStatement({

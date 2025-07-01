@@ -860,9 +860,21 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         
         # 4. Delete from asset links table if available
         if asset_links_table:
-            # Delete links where this asset is the source
-            asset_links_table.delete_item(Key={'assetIdFrom': assetId})
-            deleted_items["dynamodb_tables"].append(f"{asset_links_table_name} (assetIdFrom={assetId})")
+            # Query and delete links where this asset is the source
+            try:
+                response = asset_links_table.query(
+                    KeyConditionExpression=Key('assetIdFrom').eq(assetId)
+                )
+                
+                for item in response.get('Items', []):
+                    if 'assetIdTo' in item:
+                        asset_links_table.delete_item(Key={
+                            'assetIdFrom': assetId,
+                            'assetIdTo': item['assetIdTo']
+                        })
+                        deleted_items["dynamodb_tables"].append(f"{asset_links_table_name} (assetIdFrom={assetId}, assetIdTo={item['assetIdTo']})")
+            except Exception as e:
+                logger.warning(f"Error deleting asset links where asset is source: {e}")
             
             # Query and delete links where this asset is the target
             # This requires using a GSI, so we need to query first
@@ -874,7 +886,10 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
                 
                 for item in response.get('Items', []):
                     if 'assetIdFrom' in item:
-                        asset_links_table.delete_item(Key={'assetIdFrom': item['assetIdFrom'], 'assetIdTo': assetId})
+                        asset_links_table.delete_item(Key={
+                            'assetIdFrom': item['assetIdFrom'],
+                            'assetIdTo': assetId
+                        })
                         deleted_items["dynamodb_tables"].append(f"{asset_links_table_name} (assetIdFrom={item['assetIdFrom']}, assetIdTo={assetId})")
             except Exception as e:
                 logger.warning(f"Error deleting asset links where asset is target: {e}")
