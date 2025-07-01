@@ -75,7 +75,7 @@ export function buildSearchFunction(
     fun.role?.addToPrincipalPolicy(
         new cdk.aws_iam.PolicyStatement({
             actions: ["ssm:GetParameter"],
-            resources: [Service.IAMArn("*"+config.name+"*").ssm],
+            resources: [Service.IAMArn("*" + config.name + "*").ssm],
         })
     );
 
@@ -133,7 +133,7 @@ export function buildIndexingFunction(
     fun.role?.addToPrincipalPolicy(
         new cdk.aws_iam.PolicyStatement({
             actions: ["ssm:GetParameter"],
-            resources: [Service.IAMArn("*"+config.name+"*").ssm],
+            resources: [Service.IAMArn("*" + config.name + "*").ssm],
         })
     );
 

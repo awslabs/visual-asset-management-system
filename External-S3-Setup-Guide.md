@@ -4,19 +4,19 @@ This guide is for configuring external and cross-account S3 bucket access for th
 
 ## Terminology
 
-- **Account A**: The AWS account where VAMS is deployed
-- **Account B**: The external AWS account containing the S3 bucket(s) to be accessed
+-   **Account A**: The AWS account where VAMS is deployed
+-   **Account B**: The external AWS account containing the S3 bucket(s) to be accessed
 
 ## 1. S3 Bucket Configuration Options
 
 The VAMS application supports both creating new asset buckets and using existing external buckets:
 
-- New buckets can be created with `app.assetBuckets.createNewBucket` configuration
-- External buckets can be defined in `app.assetBuckets.externalAssetBuckets[]` configuration
-- Each external bucket requires:
-  - `bucketArn`
-  - `baseAssetsPrefix`
-  - `defaultSyncDatabaseId`
+-   New buckets can be created with `app.assetBuckets.createNewBucket` configuration
+-   External buckets can be defined in `app.assetBuckets.externalAssetBuckets[]` configuration
+-   Each external bucket requires:
+    -   `bucketArn`
+    -   `baseAssetsPrefix`
+    -   `defaultSyncDatabaseId`
 
 ## 2. S3 Bucket Policy Requirements
 
@@ -37,19 +37,16 @@ For external buckets (same account or cross-account (account B)), add this compr
                 "AWS": "arn:aws:iam::<ACCOUNT ID VAMS>:root"
             },
             "Action": "s3:*",
-            "Resource": [
-                "arn:aws:s3:::<BUCKET NAME>/*",
-                "arn:aws:s3:::<BUCKET NAME>"
-            ]
+            "Resource": ["arn:aws:s3:::<BUCKET NAME>/*", "arn:aws:s3:::<BUCKET NAME>"]
         }
     ]
 }
 ```
 
 Replace:
-- `<BUCKET NAME>` with the name of the external bucket
-- `<ACCOUNT ID VAMS>` with the AWS account ID where VAMS is deployed (ACCOUNT A)
 
+-   `<BUCKET NAME>` with the name of the external bucket
+-   `<ACCOUNT ID VAMS>` with the AWS account ID where VAMS is deployed (ACCOUNT A)
 
 If you are looking to add more restrictions to just VAMS roles in the account for the S3 account, add under `Resource`:
 
@@ -62,10 +59,11 @@ If you are looking to add more restrictions to just VAMS roles in the account fo
                     ]
                 }
             }
-```  
+```
 
 Replace:
-- `<APPLICATION NAME>` the name of the application configured in the VAMS CDK config file under `name` field. Default is `vams`.   
+
+-   `<APPLICATION NAME>` the name of the application configured in the VAMS CDK config file under `name` field. Default is `vams`.
 
 ## 3. CORS Configuration for Cross-Account Access
 
@@ -74,39 +72,25 @@ For cross-account S3 buckets, this CORS policy is essential for browser-based op
 ```json
 [
     {
-        "AllowedHeaders": [
-            "*"
-        ],
-        "AllowedMethods": [
-            "GET",
-            "PUT",
-            "POST",
-            "HEAD",
-            "OPTIONS",
-        ],
+        "AllowedHeaders": ["*"],
+        "AllowedMethods": ["GET", "PUT", "POST", "HEAD", "OPTIONS"],
         "AllowedOrigins": [
-            "*"  // For production, restrict to specific origins (Cloudfront/ALB website domain)
+            "*" // For production, restrict to specific origins (Cloudfront/ALB website domain)
         ],
-        "ExposeHeaders": [
-            "ETag",
-            "x-amz-server-side-encryption",
-            "x-amz-request-id",
-            "x-amz-id-2"
-        ],
+        "ExposeHeaders": ["ETag", "x-amz-server-side-encryption", "x-amz-request-id", "x-amz-id-2"],
         "MaxAgeSeconds": 0
     }
 ]
 ```
 
-**Important**: For production deployments, the `AllowedOrigins` should be restricted to the specific origins needed rather than using the wildcard "*" such as the cloudfront/ALB website domain.
-
+**Important**: For production deployments, the `AllowedOrigins` should be restricted to the specific origins needed rather than using the wildcard "\*" such as the cloudfront/ALB website domain.
 
 ## 4. Additional Setup Handled During Deployment
 
-- The system will attempt to add other resource policies to both created and external buckets during CDK deployment
-- The S3 Assets Buckets DynamoDB table will be populated with available buckets
-- Assets store which bucket and prefix they're assigned to upon creation
-- Changes made directly to S3 buckets will sync back to DynamoDB tables and OpenSearch indexes
+-   The system will attempt to add other resource policies to both created and external buckets during CDK deployment
+-   The S3 Assets Buckets DynamoDB table will be populated with available buckets
+-   Assets store which bucket and prefix they're assigned to upon creation
+-   Changes made directly to S3 buckets will sync back to DynamoDB tables and OpenSearch indexes
 
 ## 5. Testing Cross-Account Access
 

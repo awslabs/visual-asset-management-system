@@ -405,7 +405,7 @@ Or, you can additionally define external buckets that already exist to use for a
 At least a new creation or 1 external bucket must be defined.
 
 NOTE!!!: Follow the instructions in this External S3 Setup Guide before deploying the VAMS CDK infrastructure if using external buckets!!!
-See the [External S3 Setup Guide](./External-S3-Setup-Guide.md) for all external buckets, especially those going cross-account. 
+See the [External S3 Setup Guide](./External-S3-Setup-Guide.md) for all external buckets, especially those going cross-account.
 
 During CDK the S3 Assets Buckets dynamoDB table will be populated with the available buckets defined. This table is the basis for VAMS databases to define which bucket / prefix to use. the defaultSyncDatabaseId is used to narrow down on a database (or create one) if multiple for a bucket/prefix are defined or not existing.
 

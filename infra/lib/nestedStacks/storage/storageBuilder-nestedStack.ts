@@ -289,7 +289,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
                 throw new Error(
                     `External bucket ${bucketConfig.bucketArn} baseAssetsPrefix must end in a slash`
                 );
-            }  
+            }
 
             const bucket = s3.Bucket.fromBucketArn(
                 scope,

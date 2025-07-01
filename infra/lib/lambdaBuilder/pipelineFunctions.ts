@@ -100,7 +100,7 @@ export function buildCreatePipelineFunction(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["lambda:CreateFunction", "lambda:UpdateFunctionConfiguration"],
-            resources: [IAMArn("*"+config.name+"*").lambda],
+            resources: [IAMArn("*" + config.name + "*").lambda],
         })
     );
 
@@ -121,7 +121,7 @@ export function buildCreatePipelineFunction(
                 "states:DescribeStateMachine",
                 "states:UpdateStateMachine",
             ],
-            resources: [IAMArn("*"+config.name+"*").statemachine],
+            resources: [IAMArn("*" + config.name + "*").statemachine],
         })
     );
 
@@ -129,7 +129,7 @@ export function buildCreatePipelineFunction(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["iam:PassRole"],
-            resources: [IAMArn("*"+config.name+"*").role],
+            resources: [IAMArn("*" + config.name + "*").role],
         })
     );
 
@@ -221,7 +221,7 @@ export function buildPipelineService(
     kmsKeyLambdaPermissionAddToResourcePolicy(pipelineService, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(pipelineService, config);
 
-    const deletePipelineResources = [IAMArn("*"+config.name+"*").lambda];
+    const deletePipelineResources = [IAMArn("*" + config.name + "*").lambda];
 
     pipelineService.addToRolePolicy(
         new iam.PolicyStatement({

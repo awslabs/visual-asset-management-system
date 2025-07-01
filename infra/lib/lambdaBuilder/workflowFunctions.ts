@@ -80,7 +80,7 @@ export function buildWorkflowService(
                 "states:DescribeStateMachine",
                 "states:UpdateStateMachine",
             ],
-            resources: [IAMArn("*"+config.name+"*").statemachine],
+            resources: [IAMArn("*" + config.name + "*").statemachine],
         })
     );
     return workflowService;
@@ -130,7 +130,10 @@ export function buildListWorkflowExecutionsFunction(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["states:DescribeExecution"],
-            resources: [IAMArn("*"+config.name+"*").statemachine, IAMArn("*"+config.name+"*").statemachineExecution],
+            resources: [
+                IAMArn("*" + config.name + "*").statemachine,
+                IAMArn("*" + config.name + "*").statemachineExecution,
+            ],
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(
@@ -211,14 +214,14 @@ export function buildCreateWorkflowFunction(
                 "states:DescribeStateMachine",
                 "states:UpdateStateMachine",
             ],
-            resources: [IAMArn("*"+config.name+"*").statemachine],
+            resources: [IAMArn("*" + config.name + "*").statemachine],
         })
     );
     createWorkflowFunction.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["iam:PassRole"],
-            resources: [IAMArn("*"+config.name+"*").role],
+            resources: [IAMArn("*" + config.name + "*").role],
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(
@@ -295,7 +298,10 @@ export function buildExecuteWorkflowFunction(
                 "states:DescribeStateMachine",
                 "states:DescribeExecution",
             ],
-            resources: [IAMArn("*"+config.name+"*").statemachine, IAMArn("*"+config.name+"*").statemachineExecution],
+            resources: [
+                IAMArn("*" + config.name + "*").statemachine,
+                IAMArn("*" + config.name + "*").statemachineExecution,
+            ],
         })
     );
     return fun;
@@ -376,12 +382,12 @@ export function buildWorkflowRole(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["states:CreateStateMachine"],
-                resources: [IAMArn("*"+config.name+"*").statemachine],
+                resources: [IAMArn("*" + config.name + "*").statemachine],
             }),
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["events:PutTargets", "events:PutRule", "events:DescribeRule"],
-                resources: [IAMArn("*"+config.name+"*").stateMachineEvents],
+                resources: [IAMArn("*" + config.name + "*").stateMachineEvents],
             }),
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
@@ -447,17 +453,17 @@ export function buildWorkflowRole(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["lambda:InvokeFunction"],
-                resources: [IAMArn("*"+config.name+"*").lambda],
+                resources: [IAMArn("*" + config.name + "*").lambda],
             }),
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["iam:PassRole"],
-                resources: [IAMArn("*"+config.name+"*").role],
+                resources: [IAMArn("*" + config.name + "*").role],
             }),
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["iam:PassRole"],
-                resources: [IAMArn("*"+config.name+"*").role],
+                resources: [IAMArn("*" + config.name + "*").role],
             }),
         ],
     });

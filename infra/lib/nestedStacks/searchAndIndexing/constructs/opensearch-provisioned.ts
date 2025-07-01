@@ -218,7 +218,7 @@ export class OpensearchProvisionedConstruct extends Construct {
         schemaDeploy.addToRolePolicy(
             new cdk.aws_iam.PolicyStatement({
                 actions: ["ssm:*"],
-                resources: [IAMArn("*"+props.config.name+"*").ssm],
+                resources: [IAMArn("*" + props.config.name + "*").ssm],
                 effect: cdk.aws_iam.Effect.ALLOW,
             })
         );
