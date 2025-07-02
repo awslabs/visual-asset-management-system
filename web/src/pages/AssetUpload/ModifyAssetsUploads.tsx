@@ -51,11 +51,17 @@ interface FinishUploadsProps {
     isNewFiles: boolean;
 }
 
-const convertToFileUploadTableItems = (
+const convertToFileUploadTableItems = async (
     fileInfo: FileInfo[],
     prefix: string = ""
-): FileUploadTableItem[] => {
-    return fileInfo.map((file, index) => {
+): Promise<FileUploadTableItem[]> => {
+    const items: FileUploadTableItem[] = [];
+    
+    for (let index = 0; index < fileInfo.length; index++) {
+        const file = fileInfo[index];
+        // Get the actual file to access its size
+        const actualFile = await file.handle.getFile();
+        
         // Prepend the folder path to the relative path if a prefix exists
         const relativePath = prefix
             ? prefix.endsWith("/")
@@ -63,19 +69,21 @@ const convertToFileUploadTableItems = (
                 : prefix + "/" + file.path
             : file.path;
 
-        return {
+        items.push({
             index: index,
             name: file.path,
-            size: 0,
+            size: actualFile.size,
             status: "Queued",
             progress: 0,
             loaded: 0,
-            total: 0,
+            total: actualFile.size,
             startedAt: 0,
             handle: file.handle,
             relativePath: relativePath,
-        };
-    });
+        });
+    }
+    
+    return items;
 };
 
 export default function ModifyAssetsUploadsPage() {
@@ -171,8 +179,8 @@ export default function ModifyAssetsUploadsPage() {
     }, [assetDetail]);
 
     // Handle file selection
-    const handleFileSelection = (fileSelection: FileInfo[]) => {
-        const selectedItems = convertToFileUploadTableItems(fileSelection, keyPrefix);
+    const handleFileSelection = async (fileSelection: FileInfo[]) => {
+        const selectedItems = await convertToFileUploadTableItems(fileSelection, keyPrefix);
         setFileItems(selectedItems);
     };
 
