@@ -56,12 +56,12 @@ const convertToFileUploadTableItems = async (
     prefix: string = ""
 ): Promise<FileUploadTableItem[]> => {
     const items: FileUploadTableItem[] = [];
-    
+
     for (let index = 0; index < fileInfo.length; index++) {
         const file = fileInfo[index];
         // Get the actual file to access its size
         const actualFile = await file.handle.getFile();
-        
+
         // Prepend the folder path to the relative path if a prefix exists
         const relativePath = prefix
             ? prefix.endsWith("/")
@@ -82,7 +82,7 @@ const convertToFileUploadTableItems = async (
             relativePath: relativePath,
         });
     }
-    
+
     return items;
 };
 

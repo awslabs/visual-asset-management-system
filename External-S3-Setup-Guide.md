@@ -34,7 +34,7 @@ For external buckets (same account or cross-account (account B)), add this compr
             "Sid": "allow-vams",
             "Effect": "Allow",
             "Principal": {
-                "AWS": "arn:aws:iam::<ACCOUNT ID VAMS>:root"
+                "AWS": "arn:aws:iam::<ACCOUNT ID VAMS - ACCOUNT A>:root"
             },
             "Action": "s3:*",
             "Resource": ["arn:aws:s3:::<BUCKET NAME>/*", "arn:aws:s3:::<BUCKET NAME>"]
@@ -46,7 +46,7 @@ For external buckets (same account or cross-account (account B)), add this compr
 Replace:
 
 -   `<BUCKET NAME>` with the name of the external bucket
--   `<ACCOUNT ID VAMS>` with the AWS account ID where VAMS is deployed (ACCOUNT A)
+-   `<ACCOUNT ID VAMS - ACCOUNT A>` with the AWS account ID where VAMS is deployed (ACCOUNT A)
 
 If you are looking to add more restrictions to just VAMS roles in the account for the S3 account, add under `Resource`:
 
@@ -54,8 +54,8 @@ If you are looking to add more restrictions to just VAMS roles in the account fo
             "Condition": {
                 "ArnEquals": {
                     "aws:PrincipalArn": [
-                        "arn:aws:iam::<ACCOUNT ID VAMS>:role/<APPLICATION NAME>*",
-                        "arn:aws:sts::<ACCOUNT ID VAMS>:assumed-role/<APPLICATION NAME>*"
+                        "arn:aws:iam::<ACCOUNT ID VAMS - ACCOUNT A>:role/<APPLICATION NAME>*",
+                        "arn:aws:sts::<ACCOUNT ID VAMS - ACCOUNT A>:assumed-role/<APPLICATION NAME>*"
                     ]
                 }
             }
@@ -85,14 +85,94 @@ For cross-account S3 buckets, this CORS policy is essential for browser-based op
 
 **Important**: For production deployments, the `AllowedOrigins` should be restricted to the specific origins needed rather than using the wildcard "\*" such as the cloudfront/ALB website domain.
 
-## 4. Additional Setup Handled During Deployment
+## 4. Cross-account IAM role
+
+The cross-account role in account B (the bucket account) only says that _any_ identity from account A (VAMS solution stack) granted access to the bucket can access the bucket if an entity with permission to grant them access does so, not that they _do_ have access.
+
+### 4.1 - Account B Role / Policy
+
+Configure the trust relationship on a new role:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::<ACCOUNT ID VAMS - ACCOUNT A>:root" // Account A.
+            },
+            "Action": "sts:AssumeRole",
+            "Condition": {}
+        }
+    ]
+}
+```
+
+Configure the policy:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": ["s3:*"],
+            "Resource": ["arn:aws:s3:::<BUCKET NAME>", "arn:aws:s3:::<BUCKET NAME>/*"]
+        },
+        {
+            "Effect": "Allow", //optional depending on KMS keys are involved
+            "Action": ["kms:Decrypt", "kms:GenerateDataKey"],
+            "Resource": "*"
+        }
+    ]
+}
+```
+
+Replace:
+
+-   `<BUCKET NAME>` with the name of the external bucket
+-   `<ACCOUNT ID VAMS - ACCOUNT A>` with the AWS account ID where VAMS is deployed (ACCOUNT A)
+
+### 4.2 - Account A Policy
+
+Make sure to give the identity you're deploying VAMS with access to the external bucket in account B. Add this policy to the deploy user in account A:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": ["s3:*"],
+            "Resource": "arn:aws:s3:::<BUCKET NAME>/*"
+        }
+    ]
+}
+```
+
+Then provision AWS credentials in account A for that deploy user and configured them as an AWS CLI profile named `vams`.
+
+Replace:
+
+-   `<BUCKET NAME>` with the name of the external bucket
+
+### 4.3 Deployment
+
+When deploying VAMS, make sure to pass the AWS CLI profile for the identity with access to the bucket:
+
+```
+npm run build; cd infra; npx cdk deploy --all --require-approval never --profile vams
+```
+
+## 5. Additional Setup Handled During Deployment
 
 -   The system will attempt to add other resource policies to both created and external buckets during CDK deployment
 -   The S3 Assets Buckets DynamoDB table will be populated with available buckets
 -   Assets store which bucket and prefix they're assigned to upon creation
 -   Changes made directly to S3 buckets will sync back to DynamoDB tables and OpenSearch indexes
 
-## 5. Testing Cross-Account Access
+## 6. Testing Cross-Account Access
 
 After setting up the permissions, you should test:
 
@@ -101,7 +181,7 @@ After setting up the permissions, you should test:
 3. S3 event notifications triggering SNS topics
 4. Multipart upload operations
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
 If you encounter issues with cross-account access:
 
