@@ -13,6 +13,7 @@ import { Duration } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../config/config";
 import * as s3AssetBuckets from "../../../helper/s3AssetBuckets";
+import * as ServiceHelper from "../../../../lib/helper/service-helper";
 
 /**
  * Creates a custom resource that populates the S3AssetBucketsStorageTable with bucket information
@@ -150,7 +151,7 @@ def lambda_handler(event, context):
     populateS3AssetBucketsTableLambda.addToRolePolicy(
         new iam.PolicyStatement({
             actions: ["s3:GetBucketVersioning"],
-            resources: ["arn:aws:s3:::*"],
+            resources: [`arn:${ServiceHelper.Partition()}:s3:::*`],
             effect: iam.Effect.ALLOW,
         })
     );

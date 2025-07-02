@@ -24,7 +24,9 @@ DO THIS BEFORE DEPLOYING VAMS INFRASTRUCTURE CDK!!!
 DO THIS BEFORE DEPLOYING VAMS INFRASTRUCTURE CDK!!!
 DO THIS BEFORE DEPLOYING VAMS INFRASTRUCTURE CDK!!!
 
-For external buckets (same account or cross-account (account B)), add this comprehensive policy that includes all necessary permissions:
+For external buckets (same account or cross-account (account B)), add this comprehensive policy that includes all necessary permissions.
+
+Note: Update with your respective partition in your ARN as needed (ie. commercial vs GovCloud)
 
 ```json
 {

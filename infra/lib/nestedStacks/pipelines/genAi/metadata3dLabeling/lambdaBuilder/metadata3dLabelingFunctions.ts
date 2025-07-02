@@ -224,7 +224,7 @@ export function buildMetadataGenerationPipelineFunction(
         effect: iam.Effect.ALLOW,
         actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
         resources: [
-            "arn:aws:bedrock:" +
+            `arn:${ServiceHelper.Partition()}:bedrock:` +
                 config.env.region +
                 "::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0",
         ],
