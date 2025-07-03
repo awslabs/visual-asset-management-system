@@ -8,10 +8,12 @@ interface PreviewModalProps {
     assetId: string;
     databaseId: string;
     previewKey?: string;
+    isFilePreview?: boolean;
+    preloadedUrl?: string;
 }
 
 /**
- * Modal component for displaying a full-size preview of an asset
+ * Modal component for displaying a full-size preview of an asset or file
  */
 const PreviewModal: React.FC<PreviewModalProps> = ({
     visible,
@@ -19,6 +21,8 @@ const PreviewModal: React.FC<PreviewModalProps> = ({
     assetId,
     databaseId,
     previewKey,
+    isFilePreview = false,
+    preloadedUrl,
 }) => {
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
     const [loading, setLoading] = useState<boolean>(true);
@@ -27,6 +31,15 @@ const PreviewModal: React.FC<PreviewModalProps> = ({
     useEffect(() => {
         // Reset states when props change
         if (visible) {
+            // If we have a preloaded URL, use it directly
+            if (preloadedUrl) {
+                setPreviewUrl(preloadedUrl);
+                setLoading(false);
+                setError(false);
+                return;
+            }
+
+            // Otherwise, load the preview from scratch
             setPreviewUrl(null);
             setLoading(true);
             setError(false);
@@ -47,7 +60,7 @@ const PreviewModal: React.FC<PreviewModalProps> = ({
                         assetId,
                         key: previewKey,
                         versionId: "",
-                        downloadType: "assetPreview",
+                        downloadType: isFilePreview ? "assetFile" : "assetPreview",
                     });
 
                     console.log("Download asset response for full preview:", response);
@@ -74,14 +87,14 @@ const PreviewModal: React.FC<PreviewModalProps> = ({
 
             loadPreviewImage();
         }
-    }, [visible, assetId, databaseId, previewKey]);
+    }, [visible, assetId, databaseId, previewKey, preloadedUrl]);
 
     return (
         <Modal
             visible={visible}
             onDismiss={onDismiss}
             size="large"
-            header="Asset Preview"
+            header={isFilePreview ? "File Preview" : "Asset Preview"}
             footer={
                 <Box float="right">
                     <Button onClick={onDismiss}>Close</Button>

@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+export const audioFileFormats = [".mp3", ".wav", ".ogg", ".aac", ".flac", ".m4a"];
+export const videoFileFormats = [".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".m4v"];
 export const pcFileFormats = [".e57", ".las", ".laz", ".ply"];
 export const cadFileFormats = [
     ".step",
@@ -34,7 +36,7 @@ export const modelFileFormats = [
     ".usd",
 ];
 export const columnarFileFormats = [".rds", ".fcs", ".csv"];
-export const imageFileFormats = [".png", ".jpg", ".svg", ".gif"];
+export const imageFileFormats = [".png", ".jpg", ".jpeg", ".svg", ".gif"];
 export const previewFileFormats = imageFileFormats;
 export const archiveFileFormats = [".zip"];
 //html files are view-only, should not be made available for upload or as sources in pipeline
@@ -77,4 +79,6 @@ export const FILE_FORMATS = {
     PREVIEW: previewFileFormats,
     ARCHIVE: archiveFileFormats,
     PRESENTATION: presentationFileFormats,
+    VIDEO: videoFileFormats,
+    AUDIO: audioFileFormats,
 };

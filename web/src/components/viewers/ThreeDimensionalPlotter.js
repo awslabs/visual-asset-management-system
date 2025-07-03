@@ -379,6 +379,7 @@ export default function ThreeDimensionalPlotter(props) {
         assetId,
         databaseId,
         assetKey,
+        versionId,
         engineOptions,
         adaptToDeviceRatio,
         sceneOptions,
@@ -551,7 +552,8 @@ export default function ThreeDimensionalPlotter(props) {
                 assetId: assetId,
                 databaseId: databaseId,
                 key: assetKey,
-                version: "",
+                versionId: versionId || "",
+                downloadType: "assetFile",
             }).then((response) => {
                 if (response !== false && Array.isArray(response)) {
                     if (response[0] === false) {

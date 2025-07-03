@@ -9,7 +9,7 @@ import { downloadAsset } from "../../services/APIService";
 
 export default function ModelViewer(props) {
     const engineElement = useRef(null);
-    const { assetId, databaseId, assetKey, multiFileKeys } = props;
+    const { assetId, databaseId, assetKey, multiFileKeys, versionId } = props;
     const [loaded, setLoaded] = useState(false);
 
     useEffect(() => {
@@ -20,7 +20,8 @@ export default function ModelViewer(props) {
                     assetId: assetId,
                     databaseId: databaseId,
                     key: assetKey,
-                    version: "",
+                    versionId: versionId || "",
+                    downloadType: "assetFile",
                 });
 
                 if (response !== false && Array.isArray(response)) {
@@ -60,7 +61,8 @@ export default function ModelViewer(props) {
                             assetId: assetId,
                             databaseId: databaseId,
                             key: key,
-                            version: "",
+                            versionId: versionId || "",
+                            downloadType: "assetFile",
                         });
 
                         if (response !== false && Array.isArray(response)) {

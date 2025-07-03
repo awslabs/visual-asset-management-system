@@ -7,6 +7,8 @@ const ColumnarViewer = React.lazy(() => import("../viewers/ColumnarViewer"));
 const HTMLViewer = React.lazy(() => import("../viewers/HTMLViewer"));
 const ModelViewer = React.lazy(() => import("../viewers/ModelViewer"));
 const PointCloudViewer = React.lazy(() => import("../viewers/PointCloudViewer"));
+const VideoViewer = React.lazy(() => import("../viewers/VideoViewer"));
+const AudioViewer = React.lazy(() => import("../viewers/AudioViewer"));
 
 interface AssetVisualizerPropTypes {
     viewType: any;
@@ -15,6 +17,7 @@ interface AssetVisualizerPropTypes {
     onViewerModeChange: (viewMode: string) => void;
     assetKey?: string;
     multiFileKeys?: string[];
+    versionId?: string;
 }
 
 function AssetVisualizer(props: AssetVisualizerPropTypes) {
@@ -47,6 +50,7 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                                 props.asset.previewLocation.Key
                             }
                             altAssetKey={props.asset.previewLocation.Key}
+                            versionId={props.versionId}
                         />
                     )}
                     {props.viewType === "image" && (
@@ -55,6 +59,7 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                             databaseId={props.asset.databaseId}
                             assetKey={props.assetKey || props.asset?.assetLocation?.Key}
                             altAssetKey={props.assetKey || props.asset?.assetLocation?.Key}
+                            versionId={props.versionId}
                         />
                     )}
                     {props.viewType === "model" && (
@@ -63,6 +68,7 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                             databaseId={props.asset.databaseId}
                             assetKey={props.assetKey || props.asset?.assetLocation?.Key}
                             multiFileKeys={props.multiFileKeys}
+                            versionId={props.versionId}
                             className="visualizer-container-canvas"
                         />
                     )}
@@ -79,6 +85,7 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                             assetId={props.asset.assetId}
                             databaseId={props.asset.databaseId}
                             assetKey={props.assetKey || props.asset?.assetLocation?.Key}
+                            versionId={props.versionId}
                             className="visualizer-container-canvas"
                         />
                     )}
@@ -87,6 +94,7 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                             assetId={props.asset.assetId}
                             databaseId={props.asset.databaseId}
                             assetKey={props.assetKey || props.asset?.assetLocation?.Key}
+                            versionId={props.versionId}
                         />
                     )}
                     {props.viewType === "html" && (
@@ -94,6 +102,23 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                             assetId={props.asset.assetId}
                             databaseId={props.asset.databaseId}
                             assetKey={props.assetKey || props.asset?.assetLocation?.Key}
+                            versionId={props.versionId}
+                        />
+                    )}
+                    {props.viewType === "video" && (
+                        <VideoViewer
+                            assetId={props.asset.assetId}
+                            databaseId={props.asset.databaseId}
+                            assetKey={props.assetKey || props.asset?.assetLocation?.Key}
+                            versionId={props.versionId}
+                        />
+                    )}
+                    {props.viewType === "audio" && (
+                        <AudioViewer
+                            assetId={props.asset.assetId}
+                            databaseId={props.asset.databaseId}
+                            assetKey={props.assetKey || props.asset?.assetLocation?.Key}
+                            versionId={props.versionId}
                         />
                     )}
                 </div>

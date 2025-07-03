@@ -6,23 +6,23 @@
 import React, { useEffect, useState } from "react";
 import { Box, Button, Spinner } from "@cloudscape-design/components";
 import { downloadAsset } from "../../../services/APIService";
-import "./AssetPreviewThumbnail.css";
+import "./AssetPreviewThumbnail.css"; // Reusing the same CSS as AssetPreviewThumbnail
 
-interface AssetPreviewThumbnailProps {
+interface FilePreviewThumbnailProps {
     assetId: string;
     databaseId: string;
-    previewKey?: string;
+    fileKey: string;
     onOpenFullPreview: (previewUrl: string) => void;
 }
 
 /**
- * Component that displays a thumbnail preview of an asset
- * Used in the EnhancedFileManager when the top-level Asset Node is selected
+ * Component that displays a thumbnail preview of a file
+ * Used in the EnhancedFileManager when a previewable file node is selected
  */
-export const AssetPreviewThumbnail: React.FC<AssetPreviewThumbnailProps> = ({
+export const FilePreviewThumbnail: React.FC<FilePreviewThumbnailProps> = ({
     assetId,
     databaseId,
-    previewKey,
+    fileKey,
     onOpenFullPreview,
 }) => {
     const [url, setUrl] = useState<string | null>(null);
@@ -35,28 +35,28 @@ export const AssetPreviewThumbnail: React.FC<AssetPreviewThumbnailProps> = ({
         setLoading(true);
         setError(false);
 
-        // Don't attempt to load if no preview key is provided
-        if (!previewKey) {
-            console.log("No preview key provided to AssetPreviewThumbnail");
+        // Don't attempt to load if no file key is provided
+        if (!fileKey) {
+            console.log("No file key provided to FilePreviewThumbnail");
             setLoading(false);
             setError(true);
             return;
         }
 
-        console.log("Loading preview with key:", previewKey);
+        console.log("Loading file preview with key:", fileKey);
         const loadPreviewImage = async () => {
             try {
                 const response = await downloadAsset({
                     databaseId,
                     assetId,
-                    key: previewKey,
+                    key: fileKey,
                     versionId: "",
-                    downloadType: "assetPreview",
+                    downloadType: "assetFile", // Using "file" instead of "assetPreview" since we're downloading the actual file
                 });
 
                 if (response !== false && Array.isArray(response)) {
                     if (response[0] === false) {
-                        console.error("Error downloading preview:", response[1]);
+                        console.error("Error downloading file preview:", response[1]);
                         setError(true);
                     } else {
                         setUrl(response[1]);
@@ -65,7 +65,7 @@ export const AssetPreviewThumbnail: React.FC<AssetPreviewThumbnailProps> = ({
                     setError(true);
                 }
             } catch (err) {
-                console.error("Error loading preview:", err);
+                console.error("Error loading file preview:", err);
                 setError(true);
             } finally {
                 setLoading(false);
@@ -73,19 +73,19 @@ export const AssetPreviewThumbnail: React.FC<AssetPreviewThumbnailProps> = ({
         };
 
         loadPreviewImage();
-    }, [assetId, databaseId, previewKey]);
+    }, [assetId, databaseId, fileKey]);
 
     // Handle image load error
     const handleImageError = () => {
         setError(true);
     };
 
-    // If no preview key is provided
-    if (!previewKey) {
-        console.log("No preview key available for rendering");
+    // If no file key is provided
+    if (!fileKey) {
+        console.log("No file key available for rendering");
         return (
             <Box padding="s" textAlign="center">
-                <div>No preview available for this asset</div>
+                <div>No preview available for this file</div>
             </Box>
         );
     }
@@ -111,7 +111,7 @@ export const AssetPreviewThumbnail: React.FC<AssetPreviewThumbnailProps> = ({
                         <div className="asset-preview-thumbnail">
                             <img
                                 src={url}
-                                alt="Asset preview"
+                                alt="File preview"
                                 onError={handleImageError}
                                 onClick={() => onOpenFullPreview(url)}
                                 style={{
@@ -137,4 +137,4 @@ export const AssetPreviewThumbnail: React.FC<AssetPreviewThumbnailProps> = ({
     );
 };
 
-export default AssetPreviewThumbnail;
+export default FilePreviewThumbnail;

@@ -7,9 +7,16 @@ class ImgViewerProps {
     databaseId!: string;
     assetKey!: string;
     altAssetKey!: string;
+    versionId?: string;
 }
 
-export default function ImgViewer({ assetId, databaseId, assetKey, altAssetKey }: ImgViewerProps) {
+export default function ImgViewer({
+    assetId,
+    databaseId,
+    assetKey,
+    altAssetKey,
+    versionId,
+}: ImgViewerProps) {
     const init = "placeholder.jpg";
     const [url, setUrl] = useState(init);
     const [err, setErr] = useState(null);
@@ -23,7 +30,7 @@ export default function ImgViewer({ assetId, databaseId, assetKey, altAssetKey }
                 assetId: assetId,
                 databaseId: databaseId,
                 key: assetKey,
-                versionId: "",
+                versionId: versionId || "",
                 downloadType: "assetFile",
             }).then((response) => {
                 if (response !== false && Array.isArray(response)) {
@@ -38,7 +45,7 @@ export default function ImgViewer({ assetId, databaseId, assetKey, altAssetKey }
         };
 
         fun();
-    }, [assetId, assetKey, databaseId, url]);
+    }, [assetId, assetKey, databaseId, url, versionId]);
 
     const fallback = async (error: any) => {
         console.log("handling image load err", error);
@@ -49,7 +56,7 @@ export default function ImgViewer({ assetId, databaseId, assetKey, altAssetKey }
                 assetId: assetId,
                 databaseId: databaseId,
                 key: altAssetKey,
-                versionId: "",
+                versionId: versionId || "",
                 downloadType: "assetFile",
             }).then((response) => {
                 if (response !== false && Array.isArray(response)) {

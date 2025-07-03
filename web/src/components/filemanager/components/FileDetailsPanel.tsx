@@ -24,8 +24,10 @@ import UnarchiveFileModal from "../../modals/UnarchiveFileModal";
 import { MoveFilesModal } from "../modals/MoveFilesModal";
 import { FileVersionsModal } from "../modals/FileVersionsModal";
 import AssetPreviewThumbnail from "./AssetPreviewThumbnail";
+import FilePreviewThumbnail from "./FilePreviewThumbnail";
 import PreviewModal from "./PreviewModal";
 import "./FileDetailsPanel.css";
+import { previewFileFormats } from "../../../common/constants/fileFormats";
 
 // Import the context from FileTreeView
 import { FileManagerContext } from "./FileTreeView";
@@ -82,6 +84,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const [showMoveFilesModal, setShowMoveFilesModal] = useState(false);
     const [showFileVersionsModal, setShowFileVersionsModal] = useState(false);
     const [showPreviewModal, setShowPreviewModal] = useState(false);
+    const [showFilePreviewModal, setShowFilePreviewModal] = useState(false);
+    const [preloadedAssetUrl, setPreloadedAssetUrl] = useState<string | undefined>(undefined);
+    const [preloadedFileUrl, setPreloadedFileUrl] = useState<string | undefined>(undefined);
     const [showUnarchiveModal, setShowUnarchiveModal] = useState(false);
 
     if (!selectedItem) {
@@ -462,13 +467,25 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 }}
             />
 
-            {/* Preview Modal */}
+            {/* Asset Preview Modal */}
             <PreviewModal
                 visible={showPreviewModal}
                 onDismiss={() => setShowPreviewModal(false)}
                 assetId={assetId || ""}
                 databaseId={databaseId || ""}
                 previewKey={asset?.previewLocation?.Key}
+                preloadedUrl={preloadedAssetUrl}
+            />
+
+            {/* File Preview Modal */}
+            <PreviewModal
+                visible={showFilePreviewModal}
+                onDismiss={() => setShowFilePreviewModal(false)}
+                assetId={assetId || ""}
+                databaseId={databaseId || ""}
+                previewKey={selectedItem?.keyPrefix}
+                isFilePreview={true}
+                preloadedUrl={preloadedFileUrl}
             />
 
             {/* File Versions Modal - only show for files, not folders */}
@@ -632,7 +649,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         </div>
                     )}
 
-                {/* Show preview thumbnail only for the top-level Asset Node */}
+                {/* Show preview thumbnail for the top-level Asset Node */}
                 {selectedItem.relativePath === "/" && selectedItem.level === 0 && (
                     <div className="file-info-item">
                         <div className="file-info-label">Preview:</div>
@@ -649,7 +666,10 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     ? assetDetailState?.previewLocation
                                     : undefined)
                             }
-                            onOpenFullPreview={() => setShowPreviewModal(true)}
+                            onOpenFullPreview={(url) => {
+                                setPreloadedAssetUrl(url);
+                                setShowPreviewModal(true);
+                            }}
                         />
                     </div>
                 )}
@@ -697,6 +717,55 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                 )}
                         </div>
                     </div>
+                )}
+
+                {/* Show preview thumbnail or message for previewable file nodes - at the bottom of the panel */}
+                {!isFolder && selectedItem.level > 0 && (
+                    <>
+                        {/* Check if file format is previewable (matches previewFileFormats) */}
+                        {(() => {
+                            // Get file extension
+                            const fileName = selectedItem.name;
+                            const fileExt = fileName
+                                .substring(fileName.lastIndexOf("."))
+                                .toLowerCase();
+
+                            // Check if file extension is in previewFileFormats
+                            const isPreviewFormat = previewFileFormats.includes(fileExt);
+
+                            // If file format is previewable, show preview section
+                            if (isPreviewFormat) {
+                                // Check if file size is less than 5MB
+                                const isSizeOk =
+                                    selectedItem.size !== undefined &&
+                                    selectedItem.size < 5 * 1024 * 1024;
+
+                                return (
+                                    <div className="file-info-item">
+                                        <div className="file-info-label">Preview:</div>
+                                        {isSizeOk ? (
+                                            // Show preview if size is ok
+                                            <FilePreviewThumbnail
+                                                assetId={assetId || ""}
+                                                databaseId={databaseId || ""}
+                                                fileKey={selectedItem.keyPrefix}
+                                                onOpenFullPreview={(url) => {
+                                                    setPreloadedFileUrl(url);
+                                                    setShowFilePreviewModal(true);
+                                                }}
+                                            />
+                                        ) : (
+                                            // Show message if file is too large
+                                            <Box padding="s" textAlign="center">
+                                                <div>File is too large to preview (over 5MB)</div>
+                                            </Box>
+                                        )}
+                                    </div>
+                                );
+                            }
+                            return null;
+                        })()}
+                    </>
                 )}
             </div>
         </div>

@@ -23,12 +23,14 @@ import { FileVersionsTable } from "../filemanager/components/FileVersionsTable";
  * No viewer yet for cad and archive file formats
  */
 import {
+    audioFileFormats,
     columnarFileFormats,
     modelFileFormats,
     imageFileFormats,
     onlineViewer3DFileFormats,
     pcFileFormats,
     presentationFileFormats,
+    videoFileFormats,
 } from "../../common/constants/fileFormats";
 import AssetVisualizer from "./AssetVisualizer";
 import AssetSelectorWithModal from "../selectors/AssetSelectorWithModal";
@@ -115,6 +117,12 @@ const checkFileFormat = (fileName: string, isDirectory: boolean): string => {
     ) {
         return "html";
     }
+    if (videoFileFormats.includes(filetype) || videoFileFormats.includes("." + filetype)) {
+        return "video";
+    }
+    if (audioFileFormats.includes(filetype) || audioFileFormats.includes("." + filetype)) {
+        return "audio";
+    }
     return "preview";
 };
 
@@ -138,6 +146,26 @@ const determineMultiFileViewType = (files: FileInfo[]): string => {
 
     if (hasImageFiles) {
         return "image";
+    }
+
+    // Check for video files
+    const hasVideoFiles = files.some((file) => {
+        const format = checkFileFormat(file.filename, file.isDirectory);
+        return format === "video";
+    });
+
+    if (hasVideoFiles) {
+        return "video";
+    }
+
+    // Check for audio files
+    const hasAudioFiles = files.some((file) => {
+        const format = checkFileFormat(file.filename, file.isDirectory);
+        return format === "audio";
+    });
+
+    if (hasAudioFiles) {
+        return "audio";
     }
 
     // Default to preview for mixed or unsupported formats
@@ -264,10 +292,23 @@ export default function ViewFile() {
                         defaultViewType = determineMultiFileViewType(currentFiles);
 
                         // Don't show Preview tab for multi-file mode (as requested)
+                        // Only model viewer supports multi-file viewing
                         if (defaultViewType === "model") {
                             newViewerOptions.push({ text: "Model", id: "model" });
-                        } else if (defaultViewType === "image") {
-                            newViewerOptions.push({ text: "Image", id: "image" });
+                        } else {
+                            // For other types, default to model if available, otherwise use preview
+                            const hasModelFiles = currentFiles.some((file) => {
+                                const format = checkFileFormat(file.filename, file.isDirectory);
+                                return format === "model";
+                            });
+
+                            if (hasModelFiles) {
+                                newViewerOptions.push({ text: "Model", id: "model" });
+                                defaultViewType = "model";
+                            } else {
+                                // If no model files, use preview mode
+                                defaultViewType = "preview";
+                            }
                         }
                         // Add other view types as needed
                     } else {
@@ -292,6 +333,10 @@ export default function ViewFile() {
                             newViewerOptions.push({ text: "Image", id: "image" });
                         } else if (defaultViewType === "html") {
                             newViewerOptions.push({ text: "HTML", id: "html" });
+                        } else if (defaultViewType === "video") {
+                            newViewerOptions.push({ text: "Video", id: "video" });
+                        } else if (defaultViewType === "audio") {
+                            newViewerOptions.push({ text: "Audio", id: "audio" });
                         }
                     }
 
@@ -416,6 +461,11 @@ export default function ViewFile() {
                                                         isMultiFileMode
                                                             ? currentFiles.map((f) => f.key)
                                                             : undefined
+                                                    }
+                                                    versionId={
+                                                        isMultiFileMode
+                                                            ? undefined
+                                                            : singleFileInfo?.versionId
                                                     }
                                                     viewerMode={viewerMode}
                                                     onViewerModeChange={(newViewerMode: string) =>
