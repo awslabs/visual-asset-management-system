@@ -259,8 +259,8 @@ export function searchBuilder(
     const assetBucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
     for (const record of assetBucketRecords) {
         //Create created queue
-        const onS3ObjectCreatedQueue = new sqs.Queue(scope, "bucketSyncCreated" + record.bucket, {
-            queueName: `${config.app.baseStackName}-bucketSyncCreated-${index}`,
+        const onS3ObjectCreatedQueue = new sqs.Queue(scope, "bucketSyncCreated-" + record.bucket, {
+            queueName: `${config.app.baseStackName}-bucketSyncCreated--${index}`,
             visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900.
             encryption: storageResources.encryption.kmsKey
                 ? sqs.QueueEncryption.KMS
@@ -293,19 +293,28 @@ export function searchBuilder(
             );
         }
 
+        onS3ObjectCreatedQueue.grantConsumeMessages(sqsBucketSyncFunctionCreated);
+
         // The functions poll the respective queues, which is populated by messages sent to the topic.
-        sqsBucketSyncFunctionCreated.addEventSource(
-            new SqsEventSource(onS3ObjectCreatedQueue, {
-                batchSize: 10, // Max configurable records w/o maxBatchingWindow.
-                maxBatchingWindow: cdk.Duration.seconds(30), // Max configurable time to wait before function is invoked.
-            })
-        );
+        const esmCreated = new lambda.EventSourceMapping(scope, `SQSEventSourceBucketSyncCreated--${index}`, {
+            eventSourceArn: onS3ObjectCreatedQueue.queueArn,
+            target: sqsBucketSyncFunctionCreated,
+            batchSize: 10, // Max configurable records w/o maxBatchingWindow.
+            maxBatchingWindow: cdk.Duration.seconds(30), // Max configurable time to wait before function is invoked.
+        });
+        
+        // Due to cdk upgrade, not all regions support tags for EventSourceMapping
+        // this line should remove the tags for regions that dont support it (govcloud currently not supported)
+        if (config.app.govCloud.enabled) {
+            const cfnEsm = esmCreated.node.defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsm.addPropertyDeletionOverride("Tags");
+        }
 
         index = index + 1;
 
         //Create deleted queue
-        const onS3ObjectDeletedQueue = new sqs.Queue(scope, "bucketSyncDeleted" + record.bucket, {
-            queueName: `${config.app.baseStackName}-bucketSyncDeleted-${index}`,
+        const onS3ObjectDeletedQueue = new sqs.Queue(scope, "bucketSyncDeleted-" + record.bucket, {
+            queueName: `${config.app.baseStackName}-bucketSyncDeleted--${index}`,
             visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900.
             encryption: storageResources.encryption.kmsKey
                 ? sqs.QueueEncryption.KMS
@@ -338,12 +347,21 @@ export function searchBuilder(
             );
         }
 
-        sqsBucketSyncFunctionRemoved.addEventSource(
-            new SqsEventSource(onS3ObjectDeletedQueue, {
-                batchSize: 10, // Max configurable records w/o maxBatchingWindow.
-                maxBatchingWindow: cdk.Duration.seconds(30), // Max configurable time to wait before function is invoked.
-            })
-        );
+        onS3ObjectDeletedQueue.grantConsumeMessages(sqsBucketSyncFunctionRemoved);
+
+        const esmDeleted = new lambda.EventSourceMapping(scope, `SQSEventSourceBucketSyncDeleted--${index}`, {
+            eventSourceArn: onS3ObjectDeletedQueue.queueArn,
+            target: sqsBucketSyncFunctionRemoved,
+            batchSize: 10, // Max configurable records w/o maxBatchingWindow.
+            maxBatchingWindow: cdk.Duration.seconds(30), // Max configurable time to wait before function is invoked.
+        });
+        
+        // Due to cdk upgrade, not all regions support tags for EventSourceMapping
+        // this line should remove the tags for regions that dont support it (govcloud currently not supported)
+        if (config.app.govCloud.enabled) {
+            const cfnEsm = esmDeleted.node.defaultChild as lambda.CfnEventSourceMapping;
+            cfnEsm.addPropertyDeletionOverride("Tags");
+        }
     }
 
     //Nag supressions
