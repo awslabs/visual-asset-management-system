@@ -50,7 +50,7 @@ export function Navigation({
             items: [
                 { type: "link", text: Synonyms.Databases, href: "#/databases/" },
                 { type: "link", text: Synonyms.Assets, href: "#/assets/" },
-                { type: "link", text: `Upload ${Synonyms.Asset}`, href: "#/upload/" },
+                { type: "link", text: `Create ${Synonyms.Asset}`, href: "#/upload/" },
             ],
         },
         // {

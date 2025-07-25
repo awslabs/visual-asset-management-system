@@ -15,37 +15,6 @@ from aws_lambda_powertools.utilities.parser.models import (
 logger = safeLogger(service_name="AssetModelsV3")
 
 ########################Common Asset Models##########################
-class AssetLinksModel(BaseModel, extra=Extra.ignore):
-    """Model for asset relationships (parents, children, related assets)"""
-    parents: list[str] = []
-    child: list[str] = []
-    related: list[str] = []
-
-    @root_validator
-    def validate_fields(cls, values):
-        #Validate fields that require more scrutiny past the basic data type (str, bool, etc.) or custom validation logic
-        logger.info("Validating custom parameters")
-        (valid, message) = validate({
-            'assetLinkParentsAssetId': {
-                'value': values.get('parents'), 
-                'validator': 'ID_ARRAY',
-                'optional': True
-            },
-            'assetLinkChildAssetId': {
-                'value': values.get('child'), 
-                'validator': 'ID_ARRAY',
-                'optional': True
-            },
-            'assetLinkRelatedAssetId': {
-                'value': values.get('related'), 
-                'validator': 'ID_ARRAY',
-                'optional': True
-            }
-        })
-        if not valid:
-            logger.error(message)
-            raise ValueError(message)
-        return values
 
 class AssetLocationModel(BaseModel, extra=Extra.ignore):
     """Model for asset location in S3"""
@@ -85,7 +54,6 @@ class CreateAssetRequestModel(BaseModel, extra=Extra.ignore):
     description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
     isDistributable: bool
     tags: Optional[list[str]] = []
-    assetLinks: Optional[AssetLinksModel] = None
     bucketExistingKey: Optional[str] = None  # Optional existing key in the S3 bucket
 
     @root_validator
@@ -310,6 +278,7 @@ class AssetFileItemModel(BaseModel, extra=Extra.ignore):
     storageClass: Optional[str] = None  # To identify archived files
     isArchived: bool = False  # Computed field based on metadata
     currentAssetVersionFileVersionMismatch: bool = False  # Indicates if file version doesn't match asset version
+    primaryType: Optional[str] = None  # Primary type metadata from S3
 
 class ListAssetFilesRequestModel(BaseModel, extra=Extra.ignore):
     """Query parameters for listing asset files"""
@@ -352,6 +321,7 @@ class FileInfoResponseModel(BaseModel, extra=Extra.ignore):
     etag: Optional[str] = None
     storageClass: Optional[str] = None
     isArchived: bool = False
+    primaryType: Optional[str] = None  # Primary type metadata from S3
     versions: Optional[List[FileVersionModel]] = None
 
 class MoveFileRequestModel(BaseModel, extra=Extra.ignore):
@@ -397,6 +367,55 @@ class RevertFileVersionResponseModel(BaseModel, extra=Extra.ignore):
     filePath: str
     revertedFromVersionId: str
     newVersionId: str
+
+class SetPrimaryFileRequestModel(BaseModel, extra=Extra.ignore):
+    """Request model for setting a file's primary type metadata"""
+    filePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
+    primaryType: str = Field(strip_whitespace=True)  # Empty string or one of the allowed values
+    primaryTypeOther: Optional[str] = Field(None, strip_whitespace=True)  # Required when primaryType is 'other'
+    
+    @root_validator
+    def validate_fields(cls, values):
+        # Convert primaryType to lowercase
+        primary_type = values.get('primaryType', '').lower()
+        values['primaryType'] = primary_type
+        
+        # Convert primaryTypeOther to lowercase if provided
+        if values.get('primaryTypeOther'):
+            values['primaryTypeOther'] = values['primaryTypeOther'].lower()
+        
+        # Validate primaryType value
+        allowed_values = ['', 'primary', 'lod1', 'lod2', 'lod3', 'lod4', 'lod5', 'other']
+        if primary_type not in allowed_values:
+            raise ValueError(f"primaryType must be one of: {', '.join(allowed_values)}")
+        
+        # Validate primaryTypeOther is provided when primaryType is 'other'
+        if primary_type == 'other' and not values.get('primaryTypeOther'):
+            raise ValueError("primaryTypeOther is required when primaryType is 'other'")
+        
+        # Validate primaryTypeOther is not provided when primaryType is not 'other'
+        if primary_type != 'other' and values.get('primaryTypeOther'):
+            raise ValueError("primaryTypeOther should only be provided when primaryType is 'other'")
+        
+        # Validate primaryTypeOther length
+        if values.get('primaryTypeOther'):
+            (valid, message) = validate({
+                'primaryTypeOther': {
+                    'value': values.get('primaryTypeOther'),
+                    'validator': 'STRING_30'
+                }
+            })
+            if not valid:
+                raise ValueError(message)
+        
+        return values
+
+class SetPrimaryFileResponseModel(BaseModel, extra=Extra.ignore):
+    """Response model for setting a file's primary type metadata"""
+    success: bool
+    message: str
+    filePath: str
+    primaryType: Optional[str] = None  # The primary type that was set
 
 ######################## Ingest Asset API Models ##########################
 class IngestAssetInitializeRequestModel(BaseModel, extra=Extra.ignore):

@@ -61,8 +61,6 @@ export function buildCreateAssetFunction(
                 storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            ASSET_LINKS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetLinksStorageTable.tableName,
             TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName,
             TAG_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
@@ -76,7 +74,6 @@ export function buildCreateAssetFunction(
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun); //update asset counts on a DB
-    storageResources.dynamo.assetLinksStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.tagStorageTable.grantReadData(fun);
     storageResources.dynamo.tagTypeStorageTable.grantReadData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
@@ -137,8 +134,6 @@ export function buildAssetService(
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             ASSET_UPLOAD_TABLE_NAME: storageResources.dynamo.assetUploadsStorageTable.tableName,
-            ASSET_LINKS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetLinksStorageTable.tableName,
             METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
             ASSET_VERSIONS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetVersionsStorageTable.tableName,
@@ -159,7 +154,6 @@ export function buildAssetService(
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
     storageResources.dynamo.assetUploadsStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.assetLinksStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.metadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadWriteData(fun);

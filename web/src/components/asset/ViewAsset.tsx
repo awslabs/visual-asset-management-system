@@ -27,7 +27,6 @@ import AssetDeleteModal from "../modals/AssetDeleteModal";
 import { UpdateAsset } from "../createupdate/UpdateAsset";
 import WorkflowSelectorWithModal from "../selectors/WorkflowSelectorWithModal";
 import ControlledMetadata from "../metadata/ControlledMetadata";
-import AssetLinks from "./AssetLinks";
 import localforage from "localforage";
 import Synonyms from "../../synonyms";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
@@ -199,34 +198,6 @@ export default function ViewAsset() {
         fetchFiles();
     }, [asset?.assetId, assetId, databaseId]);
 
-    // Fetch asset links
-    useEffect(() => {
-        const fetchLinks = async () => {
-            // Don't attempt to fetch links if we already have an API error or if asset ID is missing
-            if (!assetId || showApiError) return;
-
-            try {
-                const res = await fetchAssetLinks({ assetId });
-                if (res && typeof res === "object") {
-                    setAssetLinks(res);
-                } else if (typeof res === "string" && res.includes("not found")) {
-                    setApiError(
-                        "Asset links not found. The requested asset may have been deleted or you may not have permission to access it."
-                    );
-                    setShowApiError(true);
-                    setApiErrorType("error");
-                }
-            } catch (error) {
-                console.error("Error fetching asset links:", error);
-                setApiError("Failed to load asset links. Please try again later.");
-                setShowApiError(true);
-                setApiErrorType("error");
-            }
-        };
-
-        fetchLinks();
-    }, [assetId]);
-
     // Handle opening the update asset modal
     const handleOpenUpdateAsset = () => {
         setOpenUpdateAsset(true);
@@ -310,15 +281,6 @@ export default function ViewAsset() {
                                     loadingFiles={loadingAssetFiles}
                                     onExecuteWorkflow={handleExecuteWorkflow}
                                     onWorkflowExecuted={refreshWorkflowTab}
-                                />
-
-                                {/* Asset Links */}
-                                <AssetLinks
-                                    assetId={assetId || ""}
-                                    databaseId={databaseId || ""}
-                                    assetLinks={assetLinks}
-                                    onLinksUpdated={(links: any) => setAssetLinks(links)}
-                                    noOpenSearch={useNoOpenSearch}
                                 />
 
                                 {/* Metadata */}

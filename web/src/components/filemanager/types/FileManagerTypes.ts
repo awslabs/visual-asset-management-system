@@ -11,6 +11,7 @@ export interface FileKey {
     storageClass?: string;
     isArchived: boolean;
     currentAssetVersionFileVersionMismatch?: boolean;
+    primaryType?: string | null;
 }
 
 export interface FileTree {
@@ -27,6 +28,7 @@ export interface FileTree {
     versionId?: string;
     isArchived?: boolean;
     currentAssetVersionFileVersionMismatch?: boolean;
+    primaryType?: string | null;
 }
 
 export interface FileManagerStateValues {
@@ -88,4 +90,13 @@ export interface CreateFolderModalProps {
 export interface EnhancedFileManagerProps {
     assetName: string;
     assetFiles?: FileKey[];
+}
+
+export interface SetPrimaryTypeModalProps {
+    visible: boolean;
+    onDismiss: () => void;
+    selectedFiles: FileTree[];
+    databaseId: string;
+    assetId: string;
+    onSuccess: () => void;
 }

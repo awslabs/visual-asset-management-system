@@ -390,18 +390,77 @@ export const fetchtagTypes = async (api = API) => {
     }
 };
 
-export const fetchAssetLinks = async ({ assetId }, api = API) => {
+export const fetchAssetLinks = async (
+    { assetId, databaseId, childTreeView = false },
+    api = API
+) => {
     try {
         let response;
         if (assetId) {
-            response = await api.get("api", `asset-links/${assetId}`, {});
-            if (response.message) return response.message;
+            const queryParams = {};
+            if (databaseId) {
+                queryParams.databaseId = databaseId;
+            }
+            if (childTreeView) {
+                queryParams.childTreeView = "true";
+            }
+
+            console.log("Fetching asset links with params:", queryParams);
+
+            response = await api.get("api", `asset-links/${assetId}`, {
+                queryStringParameters: queryParams,
+            });
+
+            console.log("Raw asset links response:", response);
+
+            // Handle response structure
+            // If the response itself has the expected structure (related, parents, children)
+            if (
+                response &&
+                typeof response === "object" &&
+                response.related !== undefined &&
+                response.parents !== undefined &&
+                response.children !== undefined
+            ) {
+                return response;
+            }
+            // If the response has a message property that contains the data
+            else if (
+                response &&
+                typeof response === "object" &&
+                response.message &&
+                typeof response.message === "object" &&
+                response.message.related !== undefined &&
+                response.message.parents !== undefined &&
+                response.message.children !== undefined
+            ) {
+                return response.message;
+            }
+            // If the response is just a string message
+            else if (response && typeof response === "string") {
+                console.error("Received string response:", response);
+                return {
+                    related: [],
+                    parents: [],
+                    children: [],
+                    unauthorizedCounts: { related: 0, parents: 0, children: 0 },
+                    message: response,
+                };
+            }
+            // Return the response as is, let the component handle validation
+            return response;
         } else {
             return false;
         }
     } catch (error) {
-        console.log(error);
-        return error?.message;
+        console.log("Error fetching asset links:", error);
+        return {
+            related: [],
+            parents: [],
+            children: [],
+            unauthorizedCounts: { related: 0, parents: 0, children: 0 },
+            message: error?.message || "An error occurred",
+        };
     }
 };
 export const deleteAssetLink = async ({ relationId }, api = API) => {
@@ -1195,6 +1254,243 @@ export const createDatabase = async ({ databaseId, description, defaultBucketId 
     } catch (error) {
         console.log("create database error", error);
         return [false, error?.message];
+    }
+};
+
+/**
+ * Fetches metadata for an asset link
+ * @param {Object} params - Parameters object
+ * @param {string} params.assetLinkId - Asset link ID
+ * @returns {Promise<any>}
+ */
+export const fetchAssetLinkMetadata = async ({ assetLinkId }, api = API) => {
+    try {
+        if (!assetLinkId) {
+            return false;
+        }
+
+        const response = await api.get("api", `asset-links/${assetLinkId}/metadata`, {});
+        console.log("fetchAssetLinkMetadata raw response:", response);
+
+        // Handle different response formats
+        if (response && typeof response === "object") {
+            // If response has metadata array directly
+            if (Array.isArray(response.metadata)) {
+                return response;
+            }
+            // If response.message contains the data
+            else if (
+                response.message &&
+                typeof response.message === "object" &&
+                Array.isArray(response.message.metadata)
+            ) {
+                return response.message;
+            }
+            // If response.message is just a string (like "Success"), return empty metadata structure
+            else if (response.message && typeof response.message === "string") {
+                return { metadata: [], message: response.message };
+            }
+            // Return response as-is for other object formats
+            else {
+                return response;
+            }
+        }
+        // If response is a string (like "Success"), return empty metadata structure
+        else if (typeof response === "string") {
+            return { metadata: [], message: response };
+        }
+
+        return response;
+    } catch (error) {
+        console.log("Error fetching asset link metadata:", error);
+        return { metadata: [], message: error?.message || "Error fetching metadata" };
+    }
+};
+
+/**
+ * Creates metadata for an asset link
+ * @param {Object} params - Parameters object
+ * @param {string} params.assetLinkId - Asset link ID
+ * @param {string} params.metadataKey - Metadata key
+ * @param {string} params.metadataValue - Metadata value
+ * @param {string} params.metadataValueType - Metadata value type ('XYZ' or 'String')
+ * @returns {Promise<any>}
+ */
+export const createAssetLinkMetadata = async (
+    { assetLinkId, metadataKey, metadataValue, metadataValueType },
+    api = API
+) => {
+    try {
+        if (!assetLinkId || !metadataKey || !metadataValue || !metadataValueType) {
+            return [false, "Missing required parameters"];
+        }
+
+        const response = await api.post("api", `asset-links/${assetLinkId}/metadata`, {
+            body: {
+                metadataKey,
+                metadataValue,
+                metadataValueType,
+            },
+        });
+
+        if (response.message) {
+            if (
+                response.message.indexOf &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
+            ) {
+                console.log("Create asset link metadata error:", response.message);
+                return [false, response.message];
+            } else {
+                return [true, response.message];
+            }
+        } else {
+            return [false, "No response received"];
+        }
+    } catch (error) {
+        console.log("Error creating asset link metadata:", error);
+        return [false, error?.message || "Failed to create metadata"];
+    }
+};
+
+/**
+ * Updates metadata for an asset link
+ * @param {Object} params - Parameters object
+ * @param {string} params.assetLinkId - Asset link ID
+ * @param {string} params.metadataKey - Metadata key
+ * @param {string} params.metadataValue - Metadata value
+ * @param {string} params.metadataValueType - Metadata value type ('XYZ' or 'String')
+ * @returns {Promise<any>}
+ */
+export const updateAssetLinkMetadata = async (
+    { assetLinkId, metadataKey, metadataValue, metadataValueType },
+    api = API
+) => {
+    try {
+        if (!assetLinkId || !metadataKey || !metadataValue || !metadataValueType) {
+            return [false, "Missing required parameters"];
+        }
+
+        const response = await api.put(
+            "api",
+            `asset-links/${assetLinkId}/metadata/${metadataKey}`,
+            {
+                body: {
+                    metadataValue,
+                    metadataValueType,
+                },
+            }
+        );
+
+        if (response.message) {
+            if (
+                response.message.indexOf &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
+            ) {
+                console.log("Update asset link metadata error:", response.message);
+                return [false, response.message];
+            } else {
+                return [true, response.message];
+            }
+        } else {
+            return [false, "No response received"];
+        }
+    } catch (error) {
+        console.log("Error updating asset link metadata:", error);
+        return [false, error?.message || "Failed to update metadata"];
+    }
+};
+
+/**
+ * Deletes metadata for an asset link
+ * @param {Object} params - Parameters object
+ * @param {string} params.assetLinkId - Asset link ID
+ * @param {string} params.metadataKey - Metadata key
+ * @returns {Promise<any>}
+ */
+export const deleteAssetLinkMetadata = async ({ assetLinkId, metadataKey }, api = API) => {
+    try {
+        if (!assetLinkId || !metadataKey) {
+            return [false, "Missing required parameters"];
+        }
+
+        const response = await api.del(
+            "api",
+            `asset-links/${assetLinkId}/metadata/${metadataKey}`,
+            {}
+        );
+
+        if (response.message) {
+            if (
+                response.message.indexOf &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
+            ) {
+                console.log("Delete asset link metadata error:", response.message);
+                return [false, response.message];
+            } else {
+                return [true, response.message];
+            }
+        } else {
+            return [false, "No response received"];
+        }
+    } catch (error) {
+        console.log("Error deleting asset link metadata:", error);
+        return [false, error?.message || "Failed to delete metadata"];
+    }
+};
+
+/**
+ * Sets or removes primary type metadata for a file
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {string} params.filePath - File path
+ * @param {string} params.primaryType - Primary type value (empty string to remove)
+ * @param {string} params.primaryTypeOther - Custom primary type when primaryType is 'other'
+ * @returns {Promise<any>}
+ */
+export const setPrimaryType = async (
+    { databaseId, assetId, filePath, primaryType, primaryTypeOther },
+    api = API
+) => {
+    try {
+        if (!databaseId || !assetId || !filePath) {
+            return [false, "Missing required parameters"];
+        }
+
+        const response = await api.put(
+            "api",
+            `database/${databaseId}/assets/${assetId}/setPrimaryFile`,
+            {
+                body: {
+                    filePath,
+                    primaryType: primaryType || "",
+                    primaryTypeOther: primaryTypeOther || null,
+                },
+            }
+        );
+
+        if (response.message) {
+            if (
+                response.message.indexOf &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
+            ) {
+                console.log("Set primary type error:", response.message);
+                return [false, response.message];
+            } else {
+                return [true, response.message];
+            }
+        } else if (response.success) {
+            return [true, response.message || "Primary type updated successfully"];
+        } else {
+            return [false, "No response received"];
+        }
+    } catch (error) {
+        console.log("Error setting primary type:", error);
+        return [false, error?.message || "Failed to set primary type"];
     }
 };
 

@@ -84,6 +84,12 @@ function TreeItem({ item }: TreeItemProps) {
 
                 <span className="tree-item-name">
                     {item.displayName}
+                    {isFolder && item.subTree.length > 0 && (
+                        <span className="folder-count">({item.subTree.length})</span>
+                    )}
+                    {!isFolder && item.primaryType && (
+                        <span className="folder-count">({item.primaryType})</span>
+                    )}
                     {item.isArchived && (
                         <span className="archived-icon" title="Archived">
                             <Icon name="status-negative" />
@@ -161,6 +167,12 @@ function SearchResults({}: SearchResultsProps) {
                         </span>
                         <span className="search-result-name">
                             {item.displayName}
+                            {isFolder && item.subTree.length > 0 && (
+                                <span className="folder-count">({item.subTree.length})</span>
+                            )}
+                            {!isFolder && item.primaryType && (
+                                <span className="folder-count">({item.primaryType})</span>
+                            )}
                             {item.isArchived && (
                                 <span className="archived-icon" title="Archived">
                                     <Icon name="status-negative" />

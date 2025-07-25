@@ -23,6 +23,7 @@ import AssetDeleteModal from "../../modals/AssetDeleteModal";
 import UnarchiveFileModal from "../../modals/UnarchiveFileModal";
 import { MoveFilesModal } from "../modals/MoveFilesModal";
 import { FileVersionsModal } from "../modals/FileVersionsModal";
+import { SetPrimaryTypeModal } from "../modals/SetPrimaryTypeModal";
 import AssetPreviewThumbnail from "./AssetPreviewThumbnail";
 import FilePreviewThumbnail from "./FilePreviewThumbnail";
 import PreviewModal from "./PreviewModal";
@@ -88,6 +89,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const [preloadedAssetUrl, setPreloadedAssetUrl] = useState<string | undefined>(undefined);
     const [preloadedFileUrl, setPreloadedFileUrl] = useState<string | undefined>(undefined);
     const [showUnarchiveModal, setShowUnarchiveModal] = useState(false);
+    const [showSetPrimaryTypeModal, setShowSetPrimaryTypeModal] = useState(false);
 
     if (!selectedItem) {
         return (
@@ -118,6 +120,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     size: file.size,
                     dateCreatedCurrentVersion: file.dateCreatedCurrentVersion,
                     isArchived: file.isArchived,
+                    primaryType: file.primaryType,
                 })),
             },
         });
@@ -289,6 +292,12 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                 Move/Copy Files
                                             </Button>
                                             <Button
+                                                iconName="settings"
+                                                onClick={() => setShowSetPrimaryTypeModal(true)}
+                                            >
+                                                Set Primary Type
+                                            </Button>
+                                            <Button
                                                 iconName="download"
                                                 onClick={handleMultiFileDownload}
                                             >
@@ -327,6 +336,20 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         ))}
                     </div>
                 </div>
+
+                {/* Set Primary Type Modal for multi-select */}
+                <SetPrimaryTypeModal
+                    visible={showSetPrimaryTypeModal}
+                    onDismiss={() => setShowSetPrimaryTypeModal(false)}
+                    selectedFiles={selectedItems.filter((item) => !item.isFolder)}
+                    databaseId={databaseId!}
+                    assetId={assetId!}
+                    onSuccess={() => {
+                        setShowSetPrimaryTypeModal(false);
+                        // Refresh file list
+                        dispatch({ type: "REFRESH_FILES", payload: null });
+                    }}
+                />
             </div>
         );
     }
@@ -362,6 +385,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 dateCreatedCurrentVersion: selectedItem.dateCreatedCurrentVersion,
                 versionId: selectedItem.versionId,
                 isArchived: selectedItem.isArchived,
+                primaryType: selectedItem.primaryType,
             },
         });
     };
@@ -504,6 +528,26 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 />
             )}
 
+            {/* Set Primary Type Modal */}
+            <SetPrimaryTypeModal
+                visible={showSetPrimaryTypeModal}
+                onDismiss={() => setShowSetPrimaryTypeModal(false)}
+                selectedFiles={
+                    isMultiSelect
+                        ? selectedItems.filter((item) => !item.isFolder)
+                        : selectedItem && !isFolder
+                        ? [selectedItem]
+                        : []
+                }
+                databaseId={databaseId!}
+                assetId={assetId!}
+                onSuccess={() => {
+                    setShowSetPrimaryTypeModal(false);
+                    // Refresh file list
+                    dispatch({ type: "REFRESH_FILES", payload: null });
+                }}
+            />
+
             <div
                 className="file-info-header"
                 style={{
@@ -599,6 +643,12 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                         onClick={() => setShowMoveFilesModal(true)}
                                     >
                                         Move/Copy File
+                                    </Button>
+                                    <Button
+                                        iconName="settings"
+                                        onClick={() => setShowSetPrimaryTypeModal(true)}
+                                    >
+                                        Set Primary Type
                                     </Button>
                                     <Button iconName="download" onClick={handleDownload}>
                                         Download File
@@ -716,6 +766,14 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     </div>
                                 )}
                         </div>
+                    </div>
+                )}
+
+                {/* Show Primary Type for files only */}
+                {!isFolder && selectedItem.level > 0 && (
+                    <div className="file-info-item">
+                        <div className="file-info-label">Primary Type:</div>
+                        <div className="file-info-value">{selectedItem.primaryType || "None"}</div>
                     </div>
                 )}
 

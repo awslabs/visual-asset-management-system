@@ -37,7 +37,8 @@ export interface storageResources {
     };
     dynamo: {
         appFeatureEnabledStorageTable: dynamodb.Table;
-        assetLinksStorageTable: dynamodb.Table;
+        assetLinksStorageTableV2: dynamodb.Table;
+        assetLinksMetadataStorageTable: dynamodb.Table;
         assetStorageTable: dynamodb.Table;
         assetUploadsStorageTable: dynamodb.Table;
         assetVersionsStorageTable: dynamodb.Table;
@@ -692,33 +693,53 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         },
     });
 
-    const assetLinksStorageTable = new dynamodb.Table(scope, "AssetLinksStorageTable", {
+    const assetLinksStorageTableV2 = new dynamodb.Table(scope, "AssetLinksStorageTableV2.2", {
         ...dynamodbDefaultProps,
         partitionKey: {
-            name: "assetIdFrom",
+            name: "assetLinkId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    assetLinksStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "fromAssetGSI",
+        partitionKey: {
+            name: "fromAssetDatabaseId:fromAssetId",
             type: dynamodb.AttributeType.STRING,
         },
         sortKey: {
-            name: "assetIdTo",
+            name: "toAssetDatabaseId:toAssetId",
             type: dynamodb.AttributeType.STRING,
         },
     });
 
-    assetLinksStorageTable.addGlobalSecondaryIndex({
-        indexName: "AssetIdFromGSI",
+    assetLinksStorageTableV2.addGlobalSecondaryIndex({
+        indexName: "toAssetGSI",
         partitionKey: {
-            name: "assetIdFrom",
+            name: "toAssetDatabaseId:toAssetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "fromAssetDatabaseId:fromAssetId",
             type: dynamodb.AttributeType.STRING,
         },
     });
 
-    assetLinksStorageTable.addGlobalSecondaryIndex({
-        indexName: "AssetIdToGSI",
-        partitionKey: {
-            name: "assetIdTo",
-            type: dynamodb.AttributeType.STRING,
-        },
-    });
+    const assetLinksMetadataStorageTable = new dynamodb.Table(
+        scope,
+        "AssetLinksMetadataStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "assetLinkId",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: "metadataKey",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
 
     const assetFileVersionsStorageTable = new dynamodb.Table(
         scope,
@@ -798,6 +819,8 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         },
         dynamo: {
             appFeatureEnabledStorageTable: appFeatureEnabledStorageTable,
+            assetLinksStorageTableV2: assetLinksStorageTableV2,
+            assetLinksMetadataStorageTable: assetLinksMetadataStorageTable,
             assetStorageTable: assetStorageTable,
             assetUploadsStorageTable: assetUploadsStorageTable,
             assetFileVersionsStorageTable: assetFileVersionsStorageTable,
@@ -814,7 +837,6 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
             tagTypeStorageTable: tagTypeStorageTable,
             s3AssetBucketsStorageTable: s3AssetBucketsStorageTable,
             subscriptionsStorageTable: subscriptionsStorageTable,
-            assetLinksStorageTable: assetLinksStorageTable,
             rolesStorageTable: rolesStorageTable,
             userRolesStorageTable: userRolesStorageTable,
             userStorageTable: userStorageTable,

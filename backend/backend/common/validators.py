@@ -203,6 +203,9 @@ def validate_string_max_length(name, value, max_length):
         return (False, name + " must be lower than " + str(max_length) + " characters")
     return (True, '')
 
+def validate_string_max_length_30(name, value):
+    return validate_string_max_length(name, value, 30)
+
 def validate_string_json(name, value):
     try:
         json.loads(value)
@@ -340,6 +343,10 @@ def validate(values):
                 return (valid, message)
         if v['validator'] == 'USERID_ARRAY':
             (valid, message) = validate_userid_array(k, v['value'])
+            if not valid:
+                return (valid, message)
+        if v['validator'] == 'STRING_30':
+            (valid, message) = validate_string_max_length_30(k, v['value'])
             if not valid:
                 return (valid, message)
         if v['validator'] == 'STRING_256':

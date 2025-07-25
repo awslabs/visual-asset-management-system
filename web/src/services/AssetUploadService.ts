@@ -6,12 +6,6 @@
 import { API } from "aws-amplify";
 import { Metadata } from "../components/single/Metadata";
 
-export interface AssetLinks {
-    parents: string[];
-    child: string[];
-    related: string[];
-}
-
 export interface CreateAssetRequest {
     assetId?: string;
     assetName: string;
@@ -19,7 +13,20 @@ export interface CreateAssetRequest {
     description: string;
     isDistributable: boolean;
     tags?: string[];
-    assetLinks?: AssetLinks;
+}
+
+export interface CreateAssetLinkRequest {
+    fromAssetId: string;
+    fromAssetDatabaseId: string;
+    toAssetId: string;
+    toAssetDatabaseId: string;
+    relationshipType: "related" | "parentChild";
+    tags?: string[];
+}
+
+export interface CreateAssetLinkResponse {
+    assetLinkId: string;
+    message: string;
 }
 
 export interface CreateAssetResponse {
@@ -113,6 +120,24 @@ export class AssetUploadService {
     }
 
     /**
+     * Creates a new asset link between two assets
+     * @param linkData Asset link data to create
+     * @returns Promise with the created asset link ID
+     */
+    async createAssetLink(linkData: CreateAssetLinkRequest): Promise<CreateAssetLinkResponse> {
+        try {
+            const response = await API.post("api", "asset-links", {
+                "Content-type": "application/json",
+                body: linkData,
+            });
+            return response;
+        } catch (error) {
+            console.error("Error creating asset link:", error);
+            throw error;
+        }
+    }
+
+    /**
      * Adds metadata to an existing asset
      * @param databaseId Database ID
      * @param assetId Asset ID
@@ -186,6 +211,32 @@ export class AssetUploadService {
             return etag.replace(/"/g, "");
         } catch (error) {
             console.error("Error uploading part:", error);
+            throw error;
+        }
+    }
+
+    /**
+     * Creates metadata for an asset link
+     * @param assetLinkId Asset link ID
+     * @param metadata Metadata to create
+     * @returns Promise with the result
+     */
+    async createAssetLinkMetadata(
+        assetLinkId: string,
+        metadata: {
+            metadataKey: string;
+            metadataValue: string;
+            metadataValueType: "XYZ" | "String";
+        }
+    ): Promise<any> {
+        try {
+            const response = await API.post("api", `asset-links/${assetLinkId}/metadata`, {
+                "Content-type": "application/json",
+                body: metadata,
+            });
+            return response;
+        } catch (error) {
+            console.error("Error creating asset link metadata:", error);
             throw error;
         }
     }
