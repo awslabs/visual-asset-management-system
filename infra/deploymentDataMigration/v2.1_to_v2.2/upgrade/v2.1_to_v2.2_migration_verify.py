@@ -256,6 +256,17 @@ def verify_comment_migration(dynamodb, comments_table_name, assets_table_name, l
     comments = migration.scan_table(dynamodb, comments_table_name, limit)
     logger.info(f"Found {len(comments)} comments to verify")
     
+    # Build asset lookup from assets table since we need to find assets by assetId
+    # but the table has composite key (databaseId, assetId)
+    logger.info(f"Building asset lookup from {assets_table_name}")
+    assets = migration.scan_table(dynamodb, assets_table_name)
+    asset_lookup = {}
+    for asset in assets:
+        asset_id = asset.get('assetId')
+        if asset_id:
+            asset_lookup[asset_id] = asset
+    logger.info(f"Built asset lookup with {len(asset_lookup)} entries")
+    
     success_count = 0
     error_count = 0
     errors = []
@@ -291,15 +302,10 @@ def verify_comment_migration(dynamodb, comments_table_name, assets_table_name, l
                 })
                 continue
             
-            # Get the asset record
-            assets_table = dynamodb.Table(assets_table_name)
-            response = assets_table.get_item(
-                Key={
-                    'assetId': asset_id
-                }
-            )
+            # Get the asset from our lookup
+            asset = asset_lookup.get(asset_id)
             
-            if 'Item' not in response:
+            if not asset:
                 error_count += 1
                 error_msg = f"Asset {asset_id} not found for comment"
                 logger.warning(error_msg)
@@ -309,8 +315,6 @@ def verify_comment_migration(dynamodb, comments_table_name, assets_table_name, l
                     'error_message': error_msg
                 })
                 continue
-            
-            asset = response['Item']
             
             # Check if the asset has currentVersionId
             if 'currentVersionId' not in asset:
@@ -530,7 +534,21 @@ def verify_asset_updates(dynamodb, assets_table_name, base_assets_prefix, limit=
                 continue
             
             # Check that assetLocation.Key has the correct format
+            # Apply the same logic as the migration script for creating the final key
             expected_key = f"{base_assets_prefix}{asset_id}/"
+            
+            # Remove any starting slashes from the expected key (same as migration script)
+            if expected_key.startswith('/'):
+                expected_key = expected_key[1:]
+            
+            # Add forward slash at end if not exists
+            if not expected_key.endswith('/'):
+                expected_key = expected_key + '/'
+            
+            # If only a slash, make it empty
+            if expected_key == '/':
+                expected_key = ''
+            
             if asset_location['Key'] != expected_key:
                 error_count += 1
                 error_msg = f"Asset {asset_id} has incorrect Key in assetLocation: {asset_location['Key']}, expected: {expected_key}"
@@ -829,7 +847,7 @@ def main():
         logger.error("Please set the base_assets_prefix in the CONFIG or provide it with --base-assets-prefix")
         return 1
     
-    if migration.CONFIG['bucket_name'] == 'YOUR_BUCKET_NAME':
+    if migration.CONFIG['asset_bucket_name'] == 'YOUR_ASSET_BUCKET_NAME':
         logger.error("Please set the bucket_name in the CONFIG or provide it with --bucket-name")
         return 1
     

@@ -606,8 +606,8 @@ def migrate_asset_links(dynamodb, asset_links_table_name, asset_links_table_v2_n
         logger.info(f"Found {len(links)} asset links to migrate")
         
         # Collect all asset IDs for batch lookup
-        from_asset_ids = [link.get('assetIdfrom') for link in links if 'assetIdfrom' in link]
-        to_asset_ids = [link.get('assetIdto') for link in links if 'assetIdto' in link]
+        from_asset_ids = [link.get('assetIdFrom') for link in links if 'assetIdFrom' in link]
+        to_asset_ids = [link.get('assetIdTo') for link in links if 'assetIdTo' in link]
         all_asset_ids = from_asset_ids + to_asset_ids
         
         # Batch get database IDs for all assets
@@ -621,8 +621,8 @@ def migrate_asset_links(dynamodb, asset_links_table_name, asset_links_table_v2_n
         # Process each asset link
         for link in links:
             relation_id = link.get('relationId')
-            from_asset_id = link.get('assetIdfrom')
-            to_asset_id = link.get('assetIdto')
+            from_asset_id = link.get('assetIdFrom')
+            to_asset_id = link.get('assetIdTo')
             relationship_type = link.get('relationshipType', 'related')
             
             if not relation_id or not from_asset_id or not to_asset_id:

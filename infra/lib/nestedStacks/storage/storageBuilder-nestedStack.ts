@@ -805,6 +805,38 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         },
     });
 
+    ///DEPRECATED TABLES - KEPT FOR DATA MIGRATION PURPOSES
+
+    const assetLinksStorageTableDeprecated = new dynamodb.Table(scope, "AssetLinksStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "assetIdFrom",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "assetIdTo",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    assetLinksStorageTableDeprecated.addGlobalSecondaryIndex({
+        indexName: "AssetIdFromGSI",
+        partitionKey: {
+            name: "assetIdFrom",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    assetLinksStorageTableDeprecated.addGlobalSecondaryIndex({
+        indexName: "AssetIdToGSI",
+        partitionKey: {
+            name: "assetIdTo",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    ///DEPRECATED TABLES
+
     return {
         encryption: {
             kmsKey: kmsEncryptionKey,
