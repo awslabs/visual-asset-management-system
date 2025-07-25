@@ -295,6 +295,8 @@ export function searchBuilder(
 
         onS3ObjectCreatedQueue.grantConsumeMessages(sqsBucketSyncFunctionCreated);
 
+        onS3ObjectCreatedQueue.grantConsumeMessages(sqsBucketSyncFunctionCreated);
+
         // The functions poll the respective queues, which is populated by messages sent to the topic.
         const esmCreated = new lambda.EventSourceMapping(
             scope,
