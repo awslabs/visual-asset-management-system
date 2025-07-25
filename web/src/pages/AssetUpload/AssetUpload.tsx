@@ -3,7 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { createContext, Dispatch, useContext, useEffect, useReducer, useState } from "react";
+import React, {
+    createContext,
+    Dispatch,
+    useContext,
+    useEffect,
+    useReducer,
+    useState,
+    useMemo,
+    useCallback,
+} from "react";
 import {
     Box,
     Button,
@@ -27,8 +36,6 @@ import {
     Link,
     Table,
 } from "@cloudscape-design/components";
-import { API } from "aws-amplify";
-import { Cache } from "aws-amplify";
 import { useNavigate } from "react-router";
 import DatabaseSelector from "../../components/selectors/DatabaseSelector";
 import { previewFileFormats } from "../../common/constants/fileFormats";
@@ -47,6 +54,7 @@ import { fetchTags, fetchAllAssets, fetchtagTypes } from "../../services/APIServ
 import CustomTable from "../../components/table/CustomTable";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import { TagType } from "../Tag/TagType.interface";
+import { AssetLinksTab } from "../../components/asset/tabs/AssetLinksTab";
 
 const previewFileFormatsStr = previewFileFormats.join(", ");
 var tags: any[] = [];
@@ -71,6 +79,11 @@ export class AssetDetail {
         parents?: any[];
         child?: any[];
         related?: any[];
+    };
+    assetLinksMetadata?: {
+        parents?: { [assetId: string]: any[] };
+        child?: { [assetId: string]: any[] };
+        related?: { [assetId: string]: any[] };
     };
     key?: string;
     isDistributable?: boolean;
@@ -124,6 +137,15 @@ type UpdateAssetLinks = {
         parents: string[];
         child: string[];
         related: string[];
+    };
+};
+
+type UpdateAssetLinksMetadata = {
+    type: "UPDATE_ASSET_LINKS_METADATA";
+    payload: {
+        parents?: { [assetId: string]: any[] };
+        child?: { [assetId: string]: any[] };
+        related?: { [assetId: string]: any[] };
     };
 };
 
@@ -183,6 +205,7 @@ type AssetDetailAction =
     | UpdateAssetFrontendTags
     | UpdateAssetLinksFe
     | UpdateAssetLinks
+    | UpdateAssetLinksMetadata
     | UpdateAssetType
     | UpdateAssetPipelines
     | UpdateAssetPreviewLocation
@@ -237,6 +260,11 @@ const assetDetailReducer = (
             return {
                 ...assetDetailState,
                 assetLinks: assetDetailAction.payload,
+            };
+        case "UPDATE_ASSET_LINKS_METADATA":
+            return {
+                ...assetDetailState,
+                assetLinksMetadata: assetDetailAction.payload,
             };
 
         case "UPDATE_ASSET_PIPELINES":
@@ -547,593 +575,75 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
 
 const AssetLinkingInfo = ({ setValid, showErrors }: AssetLinkingProps) => {
     const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
-    const [showLinkModal, setShowLinkModal] = useState(false);
-    const [selectedLinkType, setSelectedLinkType] = useState<OptionDefinition | null>(null);
-    const [searchedEntity, setSearchedEntity] = useState<string | null>(null);
-    const [searchResult, setSearchResult] = useState<any | null>(null);
     const { assetDetailState, assetDetailDispatch } = assetDetailContext;
-    const [showTable, setShowTable] = useState(false);
-    const [selectedItems, setSelectedItems] = useState<any[]>([]);
 
-    //Enabled Features
-    const config = Cache.getItem("config");
-    const [useNoOpenSearch] = useState(
-        config.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH)
+    // Handle asset links change from the new component - use useCallback to prevent recreation
+    const handleAssetLinksChange = useCallback(
+        (newAssetLinks: any) => {
+            console.log(
+                "handleAssetLinksChange called with:",
+                JSON.stringify(newAssetLinks, null, 2)
+            );
+
+            // Update the asset detail state with the new links and metadata
+            assetDetailDispatch({
+                type: "UPDATE_ASSET_LINKS_FE",
+                payload: newAssetLinks.assetLinksFe,
+            });
+            assetDetailDispatch({
+                type: "UPDATE_ASSET_LINKs",
+                payload: newAssetLinks.assetLinks,
+            });
+
+            // Store the metadata in the asset detail state using proper dispatch
+            if (newAssetLinks.assetLinksMetadata) {
+                console.log("Updating asset links metadata:", newAssetLinks.assetLinksMetadata);
+                assetDetailDispatch({
+                    type: "UPDATE_ASSET_LINKS_METADATA",
+                    payload: newAssetLinks.assetLinksMetadata,
+                });
+            }
+        },
+        [assetDetailDispatch]
     );
 
-    const handleEntitySearch = async () => {
-        try {
-            if (searchedEntity) {
-                let result;
-                if (!useNoOpenSearch) {
-                    //Use OpenSearch API
-                    const body = {
-                        tokens: [],
-                        operation: "AND",
-                        from: 0,
-                        size: 100,
-                        query: searchedEntity,
-                        filters: [
-                            {
-                                query_string: {
-                                    query: '(_rectype:("asset"))',
-                                },
-                            },
-                        ],
-                    };
-                    console.log("body", body);
-                    result = await API.post("api", "search", {
-                        "Content-type": "application/json",
-                        body: body,
-                    });
-                    result = result?.hits?.hits;
-                } else {
-                    //Use assets API
-                    result = await fetchAllAssets();
-                    result = result?.filter(
-                        (item: any) => item.databaseId.indexOf("#deleted") === -1
-                    );
-                    result = result?.filter((item: any) =>
-                        item.assetName.toLowerCase().includes(searchedEntity.toLowerCase())
-                    );
-                }
+    // Convert existing data to new format - use useMemo to prevent unnecessary recreations
+    const initialData = useMemo(
+        () => ({
+            assetLinksFe: {
+                parents: assetDetailState.assetLinksFe?.parents || [],
+                child: assetDetailState.assetLinksFe?.child || [],
+                related: assetDetailState.assetLinksFe?.related || [],
+            },
+            assetLinks: {
+                parents: assetDetailState.assetLinks?.parents || [],
+                child: assetDetailState.assetLinks?.child || [],
+                related: assetDetailState.assetLinks?.related || [],
+            },
+            assetLinksMetadata: {
+                parents: {},
+                child: {},
+                related: {},
+            },
+        }),
+        [
+            assetDetailState.assetLinksFe?.parents,
+            assetDetailState.assetLinksFe?.child,
+            assetDetailState.assetLinksFe?.related,
+            assetDetailState.assetLinks?.parents,
+            assetDetailState.assetLinks?.child,
+            assetDetailState.assetLinks?.related,
+        ]
+    );
 
-                if (result && Object.keys(result).length > 0) {
-                    setSearchResult(result);
-                } else {
-                    setSearchResult(null);
-                }
-                setShowTable(true);
-            }
-        } catch (error) {
-            console.error("Error fetching data:", error);
-        }
-    };
-
-    const [selectedAssets, setSelectedAssets] = useState<{
-        parents: any[];
-        child: any[];
-        related: any[];
-    }>({
-        parents: assetDetailState.assetLinksFe?.parents || [],
-        child: assetDetailState.assetLinksFe?.child || [],
-        related: assetDetailState.assetLinksFe?.related || [],
-    });
-    const [selectedAsset, setSelectedAsset] = useState<{
-        parents: any[];
-        child: any[];
-        related: any[];
-    }>({
-        parents: assetDetailState.assetLinks?.parents || [],
-        child: assetDetailState.assetLinks?.child || [],
-        related: assetDetailState.assetLinks?.related || [],
-    });
-
-    const deleteLink = (linkType: string, asset: any) => {
-        switch (linkType) {
-            case "parent":
-                setSelectedAssets((prevSelectedAssets) => ({
-                    ...prevSelectedAssets,
-                    parents: prevSelectedAssets.parents.filter(
-                        (parent) => parent.assetId !== asset.assetId
-                    ),
-                }));
-                setSelectedAsset((prevSelectedAssets) => ({
-                    ...prevSelectedAssets,
-                    parents: prevSelectedAssets.parents.filter(
-                        (assetId) => assetId !== asset.assetId
-                    ),
-                }));
-                break;
-            case "child":
-                setSelectedAssets((prevSelectedAssets) => ({
-                    ...prevSelectedAssets,
-                    child: prevSelectedAssets.child.filter(
-                        (child) => child.assetId !== asset.assetId
-                    ),
-                }));
-                setSelectedAsset((prevSelectedAssets) => ({
-                    ...prevSelectedAssets,
-                    child: prevSelectedAssets.child.filter((assetId) => assetId !== asset.assetId),
-                }));
-                break;
-            case "related":
-                setSelectedAssets((prevSelectedAssets) => ({
-                    ...prevSelectedAssets,
-                    related: prevSelectedAssets.related.filter(
-                        (related) => related.assetId !== asset.assetId
-                    ),
-                }));
-                setSelectedAsset((prevSelectedAssets) => ({
-                    ...prevSelectedAssets,
-                    related: prevSelectedAssets.related.filter(
-                        (assetId) => assetId !== asset.assetId
-                    ),
-                }));
-                break;
-            default:
-                break;
-        }
-    };
-
-    const assetCols = [
-        {
-            id: "assetId",
-            header: "Asset Name",
-            cell: (item: any) => (
-                <Link href={`#/databases/${item.databaseName}/assets/${item.assetId}`}>
-                    {item.assetName}
-                </Link>
-            ),
-            sortingField: "name",
-            isRowHeader: true,
-        },
-        {
-            id: "databaseId",
-            header: "Database Name",
-            cell: (item: any) => item.databaseName,
-            sortingField: "name",
-            isRowHeader: true,
-        },
-        {
-            id: "description",
-            header: "Description",
-            cell: (item: any) => item.description,
-            sortingField: "alt",
-        },
-    ];
-
-    const assetItems = Array.isArray(searchResult)
-        ? !useNoOpenSearch
-            ? searchResult.map((result) => ({
-                  //Search API results
-                  assetName: result._source.str_assetname || "",
-                  databaseName: result._source.str_databaseid || "",
-                  description: result._source.str_description || "",
-                  assetId: result._source.str_assetid || "",
-              }))
-            : //FetchAllAssets API Results (No OpenSearch)
-              searchResult.map((result) => ({
-                  //Search API results
-                  assetName: result.assetName || "",
-                  databaseName: result.databaseId || "",
-                  description: result.description || "",
-                  assetId: result.assetId || "",
-              }))
-        : []; //No result
-
-    const [parentLinks, setParentLinks] = useState<any[]>([]);
-    const [childLinks, setChildLinks] = useState<any[]>([]);
-    const [relatedLinks, setRelatedLinks] = useState<any[]>([]);
-    const [nameErrror, setNameError] = useState("");
-
-    useEffect(() => {
-        if (!assetDetailState.assetLinksFe) {
-            assetDetailDispatch({
-                type: "UPDATE_ASSET_LINKS_FE",
-                payload: {
-                    parents: [],
-                    child: [],
-                    related: [],
-                },
-            });
-        } else {
-            assetDetailDispatch({
-                type: "UPDATE_ASSET_LINKS_FE",
-                payload: selectedAssets,
-            });
-        }
-        if (!assetDetailState.assetLinks) {
-            assetDetailDispatch({
-                type: "UPDATE_ASSET_LINKs",
-                payload: {
-                    parents: [],
-                    child: [],
-                    related: [],
-                },
-            });
-        } else {
-            assetDetailDispatch({
-                type: "UPDATE_ASSET_LINKs",
-                payload: selectedAsset,
-            });
-        }
-        setValid(true);
-    }, [
-        assetDetailState.assetLinks,
-        selectedAsset,
-        assetDetailState.assetLinksFe,
-        selectedAssets,
-        assetOptions,
-        parentLinks,
-    ]);
     return (
-        <>
-            <Modal
-                visible={showLinkModal}
-                onDismiss={() => {
-                    setShowLinkModal(false);
-                }}
-                size="large"
-                header={"Add Linked Assets"}
-                footer={
-                    <Box float="right">
-                        <SpaceBetween direction="horizontal" size="xs">
-                            <Button
-                                variant="link"
-                                onClick={() => {
-                                    setShowLinkModal(false);
-                                }}
-                            >
-                                Cancel
-                            </Button>
-                            <Button
-                                variant="primary"
-                                onClick={() => {
-                                    setNameError("");
-                                    switch (selectedLinkType?.value) {
-                                        case "parent":
-                                            const childHasDuplicates = selectedItems.some(
-                                                (selectedItem) =>
-                                                    childLinks.find(
-                                                        (link) =>
-                                                            link.assetId === selectedItem.assetId
-                                                    ) !== undefined
-                                            );
-                                            if (childHasDuplicates) {
-                                                setNameError("This is already a child");
-                                                return;
-                                            }
-                                            setSelectedAssets((prevSelectedAssets) => ({
-                                                child: [
-                                                    ...prevSelectedAssets.child,
-                                                    {
-                                                        assetName: selectedItems[0].assetName,
-                                                        assetId: selectedItems[0].assetId,
-                                                        databaseId: selectedItems[0].databaseName,
-                                                    },
-                                                ],
-                                                parents: prevSelectedAssets.parents,
-                                                related: prevSelectedAssets.related,
-                                            }));
-                                            setSelectedAsset((prevSelectedAssets) => ({
-                                                child: [
-                                                    ...prevSelectedAssets.child,
-                                                    selectedItems[0].assetId,
-                                                ],
-                                                parents: prevSelectedAssets.parents,
-                                                related: prevSelectedAssets.related,
-                                            }));
-                                            setChildLinks((prevLinks) => [
-                                                ...prevLinks,
-                                                ...selectedItems,
-                                            ]);
-                                            break;
-                                        case "child":
-                                            const parentHasDuplicates = selectedItems.some(
-                                                (selectedItem) =>
-                                                    parentLinks.find(
-                                                        (link) =>
-                                                            link.assetId === selectedItem.assetId
-                                                    ) !== undefined
-                                            );
-                                            if (parentHasDuplicates) {
-                                                setNameError("This is already a parent");
-                                                return;
-                                            }
-                                            setSelectedAssets((prevSelectedAssets) => ({
-                                                parents: [
-                                                    ...prevSelectedAssets.parents,
-                                                    {
-                                                        assetName: selectedItems[0].assetName,
-                                                        assetId: selectedItems[0].assetId,
-                                                        databaseId: selectedItems[0].databaseName,
-                                                    },
-                                                ],
-                                                child: prevSelectedAssets.child,
-                                                related: prevSelectedAssets.related,
-                                            }));
-                                            setSelectedAsset((prevSelectedAssets) => ({
-                                                parents: [
-                                                    ...prevSelectedAssets.parents,
-                                                    selectedItems[0].assetId,
-                                                ],
-                                                child: prevSelectedAssets.child,
-                                                related: prevSelectedAssets.related,
-                                            }));
-
-                                            setParentLinks((prevLinks) => [
-                                                ...prevLinks,
-                                                ...selectedItems,
-                                            ]);
-                                            break;
-                                        case "related":
-                                            const relatedHasDuplicates = selectedItems.some(
-                                                (selectedItem) =>
-                                                    relatedLinks.find(
-                                                        (link) =>
-                                                            link.assetId === selectedItem.assetId
-                                                    ) !== undefined
-                                            );
-                                            if (relatedHasDuplicates) {
-                                                setNameError("This is already related");
-                                                return;
-                                            }
-                                            setSelectedAssets((prevSelectedAssets) => ({
-                                                related: [
-                                                    ...prevSelectedAssets.related,
-                                                    {
-                                                        assetName: selectedItems[0].assetName,
-                                                        assetId: selectedItems[0].assetId,
-                                                        databaseId: selectedItems[0].databaseName,
-                                                    },
-                                                ],
-                                                child: prevSelectedAssets.child,
-                                                parents: prevSelectedAssets.parents,
-                                            }));
-                                            setSelectedAsset((prevSelectedAssets) => ({
-                                                related: [
-                                                    ...prevSelectedAssets.related,
-                                                    selectedItems[0].assetId,
-                                                ],
-                                                child: prevSelectedAssets.child,
-                                                parents: prevSelectedAssets.parents,
-                                            }));
-                                            setRelatedLinks((prevLinks) => [
-                                                ...prevLinks,
-                                                ...selectedItems,
-                                            ]);
-                                            break;
-                                        default:
-                                            break;
-                                    }
-                                    setShowLinkModal(false);
-                                    setSearchedEntity("");
-                                    setSelectedLinkType(null);
-                                    setShowTable(false);
-                                }}
-                            >
-                                Add Links
-                            </Button>
-                        </SpaceBetween>
-                    </Box>
-                }
-            >
-                <Form>
-                    <SpaceBetween direction="vertical" size="l">
-                        <FormField
-                            label="Relationship Type"
-                            constraintText="Required. Select one event type"
-                        >
-                            <Select
-                                selectedOption={selectedLinkType}
-                                placeholder="Relationship Types"
-                                options={[
-                                    {
-                                        label: "Parent To",
-                                        value: "parent",
-                                    },
-                                    {
-                                        label: "Child To",
-                                        value: "child",
-                                    },
-                                    {
-                                        label: "Related To",
-                                        value: "related",
-                                    },
-                                ]}
-                                onChange={({ detail }) => {
-                                    setSelectedLinkType(detail.selectedOption as OptionDefinition);
-                                }}
-                            />
-                        </FormField>
-
-                        <FormField
-                            label="Entity Name"
-                            constraintText="Input asset name. Press Enter to search."
-                            errorText={nameErrror}
-                        >
-                            <Input
-                                placeholder="Search"
-                                type="search"
-                                value={searchedEntity || ""}
-                                onChange={({ detail }) => {
-                                    console.log(detail.value);
-                                    setSearchedEntity(detail.value);
-                                    setShowTable(false);
-                                    setSelectedItems([]);
-                                    setNameError("");
-                                }}
-                                onKeyDown={({ detail }) => {
-                                    if (detail.key === "Enter") {
-                                        handleEntitySearch();
-                                    }
-                                }}
-                            />
-                        </FormField>
-                        {showTable && (
-                            <FormField label="Entity">
-                                <CustomTable
-                                    columns={assetCols}
-                                    items={assetItems}
-                                    selectedItems={selectedItems}
-                                    setSelectedItems={setSelectedItems}
-                                    trackBy={"assetId"}
-                                />
-                            </FormField>
-                        )}
-                    </SpaceBetween>
-                </Form>
-            </Modal>
-
-            <Container
-                header={
-                    <Header
-                        variant="h2"
-                        actions={
-                            <SpaceBetween direction="horizontal" size="xs">
-                                <Button
-                                    variant="primary"
-                                    onClick={() => {
-                                        setShowLinkModal(true);
-                                    }}
-                                >
-                                    Add Link
-                                </Button>
-                            </SpaceBetween>
-                        }
-                    >
-                        Linked {Synonyms.Asset}s
-                    </Header>
-                }
-            >
-                <Grid gridDefinition={[{ colspan: 4 }, { colspan: 4 }, { colspan: 4 }]}>
-                    <Table
-                        columnDefinitions={[
-                            {
-                                id: "assetName",
-                                header: "Asset Name",
-                                cell: (item) => (
-                                    <Link
-                                        href={`#/databases/${item.databaseId}/assets/${item.assetId}`}
-                                    >
-                                        {item.assetName || "-"}
-                                    </Link>
-                                ),
-                                sortingField: "assetName",
-                                isRowHeader: true,
-                            },
-                            {
-                                id: "actions",
-                                header: "",
-                                cell: (item) => (
-                                    <Box float="right">
-                                        <Button
-                                            iconName="remove"
-                                            variant="icon"
-                                            onClick={() => deleteLink("parent", item)}
-                                        ></Button>
-                                    </Box>
-                                ),
-                            },
-                        ]}
-                        items={selectedAssets.parents}
-                        loadingText="Loading Assets"
-                        sortingDisabled
-                        empty={
-                            <Box margin={{ vertical: "xs" }} textAlign="center" color="inherit">
-                                <SpaceBetween size="m">
-                                    <b>No parent asset</b>
-                                </SpaceBetween>
-                            </Box>
-                        }
-                        header={<Header variant="h3">Parent Assets</Header>}
-                    />
-                    <Table
-                        columnDefinitions={[
-                            {
-                                id: "assetName",
-                                header: "Asset Name",
-                                cell: (item) => (
-                                    <Link
-                                        href={`#/databases/${item.databaseId}/assets/${item.assetId}`}
-                                    >
-                                        {item.assetName || "-"}
-                                    </Link>
-                                ),
-                                sortingField: "assetName",
-                                isRowHeader: true,
-                            },
-                            {
-                                id: "actions",
-                                header: "",
-                                cell: (item) => (
-                                    <Box float="right">
-                                        <Button
-                                            iconName="remove"
-                                            variant="icon"
-                                            onClick={() => deleteLink("child", item)}
-                                        ></Button>
-                                    </Box>
-                                ),
-                            },
-                        ]}
-                        items={selectedAssets.child}
-                        loadingText="Loading Assets"
-                        sortingDisabled
-                        empty={
-                            <Box margin={{ vertical: "xs" }} textAlign="center" color="inherit">
-                                <SpaceBetween size="m">
-                                    <b>No child asset</b>
-                                </SpaceBetween>
-                            </Box>
-                        }
-                        header={<Header variant="h3">Child Assets</Header>}
-                    />
-                    <Table
-                        columnDefinitions={[
-                            {
-                                id: "assetName",
-                                header: "Asset Name",
-                                cell: (item) => (
-                                    <Link
-                                        href={`#/databases/${item.databaseId}/assets/${item.assetId}`}
-                                    >
-                                        {item.assetName || "-"}
-                                    </Link>
-                                ),
-                                sortingField: "assetName",
-                                isRowHeader: true,
-                            },
-                            {
-                                id: "actions",
-                                header: "",
-                                cell: (item) => (
-                                    <Box float="right">
-                                        <Button
-                                            iconName="remove"
-                                            variant="icon"
-                                            onClick={() => deleteLink("related", item)}
-                                        ></Button>
-                                    </Box>
-                                ),
-                            },
-                        ]}
-                        items={selectedAssets.related}
-                        loadingText="Loading Assets"
-                        sortingDisabled
-                        empty={
-                            <Box margin={{ vertical: "xs" }} textAlign="center" color="inherit">
-                                <SpaceBetween size="m">
-                                    <b>No related asset</b>
-                                </SpaceBetween>
-                            </Box>
-                        }
-                        header={<Header variant="h3">Related Assets</Header>}
-                    />
-                </Grid>
-            </Container>
-        </>
+        <AssetLinksTab
+            mode="upload"
+            setValid={setValid}
+            showErrors={showErrors}
+            onAssetLinksChange={handleAssetLinksChange}
+            initialData={initialData}
+        />
     );
 };
 
@@ -1697,7 +1207,7 @@ const UploadForm = () => {
                             isOptional: false,
                         },
                         {
-                            title: `${Synonyms.Asset} Linking`,
+                            title: `${Synonyms.Asset} Relationships`,
                             content: (
                                 <AssetLinkingInfo
                                     setValid={(v: boolean) => {
@@ -1754,7 +1264,7 @@ export default function AssetUploadPage() {
                 <Grid gridDefinition={[{ colspan: { default: 12 } }]}>
                     <div>
                         <TextContent>
-                            <Header variant="h1">Upload and Create {Synonyms.Asset}</Header>
+                            <Header variant="h1">Create and Upload {Synonyms.Asset}</Header>
                         </TextContent>
                         <UploadForm />
                     </div>

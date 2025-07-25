@@ -59,9 +59,9 @@ import {
     buildUnSubscribeFunction,
 } from "../../lambdaBuilder/subscriptionFunctions";
 import {
-    buildAssetLinkService,
-    buildGetAssetLinksFunction,
-    buildDeleteAssetLinksFunction,
+    buildAssetLinksService,
+    buildCreateAssetLinkFunction,
+    buildAssetLinksMetadataFunction,
 } from "../../lambdaBuilder/assetsLinkFunctions";
 import { buildSearchFunction } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
 import {
@@ -515,12 +515,14 @@ export function apiBuilder(
         api: api,
     });
 
-    //Link Assets Resources
-    const linkAssetService = buildAssetLinkService(
+    //Asset Links Resources
+    // Create Asset Link (POST)
+    const createAssetLinkService = buildCreateAssetLinkFunction(
         scope,
         lambdaCommonBaseLayer,
         config,
-        storageResources.dynamo.assetLinksStorageTable,
+        storageResources.dynamo.assetLinksStorageTableV2,
+        storageResources.dynamo.assetLinksMetadataStorageTable,
         storageResources.dynamo.assetStorageTable,
         storageResources.dynamo.userRolesStorageTable,
         storageResources.dynamo.authEntitiesStorageTable,
@@ -529,17 +531,19 @@ export function apiBuilder(
         subnets,
         storageResources.encryption.kmsKey
     );
-    attachFunctionToApi(scope, linkAssetService, {
+    attachFunctionToApi(scope, createAssetLinkService, {
         routePath: "/asset-links",
         method: apigwv2.HttpMethod.POST,
         api: api,
     });
 
-    const getAssetLinksService = buildGetAssetLinksFunction(
+    // Get and Delete Asset Links (GET and DELETE)
+    const assetLinksService = buildAssetLinksService(
         scope,
         lambdaCommonBaseLayer,
         config,
-        storageResources.dynamo.assetLinksStorageTable,
+        storageResources.dynamo.assetLinksStorageTableV2,
+        storageResources.dynamo.assetLinksMetadataStorageTable,
         storageResources.dynamo.assetStorageTable,
         storageResources.dynamo.userRolesStorageTable,
         storageResources.dynamo.authEntitiesStorageTable,
@@ -548,17 +552,34 @@ export function apiBuilder(
         subnets,
         storageResources.encryption.kmsKey
     );
-    attachFunctionToApi(scope, getAssetLinksService, {
+    attachFunctionToApi(scope, assetLinksService, {
         routePath: "/asset-links/{assetId}",
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
+    attachFunctionToApi(scope, assetLinksService, {
+        routePath: "/asset-links/single/{assetLinkId}",
+        method: apigwv2.HttpMethod.GET,
+        api: api,
+    });
+    attachFunctionToApi(scope, assetLinksService, {
+        routePath: "/asset-links/{assetLinkId}",
+        method: apigwv2.HttpMethod.PUT,
+        api: api,
+    });
+    attachFunctionToApi(scope, assetLinksService, {
+        routePath: "/asset-links/{relationId}",
+        method: apigwv2.HttpMethod.DELETE,
+        api: api,
+    });
 
-    const deleteAssetLinksService = buildDeleteAssetLinksFunction(
+    // Asset Links Metadata Resources
+    const assetLinksMetadataService = buildAssetLinksMetadataFunction(
         scope,
         lambdaCommonBaseLayer,
         config,
-        storageResources.dynamo.assetLinksStorageTable,
+        storageResources.dynamo.assetLinksStorageTableV2,
+        storageResources.dynamo.assetLinksMetadataStorageTable,
         storageResources.dynamo.assetStorageTable,
         storageResources.dynamo.userRolesStorageTable,
         storageResources.dynamo.authEntitiesStorageTable,
@@ -567,8 +588,23 @@ export function apiBuilder(
         subnets,
         storageResources.encryption.kmsKey
     );
-    attachFunctionToApi(scope, deleteAssetLinksService, {
-        routePath: "/asset-links/{relationId}",
+    attachFunctionToApi(scope, assetLinksMetadataService, {
+        routePath: "/asset-links/{assetLinkId}/metadata",
+        method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+    attachFunctionToApi(scope, assetLinksMetadataService, {
+        routePath: "/asset-links/{assetLinkId}/metadata",
+        method: apigwv2.HttpMethod.GET,
+        api: api,
+    });
+    attachFunctionToApi(scope, assetLinksMetadataService, {
+        routePath: "/asset-links/{assetLinkId}/metadata/{metadataKey}",
+        method: apigwv2.HttpMethod.PUT,
+        api: api,
+    });
+    attachFunctionToApi(scope, assetLinksMetadataService, {
+        routePath: "/asset-links/{assetLinkId}/metadata/{metadataKey}",
         method: apigwv2.HttpMethod.DELETE,
         api: api,
     });
@@ -671,6 +707,12 @@ export function apiBuilder(
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/unarchiveFile",
         method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+
+    attachFunctionToApi(scope, assetFilesFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/setPrimaryFile",
+        method: apigwv2.HttpMethod.PUT,
         api: api,
     });
 

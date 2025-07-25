@@ -13,6 +13,7 @@ This script performs the following migrations:
 5. Move version number from currentVersion.Version to currentVersionId
 6. Remove specified fields from assetsTable records
 7. Migrate comments to reference current asset versions (optional)
+8. Migrate assetLinks table to new schema with database IDs
 
 Usage:
     python v2.1_to_v2.2_migration.py --profile <aws-profile-name>
@@ -55,6 +56,8 @@ CONFIG = {
     "s3_asset_buckets_table_name": "YOUR_S3_ASSET_BUCKETS_TABLE_NAME",
     "databases_table_name": "YOUR_DATABASES_TABLE_NAME",
     "comment_storage_table_name": "YOUR_COMMENT_STORAGE_TABLE_NAME",
+    "asset_links_table_name": "YOUR_ASSET_LINKS_TABLE_NAME",
+    "asset_links_table_v2_name": "YOUR_ASSET_LINKS_TABLE_V2_NAME",
     
     # Asset configuration
     "base_assets_prefix": "YOUR_BASE_ASSETS_PREFIX",
@@ -500,6 +503,178 @@ def migrate_asset_versions(dynamodb, assets_table_name, asset_versions_table_nam
     logger.info(f"Completed migration of asset versions: {success_count} successful, {error_count} errors")
     return success_count, error_count
 
+def batch_get_asset_database_ids(dynamodb, assets_table_name, asset_ids):
+    """
+    Batch get database IDs for a list of asset IDs.
+    
+    Args:
+        dynamodb: DynamoDB resource
+        assets_table_name (str): Name of the assets table
+        asset_ids (list): List of asset IDs to look up
+        
+    Returns:
+        dict: Dictionary mapping asset IDs to their database IDs
+    """
+    asset_database_map = {}
+    
+    # Remove duplicates
+    unique_asset_ids = list(set(asset_ids))
+    
+    # Process in batches of 100 (DynamoDB batch_get_item limit)
+    batch_size = 100
+    for i in range(0, len(unique_asset_ids), batch_size):
+        batch = unique_asset_ids[i:i + batch_size]
+        
+        try:
+            # For each asset ID, we need to scan the table since we don't know the database ID
+            # This is inefficient but necessary for this migration
+            assets_table = dynamodb.Table(assets_table_name)
+            
+            for asset_id in batch:
+                # Query for this asset ID across all databases
+                response = assets_table.scan(
+                    FilterExpression=boto3.dynamodb.conditions.Attr('assetId').eq(asset_id)
+                )
+                
+                items = response.get('Items', [])
+                
+                if items:
+                    # Use the first matching item's database ID
+                    asset_database_map[asset_id] = items[0].get('databaseId')
+                    
+                # Handle pagination if necessary
+                while 'LastEvaluatedKey' in response:
+                    response = assets_table.scan(
+                        FilterExpression=boto3.dynamodb.conditions.Attr('assetId').eq(asset_id),
+                        ExclusiveStartKey=response['LastEvaluatedKey']
+                    )
+                    
+                    items = response.get('Items', [])
+                    
+                    if items and asset_id not in asset_database_map:
+                        asset_database_map[asset_id] = items[0].get('databaseId')
+                        break
+                
+        except Exception as e:
+            logger.exception(f"Error in batch get asset database IDs: {e}")
+    
+    return asset_database_map
+
+def migrate_asset_links(dynamodb, asset_links_table_name, asset_links_table_v2_name, assets_table_name, limit=None):
+    """
+    Migrate asset links from old table to new table with updated schema.
+    
+    For each asset link:
+    1. Extract relationId, assetIdfrom, assetIdto, and relationshipType
+    2. Look up database IDs for both assets
+    3. Create new record with transformed schema
+    4. Insert into new asset links table
+    
+    Args:
+        dynamodb: DynamoDB resource
+        asset_links_table_name (str): Name of the old asset links table
+        asset_links_table_v2_name (str): Name of the new asset links v2 table
+        assets_table_name (str): Name of the assets table for database ID lookups
+        limit (int, optional): Maximum number of links to process
+        
+    Returns:
+        tuple: (success_count, error_count)
+    """
+    logger.info(f"Starting migration of asset links from {asset_links_table_name} to {asset_links_table_v2_name}")
+    
+    try:
+        # Get all asset links from the old table
+        asset_links_table = dynamodb.Table(asset_links_table_name)
+        asset_links_table_v2 = dynamodb.Table(asset_links_table_v2_name)
+        
+        # Scan the old asset links table
+        if limit:
+            response = asset_links_table.scan(Limit=limit)
+        else:
+            response = asset_links_table.scan()
+            
+        links = response.get('Items', [])
+        
+        # Handle pagination if necessary
+        while 'LastEvaluatedKey' in response:
+            if limit and len(links) >= limit:
+                break
+                
+            response = asset_links_table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
+            links.extend(response.get('Items', []))
+        
+        logger.info(f"Found {len(links)} asset links to migrate")
+        
+        # Collect all asset IDs for batch lookup
+        from_asset_ids = [link.get('assetIdFrom') for link in links if 'assetIdFrom' in link]
+        to_asset_ids = [link.get('assetIdTo') for link in links if 'assetIdTo' in link]
+        all_asset_ids = from_asset_ids + to_asset_ids
+        
+        # Batch get database IDs for all assets
+        logger.info(f"Looking up database IDs for {len(all_asset_ids)} assets")
+        asset_database_map = batch_get_asset_database_ids(dynamodb, assets_table_name, all_asset_ids)
+        logger.info(f"Found database IDs for {len(asset_database_map)} assets")
+        
+        success_count = 0
+        error_count = 0
+        
+        # Process each asset link
+        for link in links:
+            relation_id = link.get('relationId')
+            from_asset_id = link.get('assetIdFrom')
+            to_asset_id = link.get('assetIdTo')
+            relationship_type = link.get('relationshipType', 'related')
+            
+            if not relation_id or not from_asset_id or not to_asset_id:
+                error_count += 1
+                logger.warning(f"Skipped migrating link - missing required fields: {link}")
+                continue
+            
+            try:
+                # Look up database IDs
+                from_database_id = asset_database_map.get(from_asset_id)
+                to_database_id = asset_database_map.get(to_asset_id)
+                
+                if not from_database_id or not to_database_id:
+                    error_count += 1
+                    logger.warning(f"Skipped migrating link {relation_id} - could not find database IDs for assets")
+                    continue
+                
+                # Transform relationship type
+                if relationship_type in ['parent', 'child']:
+                    new_relationship_type = 'parentChild'
+                else:
+                    new_relationship_type = relationship_type
+                
+                # Create new asset link record
+                new_link = {
+                    'assetLinkId': relation_id,
+                    'fromAssetDatabaseId:fromAssetId': f"{from_database_id}:{from_asset_id}",
+                    'fromAssetDatabaseId': from_database_id,
+                    'fromAssetId': from_asset_id,
+                    'toAssetDatabaseId:toAssetId': f"{to_database_id}:{to_asset_id}",
+                    'toAssetDatabaseId': to_database_id,
+                    'toAssetId': to_asset_id,
+                    'relationshipType': new_relationship_type,
+                    'tags': []
+                }
+                
+                # Put the new link into the v2 table
+                asset_links_table_v2.put_item(Item=new_link)
+                success_count += 1
+                logger.info(f"Successfully migrated asset link {relation_id}")
+                
+            except Exception as e:
+                error_count += 1
+                logger.error(f"Error migrating asset link {relation_id}: {e}")
+        
+        logger.info(f"Completed migration of asset links: {success_count} successful, {error_count} errors")
+        return success_count, error_count
+        
+    except Exception as e:
+        logger.exception(f"Error in asset links migration: {e}")
+        return 0, 0
+
 def migrate_comments(dynamodb, comments_table_name, assets_table_name, limit=None):
     """
     Migrate comments to ensure they reference the current version of assets.
@@ -671,6 +846,8 @@ def main():
     parser.add_argument('--s3-asset-buckets-table', help='Name of the S3_Asset_Buckets table')
     parser.add_argument('--databases-table', help='Name of the databases table')
     parser.add_argument('--comments-table', help='Name of the comments table for migrating comments')
+    parser.add_argument('--asset-links-table', help='Name of the old asset links table')
+    parser.add_argument('--asset-links-table-v2', help='Name of the new asset links v2 table')
     parser.add_argument('--base-assets-prefix', help='Base assets prefix to use in assetLocation.Key')
     parser.add_argument('--asset-bucket-name', help='Name of the asset bucket to use for lookup')
     parser.add_argument('--dry-run', action='store_true', help='Perform a dry run without making changes')
@@ -697,6 +874,10 @@ def main():
         CONFIG['databases_table_name'] = args.databases_table
     if args.comments_table:
         CONFIG['comment_storage_table_name'] = args.comments_table
+    if args.asset_links_table:
+        CONFIG['asset_links_table_name'] = args.asset_links_table
+    if args.asset_links_table_v2:
+        CONFIG['asset_links_table_v2_name'] = args.asset_links_table_v2
     if args.base_assets_prefix:
         CONFIG['base_assets_prefix'] = args.base_assets_prefix
     if args.asset_bucket_name:
@@ -810,6 +991,21 @@ def main():
             )
         else:
             logger.info("Skipping comment migration - no comments table specified")
+            
+        # Step 5: Migrate asset links to the new schema
+        asset_links_success = 0
+        asset_links_errors = 0
+        if (CONFIG['asset_links_table_name'] != 'YOUR_ASSET_LINKS_TABLE_NAME' and 
+            CONFIG['asset_links_table_v2_name'] != 'YOUR_ASSET_LINKS_TABLE_V2_NAME'):
+            asset_links_success, asset_links_errors = migrate_asset_links(
+                dynamodb,
+                CONFIG['asset_links_table_name'],
+                CONFIG['asset_links_table_v2_name'],
+                CONFIG['assets_table_name'],
+                args.limit if args.limit else None
+            )
+        else:
+            logger.info("Skipping asset links migration - no asset links tables specified")
         
         # Print summary
         logger.info("Migration completed")
@@ -818,8 +1014,10 @@ def main():
         logger.info(f"Database records update: {db_success} successful, {db_errors} errors")
         if CONFIG['comment_storage_table_name'] != 'YOUR_COMMENT_STORAGE_TABLE_NAME':
             logger.info(f"Comment migration: {comment_success} successful, {comment_errors} errors, {comment_migrated} comments migrated")
+        if CONFIG['asset_links_table_name'] != 'YOUR_ASSET_LINKS_TABLE_NAME':
+            logger.info(f"Asset links migration: {asset_links_success} successful, {asset_links_errors} errors")
         
-        if version_errors > 0 or asset_errors > 0 or db_errors > 0 or comment_errors > 0:
+        if version_errors > 0 or asset_errors > 0 or db_errors > 0 or comment_errors > 0 or asset_links_errors > 0:
             logger.warning("Migration completed with errors - check the logs for details")
             return 1
         else:

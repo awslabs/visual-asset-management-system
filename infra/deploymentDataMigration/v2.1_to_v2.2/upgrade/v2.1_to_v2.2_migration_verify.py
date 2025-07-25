@@ -9,7 +9,9 @@ This script verifies that the migration from v2.1 to v2.2 was successful by:
 1. Checking that all assets have a corresponding version record
 2. Verifying that asset records have been updated correctly with new structure
 3. Verifying that database records have been updated with defaultBucketId
-4. Generating a report of the verification results
+4. Verifying that comments reference current asset versions (optional)
+5. Verifying that asset links have been migrated to the new schema (optional)
+6. Generating a report of the verification results
 
 Usage:
     python v2.1_to_v2.2_migration_verify.py --config your_config.json
@@ -32,7 +34,15 @@ from datetime import datetime
 from botocore.exceptions import ClientError
 
 # Import the migration script for configuration and utility functions
-import v2_1_to_v2_2_migration as migration
+import importlib.util
+import sys
+
+# Load the migration script dynamically since it has dots in the filename
+migration_script_path = os.path.join(os.path.dirname(__file__), 'v2.1_to_v2.2_migration.py')
+spec = importlib.util.spec_from_file_location("migration", migration_script_path)
+migration = importlib.util.module_from_spec(spec)
+sys.modules["migration"] = migration
+spec.loader.exec_module(migration)
 
 # Configure logging
 logging.basicConfig(
@@ -47,6 +57,185 @@ logger = logging.getLogger(__name__)
 # =====================================================================
 # VERIFICATION FUNCTIONS
 # =====================================================================
+
+def verify_asset_links_migration(dynamodb, asset_links_table_v2_name, assets_table_name, limit=None):
+    """
+    Verify that asset links have been properly migrated to the new schema.
+    
+    Args:
+        dynamodb: DynamoDB resource
+        asset_links_table_v2_name (str): Name of the new asset links v2 table
+        assets_table_name (str): Name of the assets table for database ID lookups
+        limit (int, optional): Maximum number of links to verify
+        
+    Returns:
+        tuple: (success_count, error_count, errors)
+    """
+    logger.info(f"Verifying asset links migration")
+    
+    # Get all asset links from the v2 table
+    asset_links = migration.scan_table(dynamodb, asset_links_table_v2_name, limit)
+    logger.info(f"Found {len(asset_links)} asset links to verify")
+    
+    success_count = 0
+    error_count = 0
+    errors = []
+    
+    # Process each asset link
+    for link in asset_links:
+        asset_link_id = link.get('assetLinkId')
+        
+        try:
+            # Verify required fields
+            required_fields = [
+                'assetLinkId', 
+                'fromAssetDatabaseId:fromAssetId', 
+                'fromAssetDatabaseId', 
+                'fromAssetId',
+                'toAssetDatabaseId:toAssetId', 
+                'toAssetDatabaseId', 
+                'toAssetId',
+                'relationshipType'
+            ]
+            
+            missing_fields = []
+            for field in required_fields:
+                if field not in link:
+                    missing_fields.append(field)
+            
+            if missing_fields:
+                error_count += 1
+                error_msg = f"Asset link {asset_link_id} is missing fields: {', '.join(missing_fields)}"
+                logger.warning(error_msg)
+                errors.append({
+                    'asset_id': link.get('fromAssetId', 'unknown'),
+                    'error_type': 'missing_required_fields',
+                    'error_message': error_msg
+                })
+                continue
+            
+            # Verify relationship type is valid
+            relationship_type = link.get('relationshipType')
+            if relationship_type not in ['related', 'parentChild']:
+                error_count += 1
+                error_msg = f"Asset link {asset_link_id} has invalid relationshipType: {relationship_type}"
+                logger.warning(error_msg)
+                errors.append({
+                    'asset_id': link.get('fromAssetId'),
+                    'error_type': 'invalid_relationship_type',
+                    'error_message': error_msg
+                })
+                continue
+            
+            # Verify composite keys are correctly formatted
+            from_composite = link.get('fromAssetDatabaseId:fromAssetId')
+            expected_from_composite = f"{link.get('fromAssetDatabaseId')}:{link.get('fromAssetId')}"
+            if from_composite != expected_from_composite:
+                error_count += 1
+                error_msg = f"Asset link {asset_link_id} has incorrect fromAssetDatabaseId:fromAssetId: {from_composite}, expected: {expected_from_composite}"
+                logger.warning(error_msg)
+                errors.append({
+                    'asset_id': link.get('fromAssetId'),
+                    'error_type': 'incorrect_composite_key',
+                    'error_message': error_msg
+                })
+                continue
+            
+            to_composite = link.get('toAssetDatabaseId:toAssetId')
+            expected_to_composite = f"{link.get('toAssetDatabaseId')}:{link.get('toAssetId')}"
+            if to_composite != expected_to_composite:
+                error_count += 1
+                error_msg = f"Asset link {asset_link_id} has incorrect toAssetDatabaseId:toAssetId: {to_composite}, expected: {expected_to_composite}"
+                logger.warning(error_msg)
+                errors.append({
+                    'asset_id': link.get('fromAssetId'),
+                    'error_type': 'incorrect_composite_key',
+                    'error_message': error_msg
+                })
+                continue
+            
+            # Verify that the referenced assets exist
+            from_asset_id = link.get('fromAssetId')
+            from_database_id = link.get('fromAssetDatabaseId')
+            to_asset_id = link.get('toAssetId')
+            to_database_id = link.get('toAssetDatabaseId')
+            
+            # Check from asset
+            assets_table = dynamodb.Table(assets_table_name)
+            from_response = assets_table.get_item(
+                Key={
+                    'databaseId': from_database_id,
+                    'assetId': from_asset_id
+                }
+            )
+            
+            if 'Item' not in from_response:
+                error_count += 1
+                error_msg = f"Asset link {asset_link_id} references non-existent from asset: {from_asset_id} in database {from_database_id}"
+                logger.warning(error_msg)
+                errors.append({
+                    'asset_id': from_asset_id,
+                    'error_type': 'missing_referenced_asset',
+                    'error_message': error_msg
+                })
+                continue
+            
+            # Check to asset
+            to_response = assets_table.get_item(
+                Key={
+                    'databaseId': to_database_id,
+                    'assetId': to_asset_id
+                }
+            )
+            
+            if 'Item' not in to_response:
+                error_count += 1
+                error_msg = f"Asset link {asset_link_id} references non-existent to asset: {to_asset_id} in database {to_database_id}"
+                logger.warning(error_msg)
+                errors.append({
+                    'asset_id': from_asset_id,
+                    'error_type': 'missing_referenced_asset',
+                    'error_message': error_msg
+                })
+                continue
+            
+            # Verify tags field exists and is an array
+            if 'tags' not in link:
+                error_count += 1
+                error_msg = f"Asset link {asset_link_id} is missing tags field"
+                logger.warning(error_msg)
+                errors.append({
+                    'asset_id': from_asset_id,
+                    'error_type': 'missing_tags_field',
+                    'error_message': error_msg
+                })
+                continue
+            
+            if not isinstance(link.get('tags'), list):
+                error_count += 1
+                error_msg = f"Asset link {asset_link_id} has invalid tags field: {link.get('tags')}, expected an array"
+                logger.warning(error_msg)
+                errors.append({
+                    'asset_id': from_asset_id,
+                    'error_type': 'invalid_tags_field',
+                    'error_message': error_msg
+                })
+                continue
+            
+            success_count += 1
+            
+        except Exception as e:
+            error_count += 1
+            error_msg = f"Error verifying asset link {asset_link_id}: {e}"
+            logger.error(error_msg)
+            errors.append({
+                'asset_id': link.get('fromAssetId', 'unknown'),
+                'error_type': 'exception',
+                'error_message': error_msg
+            })
+    
+    logger.info(f"Completed verification of asset links migration: {success_count} successful, {error_count} errors")
+    return success_count, error_count, errors
 
 def verify_comment_migration(dynamodb, comments_table_name, assets_table_name, limit=None):
     """
@@ -66,6 +255,17 @@ def verify_comment_migration(dynamodb, comments_table_name, assets_table_name, l
     # Get all comments
     comments = migration.scan_table(dynamodb, comments_table_name, limit)
     logger.info(f"Found {len(comments)} comments to verify")
+    
+    # Build asset lookup from assets table since we need to find assets by assetId
+    # but the table has composite key (databaseId, assetId)
+    logger.info(f"Building asset lookup from {assets_table_name}")
+    assets = migration.scan_table(dynamodb, assets_table_name)
+    asset_lookup = {}
+    for asset in assets:
+        asset_id = asset.get('assetId')
+        if asset_id:
+            asset_lookup[asset_id] = asset
+    logger.info(f"Built asset lookup with {len(asset_lookup)} entries")
     
     success_count = 0
     error_count = 0
@@ -102,15 +302,10 @@ def verify_comment_migration(dynamodb, comments_table_name, assets_table_name, l
                 })
                 continue
             
-            # Get the asset record
-            assets_table = dynamodb.Table(assets_table_name)
-            response = assets_table.get_item(
-                Key={
-                    'assetId': asset_id
-                }
-            )
+            # Get the asset from our lookup
+            asset = asset_lookup.get(asset_id)
             
-            if 'Item' not in response:
+            if not asset:
                 error_count += 1
                 error_msg = f"Asset {asset_id} not found for comment"
                 logger.warning(error_msg)
@@ -120,8 +315,6 @@ def verify_comment_migration(dynamodb, comments_table_name, assets_table_name, l
                     'error_message': error_msg
                 })
                 continue
-            
-            asset = response['Item']
             
             # Check if the asset has currentVersionId
             if 'currentVersionId' not in asset:
@@ -341,7 +534,21 @@ def verify_asset_updates(dynamodb, assets_table_name, base_assets_prefix, limit=
                 continue
             
             # Check that assetLocation.Key has the correct format
+            # Apply the same logic as the migration script for creating the final key
             expected_key = f"{base_assets_prefix}{asset_id}/"
+            
+            # Remove any starting slashes from the expected key (same as migration script)
+            if expected_key.startswith('/'):
+                expected_key = expected_key[1:]
+            
+            # Add forward slash at end if not exists
+            if not expected_key.endswith('/'):
+                expected_key = expected_key + '/'
+            
+            # If only a slash, make it empty
+            if expected_key == '/':
+                expected_key = ''
+            
             if asset_location['Key'] != expected_key:
                 error_count += 1
                 error_msg = f"Asset {asset_id} has incorrect Key in assetLocation: {asset_location['Key']}, expected: {expected_key}"
@@ -448,7 +655,7 @@ def verify_database_updates(dynamodb, databases_table_name, limit=None):
     logger.info(f"Completed verification of database updates: {success_count} successful, {error_count} errors")
     return success_count, error_count, errors
 
-def generate_report(version_results, asset_results, database_results, comment_results=None, output_file=None):
+def generate_report(version_results, asset_results, database_results, comment_results=None, asset_links_results=None, output_file=None):
     """
     Generate a report of the verification results.
     
@@ -457,6 +664,7 @@ def generate_report(version_results, asset_results, database_results, comment_re
         asset_results (tuple): Results from verify_asset_updates
         database_results (tuple): Results from verify_database_updates
         comment_results (tuple, optional): Results from verify_comment_migration
+        asset_links_results (tuple, optional): Results from verify_asset_links_migration
         output_file (str, optional): Path to output file
         
     Returns:
@@ -471,6 +679,12 @@ def generate_report(version_results, asset_results, database_results, comment_re
     comment_error_details = []
     if comment_results:
         comment_success, comment_errors, comment_error_details = comment_results
+        
+    asset_links_success = 0
+    asset_links_errors = 0
+    asset_links_error_details = []
+    if asset_links_results:
+        asset_links_success, asset_links_errors, asset_links_error_details = asset_links_results
     
     # Create report directory if it doesn't exist
     report_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'reports')
@@ -504,6 +718,11 @@ def generate_report(version_results, asset_results, database_results, comment_re
         if comment_results:
             for error in comment_error_details:
                 writer.writerow(error)
+                
+        # Write asset links errors if available
+        if asset_links_results:
+            for error in asset_links_error_details:
+                writer.writerow(error)
     
     # Generate summary
     summary = {
@@ -533,6 +752,15 @@ def generate_report(version_results, asset_results, database_results, comment_re
         }
         summary['total_success'] += comment_success
         summary['total_errors'] += comment_errors
+        
+    # Add asset links verification results if available
+    if asset_links_results:
+        summary['asset_links_verification'] = {
+            'success_count': asset_links_success,
+            'error_count': asset_links_errors
+        }
+        summary['total_success'] += asset_links_success
+        summary['total_errors'] += asset_links_errors
     
     # Write summary to JSON file
     summary_file = output_file.replace('.csv', '_summary.json')
@@ -556,6 +784,7 @@ def main():
     parser.add_argument('--s3-asset-buckets-table', help='Name of the S3_Asset_Buckets table')
     parser.add_argument('--databases-table', help='Name of the databases table')
     parser.add_argument('--comments-table', help='Name of the comments table for verifying comment migration')
+    parser.add_argument('--asset-links-table-v2', help='Name of the new asset links v2 table for verifying asset links migration')
     parser.add_argument('--base-assets-prefix', help='Base assets prefix to use in assetLocation.Key')
     parser.add_argument('--asset-bucket-name', help='Name of the asset bucket used for storage')
     parser.add_argument('--config', help='Path to configuration file')
@@ -581,10 +810,12 @@ def main():
         migration.CONFIG['databases_table_name'] = args.databases_table
     if args.comments_table:
         migration.CONFIG['comment_storage_table_name'] = args.comments_table
+    if args.asset_links_table_v2:
+        migration.CONFIG['asset_links_table_v2_name'] = args.asset_links_table_v2
     if args.base_assets_prefix:
         migration.CONFIG['base_assets_prefix'] = args.base_assets_prefix
-    if args.bucket_name:
-        migration.CONFIG['bucket_name'] = args.bucket_name
+    if args.asset_bucket_name:
+        migration.CONFIG['asset_bucket_name'] = args.asset_bucket_name
     if args.profile:
         migration.CONFIG['aws_profile'] = args.profile
     if args.region:
@@ -616,7 +847,7 @@ def main():
         logger.error("Please set the base_assets_prefix in the CONFIG or provide it with --base-assets-prefix")
         return 1
     
-    if migration.CONFIG['bucket_name'] == 'YOUR_BUCKET_NAME':
+    if migration.CONFIG['asset_bucket_name'] == 'YOUR_ASSET_BUCKET_NAME':
         logger.error("Please set the bucket_name in the CONFIG or provide it with --bucket-name")
         return 1
     
@@ -667,6 +898,16 @@ def main():
                 migration.CONFIG['assets_table_name'],
                 args.limit
             )
+            
+        # Verify asset links migration if asset links v2 table is specified
+        asset_links_results = None
+        if migration.CONFIG['asset_links_table_v2_name'] != 'YOUR_ASSET_LINKS_TABLE_V2_NAME':
+            asset_links_results = verify_asset_links_migration(
+                dynamodb,
+                migration.CONFIG['asset_links_table_v2_name'],
+                migration.CONFIG['assets_table_name'],
+                args.limit
+            )
         
         # Generate report
         report_file, summary_file = generate_report(
@@ -674,6 +915,7 @@ def main():
             asset_results, 
             database_results, 
             comment_results,
+            asset_links_results,
             args.output
         )
         
@@ -685,6 +927,11 @@ def main():
         comment_errors = 0
         if comment_results:
             comment_success, comment_errors, _ = comment_results
+            
+        asset_links_success = 0
+        asset_links_errors = 0
+        if asset_links_results:
+            asset_links_success, asset_links_errors, _ = asset_links_results
         
         logger.info("Verification completed")
         logger.info(f"Asset versions verification: {version_success} successful, {version_errors} errors")
@@ -692,10 +939,12 @@ def main():
         logger.info(f"Database updates verification: {db_success} successful, {db_errors} errors")
         if comment_results:
             logger.info(f"Comment migration verification: {comment_success} successful, {comment_errors} errors")
+        if asset_links_results:
+            logger.info(f"Asset links migration verification: {asset_links_success} successful, {asset_links_errors} errors")
         logger.info(f"Report saved to: {report_file}")
         logger.info(f"Summary saved to: {summary_file}")
         
-        if version_errors > 0 or asset_errors > 0 or db_errors > 0 or comment_errors > 0:
+        if version_errors > 0 or asset_errors > 0 or db_errors > 0 or comment_errors > 0 or asset_links_errors > 0:
             logger.warning("Verification completed with errors - check the report for details")
             return 1
         else:

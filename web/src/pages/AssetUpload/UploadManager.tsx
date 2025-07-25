@@ -21,7 +21,6 @@ import AssetUploadService, {
     UploadPartResult,
     CompleteUploadResponse,
     CreateAssetResponse,
-    AssetLinks,
 } from "../../services/AssetUploadService";
 import { Metadata } from "../../components/single/Metadata";
 import { AssetDetail } from "./AssetUpload";
@@ -46,7 +45,8 @@ interface UploadManagerProps {
 
 interface UploadState {
     assetCreationStatus: "pending" | "in-progress" | "completed" | "failed";
-    metadataStatus: "pending" | "in-progress" | "completed" | "failed";
+    assetLinksStatus: "pending" | "in-progress" | "completed" | "failed" | "skipped";
+    metadataStatus: "pending" | "in-progress" | "completed" | "failed" | "skipped";
     uploadInitStatus: "pending" | "in-progress" | "completed" | "failed" | "skipped";
     previewUploadInitStatus: "pending" | "in-progress" | "completed" | "failed" | "skipped";
     uploadStatus: "pending" | "in-progress" | "completed" | "failed" | "skipped";
@@ -60,6 +60,7 @@ interface UploadState {
     finalCompletionTriggered: boolean;
     hasFailedParts: boolean;
     hasSkippedParts: boolean;
+    assetLinksErrors: string[];
 }
 
 interface FilePart {
@@ -71,27 +72,6 @@ interface FilePart {
     status: "pending" | "in-progress" | "completed" | "failed";
     etag?: string;
     retryCount: number;
-}
-
-// Helper function to convert AssetDetail.assetLinks to AssetUploadService.AssetLinks
-function convertAssetLinks(links?: {
-    parents?: any[];
-    child?: any[];
-    related?: any[];
-}): AssetLinks | undefined {
-    if (!links) return undefined;
-
-    return {
-        parents: Array.isArray(links.parents)
-            ? links.parents.map((p) => (typeof p === "string" ? p : p.assetId))
-            : [],
-        child: Array.isArray(links.child)
-            ? links.child.map((c) => (typeof c === "string" ? c : c.assetId))
-            : [],
-        related: Array.isArray(links.related)
-            ? links.related.map((r) => (typeof r === "string" ? r : r.assetId))
-            : [],
-    };
 }
 
 export default function UploadManager({
@@ -106,7 +86,19 @@ export default function UploadManager({
 }: UploadManagerProps) {
     const [uploadState, setUploadState] = useState<UploadState>({
         assetCreationStatus: isExistingAsset ? "completed" : "pending",
-        metadataStatus: isExistingAsset ? "completed" : "pending",
+        assetLinksStatus:
+            !isExistingAsset &&
+            assetDetail.assetLinksFe &&
+            (assetDetail.assetLinksFe.parents?.length ||
+                assetDetail.assetLinksFe.child?.length ||
+                assetDetail.assetLinksFe.related?.length)
+                ? "pending"
+                : "skipped",
+        metadataStatus: isExistingAsset
+            ? "completed"
+            : Object.keys(metadata).length > 0
+            ? "pending"
+            : "skipped",
         uploadInitStatus: fileItems.length > 0 ? "pending" : "skipped",
         previewUploadInitStatus: assetDetail.Preview ? "pending" : "skipped",
         uploadStatus: fileItems.length > 0 ? "pending" : "skipped",
@@ -117,6 +109,7 @@ export default function UploadManager({
         finalCompletionTriggered: false,
         hasFailedParts: false,
         hasSkippedParts: false,
+        assetLinksErrors: [],
     });
 
     const [fileParts, setFileParts] = useState<FilePart[]>([]);
@@ -600,7 +593,6 @@ export default function UploadManager({
                 description: assetDetail.description || "",
                 isDistributable: assetDetail.isDistributable || false,
                 tags: assetDetail.tags || [],
-                assetLinks: convertAssetLinks(assetDetail.assetLinks),
             };
 
             const response = await AssetUploadService.createAsset(assetData);
@@ -632,6 +624,12 @@ export default function UploadManager({
                 return;
             }
 
+            // Skip if no metadata to add
+            if (Object.keys(metadata).length === 0) {
+                setUploadState((prev) => ({ ...prev, metadataStatus: "skipped" }));
+                return;
+            }
+
             try {
                 setUploadState((prev) => ({ ...prev, metadataStatus: "in-progress" }));
 
@@ -651,6 +649,309 @@ export default function UploadManager({
             }
         },
         [assetDetail, metadata, isExistingAsset]
+    );
+
+    // Step 2.5: Create Asset Links
+    const createAssetLinks = useCallback(
+        async (assetId: string) => {
+            // Skip if no asset links provided or if this is an existing asset
+            if (
+                isExistingAsset ||
+                !assetDetail.assetLinksFe ||
+                (!assetDetail.assetLinksFe.parents?.length &&
+                    !assetDetail.assetLinksFe.child?.length &&
+                    !assetDetail.assetLinksFe.related?.length)
+            ) {
+                setUploadState((prev) => ({ ...prev, assetLinksStatus: "skipped" }));
+                return;
+            }
+
+            try {
+                setUploadState((prev) => ({ ...prev, assetLinksStatus: "in-progress" }));
+
+                const linkPromises = [];
+                const errors: string[] = [];
+                const createdLinks: {
+                    assetLinkId: string;
+                    assetId: string;
+                    relationshipType: string;
+                }[] = [];
+
+                console.log("Creating asset links with assetId:", assetId);
+                console.log(
+                    "Asset links data (assetLinksFe):",
+                    JSON.stringify(assetDetail.assetLinksFe, null, 2)
+                );
+                console.log(
+                    "Asset links metadata:",
+                    JSON.stringify(assetDetail.assetLinksMetadata, null, 2)
+                );
+
+                // Create parent links (parentChild relationship)
+                if (assetDetail.assetLinksFe.parents?.length) {
+                    console.log("Creating parent links:", assetDetail.assetLinksFe.parents);
+                    for (const parentAsset of assetDetail.assetLinksFe.parents) {
+                        // Validate that parentAsset has required fields
+                        if (!parentAsset.assetId || !parentAsset.databaseId) {
+                            const errorMsg = `Parent asset missing required fields: assetId=${parentAsset.assetId}, databaseId=${parentAsset.databaseId}`;
+                            errors.push(errorMsg);
+                            console.error(errorMsg, parentAsset);
+                            continue;
+                        }
+
+                        linkPromises.push(
+                            AssetUploadService.createAssetLink({
+                                fromAssetId: parentAsset.assetId,
+                                fromAssetDatabaseId: parentAsset.databaseId,
+                                toAssetId: assetId,
+                                toAssetDatabaseId: assetDetail.databaseId || "",
+                                relationshipType: "parentChild",
+                            })
+                                .then((response) => {
+                                    console.log("Parent link created successfully:", response);
+                                    createdLinks.push({
+                                        assetLinkId: response.assetLinkId,
+                                        assetId: parentAsset.assetId,
+                                        relationshipType: "parents",
+                                    });
+                                    return response;
+                                })
+                                .catch((error) => {
+                                    const errorMsg = `Parent link failed for ${parentAsset.assetId}: ${error.message}`;
+                                    errors.push(errorMsg);
+                                    console.error(errorMsg, error);
+                                })
+                        );
+                    }
+                }
+
+                // Create child links (parentChild relationship)
+                if (assetDetail.assetLinksFe.child?.length) {
+                    console.log("Creating child links:", assetDetail.assetLinksFe.child);
+                    for (const childAsset of assetDetail.assetLinksFe.child) {
+                        // Validate that childAsset has required fields
+                        if (!childAsset.assetId || !childAsset.databaseId) {
+                            const errorMsg = `Child asset missing required fields: assetId=${childAsset.assetId}, databaseId=${childAsset.databaseId}`;
+                            errors.push(errorMsg);
+                            console.error(errorMsg, childAsset);
+                            continue;
+                        }
+
+                        linkPromises.push(
+                            AssetUploadService.createAssetLink({
+                                fromAssetId: assetId,
+                                fromAssetDatabaseId: assetDetail.databaseId || "",
+                                toAssetId: childAsset.assetId,
+                                toAssetDatabaseId: childAsset.databaseId,
+                                relationshipType: "parentChild",
+                            })
+                                .then((response) => {
+                                    console.log("Child link created successfully:", response);
+                                    createdLinks.push({
+                                        assetLinkId: response.assetLinkId,
+                                        assetId: childAsset.assetId,
+                                        relationshipType: "child",
+                                    });
+                                    return response;
+                                })
+                                .catch((error) => {
+                                    const errorMsg = `Child link failed for ${childAsset.assetId}: ${error.message}`;
+                                    errors.push(errorMsg);
+                                    console.error(errorMsg, error);
+                                })
+                        );
+                    }
+                }
+
+                // Create related links (related relationship)
+                if (assetDetail.assetLinksFe.related?.length) {
+                    console.log("Creating related links:", assetDetail.assetLinksFe.related);
+                    for (const relatedAsset of assetDetail.assetLinksFe.related) {
+                        // Validate that relatedAsset has required fields
+                        if (!relatedAsset.assetId || !relatedAsset.databaseId) {
+                            const errorMsg = `Related asset missing required fields: assetId=${relatedAsset.assetId}, databaseId=${relatedAsset.databaseId}`;
+                            errors.push(errorMsg);
+                            console.error(errorMsg, relatedAsset);
+                            continue;
+                        }
+
+                        linkPromises.push(
+                            AssetUploadService.createAssetLink({
+                                fromAssetId: assetId,
+                                fromAssetDatabaseId: assetDetail.databaseId || "",
+                                toAssetId: relatedAsset.assetId,
+                                toAssetDatabaseId: relatedAsset.databaseId,
+                                relationshipType: "related",
+                            })
+                                .then((response) => {
+                                    console.log("Related link created successfully:", response);
+                                    createdLinks.push({
+                                        assetLinkId: response.assetLinkId,
+                                        assetId: relatedAsset.assetId,
+                                        relationshipType: "related",
+                                    });
+                                    return response;
+                                })
+                                .catch((error) => {
+                                    const errorMsg = `Related link failed for ${relatedAsset.assetId}: ${error.message}`;
+                                    errors.push(errorMsg);
+                                    console.error(errorMsg, error);
+                                })
+                        );
+                    }
+                }
+
+                // Wait for all link creation attempts to complete
+                await Promise.allSettled(linkPromises);
+
+                console.log("Asset links creation completed. Created links:", createdLinks);
+                console.log("Errors:", errors);
+
+                // Now create metadata for the successfully created links
+                if (createdLinks.length > 0) {
+                    console.log("Creating asset link metadata for created links:", createdLinks);
+                    const metadataPromises = [];
+
+                    for (const link of createdLinks) {
+                        // Find the original asset data to get the metadata
+                        let originalAsset = null;
+                        let relationshipKey = "";
+
+                        if (link.relationshipType === "parents") {
+                            originalAsset = assetDetail.assetLinksFe.parents?.find(
+                                (asset) => asset.assetId === link.assetId
+                            );
+                            relationshipKey = "parents";
+                        } else if (link.relationshipType === "child") {
+                            originalAsset = assetDetail.assetLinksFe.child?.find(
+                                (asset) => asset.assetId === link.assetId
+                            );
+                            relationshipKey = "child";
+                        } else if (link.relationshipType === "related") {
+                            originalAsset = assetDetail.assetLinksFe.related?.find(
+                                (asset) => asset.assetId === link.assetId
+                            );
+                            relationshipKey = "related";
+                        }
+
+                        // Check if the original asset has metadata
+                        if (
+                            originalAsset &&
+                            originalAsset.metadata &&
+                            originalAsset.metadata.length > 0
+                        ) {
+                            console.log(
+                                `Creating metadata for link ${link.assetLinkId} from original asset:`,
+                                originalAsset.metadata
+                            );
+
+                            for (const metadataItem of originalAsset.metadata) {
+                                metadataPromises.push(
+                                    AssetUploadService.createAssetLinkMetadata(link.assetLinkId, {
+                                        metadataKey: metadataItem.metadataKey,
+                                        metadataValue: metadataItem.metadataValue,
+                                        metadataValueType: metadataItem.metadataValueType,
+                                    })
+                                        .then((response) => {
+                                            console.log(
+                                                `Asset link metadata created successfully for ${link.assetLinkId}:`,
+                                                response
+                                            );
+                                            return response;
+                                        })
+                                        .catch((error) => {
+                                            const errorMsg = `Asset link metadata creation failed for ${link.assetLinkId}: ${error.message}`;
+                                            errors.push(errorMsg);
+                                            console.error(errorMsg, error);
+                                        })
+                                );
+                            }
+                        } else {
+                            console.log(
+                                `No metadata found for asset ${link.assetId} in relationship ${link.relationshipType}`
+                            );
+                        }
+
+                        // Also check the assetLinksMetadata structure as fallback
+                        if (assetDetail.assetLinksMetadata) {
+                            const fallbackMetadata =
+                                assetDetail.assetLinksMetadata[
+                                    link.relationshipType as keyof typeof assetDetail.assetLinksMetadata
+                                ]?.[link.assetId];
+
+                            if (fallbackMetadata && fallbackMetadata.length > 0) {
+                                console.log(
+                                    `Creating metadata for link ${link.assetLinkId} from fallback structure:`,
+                                    fallbackMetadata
+                                );
+                                for (const metadataItem of fallbackMetadata) {
+                                    metadataPromises.push(
+                                        AssetUploadService.createAssetLinkMetadata(
+                                            link.assetLinkId,
+                                            {
+                                                metadataKey: metadataItem.metadataKey,
+                                                metadataValue: metadataItem.metadataValue,
+                                                metadataValueType: metadataItem.metadataValueType,
+                                            }
+                                        )
+                                            .then((response) => {
+                                                console.log(
+                                                    `Asset link metadata created successfully for ${link.assetLinkId} (fallback):`,
+                                                    response
+                                                );
+                                                return response;
+                                            })
+                                            .catch((error) => {
+                                                const errorMsg = `Asset link metadata creation failed for ${link.assetLinkId} (fallback): ${error.message}`;
+                                                errors.push(errorMsg);
+                                                console.error(errorMsg, error);
+                                            })
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    if (metadataPromises.length > 0) {
+                        console.log(
+                            `Executing ${metadataPromises.length} metadata creation promises`
+                        );
+                        await Promise.allSettled(metadataPromises);
+                    } else {
+                        console.log("No metadata promises to execute");
+                    }
+                }
+
+                if (errors.length > 0) {
+                    setUploadState((prev) => ({
+                        ...prev,
+                        assetLinksStatus: "failed",
+                        assetLinksErrors: errors,
+                        errors: [
+                            ...prev.errors,
+                            ...errors.map((err) => ({ step: "Asset Links", message: err })),
+                        ],
+                    }));
+                } else {
+                    setUploadState((prev) => ({ ...prev, assetLinksStatus: "completed" }));
+                }
+            } catch (error: any) {
+                console.error("Asset links creation error:", error);
+                setUploadState((prev) => ({
+                    ...prev,
+                    assetLinksStatus: "failed",
+                    errors: [
+                        ...prev.errors,
+                        {
+                            step: "Asset Links",
+                            message: error.message || "Failed to create asset links",
+                        },
+                    ],
+                }));
+                throw error;
+            }
+        },
+        [assetDetail, isExistingAsset]
     );
 
     // Step 3: Initialize Upload
@@ -1270,6 +1571,9 @@ export default function UploadManager({
 
                         // Step 2: Add Metadata
                         await addMetadata(assetId);
+
+                        // Step 2.5: Create Asset Links
+                        await createAssetLinks(assetId);
                     }
                 } else if (assetId) {
                     // For existing assets, make sure we set the createdAssetId in state
@@ -1543,6 +1847,50 @@ export default function UploadManager({
                             </StatusIndicator>
                         </SpaceBetween>
                     </Box>
+
+                    {uploadState.assetLinksStatus !== "skipped" && (
+                        <Box>
+                            <SpaceBetween direction="vertical" size="xs">
+                                <Box variant="awsui-key-label">Asset Links Creation</Box>
+                                <StatusIndicator
+                                    type={getStatusIndicatorType(uploadState.assetLinksStatus)}
+                                >
+                                    {getStatusText(uploadState.assetLinksStatus)}
+                                </StatusIndicator>
+                                {uploadState.assetLinksStatus === "failed" &&
+                                    uploadState.assetLinksErrors.length > 0 && (
+                                        <SpaceBetween direction="horizontal" size="xs">
+                                            <Button
+                                                onClick={() => {
+                                                    // Retry asset links creation
+                                                    const assetId =
+                                                        uploadState.createdAssetId ||
+                                                        assetDetail.assetId ||
+                                                        "";
+                                                    if (assetId) {
+                                                        createAssetLinks(assetId);
+                                                    }
+                                                }}
+                                            >
+                                                Retry Asset Links
+                                            </Button>
+                                            <Button
+                                                onClick={() => {
+                                                    // Continue without asset links
+                                                    setUploadState((prev) => ({
+                                                        ...prev,
+                                                        assetLinksStatus: "skipped",
+                                                    }));
+                                                }}
+                                                variant="link"
+                                            >
+                                                Continue Without Failed Links
+                                            </Button>
+                                        </SpaceBetween>
+                                    )}
+                            </SpaceBetween>
+                        </Box>
+                    )}
 
                     <Box>
                         <SpaceBetween direction="vertical" size="xs">

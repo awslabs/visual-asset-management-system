@@ -46,6 +46,7 @@ interface FileInfo {
     size?: number;
     dateCreatedCurrentVersion?: string;
     isArchived?: boolean;
+    primaryType?: string | null;
 }
 
 interface ViewFileState {
@@ -57,6 +58,7 @@ interface ViewFileState {
     size?: number;
     dateCreatedCurrentVersion?: string;
     isArchived?: boolean;
+    primaryType?: string | null;
 
     // Multi-file mode (new functionality)
     files?: FileInfo[];
@@ -195,6 +197,7 @@ export default function ViewFile() {
               size: state?.size,
               dateCreatedCurrentVersion: state?.dateCreatedCurrentVersion,
               isArchived: state?.isArchived,
+              primaryType: state?.primaryType,
           };
 
     // Check if any files are archived
@@ -354,7 +357,6 @@ export default function ViewFile() {
         assetId,
         databaseId,
         pathViewType,
-        asset,
         singleFileInfo?.filename,
         singleFileInfo?.isDirectory,
         isMultiFileMode,
@@ -374,7 +376,15 @@ export default function ViewFile() {
         if (isMultiFileMode) {
             return `${asset?.assetName || "Asset"} - Multiple Files`;
         }
-        return singleFileInfo?.filename || asset?.assetName || "";
+
+        const filename = singleFileInfo?.filename || asset?.assetName || "";
+        const primaryType = singleFileInfo?.primaryType;
+
+        if (primaryType && primaryType.trim() !== "") {
+            return `${filename} (${primaryType})`;
+        }
+
+        return filename;
     };
 
     // Handle version revert - refresh the page to show updated file
@@ -499,6 +509,17 @@ export default function ViewFile() {
                                             >
                                                 <span style={{ fontFamily: "monospace" }}>
                                                     {file.filename}
+                                                    {file.primaryType &&
+                                                        file.primaryType.trim() !== "" && (
+                                                            <span
+                                                                style={{
+                                                                    color: "#666",
+                                                                    marginLeft: "4px",
+                                                                }}
+                                                            >
+                                                                ({file.primaryType})
+                                                            </span>
+                                                        )}
                                                     {file.versionId && (
                                                         <span
                                                             style={{

@@ -194,8 +194,6 @@ export function buildSqsBucketSyncFunction(
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             ASSET_VERSIONS_STORAGE_TABLE_NAME:
                 storageResources.dynamo.assetVersionsStorageTable.tableName,
-            ASSET_LINKS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetLinksStorageTable.tableName, //Not directly used but needed to execute create_asset functions
             TAG_TYPES_STORAGE_TABLE_NAME: storageResources.dynamo.tagTypeStorageTable.tableName, //Not directly used but needed to execute create_asset functions
             TAG_STORAGE_TABLE_NAME: storageResources.dynamo.tagStorageTable.tableName, //Not directly used but needed to execute create_asset functions
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
@@ -213,7 +211,6 @@ export function buildSqsBucketSyncFunction(
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetVersionsStorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.assetLinksStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.tagTypeStorageTable.grantReadData(fun);
     storageResources.dynamo.tagStorageTable.grantReadData(fun);
 

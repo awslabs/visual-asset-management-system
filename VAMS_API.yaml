@@ -20,6 +20,30 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+    /api/version:
+        get:
+            summary: "Get VAMS version information."
+            description: "Returns the current version of the Visual Asset Management System. This endpoint is unauthenticated and can be used for health checks or version verification."
+            responses:
+                "200":
+                    description: Version information retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    version:
+                                        type: string
+                                        description: "Current VAMS version"
+                                        example: "2.2.0"
+                                required:
+                                    - version
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
     /assets:
             put:
                 summary: "Create or update an asset."
@@ -104,36 +128,54 @@ paths:
                                     $ref: '#/components/schemas/error'
     /asset-links:
         post:
-            summary: "Create or update asset links."
+            summary: "Create a new asset link."
+            description: "Create a new asset link between two assets with relationship type and optional metadata. Supports 'related' and 'parentChild' relationship types with cycle detection."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            $ref: "#/components/schemas/asset_links"
+                            $ref: "#/components/schemas/createAssetLinkRequest"
             responses:
                 "200":
-                    description: OK
+                    description: Asset link created successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/createAssetLinkResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or validation error.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not allowed to create/update asset link.
+                    description: Not authorized to create asset link.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+            security:
+              - DefaultCognitoAuthorizer: []
     /asset-links/{assetId}:
         get:
-            summary: "Create or update asset links."
+            summary: "Get asset links for a specific asset."
+            description: "Retrieve all asset links (related, parents, children) for a specific asset. Supports optional tree view for hierarchical display of parent-child relationships."
             responses:
                 "200":
-                    description: OK
+                    description: Asset links retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                oneOf:
+                                  - $ref: "#/components/schemas/getAssetLinksResponse"
+                                  - $ref: "#/components/schemas/getAssetLinksTreeViewResponse"
                 "400":
                     description: Invalid parameters.
                     content:
@@ -141,7 +183,17 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not allowed to create/update asset link.
+                    description: Not authorized to view asset links.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -149,23 +201,38 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
               - name: "assetId"
                 in: "path"
                 description: "Unique identifier for asset."
                 required: true
                 schema:
                     $ref: "#/components/schemas/id_regex"
+              - name: "databaseId"
+                in: "query"
+                description: "Database ID for the asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "childTreeView"
+                in: "query"
+                description: "Whether to return children as a tree structure."
+                required: false
+                schema:
+                    type: boolean
+                    default: false
             security:
               - DefaultCognitoAuthorizer: []
-    /asset-links/{relationId}:
-        delete:
-            summary: "Delete asset link."
+    /asset-links/single/{assetLinkId}:
+        get:
+            summary: "Get a single asset link by ID."
+            description: "Retrieve details of a specific asset link by its unique identifier."
             responses:
                 "200":
-                    description: OK
+                    description: Asset link retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/getSingleAssetLinkResponse"
                 "400":
                     description: Invalid parameters.
                     content:
@@ -173,7 +240,111 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not allowed to delete asset link.
+                    description: Not authorized to view this asset link.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset link not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "assetLinkId"
+                in: "path"
+                description: "Unique identifier for asset link."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/uuid_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /asset-links/{assetLinkId}:
+        put:
+            summary: "Update an asset link."
+            description: "Update an existing asset link. Currently only tags can be updated."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/updateAssetLinkRequest"
+            responses:
+                "200":
+                    description: Asset link updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/updateAssetLinkResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to update this asset link.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset link not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "assetLinkId"
+                in: "path"
+                description: "Unique identifier for asset link."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/uuid_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /asset-links/{relationId}:
+        delete:
+            summary: "Delete an asset link."
+            description: "Delete an asset link by its unique identifier. Also removes associated metadata."
+            responses:
+                "200":
+                    description: Asset link deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/deleteAssetLinkResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete asset link.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset link not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -183,10 +354,208 @@ paths:
             parameters:
               - name: "relationId"
                 in: "path"
+                description: "Unique identifier for asset link (name kept for backwards compatability for CDK deployment, actually is assetLinkId)."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/uuid_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /asset-links/{assetLinkId}/metadata:
+        get:
+            summary: "Get metadata for an asset link."
+            description: "Retrieve all metadata associated with a specific asset link."
+            responses:
+                "200":
+                    description: Metadata retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/getAssetLinkMetadataResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to view metadata for this asset link.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset link not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "assetLinkId"
+                in: "path"
                 description: "Unique identifier for asset link."
                 required: true
                 schema:
                     $ref: "#/components/schemas/uuid_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+        post:
+            summary: "Create metadata for an asset link."
+            description: "Add new metadata to a specific asset link."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/createAssetLinkMetadataRequest"
+            responses:
+                "200":
+                    description: Metadata created successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/createAssetLinkMetadataResponse"
+                "400":
+                    description: Invalid parameters or metadata key already exists.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create metadata for this asset link.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset link not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "assetLinkId"
+                in: "path"
+                description: "Unique identifier for asset link."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/uuid_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /asset-links/{assetLinkId}/metadata/{metadataKey}:
+        put:
+            summary: "Update metadata for an asset link."
+            description: "Update existing metadata for a specific asset link."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/updateAssetLinkMetadataRequest"
+            responses:
+                "200":
+                    description: Metadata updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/updateAssetLinkMetadataResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to update metadata for this asset link.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset link or metadata key not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "assetLinkId"
+                in: "path"
+                description: "Unique identifier for asset link."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/uuid_regex"
+              - name: "metadataKey"
+                in: "path"
+                description: "Metadata key to update."
+                required: true
+                schema:
+                    type: string
+            security:
+              - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Delete metadata for an asset link."
+            description: "Remove specific metadata from an asset link."
+            responses:
+                "200":
+                    description: Metadata deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/deleteAssetLinkMetadataResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete metadata for this asset link.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset link or metadata key not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "assetLinkId"
+                in: "path"
+                description: "Unique identifier for asset link."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/uuid_regex"
+              - name: "metadataKey"
+                in: "path"
+                description: "Metadata key to delete."
+                required: true
+                schema:
+                    type: string
             security:
               - DefaultCognitoAuthorizer: []
     /auth/constraints:
@@ -1465,6 +1834,63 @@ paths:
                 required: true
                 schema:
                     type: string
+            security:
+              - DefaultCognitoAuthorizer: []
+    
+    /database/{databaseId}/assets/{assetId}/setPrimaryFile:
+        put:
+            summary: "Set or remove primary type metadata for a file."
+            description: "Set or remove primary type metadata for a file in S3. The primary type can be used to categorize files within an asset (e.g., primary, lod1-lod5, other). Only works on files, not folders."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/setPrimaryFileRequest"
+            responses:
+                "200":
+                    description: Primary type set successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/setPrimaryFileResponse"
+                "400":
+                    description: Invalid parameters or trying to set primary type on folder.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to modify files in this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: File not found or file is archived.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
             security:
               - DefaultCognitoAuthorizer: []
     
@@ -3949,6 +4375,10 @@ components:
                 currentAssetVersionFileVersionMismatch:
                     type: boolean
                     description: "Whether this file's version doesn't match the current asset version"
+                primaryType:
+                    type: string
+                    description: "Primary type metadata for the file (e.g., primary, lod1-lod5, other). Only present for non-folder objects."
+                    nullable: true
             required:
                 - fileName
                 - key
@@ -4037,6 +4467,10 @@ components:
                 isArchived:
                     type: boolean
                     description: "Whether the file is archived (soft deleted)"
+                primaryType:
+                    type: string
+                    description: "Primary type metadata for the file (e.g., primary, lod1-lod5, other). Only present for non-folder objects."
+                    nullable: true
                 versions:
                     type: array
                     items:
@@ -4446,6 +4880,396 @@ components:
                     description: "Token for pagination"
             required:
                 - Items
+        
+        # New Asset Links API Schemas
+        createAssetLinkRequest:
+            type: object
+            properties:
+                fromAssetId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Source asset ID"
+                fromAssetDatabaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Source asset database ID"
+                toAssetId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Target asset ID"
+                toAssetDatabaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Target asset database ID"
+                relationshipType:
+                    type: string
+                    enum: [related, parentChild]
+                    description: "Type of relationship between assets"
+                tags:
+                    type: array
+                    items:
+                        type: string
+                    description: "Tags associated with the asset link"
+                    default: []
+            required:
+                - fromAssetId
+                - fromAssetDatabaseId
+                - toAssetId
+                - toAssetDatabaseId
+                - relationshipType
+        
+        createAssetLinkResponse:
+            type: object
+            properties:
+                assetLinkId:
+                    $ref: '#/components/schemas/uuid_regex'
+                    description: "Generated asset link ID"
+                message:
+                    type: string
+                    description: "Success message"
+            required:
+                - assetLinkId
+                - message
+        
+        assetLinkModel:
+            type: object
+            properties:
+                assetLinkId:
+                    $ref: '#/components/schemas/uuid_regex'
+                    description: "Asset link ID"
+                fromAssetId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Source asset ID"
+                fromAssetDatabaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Source asset database ID"
+                toAssetId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Target asset ID"
+                toAssetDatabaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Target asset database ID"
+                relationshipType:
+                    type: string
+                    enum: [related, parentChild]
+                    description: "Type of relationship between assets"
+                tags:
+                    type: array
+                    items:
+                        type: string
+                    description: "Tags associated with the asset link"
+            required:
+                - assetLinkId
+                - fromAssetId
+                - fromAssetDatabaseId
+                - toAssetId
+                - toAssetDatabaseId
+                - relationshipType
+                - tags
+        
+        getSingleAssetLinkResponse:
+            type: object
+            properties:
+                assetLink:
+                    $ref: "#/components/schemas/assetLinkModel"
+                message:
+                    type: string
+                    description: "Response message"
+                    default: "Success"
+            required:
+                - assetLink
+        
+        updateAssetLinkRequest:
+            type: object
+            properties:
+                tags:
+                    type: array
+                    items:
+                        type: string
+                    description: "Updated tags for the asset link"
+                    default: []
+            required: []
+        
+        updateAssetLinkResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                    description: "Success message"
+            required:
+                - message
+        
+        deleteAssetLinkResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                    description: "Success message"
+            required:
+                - message
+        
+        assetNodeModel:
+            type: object
+            properties:
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Asset ID"
+                assetName:
+                    type: string
+                    description: "Asset name"
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Database ID"
+                assetLinkId:
+                    $ref: '#/components/schemas/uuid_regex'
+                    description: "Asset link ID if applicable"
+            required:
+                - assetId
+                - assetName
+                - databaseId
+        
+        assetTreeNodeModel:
+            type: object
+            properties:
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Asset ID"
+                assetName:
+                    type: string
+                    description: "Asset name"
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Database ID"
+                assetLinkId:
+                    $ref: '#/components/schemas/uuid_regex'
+                    description: "Asset link ID"
+                children:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetTreeNodeModel"
+                    description: "Child nodes in the tree"
+                    default: []
+            required:
+                - assetId
+                - assetName
+                - databaseId
+                - assetLinkId
+        
+        unauthorizedCountsModel:
+            type: object
+            properties:
+                related:
+                    type: integer
+                    description: "Count of unauthorized related assets"
+                    default: 0
+                parents:
+                    type: integer
+                    description: "Count of unauthorized parent assets"
+                    default: 0
+                children:
+                    type: integer
+                    description: "Count of unauthorized child assets"
+                    default: 0
+        
+        getAssetLinksResponse:
+            type: object
+            properties:
+                related:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetNodeModel"
+                    description: "Related assets"
+                    default: []
+                parents:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetNodeModel"
+                    description: "Parent assets"
+                    default: []
+                children:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetNodeModel"
+                    description: "Child assets (flat list)"
+                    default: []
+                unauthorizedCounts:
+                    $ref: "#/components/schemas/unauthorizedCountsModel"
+                    description: "Counts of unauthorized assets"
+                message:
+                    type: string
+                    description: "Response message"
+                    default: "Success"
+            required:
+                - related
+                - parents
+                - children
+                - unauthorizedCounts
+        
+        getAssetLinksTreeViewResponse:
+            type: object
+            properties:
+                related:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetNodeModel"
+                    description: "Related assets"
+                    default: []
+                parents:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetNodeModel"
+                    description: "Parent assets"
+                    default: []
+                children:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetTreeNodeModel"
+                    description: "Child assets (tree structure)"
+                    default: []
+                unauthorizedCounts:
+                    $ref: "#/components/schemas/unauthorizedCountsModel"
+                    description: "Counts of unauthorized assets"
+                message:
+                    type: string
+                    description: "Response message"
+                    default: "Success"
+            required:
+                - related
+                - parents
+                - children
+                - unauthorizedCounts
+        
+        # Asset Link Metadata Schemas
+        createAssetLinkMetadataRequest:
+            type: object
+            properties:
+                metadataKey:
+                    type: string
+                    description: "Metadata key"
+                metadataValue:
+                    type: string
+                    description: "Metadata value"
+                metadataValueType:
+                    type: string
+                    enum: [string, number, boolean, date]
+                    description: "Type of metadata value"
+                    default: "string"
+            required:
+                - metadataKey
+                - metadataValue
+        
+        updateAssetLinkMetadataRequest:
+            type: object
+            properties:
+                metadataValue:
+                    type: string
+                    description: "Updated metadata value"
+                metadataValueType:
+                    type: string
+                    enum: [string, number, boolean, date]
+                    description: "Type of metadata value"
+                    default: "string"
+            required:
+                - metadataValue
+        
+        assetLinkMetadataModel:
+            type: object
+            properties:
+                assetLinkId:
+                    $ref: '#/components/schemas/uuid_regex'
+                    description: "Asset link ID"
+                metadataKey:
+                    type: string
+                    description: "Metadata key"
+                metadataValue:
+                    type: string
+                    description: "Metadata value"
+                metadataValueType:
+                    type: string
+                    enum: [string, number, boolean, date]
+                    description: "Type of metadata value"
+            required:
+                - assetLinkId
+                - metadataKey
+                - metadataValue
+                - metadataValueType
+        
+        createAssetLinkMetadataResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                    description: "Success message"
+            required:
+                - message
+        
+        getAssetLinkMetadataResponse:
+            type: object
+            properties:
+                metadata:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetLinkMetadataModel"
+                    description: "List of metadata for the asset link"
+                message:
+                    type: string
+                    description: "Response message"
+                    default: "Success"
+            required:
+                - metadata
+        
+        updateAssetLinkMetadataResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                    description: "Success message"
+            required:
+                - message
+        
+        deleteAssetLinkMetadataResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                    description: "Success message"
+            required:
+                - message
+        
+        # Set Primary File Schemas
+        setPrimaryFileRequest:
+            type: object
+            properties:
+                filePath:
+                    type: string
+                    description: "Path to the file relative to the asset root"
+                primaryType:
+                    type: string
+                    enum: ["", "primary", "lod1", "lod2", "lod3", "lod4", "lod5", "other"]
+                    description: "Primary type for the file. Empty string removes the metadata."
+                primaryTypeOther:
+                    type: string
+                    maxLength: 30
+                    description: "Custom primary type when primaryType is 'other'"
+            required:
+                - filePath
+                - primaryType
+        
+        setPrimaryFileResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                filePath:
+                    type: string
+                    description: "File path that was modified"
+                primaryType:
+                    type: string
+                    description: "The primary type that was set (null if removed)"
+            required:
+                - success
+                - message
+                - filePath
     parameters:
       maxItemsParam:
         name: maxItems

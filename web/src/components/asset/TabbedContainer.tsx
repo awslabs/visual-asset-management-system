@@ -11,6 +11,7 @@ import { FileKey } from "../filemanager/types/FileManagerTypes";
 
 // Lazy load the tab components
 const FileManagerTab = React.lazy(() => import("./tabs/FileManagerTab"));
+const AssetLinksTab = React.lazy(() => import("./tabs/AssetLinksTab"));
 const WorkflowTab = React.lazy(() => import("./tabs/WorkflowTab"));
 const CommentsTab = React.lazy(() => import("./tabs/CommentsTab"));
 const VersionsTab = React.lazy(() => import("./tabs/VersionsTab"));
@@ -66,6 +67,22 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                                         databaseId={databaseId}
                                         loading={loadingFiles}
                                         onExecuteWorkflow={onExecuteWorkflow} // Keeping prop for compatibility
+                                    />
+                                </Suspense>
+                            ),
+                        },
+                        {
+                            id: "relationships",
+                            label: "Relationships",
+                            content: (
+                                <Suspense
+                                    fallback={<LoadingSpinner text="Loading Relationships..." />}
+                                >
+                                    <AssetLinksTab
+                                        mode="view"
+                                        assetId={assetId}
+                                        databaseId={databaseId}
+                                        isActive={activeTabId === "relationships"}
                                     />
                                 </Suspense>
                             ),

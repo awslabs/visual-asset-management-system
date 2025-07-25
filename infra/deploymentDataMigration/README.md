@@ -89,7 +89,15 @@ The migration script performs the following operations:
     - Remove specified fields: `isMultiFile`, `pipelineId`, `executionId`, `versions`, `currentVersion`, `specifiedPipelines`, `Parent`, `objectFamily`
 
 3. **Database Records Update**:
+
     - Add `defaultBucketId` to all records in the databases table
+
+4. **Asset Links Migration** (Optional):
+    - Migrate asset links from the old table schema to the new table schema
+    - Look up database IDs for each asset in the link
+    - Create composite keys for GSI indexes (`fromAssetDatabaseId:fromAssetId` and `toAssetDatabaseId:toAssetId`)
+    - Transform relationship types: "related" stays as is, "parent"/"child" becomes "parentChild"
+    - Add empty tags array to each link
 
 #### Running the Migration
 
@@ -115,6 +123,8 @@ The migration scripts are located in the `infra/deploymentDataMigration/v2.1_to_
         - `databases_table_name`: Name of the databases table
         - `base_assets_prefix`: Base prefix for asset locations (should end with a slash)
         - `asset_bucket_name`: Name of the S3 bucket used for asset storage
+        - `asset_links_table_name` (optional): Name of the old asset links table to migrate from
+        - `asset_links_table_v2_name` (optional): Name of the new asset links v2 table to migrate to
 
 3. Run the migration using the helper scripts:
 

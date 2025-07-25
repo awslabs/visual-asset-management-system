@@ -4,6 +4,8 @@
     "s3_asset_buckets_table_name": "PROD_S3_ASSET_BUCKETS_TABLE_NAME",
     "databases_table_name": "PROD_DATABASES_TABLE_NAME",
     "comment_storage_table_name": "PROD_COMMENT_STORAGE_TABLE_NAME",
+    "asset_links_table_name": "PROD_ASSET_LINKS_TABLE_NAME",
+    "asset_links_table_v2_name": "PROD_ASSET_LINKS_TABLE_V2_NAME",
     "base_assets_prefix": "/",
     "asset_bucket_name": "PROD_ASSETS_BUCKET_NAME",
     "aws_profile": "",
@@ -19,6 +21,8 @@
         "Make sure to back up your data before running the migration in production.",
         "base_assets_prefix should end with a slash (/) for proper path construction.",
         "asset_bucket_name is the name of the S3 bucket used for asset storage.",
-        "comment_storage_table_name is optional and used for migrating comments to reference current asset versions."
+        "comment_storage_table_name is optional and used for migrating comments to reference current asset versions.",
+        "asset_links_table_name is the name of the old asset links table to migrate from.",
+        "asset_links_table_v2_name is the name of the new asset links v2 table to migrate to."
     ]
 }

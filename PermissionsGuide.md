@@ -176,14 +176,33 @@ Below are the API routes with the current supported method types. It uses the fi
 Additionally it shows which object authorization checks it does for a particular object type and field.
 
 -   `/api/amplify-config` - GET (No authentication or API authorization logic checks on base call)
+-   `/api/version` - GET (No authentication or API authorization logic checks on base call)
 -   `/assets` - POST
 -   -   `Asset` (assetName, databaseId, tags) - POST (api: POST)
--   `/asset-links/{assetId}` - GET
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
--   `/asset-links/{relationId}` - DELETE
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   `/asset-links` - POST
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   -   `Asset` (fromAssetId, fromAssetDatabaseId, assetName, assetType, tags) - POST (api: POST)
+-   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - POST (api: POST)
+-   `/asset-links/{assetId}` - GET
+-   -   `Asset` (assetId, assetName, databaseId, assetType, tags) - GET (api: GET)
+-   `/asset-links/single/{assetLinkId}` - GET
+-   -   `Asset` (fromAssetId, fromAssetDatabaseId, assetName, assetType, tags) - GET (api: GET)
+-   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - GET (api: GET)
+-   `/asset-links/{assetLinkId}` - PUT
+-   -   `Asset` (fromAssetId, fromAssetDatabaseId, assetName, assetType, tags) - PUT (api: PUT)
+-   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - PUT (api: PUT)
+-   `/asset-links/{relationId}` - DELETE
+-   -   `Asset` (fromAssetId, fromAssetDatabaseId, assetName, assetType, tags) - DELETE (api: DELETE)
+-   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - DELETE (api: DELETE)
+-   `/asset-links/{assetLinkId}/metadata` - GET/POST
+-   -   `Asset` (fromAssetId, fromAssetDatabaseId, assetName, assetType, tags) - GET (api: GET)
+-   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - GET (api: GET)
+-   -   `Asset` (fromAssetId, fromAssetDatabaseId, assetName, assetType, tags) - POST (api: POST)
+-   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - POST (api: POST)
+-   `/asset-links/{assetLinkId}/metadata/{metadataKey}` - PUT/DELETE
+-   -   `Asset` (fromAssetId, fromAssetDatabaseId, assetName, assetType, tags) - PUT (api: PUT)
+-   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - PUT (api: PUT)
+-   -   `Asset` (fromAssetId, fromAssetDatabaseId, assetName, assetType, tags) - DELETE (api: DELETE)
+-   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - DELETE (api: DELETE)
 -   `/auth/constraints` - GET
 -   `/auth/constraints/{constraintId}` - GET/PUT/POST/DELETE
 -   `/auth/loginProfile/{userId}` - GET/POST
@@ -233,6 +252,8 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   `/database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/setPrimaryFile` - PUT
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: PUT)
 -   `/database/{databaseId}/assets/{assetId}/createVersion` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
 -   `/database/{databaseId}/assets/{assetId}/revertAssetVersion/{assetVersionId}` - POST

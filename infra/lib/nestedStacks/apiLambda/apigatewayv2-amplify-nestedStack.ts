@@ -12,6 +12,10 @@ import {
     AmplifyConfigLambdaConstruct,
     AmplifyConfigLambdaConstructProps,
 } from "./constructs/amplify-config-lambda-construct";
+import {
+    VamsVersionLambdaConstruct,
+    VamsVersionLambdaConstructProps,
+} from "./constructs/vams-version-lambda-construct";
 import { Construct } from "constructs";
 import { NestedStack } from "aws-cdk-lib";
 import { Service } from "../../helper/service-helper";
@@ -167,6 +171,18 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
             this,
             "AmplifyConfigNestedStack",
             amplifyConfigProps
+        );
+
+        //Setup Version
+        const vamsVersionProps: VamsVersionLambdaConstructProps = {
+            ...props,
+            api: api,
+        };
+
+        const vamsVersionFn = new VamsVersionLambdaConstruct(
+            this,
+            "VamsVersionNestedStack",
+            vamsVersionProps
         );
 
         // export any cf outputs

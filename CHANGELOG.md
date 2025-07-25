@@ -109,6 +109,15 @@ This version includes significant enhancements to VAMS infrastructure, a complet
 -   Added a new use-case pipeline and configuration option for `ModelOps` complex tasks such as file format conversions, optimizations for 3D assets, and generating image captures of 3D models.
     -   VAMS pipeline registration `inputParameters` will define for each pipeline registration what the output file extension type(s) will be. ModelOps can output multiple file types in one execution. Pipeline can be called by registering 'vamsExecuteModelOps' lambda function with VAMS pipelines / workflows.
 -   Pipelines and workflows can now be created under a GLOBAL database. GLOBAL database workflows can be executed across all assets across all databases. The GLOBAL database is a reserved keyword now which implies that an entity applies to all databases (right now only workflows/pipelines) This now allows for the capability of registering pipelines/workflows automatically as part of use-case pipeline deployments as a database no longer needs to exist (GLOBAL).
+-   Asset links backend APIs were re-written to accomodate tracking databaseId with to/from assets, tracking tags on asset links, and now tracking metadata against a asset links
+    -   New dynamoDB tables are created for these new trackings, one of which requires a data migration script to move data from the old tables.
+-   **Web** Asset Links under View Asset is now part of the tabbing window under "Relationships"
+-   **Web** Asset links / relationships now has a new look similar to the new file manager to track relationships. This is in both View Assets and on Asset upload for new assets.
+    -   Metadata key/pair values can now be tracked against asset links with String and XYZ type. Translation, Rotation, and Scale are hard- XYZ typed fields that can be used before adding custom metadata
+    -   Ability to see child sub-trees from all child assets recursively down
+-   **Web** Add file primary type attribute viewing and setting such as "primary", "lod1" - "lod5", and a custom primary type. These can be set on any file and are saved as metadata in S3 on the file. This is useful for identifying what the primary files are as part of an asset and if they are the prime or a particular level of detail (lod), or other designation. There is no logic tied to this value yet in VAMS but can be used for visual identification or in custom logic implementations.
+-   Added a '/api/version' GET API path (NoOp authorizer) to get back the version of the current deployment of VAMS. This is stored in the config.ts file during CDK deployment and should be updated with VAMS version rollouts.
+    -   Added '/database/{databaseId}/assets/{assetId}/setPrimaryFile' API endpoint to support this and returns this value as part of listing files and returning file information as part of those repsective APIs.
 -   (Draft Implementation) Started overhaul of lambda backend unit tests that were previously outdated and non-functioning. Unit tests as of 2.2 still have many non-functioning (skipped) tests that will need to be corrected. Passed tests will also need additional validation and coverage evaluation.
 
 ### Bug Fixes
@@ -156,7 +165,7 @@ This version includes significant enhancements to VAMS infrastructure, a complet
 
 ### Known Oustanding Issues
 
--   With updating to support multiple S3 buckets, there are scenarios that can occur where if there are multiple buckets/prefixes across different databases where the assetId are now the same, there will be lookup conflicts within assetLinks, Comments, and subscriptions functionality. This can only occur right now with manual changes/updates as done directly to S3 as assetIds generated from VAMS uploads still generate unique GUIDs.
+-   With updating to support multiple S3 buckets, there are scenarios that can occur where if there are multiple buckets/prefixes across different databases where the assetId are now the same, there will be lookup conflicts within Comments and subscriptions functionality. This can only occur right now with manual changes/updates as done directly to S3 as assetIds generated from VAMS uploads still generate unique GUIDs.
 -   Using the same pipeline ID in a GLOBAL and non-GLOBAL database will cause overlap conflicts and issues.
 
 ## [2.1.1] (2025-01-17)

@@ -13,7 +13,7 @@ from datetime import datetime
 from handlers.metadata import to_update_expr
 from customLogging.logger import safeLogger
 from handlers.assets.createAsset import create_asset
-from models.assetsV3 import CreateAssetRequestModel, AssetLinksModel
+from models.assetsV3 import CreateAssetRequestModel
 from handlers.databases.createDatabase import create_database
 from models.databases import CreateDatabaseRequestModel
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -499,8 +499,7 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
             assetName=asset_id,
             description=f"Auto-created asset for {asset_id}",
             isDistributable=True,
-            tags=[],
-            assetLinks=None
+            tags=[]
         )
         
         # Create the asset

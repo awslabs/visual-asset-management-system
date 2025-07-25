@@ -22,7 +22,8 @@ from models.assetsV3 import (
     AssetFileItemModel, ListAssetFilesRequestModel, ListAssetFilesResponseModel,
     FileInfoRequestModel, FileInfoResponseModel, MoveFileRequestModel,
     CopyFileRequestModel, ArchiveFileRequestModel, UnarchiveFileRequestModel, DeleteFileRequestModel,
-    FileOperationResponseModel, RevertFileVersionRequestModel, RevertFileVersionResponseModel
+    FileOperationResponseModel, RevertFileVersionRequestModel, RevertFileVersionResponseModel,
+    SetPrimaryFileRequestModel, SetPrimaryFileResponseModel
 )
 
 # Configure AWS clients with retry configuration
@@ -769,6 +770,14 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
             'isArchived': is_file_archived(bucket, key)
         }
         
+        # Add primaryType from S3 metadata (only for non-folder objects)
+        if not result['isFolder']:
+            metadata = response.get('Metadata', {})
+            primary_type = metadata.get('vams-primarytype', '')
+            result['primaryType'] = primary_type if primary_type else None
+        else:
+            result['primaryType'] = None
+        
         # Include version history if requested
         if include_versions:
             try:
@@ -970,10 +979,19 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                     # Check if file is archived
                     item['isArchived'] = is_file_archived(bucket, obj['Key'])
                     
+                    # Add primaryType from S3 metadata (only for non-folder objects)
+                    if not is_folder:
+                        metadata = version_info.get('Metadata', {})
+                        primary_type = metadata.get('vams-primarytype', '')
+                        item['primaryType'] = primary_type if primary_type else None
+                    else:
+                        item['primaryType'] = None
+                    
                 except Exception as e:
                     logger.warning(f"Error getting version info for {obj['Key']}: {e}")
                     item['versionId'] = 'null'
                     item['isArchived'] = False
+                    item['primaryType'] = None
                 
                 # Only add non-archived files unless include_archived is True
                 if not item['isArchived'] or include_archived:
@@ -1716,6 +1734,95 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
     # Return response model
     return FileInfoResponseModel(**metadata)
 
+def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type: str, primary_type_other: Optional[str], claims_and_roles: Dict) -> SetPrimaryFileResponseModel:
+    """Set or remove primary type metadata for a file in S3
+    
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        file_path: The file path to set primary type for
+        primary_type: The primary type value (empty string to remove, or one of the allowed values)
+        primary_type_other: The custom primary type when primary_type is 'other'
+        claims_and_roles: The claims and roles from the request
+        
+    Returns:
+        SetPrimaryFileResponseModel with the result of the operation
+    """
+    # Get asset and verify permissions (need POST permission to modify)
+    asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
+    
+    # Validate that filePath doesn't end with '/' (folders not allowed)
+    if file_path.endswith('/'):
+        raise VAMSGeneralErrorResponse("Cannot set primary type on folders. File path must not end with '/'")
+    
+    # Get asset location
+    bucket, base_key = get_asset_s3_location(asset)
+    
+    # Use smart path resolution to avoid duplication
+    full_key = resolve_asset_file_path(base_key, file_path)
+    
+    # Check if file exists and is not archived
+    try:
+        current_object = s3_client.head_object(Bucket=bucket, Key=full_key)
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'NoSuchKey':
+            # Check if file is archived
+            if is_file_archived(bucket, full_key):
+                raise VAMSGeneralErrorResponse(f"Cannot set primary type on archived file: {file_path}")
+            else:
+                raise VAMSGeneralErrorResponse(f"File not found: {file_path}")
+        raise VAMSGeneralErrorResponse(f"Error checking file: {str(e)}")
+    
+    # Check if file is archived
+    if is_file_archived(bucket, full_key):
+        raise VAMSGeneralErrorResponse(f"Cannot set primary type on archived file: {file_path}")
+    
+    try:
+        # Get current metadata
+        current_metadata = current_object.get('Metadata', {})
+        
+        # Determine the metadata value to set
+        if primary_type == '':
+            # Remove the metadata attribute by excluding it from the new metadata
+            new_metadata = {k: v for k, v in current_metadata.items() if k != 'vams-primarytype'}
+            operation_message = f"Removed primary type metadata from file: {file_path}"
+            final_primary_type = None
+        else:
+            # Set or update the metadata attribute
+            new_metadata = current_metadata.copy()
+            if primary_type == 'other':
+                new_metadata['vams-primarytype'] = primary_type_other
+                final_primary_type = primary_type_other
+            else:
+                new_metadata['vams-primarytype'] = primary_type
+                final_primary_type = primary_type
+            operation_message = f"Set primary type '{final_primary_type}' for file: {file_path}"
+        
+        # Copy the object with updated metadata (this creates a new version with the updated metadata)
+        s3_client.copy_object(
+            CopySource={'Bucket': bucket, 'Key': full_key},
+            Bucket=bucket,
+            Key=full_key,
+            MetadataDirective='REPLACE',
+            Metadata=new_metadata,
+            ContentType=current_object.get('ContentType', 'binary/octet-stream')
+        )
+        
+        # Send email notification for asset file change
+        send_subscription_email(databaseId, assetId)
+        
+        # Return response
+        return SetPrimaryFileResponseModel(
+            success=True,
+            message=operation_message,
+            filePath=file_path,
+            primaryType=final_primary_type
+        )
+        
+    except Exception as e:
+        logger.exception(f"Error setting primary type metadata: {e}")
+        raise VAMSGeneralErrorResponse(f"Failed to set primary type metadata: {str(e)}")
+
 def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_and_roles: Dict) -> ListAssetFilesResponseModel:
     """List files for an asset
     
@@ -2355,6 +2462,83 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
         logger.exception(f"Internal error: {e}")
         return internal_error()
 
+def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
+    """Handle PUT /setPrimaryFile requests
+    
+    Args:
+        event: The API Gateway event
+        context: The Lambda context
+        
+    Returns:
+        APIGatewayProxyResponseV2 with the response
+    """
+    try:
+        # Get claims and roles
+        claims_and_roles = request_to_claims(event)
+        
+        # Check API authorization
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforceAPI(event):
+                return authorization_error()
+        
+        # Get path parameters
+        path_params = event.get('pathParameters', {})
+        if 'databaseId' not in path_params:
+            return validation_error(body={'message': "No database ID in API Call"})
+        
+        if 'assetId' not in path_params:
+            return validation_error(body={'message': "No asset ID in API Call"})
+        
+        # Validate path parameters
+        (valid, message) = validate({
+            'databaseId': {
+                'value': path_params['databaseId'],
+                'validator': 'ID'
+            },
+            'assetId': {
+                'value': path_params['assetId'],
+                'validator': 'ASSET_ID'
+            },
+        })
+        
+        if not valid:
+            return validation_error(body={'message': message})
+        
+        # Parse request body
+        if not event.get('body'):
+            return validation_error(body={'message': "Request body is required"})
+        
+        if isinstance(event['body'], str):
+            body = json.loads(event['body'])
+        else:
+            body = event['body']
+        
+        # Parse request model
+        request_model = parse(body, model=SetPrimaryFileRequestModel)
+        
+        # Process request
+        response = set_primary_file(
+            path_params['databaseId'],
+            path_params['assetId'],
+            request_model.filePath,
+            request_model.primaryType,
+            request_model.primaryTypeOther,
+            claims_and_roles
+        )
+        
+        return success(body=response.dict())
+    
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Internal error: {e}")
+        return internal_error()
+
 def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
     """Handle GET /listFiles requests
     
@@ -2458,6 +2642,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             return handle_delete_file(event, context)
         elif method == 'POST' and '/revertFileVersion/' in path:
             return handle_revert_file_version(event, context)
+        elif method == 'PUT' and path.endswith('/setPrimaryFile'):
+            return handle_set_primary_file(event, context)
         else:
             return validation_error(body={'message': "Invalid API path or method"})
     

@@ -18,11 +18,13 @@ import {
 } from "../helper/security";
 import * as Config from "../../config/config";
 
-export function buildAssetLinkService(
+// Combined function for GET and DELETE operations
+export function buildAssetLinksService(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     config: Config.Config,
-    assetLinksStorageTable: dynamodb.Table,
+    assetLinksStorageTableV2: dynamodb.Table,
+    assetLinksMetadataStorageTable: dynamodb.Table,
     assetStorageTable: dynamodb.Table,
     userRolesStorageTable: dynamodb.Table,
     authEntitiesStorageTable: dynamodb.Table,
@@ -48,28 +50,32 @@ export function buildAssetLinkService(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            ASSET_LINKS_STORAGE_TABLE_NAME: assetLinksStorageTable.tableName,
+            ASSET_LINKS_STORAGE_TABLE_V2_NAME: assetLinksStorageTableV2.tableName,
+            ASSET_LINKS_METADATA_STORAGE_TABLE_NAME: assetLinksMetadataStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
             AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: rolesStorageTable.tableName,
         },
     });
-    assetLinksStorageTable.grantReadWriteData(assetLinksService);
+    assetLinksStorageTableV2.grantReadWriteData(assetLinksService);
+    assetLinksMetadataStorageTable.grantReadWriteData(assetLinksService);
     assetStorageTable.grantReadWriteData(assetLinksService);
-    authEntitiesStorageTable.grantReadWriteData(assetLinksService);
-    userRolesStorageTable.grantReadWriteData(assetLinksService);
+    authEntitiesStorageTable.grantReadData(assetLinksService);
+    userRolesStorageTable.grantReadData(assetLinksService);
     rolesStorageTable.grantReadData(assetLinksService);
     kmsKeyLambdaPermissionAddToResourcePolicy(assetLinksService, kmsKey);
     globalLambdaEnvironmentsAndPermissions(assetLinksService, config);
     return assetLinksService;
 }
 
-export function buildGetAssetLinksFunction(
+// Separate function for POST operations (create asset link)
+export function buildCreateAssetLinkFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     config: Config.Config,
-    assetLinksStorageTable: dynamodb.Table,
+    assetLinksStorageTableV2: dynamodb.Table,
+    assetLinksMetadataStorageTable: dynamodb.Table,
     assetStorageTable: dynamodb.Table,
     userRolesStorageTable: dynamodb.Table,
     authEntitiesStorageTable: dynamodb.Table,
@@ -78,8 +84,8 @@ export function buildGetAssetLinksFunction(
     subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
 ): lambda.Function {
-    const name = "getAssetLinksService";
-    const getAssetLinksService = new lambda.Function(scope, name, {
+    const name = "createAssetLink";
+    const createAssetLinkService = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.assetLinks.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -95,28 +101,32 @@ export function buildGetAssetLinksFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            ASSET_LINKS_STORAGE_TABLE_NAME: assetLinksStorageTable.tableName,
+            ASSET_LINKS_STORAGE_TABLE_V2_NAME: assetLinksStorageTableV2.tableName,
+            ASSET_LINKS_METADATA_STORAGE_TABLE_NAME: assetLinksMetadataStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
             AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: rolesStorageTable.tableName,
         },
     });
-    assetLinksStorageTable.grantReadWriteData(getAssetLinksService);
-    assetStorageTable.grantReadWriteData(getAssetLinksService);
-    authEntitiesStorageTable.grantReadWriteData(getAssetLinksService);
-    userRolesStorageTable.grantReadWriteData(getAssetLinksService);
-    rolesStorageTable.grantReadData(getAssetLinksService);
-    kmsKeyLambdaPermissionAddToResourcePolicy(getAssetLinksService, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(getAssetLinksService, config);
-    return getAssetLinksService;
+    assetLinksStorageTableV2.grantReadWriteData(createAssetLinkService);
+    assetLinksMetadataStorageTable.grantReadWriteData(createAssetLinkService);
+    assetStorageTable.grantReadWriteData(createAssetLinkService);
+    authEntitiesStorageTable.grantReadData(createAssetLinkService);
+    userRolesStorageTable.grantReadData(createAssetLinkService);
+    rolesStorageTable.grantReadData(createAssetLinkService);
+    kmsKeyLambdaPermissionAddToResourcePolicy(createAssetLinkService, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(createAssetLinkService, config);
+    return createAssetLinkService;
 }
 
-export function buildDeleteAssetLinksFunction(
+// New function for metadata operations
+export function buildAssetLinksMetadataFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     config: Config.Config,
-    assetLinksStorageTable: dynamodb.Table,
+    assetLinksStorageTableV2: dynamodb.Table,
+    assetLinksMetadataStorageTable: dynamodb.Table,
     assetStorageTable: dynamodb.Table,
     userRolesStorageTable: dynamodb.Table,
     authEntitiesStorageTable: dynamodb.Table,
@@ -125,8 +135,8 @@ export function buildDeleteAssetLinksFunction(
     subnets: ec2.ISubnet[],
     kmsKey?: kms.IKey
 ): lambda.Function {
-    const name = "deleteAssetLinksService";
-    const deleteAssetLinksService = new lambda.Function(scope, name, {
+    const name = "assetLinksMetadataService";
+    const assetLinksMetadataService = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.assetLinks.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
@@ -142,19 +152,21 @@ export function buildDeleteAssetLinksFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            ASSET_LINKS_STORAGE_TABLE_NAME: assetLinksStorageTable.tableName,
+            ASSET_LINKS_STORAGE_TABLE_V2_NAME: assetLinksStorageTableV2.tableName,
+            ASSET_LINKS_METADATA_STORAGE_TABLE_NAME: assetLinksMetadataStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: assetStorageTable.tableName,
             AUTH_TABLE_NAME: authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: rolesStorageTable.tableName,
         },
     });
-    assetLinksStorageTable.grantReadWriteData(deleteAssetLinksService);
-    assetStorageTable.grantReadWriteData(deleteAssetLinksService);
-    authEntitiesStorageTable.grantReadWriteData(deleteAssetLinksService);
-    userRolesStorageTable.grantReadWriteData(deleteAssetLinksService);
-    rolesStorageTable.grantReadData(deleteAssetLinksService);
-    kmsKeyLambdaPermissionAddToResourcePolicy(deleteAssetLinksService, kmsKey);
-    globalLambdaEnvironmentsAndPermissions(deleteAssetLinksService, config);
-    return deleteAssetLinksService;
+    assetLinksStorageTableV2.grantReadWriteData(assetLinksMetadataService);
+    assetLinksMetadataStorageTable.grantReadWriteData(assetLinksMetadataService);
+    assetStorageTable.grantReadWriteData(assetLinksMetadataService);
+    authEntitiesStorageTable.grantReadData(assetLinksMetadataService);
+    userRolesStorageTable.grantReadData(assetLinksMetadataService);
+    rolesStorageTable.grantReadData(assetLinksMetadataService);
+    kmsKeyLambdaPermissionAddToResourcePolicy(assetLinksMetadataService, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(assetLinksMetadataService, config);
+    return assetLinksMetadataService;
 }

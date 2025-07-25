@@ -162,6 +162,12 @@
     -ms-user-select: none;
 }
 
+.folder-count {
+    margin-left: 5px;
+    font-size: 0.85em;
+    color: #666;
+}
+
 .tree-item-children {
     /* Disable text selection */
     user-select: none;

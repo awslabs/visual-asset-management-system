@@ -295,14 +295,20 @@ export function searchBuilder(
 
         onS3ObjectCreatedQueue.grantConsumeMessages(sqsBucketSyncFunctionCreated);
 
+        onS3ObjectCreatedQueue.grantConsumeMessages(sqsBucketSyncFunctionCreated);
+
         // The functions poll the respective queues, which is populated by messages sent to the topic.
-        const esmCreated = new lambda.EventSourceMapping(scope, `SQSEventSourceBucketSyncCreated--${index}`, {
-            eventSourceArn: onS3ObjectCreatedQueue.queueArn,
-            target: sqsBucketSyncFunctionCreated,
-            batchSize: 10, // Max configurable records w/o maxBatchingWindow.
-            maxBatchingWindow: cdk.Duration.seconds(30), // Max configurable time to wait before function is invoked.
-        });
-        
+        const esmCreated = new lambda.EventSourceMapping(
+            scope,
+            `SQSEventSourceBucketSyncCreated--${index}`,
+            {
+                eventSourceArn: onS3ObjectCreatedQueue.queueArn,
+                target: sqsBucketSyncFunctionCreated,
+                batchSize: 10, // Max configurable records w/o maxBatchingWindow.
+                maxBatchingWindow: cdk.Duration.seconds(30), // Max configurable time to wait before function is invoked.
+            }
+        );
+
         // Due to cdk upgrade, not all regions support tags for EventSourceMapping
         // this line should remove the tags for regions that dont support it (govcloud currently not supported)
         if (config.app.govCloud.enabled) {
@@ -349,13 +355,17 @@ export function searchBuilder(
 
         onS3ObjectDeletedQueue.grantConsumeMessages(sqsBucketSyncFunctionRemoved);
 
-        const esmDeleted = new lambda.EventSourceMapping(scope, `SQSEventSourceBucketSyncDeleted--${index}`, {
-            eventSourceArn: onS3ObjectDeletedQueue.queueArn,
-            target: sqsBucketSyncFunctionRemoved,
-            batchSize: 10, // Max configurable records w/o maxBatchingWindow.
-            maxBatchingWindow: cdk.Duration.seconds(30), // Max configurable time to wait before function is invoked.
-        });
-        
+        const esmDeleted = new lambda.EventSourceMapping(
+            scope,
+            `SQSEventSourceBucketSyncDeleted--${index}`,
+            {
+                eventSourceArn: onS3ObjectDeletedQueue.queueArn,
+                target: sqsBucketSyncFunctionRemoved,
+                batchSize: 10, // Max configurable records w/o maxBatchingWindow.
+                maxBatchingWindow: cdk.Duration.seconds(30), // Max configurable time to wait before function is invoked.
+            }
+        );
+
         // Due to cdk upgrade, not all regions support tags for EventSourceMapping
         // this line should remove the tags for regions that dont support it (govcloud currently not supported)
         if (config.app.govCloud.enabled) {
