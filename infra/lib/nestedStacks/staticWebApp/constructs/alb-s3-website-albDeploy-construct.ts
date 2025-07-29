@@ -34,6 +34,7 @@ export interface AlbS3WebsiteAlbDeployConstructProps extends cdk.StackProps {
     webSiteBuildPath: string;
     webAcl: string;
     apiUrl: string;
+    csp: string;
     vpc: ec2.IVpc;
     albSubnets: ec2.ISubnet[];
     albSecurityGroup: ec2.SecurityGroup;
@@ -198,6 +199,11 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
         listener.addTargetGroups("WebAppTargetGroup1", {
             targetGroups: [targetGroup1],
         });
+
+        //If CSP not empty, add it to the header
+        if (props.csp !== "") {
+            listener.setAttribute("routing.http.response.content_security_policy.header_value", props.csp);
+        }
 
         //Setup listener rule to rewrite path to forward to API Gateway for backend API calls
         const applicationListenerRuleBackendAPI = new elbv2.ApplicationListenerRule(

@@ -102,6 +102,10 @@ export class CoreVAMSStack extends cdk.Stack {
             this.enabledFeatures.push(VAMS_APP_FEATURES.AUTHPROVIDER_EXTERNALOAUTHIDP);
         }
 
+        if (props.config.app.webUi.allowUnsafeEvalFeatures) {
+            this.enabledFeatures.push(VAMS_APP_FEATURES.ALLOWUNSAFEEVAL);
+        }
+
         //Deploy VPC (nested stack)
         if (props.config.app.useGlobalVpc.enabled) {
             const vpcBuilderNestedStack = new VPCBuilderNestedStack(this, "VPCBuilder", {

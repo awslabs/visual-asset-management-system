@@ -99,7 +99,8 @@
             }
         },
         "webUi": {
-            "optionalBannerHtmlMessage": ""
+            "optionalBannerHtmlMessage": "",
+            "allowUnsafeEvalFeatures": false
         }
     }
 }

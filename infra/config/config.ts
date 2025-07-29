@@ -160,6 +160,10 @@ export function getConfig(app: cdk.App): Config {
         config.app.assetBuckets.createNewBucket = true;
     }
 
+    if (config.app.webUi.allowUnsafeEvalFeatures == undefined) {
+        config.app.webUi.allowUnsafeEvalFeatures = false;
+    }
+
     //Load S3 Policy statements JSON
     const s3AdditionalBucketPolicyFile: string = readFileSync(
         join(__dirname, "policy", "s3AdditionalBucketPolicyConfig.json"),
@@ -590,6 +594,7 @@ export interface ConfigPublic {
         };
         webUi: {
             optionalBannerHtmlMessage: string;
+            allowUnsafeEvalFeatures: boolean;
         };
     };
 }

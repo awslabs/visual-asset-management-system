@@ -242,6 +242,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 webSiteBuildPath: props.webAppBuildPath,
                 webAcl: props.ssmWafArn,
                 apiUrl: props.apiUrl,
+                csp: props.csp,
                 vpc: webAppDistroNetwork.vpc,
                 albSubnets: webAppDistroNetwork.subnets.webApp,
                 albSecurityGroup: webAppDistroNetwork.securityGroups.webAppALB,

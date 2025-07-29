@@ -181,11 +181,17 @@ export function generateContentSecurityPolicy(
         `https://${Service("S3").Endpoint}/`,
     ];
 
+    //Add cognito
     if (config.app.authProvider.useCognito.enabled) {
         connectSrc.push(`https://${Service("COGNITO_IDP").Endpoint}/`);
         connectSrc.push(`https://${Service("COGNITO_IDENTITY").Endpoint}/`);
         scriptSrc.push(`https://${Service("COGNITO_IDP").Endpoint}/`);
         scriptSrc.push(`https://${Service("COGNITO_IDENTITY").Endpoint}/`);
+    }
+
+    //Add unsafe eval when enabled
+    if (config.app.webUi.allowUnsafeEvalFeatures) {
+        scriptSrc.push(`'unsafe-eval'`);
     }
 
     //Add GeoLocation service URL if feature turned on
