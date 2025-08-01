@@ -52,15 +52,15 @@ function TreeItem({ item }: TreeItemProps) {
     useEffect(() => {
         const loadAssetDetails = async () => {
             if (!showTags || !item.assetData || isLoadingDetails) return;
-            
+
             const { assetId, databaseId } = item.assetData;
-            
+
             // Check if we already have this asset in cache
             if (state.assetDetailsCache && state.assetDetailsCache[assetId]) {
                 setAssetDetails(state.assetDetailsCache[assetId]);
                 return;
             }
-            
+
             setIsLoadingDetails(true);
             try {
                 // Fetch asset details
@@ -73,7 +73,7 @@ function TreeItem({ item }: TreeItemProps) {
                         payload: { assetId, details },
                     });
                 }
-                
+
                 // Fetch tag types if not already loaded
                 if (tagTypes.length === 0) {
                     const types = await fetchtagTypes();
@@ -87,9 +87,16 @@ function TreeItem({ item }: TreeItemProps) {
                 setIsLoadingDetails(false);
             }
         };
-        
+
         loadAssetDetails();
-    }, [showTags, item.assetData, state.assetDetailsCache, dispatch, isLoadingDetails, tagTypes.length]);
+    }, [
+        showTags,
+        item.assetData,
+        state.assetDetailsCache,
+        dispatch,
+        isLoadingDetails,
+        tagTypes.length,
+    ]);
 
     // Format tags with tag types
     const formatTags = (tags: any[]) => {
@@ -153,9 +160,8 @@ function TreeItem({ item }: TreeItemProps) {
     };
 
     // Get tags to display
-    const tagsDisplay = showTags && assetDetails && assetDetails.tags 
-        ? formatTags(assetDetails.tags) 
-        : "";
+    const tagsDisplay =
+        showTags && assetDetails && assetDetails.tags ? formatTags(assetDetails.tags) : "";
 
     return (
         <div className="asset-links-tree-item">

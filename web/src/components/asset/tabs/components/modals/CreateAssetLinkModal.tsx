@@ -58,14 +58,14 @@ export function CreateAssetLinkModal({
                 console.error("Error fetching tag types:", error);
             }
         };
-        
+
         loadTagTypes();
     }, []);
 
     // Format tags with tag types (same logic as SearchPageListView)
     const formatAssetTags = (tags: any[]) => {
         console.log("formatAssetTags called with:", tags);
-        
+
         if (!Array.isArray(tags) || tags.length === 0) {
             console.log("No tags to format or tags is not an array");
             return "No tags assigned";
@@ -73,10 +73,10 @@ export function CreateAssetLinkModal({
 
         try {
             console.log("Tag types available:", tagTypes);
-            
+
             const tagsWithType = tags.map((tag) => {
                 console.log("Processing tag:", tag);
-                
+
                 if (tagTypes && tagTypes.length > 0) {
                     for (const tagType of tagTypes) {
                         var tagTypeName = tagType.tagTypeName;
@@ -86,7 +86,11 @@ export function CreateAssetLinkModal({
                             tagTypeName += " [R]";
                         }
 
-                        if (tagType.tags && Array.isArray(tagType.tags) && tagType.tags.includes(tag)) {
+                        if (
+                            tagType.tags &&
+                            Array.isArray(tagType.tags) &&
+                            tagType.tags.includes(tag)
+                        ) {
                             console.log(`Found tag type for ${tag}: ${tagTypeName}`);
                             return `${tag} [${tagTypeName}]`;
                         }
@@ -161,7 +165,7 @@ export function CreateAssetLinkModal({
                         console.log("Tags in first result:", result[0].tags);
                     }
                 }
-                
+
                 setSearchResult(result);
                 setShowTable(true);
             } else {
@@ -186,27 +190,27 @@ export function CreateAssetLinkModal({
 
         // Add selected items to the selected assets list, avoiding duplicates
         const newSelectedAssets = [...selectedAssets];
-        selectedItems.forEach(item => {
-            const isDuplicate = newSelectedAssets.some(asset => asset.assetId === item.assetId);
+        selectedItems.forEach((item) => {
+            const isDuplicate = newSelectedAssets.some((asset) => asset.assetId === item.assetId);
             if (!isDuplicate) {
                 newSelectedAssets.push(item);
             }
         });
-        
+
         setSelectedAssets(newSelectedAssets);
         setSelectedItems([]);
     };
 
     // Remove an asset from the selected assets list
     const removeSelectedAsset = (assetId: string) => {
-        setSelectedAssets(selectedAssets.filter(asset => asset.assetId !== assetId));
+        setSelectedAssets(selectedAssets.filter((asset) => asset.assetId !== assetId));
     };
 
     // Add link
     const addLink = async () => {
         // Use selectedAssets instead of selectedItems for the final selection
         const assetsToLink = selectedAssets.length > 0 ? selectedAssets : selectedItems;
-        
+
         if (assetsToLink.length === 0) {
             setFormError("Please select at least one asset to link.");
             return;
@@ -314,7 +318,7 @@ export function CreateAssetLinkModal({
                 } catch (err: any) {
                     console.error("Error creating asset link:", err);
                     errorCount++;
-                    
+
                     // Extract error message from the response
                     let errorMessage = "Unknown error";
                     try {
@@ -333,11 +337,11 @@ export function CreateAssetLinkModal({
                     } catch (parseError) {
                         errorMessage = err.message || "Unknown error";
                     }
-                    
+
                     // Add to errors array
                     errors.push({
                         assetName: selectedAsset.assetName,
-                        message: errorMessage
+                        message: errorMessage,
                     });
                 }
             }
@@ -346,7 +350,9 @@ export function CreateAssetLinkModal({
             if (successCount > 0 && errorCount === 0) {
                 showMessage({
                     type: "success",
-                    message: `Successfully added ${successCount} ${relationshipType} link${successCount !== 1 ? 's' : ''}`,
+                    message: `Successfully added ${successCount} ${relationshipType} link${
+                        successCount !== 1 ? "s" : ""
+                    }`,
                     dismissible: true,
                     autoDismiss: true,
                 });
@@ -354,20 +360,24 @@ export function CreateAssetLinkModal({
                 onSuccess();
             } else if (successCount > 0 && errorCount > 0) {
                 // Format error messages for display
-                const errorMessages = errors.map(error => 
-                    `• ${error.assetName}: ${error.message}`
-                ).join('\n');
-                
+                const errorMessages = errors
+                    .map((error) => `• ${error.assetName}: ${error.message}`)
+                    .join("\n");
+
                 setFormError(
-                    `Added ${successCount} link${successCount !== 1 ? 's' : ''} successfully, but ${errorCount} failed.\n\nErrors:\n${errorMessages}`
+                    `Added ${successCount} link${
+                        successCount !== 1 ? "s" : ""
+                    } successfully, but ${errorCount} failed.\n\nErrors:\n${errorMessages}`
                 );
             } else if (errorCount > 0) {
                 // Format error messages for display
-                const errorMessages = errors.map(error => 
-                    `• ${error.assetName}: ${error.message}`
-                ).join('\n');
-                
-                setFormError(`Failed to add any ${relationshipType} links.\n\nErrors:\n${errorMessages}`);
+                const errorMessages = errors
+                    .map((error) => `• ${error.assetName}: ${error.message}`)
+                    .join("\n");
+
+                setFormError(
+                    `Failed to add any ${relationshipType} links.\n\nErrors:\n${errorMessages}`
+                );
             } else {
                 setFormError(`No asset links were processed. Please try again.`);
             }
@@ -435,29 +445,36 @@ export function CreateAssetLinkModal({
             ? searchResult.map((result: any) => {
                   // Debug logging for OpenSearch results
                   console.log("Processing OpenSearch result:", result);
-                  console.log("_source fields:", result._source ? Object.keys(result._source) : "No _source");
-                  
+                  console.log(
+                      "_source fields:",
+                      result._source ? Object.keys(result._source) : "No _source"
+                  );
+
                   // Check for tags in different possible locations
                   // OpenSearch typically stores tags in list_tags field
                   let tags = [];
-                  
+
                   if (result._source?.list_tags) {
                       // If list_tags is a string (comma-separated), split it
-                      if (typeof result._source.list_tags === 'string') {
-                          tags = result._source.list_tags.split(',').map((tag: string) => tag.trim());
-                      } 
+                      if (typeof result._source.list_tags === "string") {
+                          tags = result._source.list_tags
+                              .split(",")
+                              .map((tag: string) => tag.trim());
+                      }
                       // If list_tags is already an array
                       else if (Array.isArray(result._source.list_tags)) {
                           tags = result._source.list_tags;
                       }
-                  } 
+                  }
                   // Fallback to other possible tag fields
                   else if (result._source?.tags) {
-                      tags = Array.isArray(result._source.tags) ? result._source.tags : [result._source.tags];
+                      tags = Array.isArray(result._source.tags)
+                          ? result._source.tags
+                          : [result._source.tags];
                   }
-                  
+
                   console.log("Found tags:", tags);
-                  
+
                   // Search API results
                   return {
                       assetName: result._source?.str_assetname || "",
@@ -473,7 +490,7 @@ export function CreateAssetLinkModal({
                   console.log("Processing direct API result:", result);
                   console.log("Available fields:", Object.keys(result));
                   console.log("Tags field:", result.tags);
-                  
+
                   return {
                       assetName: result.assetName || "",
                       databaseName: result.databaseId || "",
@@ -483,7 +500,7 @@ export function CreateAssetLinkModal({
                   };
               })
         : []; // No result
-        
+
     // Debug the formatted items
     console.log("Formatted asset items:", assetItems);
     if (assetItems.length > 0) {
@@ -523,7 +540,10 @@ export function CreateAssetLinkModal({
                         </Button>
                         <Button
                             variant="primary"
-                            disabled={addDisabled || (selectedItems.length === 0 && selectedAssets.length === 0)}
+                            disabled={
+                                addDisabled ||
+                                (selectedItems.length === 0 && selectedAssets.length === 0)
+                            }
                             onClick={addLink}
                         >
                             Create Link
@@ -586,7 +606,9 @@ export function CreateAssetLinkModal({
                                             cell: (item: any) => (
                                                 <Button
                                                     variant="link"
-                                                    onClick={() => removeSelectedAsset(item.assetId)}
+                                                    onClick={() =>
+                                                        removeSelectedAsset(item.assetId)
+                                                    }
                                                 >
                                                     Remove
                                                 </Button>
@@ -651,7 +673,14 @@ export function CreateAssetLinkModal({
                     {/* Search Results */}
                     {showTable && (
                         <div style={{ width: "100%", maxWidth: "none", minWidth: 0 }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                            <div
+                                style={{
+                                    display: "flex",
+                                    justifyContent: "space-between",
+                                    alignItems: "center",
+                                    marginBottom: "8px",
+                                }}
+                            >
                                 <label
                                     style={{
                                         display: "block",

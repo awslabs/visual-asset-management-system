@@ -233,7 +233,7 @@ function searchReducer(state: any, action: any) {
                 ...state,
                 map: action.map,
             };
-            
+
         case "toggle-preview-thumbnails":
             return {
                 ...state,

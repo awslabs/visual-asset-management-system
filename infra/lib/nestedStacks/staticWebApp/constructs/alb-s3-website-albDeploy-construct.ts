@@ -202,7 +202,10 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
 
         //If CSP not empty, add it to the header
         if (props.csp !== "") {
-            listener.setAttribute("routing.http.response.content_security_policy.header_value", props.csp);
+            listener.setAttribute(
+                "routing.http.response.content_security_policy.header_value",
+                props.csp
+            );
         }
 
         //Setup listener rule to rewrite path to forward to API Gateway for backend API calls

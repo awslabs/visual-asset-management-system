@@ -82,7 +82,7 @@ Some configuration options can be overriden at time of deployment with either en
 -   `app.authProvider.useExternalOauthIdp.lambdaAuthorizorJWTAudience` | default: NULL | The audience provided by the external IDP system to recognize this application deployment for JWT token verification
 
 -   `app.webUi.optionalBannerHtmlMessage` | default: NULL | #Optional HTML message to display as a banner in the web UI. Can be used for system notifications or compliance messages.
--   `app.webUi.allowUnsafeEvalFeatures` | default: false | #Allow for features and web CSP policy that allow 'unsafe-eval' policy for script execution. Confirm with your security teams before turning this on. 
+-   `app.webUi.allowUnsafeEvalFeatures` | default: false | #Allow for features and web CSP policy that allow 'unsafe-eval' policy for script execution. Confirm with your security teams before turning this on.
 
 ### Additional configuration notes
 

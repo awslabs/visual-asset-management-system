@@ -100,7 +100,12 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
     const navigate = useNavigate();
 
     // Handler for opening the preview modal
-    const handleOpenPreview = (previewUrl: string, assetName: string, previewKey: string, item?: any) => {
+    const handleOpenPreview = (
+        previewUrl: string,
+        assetName: string,
+        previewKey: string,
+        item?: any
+    ) => {
         setPreviewAsset({
             url: previewUrl,
             assetId: item?.str_assetid,
@@ -181,7 +186,9 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                     <PreviewThumbnailCell
                         assetId={item.str_assetid}
                         databaseId={item.str_databaseid}
-                        onOpenFullPreview={(url, assetName, previewKey) => handleOpenPreview(url, assetName, previewKey, item)}
+                        onOpenFullPreview={(url, assetName, previewKey) =>
+                            handleOpenPreview(url, assetName, previewKey, item)
+                        }
                         assetName={item.str_assetname}
                     />
                 ),
@@ -192,9 +199,14 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
         ];
 
         // Add preview to visible columns if not already there
-        if (state.tablePreferences?.visibleContent && 
-            !state.tablePreferences.visibleContent.includes("preview")) {
-            state.tablePreferences.visibleContent = ["preview", ...state.tablePreferences.visibleContent];
+        if (
+            state.tablePreferences?.visibleContent &&
+            !state.tablePreferences.visibleContent.includes("preview")
+        ) {
+            state.tablePreferences.visibleContent = [
+                "preview",
+                ...state.tablePreferences.visibleContent,
+            ];
         }
     }
 
@@ -523,7 +535,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                     search({}, { state, dispatch });
                 }}
             />
-            
+
             {/* Asset Preview Modal */}
             <AssetPreviewModal
                 visible={showPreviewModal}

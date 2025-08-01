@@ -245,13 +245,13 @@ export function assetLinksReducer(
                     ? buildTreeFromAssetLinks(state.assetLinksData, newShowChildrenSubTree)
                     : state.treeData,
             };
-            
+
         case "TOGGLE_TAGS_IN_TREE":
             return {
                 ...state,
                 showTagsInTree: !state.showTagsInTree,
             };
-            
+
         case "SET_ASSET_DETAILS":
             return {
                 ...state,

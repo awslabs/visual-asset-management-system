@@ -39,27 +39,27 @@ export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
             try {
                 // First, fetch the asset details to get the previewLocation
                 const assetDetails = await fetchAsset({ databaseId, assetId, showArchived: false });
-                
-                if (!assetDetails || typeof assetDetails === 'string') {
+
+                if (!assetDetails || typeof assetDetails === "string") {
                     console.error("Error fetching asset details:", assetDetails);
                     setError(true);
                     setLoading(false);
                     return;
                 }
-                
+
                 // Get the preview key from the asset details
-                const assetPreviewKey = assetDetails.previewLocation?.Key || 
-                                       assetDetails.previewLocation?.key;
-                
+                const assetPreviewKey =
+                    assetDetails.previewLocation?.Key || assetDetails.previewLocation?.key;
+
                 if (!assetPreviewKey) {
                     console.log(`No preview key found for asset ${assetId}`);
                     setError(true);
                     setLoading(false);
                     return;
                 }
-                
+
                 console.log(`Loading preview for asset ${assetId} with key: ${assetPreviewKey}`);
-                
+
                 // Now download the preview image
                 const response = await downloadAsset({
                     databaseId,
