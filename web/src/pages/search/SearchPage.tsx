@@ -18,6 +18,7 @@ import {
     Multiselect,
     SpaceBetween,
     TextContent,
+    Toggle,
 } from "@cloudscape-design/components";
 import Synonyms from "../../synonyms";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
@@ -232,6 +233,12 @@ function searchReducer(state: any, action: any) {
                 ...state,
                 map: action.map,
             };
+            
+        case "toggle-preview-thumbnails":
+            return {
+                ...state,
+                showPreviewThumbnails: !state.showPreviewThumbnails,
+            };
 
         default:
             return state;
@@ -264,6 +271,7 @@ export const INITIAL_STATE = {
     columnNames: [],
     columnDefinitions: [],
     notifications: [],
+    showPreviewThumbnails: false,
 };
 var tags: any[] = [];
 function SearchPage(props: SearchPageProps) {
@@ -499,6 +507,14 @@ function SearchPage(props: SearchPageProps) {
                                                     )
                                                 }
                                             />
+                                            <Toggle
+                                                onChange={({ detail }) =>
+                                                    dispatch({ type: "toggle-preview-thumbnails" })
+                                                }
+                                                checked={state.showPreviewThumbnails}
+                                            >
+                                                Show Preview Thumbnails
+                                            </Toggle>
                                         </Grid>
                                     </FormField>
                                     <FormField label="Search">

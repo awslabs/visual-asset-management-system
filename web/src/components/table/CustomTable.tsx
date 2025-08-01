@@ -20,6 +20,7 @@ interface CustomTableProps {
     trackBy: string;
     enablePagination?: boolean;
     pageSize?: number;
+    selectionType?: "single" | "multi";
 }
 
 const CustomTable: React.FC<CustomTableProps> = ({
@@ -30,6 +31,7 @@ const CustomTable: React.FC<CustomTableProps> = ({
     trackBy,
     enablePagination = false,
     pageSize = 15,
+    selectionType = "single",
 }) => {
     const [currentPageIndex, setCurrentPageIndex] = useState(1);
 
@@ -60,7 +62,7 @@ const CustomTable: React.FC<CustomTableProps> = ({
                         columnDisplay={columns.map((col) => ({ id: col.id, visible: true }))}
                         items={paginatedItems}
                         loadingText="Loading resources"
-                        selectionType="single"
+                        selectionType={selectionType}
                         variant="full-page"
                         empty={
                             <Box margin={{ vertical: "xs" }} textAlign="center" color="inherit">

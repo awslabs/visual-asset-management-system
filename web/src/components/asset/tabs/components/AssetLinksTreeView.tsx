@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useContext } from "react";
+import React, { useContext, useEffect, useState } from "react";
 import {
     Box,
     Button,
@@ -21,6 +21,7 @@ import {
     AssetLinksContextType,
     NewAssetLinksContextType,
 } from "../types/AssetLinksTypes";
+import { fetchAsset, fetchtagTypes } from "../../../../services/APIService";
 import "./AssetLinksTreeView.css";
 
 // Create a context that will be overridden by the main component
@@ -39,9 +40,87 @@ function TreeItem({ item }: TreeItemProps) {
         throw new Error("TreeItem must be used within an AssetLinksContext.Provider");
     }
     const { state, dispatch } = context;
+    const [assetDetails, setAssetDetails] = useState<any>(null);
+    const [tagTypes, setTagTypes] = useState<any[]>([]);
+    const [isLoadingDetails, setIsLoadingDetails] = useState(false);
 
     const isSelected = state.selectedNode?.id === item.id;
     const hasChildren = item.children.length > 0;
+    const showTags = state.showTagsInTree && item.type === "asset" && item.assetData;
+
+    // Fetch asset details and tag types when needed
+    useEffect(() => {
+        const loadAssetDetails = async () => {
+            if (!showTags || !item.assetData || isLoadingDetails) return;
+            
+            const { assetId, databaseId } = item.assetData;
+            
+            // Check if we already have this asset in cache
+            if (state.assetDetailsCache && state.assetDetailsCache[assetId]) {
+                setAssetDetails(state.assetDetailsCache[assetId]);
+                return;
+            }
+            
+            setIsLoadingDetails(true);
+            try {
+                // Fetch asset details
+                const details = await fetchAsset({ databaseId, assetId, showArchived: false });
+                if (details) {
+                    setAssetDetails(details);
+                    // Cache the details
+                    dispatch({
+                        type: "SET_ASSET_DETAILS",
+                        payload: { assetId, details },
+                    });
+                }
+                
+                // Fetch tag types if not already loaded
+                if (tagTypes.length === 0) {
+                    const types = await fetchtagTypes();
+                    if (types && Array.isArray(types)) {
+                        setTagTypes(types);
+                    }
+                }
+            } catch (error) {
+                console.error("Error fetching asset details:", error);
+            } finally {
+                setIsLoadingDetails(false);
+            }
+        };
+        
+        loadAssetDetails();
+    }, [showTags, item.assetData, state.assetDetailsCache, dispatch, isLoadingDetails, tagTypes.length]);
+
+    // Format tags with tag types
+    const formatTags = (tags: any[]) => {
+        if (!Array.isArray(tags) || tags.length === 0) {
+            return "";
+        }
+
+        try {
+            const tagsWithType = tags.map((tag) => {
+                if (tagTypes && tagTypes.length > 0) {
+                    for (const tagType of tagTypes) {
+                        var tagTypeName = tagType.tagTypeName;
+
+                        if (tagType && tagType.required === "True") {
+                            tagTypeName += " [R]";
+                        }
+
+                        if (tagType.tags && tagType.tags.includes(tag)) {
+                            return `${tag} [${tagTypeName}]`;
+                        }
+                    }
+                }
+                return tag;
+            });
+
+            return `(${tagsWithType.join(", ")})`;
+        } catch (error) {
+            console.error("Error formatting tags:", error);
+            return "";
+        }
+    };
 
     const handleClick = (e: React.MouseEvent) => {
         // Handle Ctrl+click for navigation to asset page
@@ -72,6 +151,11 @@ function TreeItem({ item }: TreeItemProps) {
             payload: item.id,
         });
     };
+
+    // Get tags to display
+    const tagsDisplay = showTags && assetDetails && assetDetails.tags 
+        ? formatTags(assetDetails.tags) 
+        : "";
 
     return (
         <div className="asset-links-tree-item">
@@ -107,6 +191,11 @@ function TreeItem({ item }: TreeItemProps) {
                     {item.name}
                     {item.type === "root" && item.children.length > 0 && (
                         <span className="asset-links-count">({item.children.length})</span>
+                    )}
+                    {showTags && (
+                        <span className="asset-links-tags">
+                            {isLoadingDetails ? " (Loading tags...)" : tagsDisplay}
+                        </span>
                     )}
                 </span>
             </div>
@@ -309,6 +398,17 @@ export function AssetLinksTreeView() {
                 {isViewMode && (
                     <div className="asset-links-toggle-controls">
                         <div className="asset-links-toggle-row">
+                            <Toggle
+                                onChange={() =>
+                                    dispatch({
+                                        type: "TOGGLE_TAGS_IN_TREE",
+                                        payload: null,
+                                    })
+                                }
+                                checked={state.showTagsInTree || false}
+                            >
+                                Show Tags
+                            </Toggle>
                             <Toggle
                                 onChange={() =>
                                     dispatch({

@@ -15,7 +15,8 @@ import {
 export const initialAssetLinksState: AssetLinksState = {
     treeData: [],
     selectedNode: null,
-    showChildrenSubTree: false,
+    showChildrenSubTree: true, // Set to true by default
+    showTagsInTree: false, // Default to false for performance reasons
     loading: true,
     error: null,
     assetLinksData: null,
@@ -27,6 +28,7 @@ export const initialAssetLinksState: AssetLinksState = {
     searchTerm: "",
     searchResults: [],
     isSearching: false,
+    assetDetailsCache: {}, // Cache for asset details
 };
 
 function buildTreeFromAssetLinks(
@@ -242,6 +244,21 @@ export function assetLinksReducer(
                 treeData: state.assetLinksData
                     ? buildTreeFromAssetLinks(state.assetLinksData, newShowChildrenSubTree)
                     : state.treeData,
+            };
+            
+        case "TOGGLE_TAGS_IN_TREE":
+            return {
+                ...state,
+                showTagsInTree: !state.showTagsInTree,
+            };
+            
+        case "SET_ASSET_DETAILS":
+            return {
+                ...state,
+                assetDetailsCache: {
+                    ...state.assetDetailsCache,
+                    [action.payload.assetId]: action.payload.details,
+                },
             };
 
         case "REFRESH_DATA":

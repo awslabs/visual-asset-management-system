@@ -12,8 +12,11 @@ import {
     Grid,
     Select,
     FormField,
+    Modal,
 } from "@cloudscape-design/components";
 import AssetDeleteModal from "../../components/modals/AssetDeleteModal";
+import PreviewThumbnailCell from "./components/PreviewThumbnailCell";
+import AssetPreviewModal from "../../components/filemanager/modals/AssetPreviewModal";
 import {
     changeFilter,
     changeRectype,
@@ -79,6 +82,14 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
     // identify all the names of columns from state.result.hits.hits
     // create a column definition for each column
     const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [showPreviewModal, setShowPreviewModal] = useState(false);
+    const [previewAsset, setPreviewAsset] = useState<{
+        url?: string;
+        assetId?: string;
+        databaseId?: string;
+        previewKey?: string;
+        assetName?: string;
+    }>({});
 
     useEffect(() => {
         fetchtagTypes().then((res) => {
@@ -88,13 +99,26 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
 
     const navigate = useNavigate();
 
+    // Handler for opening the preview modal
+    const handleOpenPreview = (previewUrl: string, assetName: string, previewKey: string, item?: any) => {
+        setPreviewAsset({
+            url: previewUrl,
+            assetId: item?.str_assetid,
+            databaseId: item?.str_databaseid,
+            previewKey: previewKey,
+            assetName: assetName,
+        });
+        setShowPreviewModal(true);
+    };
+
     if (!state?.initialResult) {
         return <div>Loading..</div>;
     }
 
     const { columnNames } = state;
 
-    const columnDefinitions = columnNames?.map((name: string) => {
+    // Add preview column if showPreviewThumbnails is enabled
+    let enhancedColumnDefinitions = columnNames?.map((name: string) => {
         if (name === "str_asset") {
             return {
                 id: name,
@@ -147,12 +171,39 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
         };
     });
 
+    // Add preview column if showPreviewThumbnails is enabled
+    if (state.showPreviewThumbnails && state.filters._rectype.value === "asset") {
+        enhancedColumnDefinitions = [
+            {
+                id: "preview",
+                header: "Preview",
+                cell: (item: any) => (
+                    <PreviewThumbnailCell
+                        assetId={item.str_assetid}
+                        databaseId={item.str_databaseid}
+                        onOpenFullPreview={(url, assetName, previewKey) => handleOpenPreview(url, assetName, previewKey, item)}
+                        assetName={item.str_assetname}
+                    />
+                ),
+                sortingField: "preview",
+                isRowHeader: false,
+            },
+            ...enhancedColumnDefinitions,
+        ];
+
+        // Add preview to visible columns if not already there
+        if (state.tablePreferences?.visibleContent && 
+            !state.tablePreferences.visibleContent.includes("preview")) {
+            state.tablePreferences.visibleContent = ["preview", ...state.tablePreferences.visibleContent];
+        }
+    }
+
     const currentPage = 1 + Math.ceil(state?.pagination?.from / state?.tablePreferences?.pageSize);
     const pageCount = Math.ceil(
         state?.result?.hits?.total?.value / state?.tablePreferences?.pageSize
     );
 
-    if (!columnDefinitions) {
+    if (!enhancedColumnDefinitions) {
         return <div>Loading...</div>;
     }
 
@@ -163,7 +214,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                     empty={
                         <EmptyState
                             title="No matches"
-                            subtitle="We can’t find a match."
+                            subtitle="We can't find a match."
                             action={
                                 <Button
                                     onClick={() => {
@@ -178,7 +229,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                             }
                         />
                     }
-                    columnDefinitions={columnDefinitions}
+                    columnDefinitions={enhancedColumnDefinitions}
                     selectedItems={state?.selectedItems}
                     isItemDisabled={(item: any) => {
                         return state?.disableSelection || false;
@@ -252,7 +303,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                                 options: [
                                     {
                                         label: "All columns",
-                                        options: columnDefinitions
+                                        options: enhancedColumnDefinitions
                                             .map(
                                                 (
                                                     columnDefinition: TableProps.ColumnDefinition<string>
@@ -471,6 +522,16 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                     // Refresh the search results
                     search({}, { state, dispatch });
                 }}
+            />
+            
+            {/* Asset Preview Modal */}
+            <AssetPreviewModal
+                visible={showPreviewModal}
+                onDismiss={() => setShowPreviewModal(false)}
+                assetId={previewAsset.assetId || ""}
+                databaseId={previewAsset.databaseId || ""}
+                previewKey={previewAsset.previewKey}
+                assetName={previewAsset.assetName || ""}
             />
         </>
     );

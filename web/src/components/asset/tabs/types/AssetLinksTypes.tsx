@@ -61,6 +61,7 @@ export interface AssetLinksState {
     treeData: TreeNodeItem[];
     selectedNode: TreeNodeItem | null;
     showChildrenSubTree?: boolean; // Optional for upload mode
+    showTagsInTree?: boolean; // Toggle for showing tags in tree view
     loading?: boolean; // Optional for upload mode
     error: string | null;
     assetLinksData: AssetLinksData | null;
@@ -74,6 +75,8 @@ export interface AssetLinksState {
         relationshipType: "related" | "parent" | "child",
         metadata: AssetLinkMetadata[]
     ) => void;
+    // Cache for asset details to avoid repeated API calls
+    assetDetailsCache?: { [key: string]: any };
 }
 
 export interface AssetLinksContextType {
@@ -88,6 +91,7 @@ export type AssetLinksAction =
     | { type: "SELECT_NODE"; payload: TreeNodeItem | null }
     | { type: "TOGGLE_NODE_EXPANDED"; payload: string }
     | { type: "TOGGLE_CHILDREN_SUBTREE"; payload: null }
+    | { type: "TOGGLE_TAGS_IN_TREE"; payload: null }
     | { type: "REFRESH_DATA"; payload: null }
     | { type: "SET_METADATA_LOADING"; payload: boolean }
     | { type: "SET_METADATA_ERROR"; payload: string | null }
@@ -96,7 +100,8 @@ export type AssetLinksAction =
     | { type: "UPDATE_METADATA"; payload: AssetLinkMetadata }
     | { type: "DELETE_METADATA"; payload: { assetLinkId: string; metadataKey: string } }
     | { type: "SET_SEARCH_TERM"; payload: { searchTerm: string } }
-    | { type: "SET_SEARCH_RESULTS"; payload: { searchResults: TreeNodeItem[] } };
+    | { type: "SET_SEARCH_RESULTS"; payload: { searchResults: TreeNodeItem[] } }
+    | { type: "SET_ASSET_DETAILS"; payload: { assetId: string; details: any } };
 
 export interface AssetLinksTabProps {
     // Mode determines behavior
