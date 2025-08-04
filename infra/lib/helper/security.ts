@@ -168,9 +168,9 @@ export function generateContentSecurityPolicy(
         "blob:",
         "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
         authenticationDomain,
-        `https://${apiUrl}`,
-        `https://${Service("S3").PrincipalString}/`,
-        `https://${Service("S3").Endpoint}/`,
+        // `https://${apiUrl}`,
+        // `https://${Service("S3").PrincipalString}/`,
+        // `https://${Service("S3").Endpoint}/`,
     ];
 
     const imgMediaSrc = [

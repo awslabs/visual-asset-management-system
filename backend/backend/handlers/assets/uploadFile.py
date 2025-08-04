@@ -24,7 +24,7 @@ from models.assetsV3 import (
     InitializeUploadRequestModel, InitializeUploadResponseModel, UploadPartModel, UploadFileResponseModel,
     CompleteUploadRequestModel, CompleteUploadResponseModel, FileCompletionResult,
     CompleteExternalUploadRequestModel, ExternalFileModel,
-    AssetUploadTableModel, CreateFolderRequestModel, CreateFolderResponseModel
+    AssetUploadTableModel
 )
 
 # Configure AWS clients with retry configuration
@@ -397,42 +397,6 @@ def normalize_s3_path(asset_base_key, file_path):
         resolved_path = asset_base_key + file_path
         logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
         return resolved_path
-
-def create_folder(databaseId: str, assetId: str, request_model: CreateFolderRequestModel, claims_and_roles):
-    """Create a folder in S3 for the specified asset"""
-    # Verify asset exists
-    asset = get_asset_details(databaseId, assetId)
-    if not asset:
-        raise VAMSGeneralErrorResponse(f"Asset {assetId} not found in database {databaseId}")
-    
-    # Get bucket details from asset's bucketId
-    bucketDetails = get_default_bucket_details(asset['bucketId'])
-    asset_bucket = bucketDetails['bucketName']
-    baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
-    
-    # Get the asset's base location
-    asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
-
-    # Normalize the path by combining asset base key with the relative folder path
-    normalized_key_path = normalize_s3_path(asset_base_key, request_model.relativeKey)
-    
-    # Create the folder in S3 (in S3, folders are represented by zero-byte objects with a trailing slash)
-    try:
-        s3.put_object(
-            Bucket=asset_bucket,
-            Key=normalized_key_path,
-            Body=''
-        )
-        
-        logger.info(f"Created folder {normalized_key_path} in bucket {asset_bucket}")
-        
-        return CreateFolderResponseModel(
-            message=f"Folder created successfully",
-            relativeKey=request_model.relativeKey
-        )
-    except Exception as e:
-        logger.exception(f"Error creating folder: {e}")
-        raise VAMSGeneralErrorResponse(f"Error creating folder: {str(e)}")
 
 #######################
 # API Implementations
@@ -1223,33 +1187,6 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 return response
             else:
                 return success(body=response.dict())
-            
-        elif method == 'POST' and '/assets/' in path and path.endswith('/createFolder'):
-            # Create Folder API - Extract databaseId and assetId from path parameters
-            if not event.get('pathParameters') or not event['pathParameters'].get('databaseId') or not event['pathParameters'].get('assetId'):
-                return validation_error(body={'message': "Missing databaseId or assetId in path parameters"})
-                
-            databaseId = event['pathParameters']['databaseId']
-            assetId = event['pathParameters']['assetId']
-            
-            # Parse request model
-            request_model = parse(event['body'], model=CreateFolderRequestModel)
-            
-            # Check authorization
-            asset = get_asset_details(databaseId, assetId)
-            if not asset:
-                return validation_error(body={'message': f"Asset {assetId} not found"})
-            
-            asset["object__type"] = "asset"
-            
-            if len(claims_and_roles["tokens"]) > 0:
-                casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                if not (casbin_enforcer.enforce(asset, "POST") and casbin_enforcer.enforceAPI(event)):
-                    return authorization_error()
-            
-            # Process request
-            response = create_folder(databaseId, assetId, request_model, claims_and_roles)
-            return success(body=response.dict())
             
         else:
             return validation_error(body={'message': "Invalid API path or method"})

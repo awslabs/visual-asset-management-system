@@ -144,7 +144,7 @@ export interface AmplifyConfigLambdaConstructProps extends cdk.StackProps {
     cognitoFederatedConfig?: AmplifyConfigFederatedIdentityProps;
 
     /**
-     * Content Security Policy to apply (generally for ALB deployment where CSP is not injected)
+     * Content Security Policy to apply at the react level [none headers passed from static webpage service] (generally not used as alreayd provided in Cloudfront and ALB deployment)
      */
     contentSecurityPolicy?: string;
 }
@@ -199,7 +199,7 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                         props.config.app.authProvider.useExternalOAuthIdp
                             .idpAuthProviderDiscoveryEndpoint || "undefined",
                     stackName: props.stackName!,
-                    contentSecurityPolicy: props.contentSecurityPolicy || "",
+                    contentSecurityPolicy: "",
                     bannerHtmlMessage: props.config.app.webUi.optionalBannerHtmlMessage || "",
                 })
             ),

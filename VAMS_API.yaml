@@ -163,7 +163,7 @@ paths:
                                 $ref: '#/components/schemas/error'
             security:
               - DefaultCognitoAuthorizer: []
-    /asset-links/{assetId}:
+    /database/{databaseId}/assets/{assetId}/asset-links:
         get:
             summary: "Get asset links for a specific asset."
             description: "Retrieve all asset links (related, parents, children) for a specific asset. Supports optional tree view for hierarchical display of parent-child relationships."
@@ -208,7 +208,7 @@ paths:
                 schema:
                     $ref: "#/components/schemas/id_regex"
               - name: "databaseId"
-                in: "query"
+                in: "path"
                 description: "Database ID for the asset."
                 required: true
                 schema:

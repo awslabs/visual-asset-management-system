@@ -23,7 +23,7 @@ from models.assetsV3 import (
     FileInfoRequestModel, FileInfoResponseModel, MoveFileRequestModel,
     CopyFileRequestModel, ArchiveFileRequestModel, UnarchiveFileRequestModel, DeleteFileRequestModel,
     FileOperationResponseModel, RevertFileVersionRequestModel, RevertFileVersionResponseModel,
-    SetPrimaryFileRequestModel, SetPrimaryFileResponseModel
+    SetPrimaryFileRequestModel, SetPrimaryFileResponseModel, CreateFolderRequestModel, CreateFolderResponseModel
 )
 
 # Configure AWS clients with retry configuration
@@ -1734,6 +1734,40 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
     # Return response model
     return FileInfoResponseModel(**metadata)
 
+def create_folder(databaseId: str, assetId: str, request_model: CreateFolderRequestModel, claims_and_roles):
+    """Create a folder in S3 for the specified asset"""
+    # Verify asset exists
+    asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
+    
+    # Get bucket details from asset's bucketId
+    bucketDetails = get_default_bucket_details(asset['bucketId'])
+    asset_bucket = bucketDetails['bucketName']
+    baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
+    
+    # Get the asset's base location
+    asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
+
+    # Normalize the path by combining asset base key with the relative folder path
+    normalized_key_path = resolve_asset_file_path(asset_base_key, request_model.relativeKey)
+    
+    # Create the folder in S3 (in S3, folders are represented by zero-byte objects with a trailing slash)
+    try:
+        s3_client.put_object(
+            Bucket=asset_bucket,
+            Key=normalized_key_path,
+            Body=''
+        )
+        
+        logger.info(f"Created folder {normalized_key_path} in bucket {asset_bucket}")
+        
+        return CreateFolderResponseModel(
+            message=f"Folder created successfully",
+            relativeKey=request_model.relativeKey
+        )
+    except Exception as e:
+        logger.exception(f"Error creating folder: {e}")
+        raise VAMSGeneralErrorResponse(f"Error creating folder: {str(e)}")
+
 def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type: str, primary_type_other: Optional[str], claims_and_roles: Dict) -> SetPrimaryFileResponseModel:
     """Set or remove primary type metadata for a file in S3
     
@@ -2462,6 +2496,81 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
         logger.exception(f"Internal error: {e}")
         return internal_error()
 
+def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
+    """Handle POST /createFolder requests
+    
+    Args:
+        event: The API Gateway event
+        context: The Lambda context
+        
+    Returns:
+        APIGatewayProxyResponseV2 with the response
+    """
+    try:
+        # Get claims and roles
+        claims_and_roles = request_to_claims(event)
+        
+        # Check API authorization
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforceAPI(event):
+                return authorization_error()
+        
+        # Get path parameters
+        path_params = event.get('pathParameters', {})
+        if 'databaseId' not in path_params:
+            return validation_error(body={'message': "No database ID in API Call"})
+        
+        if 'assetId' not in path_params:
+            return validation_error(body={'message': "No asset ID in API Call"})
+        
+        # Validate path parameters
+        (valid, message) = validate({
+            'databaseId': {
+                'value': path_params['databaseId'],
+                'validator': 'ID'
+            },
+            'assetId': {
+                'value': path_params['assetId'],
+                'validator': 'ASSET_ID'
+            },
+        })
+        
+        if not valid:
+            return validation_error(body={'message': message})
+        
+        # Parse request body
+        if not event.get('body'):
+            return validation_error(body={'message': "Request body is required"})
+        
+        if isinstance(event['body'], str):
+            body = json.loads(event['body'])
+        else:
+            body = event['body']
+        
+        # Parse request model
+        request_model = parse(body, model=CreateFolderRequestModel)
+        
+        # Process request
+        response = create_folder(
+            path_params['databaseId'],
+            path_params['assetId'],
+            request_model,
+            claims_and_roles
+        )
+        
+        return success(body=response.dict())
+    
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Internal error: {e}")
+        return internal_error()
+
 def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
     """Handle PUT /setPrimaryFile requests
     
@@ -2636,6 +2745,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             return handle_copy_file(event, context)
         elif method == 'POST' and path.endswith('/unarchiveFile'):
             return handle_unarchive_file(event, context)
+        elif method == 'POST' and path.endswith('/createFolder'):
+            return handle_create_folder(event, context)
         elif method == 'DELETE' and path.endswith('/archiveFile'):
             return handle_archive_file(event, context)
         elif method == 'DELETE' and path.endswith('/deleteFile'):

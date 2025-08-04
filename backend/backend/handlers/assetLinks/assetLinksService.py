@@ -526,47 +526,37 @@ def handle_get_request(event):
             return success(body=response.dict())
         
         # Case 2: Get asset links for a specific asset
-        elif 'assetId' in path_parameters:
-            logger.info(f"Getting asset links for asset {path_parameters['assetId']}")
+        elif 'assetId' in path_parameters and 'databaseId' in path_parameters:
+            logger.info(f"Getting asset links for asset {path_parameters['assetId']} in database {path_parameters['databaseId']}")
             
-            # Validate path and query parameters
+            # Validate path parameters
             (valid, message) = validate({
                 'assetId': {
                     'value': path_parameters['assetId'],
                     'validator': 'ASSET_ID'
-                }
-            })
-            if not valid:
-                logger.error(message)
-                return validation_error(body={'message': message})
-            
-            # Parse and validate query parameters using request model
-            try:
-                # Combine path and query parameters for the request model
-                combined_params = {
-                    'assetId': path_parameters['assetId'],
-                    'databaseId': query_parameters.get('databaseId'),
-                    'childTreeView': query_parameters.get('childTreeView', '').lower() == 'true'
-                }
-                
-                if not combined_params['databaseId']:
-                    return validation_error(body={'message': 'Database ID is required'})
-                
-                request_model = parse(combined_params, model=GetAssetLinksRequestModel)
-            except ValidationError as v:
-                logger.exception(f"Validation error in query parameters: {v}")
-                return validation_error(body={'message': str(v)})
-            
-            # Validate database ID
-            (valid, message) = validate({
+                },
                 'databaseId': {
-                    'value': request_model.databaseId,
+                    'value': path_parameters['databaseId'],
                     'validator': 'ID'
                 }
             })
             if not valid:
                 logger.error(message)
                 return validation_error(body={'message': message})
+            
+            # Parse and validate parameters using request model
+            try:
+                # Combine path and query parameters for the request model
+                combined_params = {
+                    'assetId': path_parameters['assetId'],
+                    'databaseId': path_parameters['databaseId'],
+                    'childTreeView': query_parameters.get('childTreeView', '').lower() == 'true'
+                }
+                
+                request_model = parse(combined_params, model=GetAssetLinksRequestModel)
+            except ValidationError as v:
+                logger.exception(f"Validation error in parameters: {v}")
+                return validation_error(body={'message': str(v)})
             
             # Get asset links
             response = get_asset_links_for_asset(
@@ -578,7 +568,7 @@ def handle_get_request(event):
             return success(body=response.dict())
             
         else:
-            return validation_error(body={'message': 'Asset ID or Asset Link ID is required'})
+            return validation_error(body={'message': 'Asset ID, Database ID, or Asset Link ID is required'})
             
     except ValueError as v:
         logger.warning(f"Validation error in asset links retrieval: {v}")

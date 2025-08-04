@@ -194,7 +194,6 @@ export class CoreVAMSStack extends cdk.Stack {
                 subnetsPublic: this.subnetsPublic,
                 webAppBuildPath: this.webAppBuildPath,
                 apiUrl: apiNestedStack.apiEndpoint,
-                csp: apiNestedStack.csp,
                 storageResources: storageResourcesNestedStack.storageResources,
                 ssmWafArn: props.ssmWafArn,
                 authResources: authBuilderNestedStack.authResources,
