@@ -182,8 +182,6 @@ Additionally it shows which object authorization checks it does for a particular
 -   `/asset-links` - POST
 -   -   `Asset` (fromAssetId, fromAssetDatabaseId, assetName, assetType, tags) - POST (api: POST)
 -   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - POST (api: POST)
--   `/asset-links/{assetId}` - GET
--   -   `Asset` (assetId, assetName, databaseId, assetType, tags) - GET (api: GET)
 -   `/asset-links/single/{assetLinkId}` - GET
 -   -   `Asset` (fromAssetId, fromAssetDatabaseId, assetName, assetType, tags) - GET (api: GET)
 -   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - GET (api: GET)
@@ -228,6 +226,8 @@ Additionally it shows which object authorization checks it does for a particular
 -   `/database/{databaseId}/assets/{assetId}` - GET/PUT
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
+-   `/database/{databaseId}/assets/{assetId}/asset-links` - GET
+-   -   `Asset` (assetId, assetName, databaseId, assetType, tags) - GET (api: GET)
 -   `/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/database/{databaseId}/assets/{assetId}/createFolder` - POST

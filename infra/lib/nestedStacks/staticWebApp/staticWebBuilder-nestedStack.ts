@@ -15,6 +15,7 @@ import { GatewayAlbDeployConstruct } from "./constructs/gateway-albDeploy-constr
 import { AlbS3WebsiteAlbDeployConstruct } from "./constructs/alb-s3-website-albDeploy-construct";
 import { CustomCognitoConfigConstruct } from "./constructs/custom-cognito-config-construct";
 import { addBehaviorToCloudFrontDistribution } from "./constructs/cloudfront-s3-website-construct";
+import { generateContentSecurityPolicy } from "../../helper/security";
 import { NagSuppressions } from "cdk-nag";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { requireTLSAndAdditionalPolicyAddToResourcePolicy } from "../../helper/security";
@@ -27,7 +28,6 @@ export interface StaticWebBuilderNestedStackProps extends cdk.StackProps {
     config: Config.Config;
     webAppBuildPath: string;
     apiUrl: string;
-    csp: string;
     storageResources: storageResources;
     ssmWafArn: string;
     authResources: authResources;
@@ -142,6 +142,23 @@ export class StaticWebBuilderNestedStack extends NestedStack {
         //Set public variable to bucket
         this.webAppBucket = webAppBucket;
 
+        //Generate CSP
+        //Generate Auth Domain and Global CSP policy
+        let authDomain = "";
+
+        if (props.config.app.authProvider.useCognito.useSaml) {
+            authDomain = `https://${samlSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`;
+        } else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
+            authDomain = props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl;
+        }
+
+        const cspPolicy = generateContentSecurityPolicy(
+            props.storageResources,
+            authDomain,
+            props.apiUrl,
+            props.config
+        );
+
         //Deploy website distribution infrastructure and authentication tie-ins
         if (!props.config.app.useAlb.enabled) {
             //Deploy through CloudFront (default)
@@ -154,7 +171,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 webSiteBuildPath: props.webAppBuildPath,
                 webAcl: props.ssmWafArn,
                 apiUrl: props.apiUrl,
-                csp: props.csp,
+                csp: cspPolicy,
                 cognitoDomain: props.config.app.authProvider.useCognito.useSaml
                     ? `https://${samlSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`
                     : "",
@@ -242,7 +259,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 webSiteBuildPath: props.webAppBuildPath,
                 webAcl: props.ssmWafArn,
                 apiUrl: props.apiUrl,
-                csp: props.csp,
+                csp: cspPolicy,
                 vpc: webAppDistroNetwork.vpc,
                 albSubnets: webAppDistroNetwork.subnets.webApp,
                 albSecurityGroup: webAppDistroNetwork.securityGroups.webAppALB,

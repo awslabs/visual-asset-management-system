@@ -116,7 +116,7 @@ export function attachFunctionToApi(
     scope: Construct,
     lambdaFunction: lambda.Function,
     apiGatewayConfiguration: apiGatewayLambdaConfiguration
-) {
+): ApiGatewayV2LambdaConstruct {
     const apig = new ApiGatewayV2LambdaConstruct(
         scope,
         apiGatewayConfiguration.method + apiGatewayConfiguration.routePath,
@@ -128,6 +128,8 @@ export function attachFunctionToApi(
             api: apiGatewayConfiguration.api,
         }
     );
+
+    return apig;
 }
 
 export function apiBuilder(
@@ -553,15 +555,17 @@ export function apiBuilder(
         storageResources.encryption.kmsKey
     );
     attachFunctionToApi(scope, assetLinksService, {
-        routePath: "/asset-links/{assetId}",
+        routePath: "/database/{databaseId}/assets/{assetId}/asset-links",
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
+
     attachFunctionToApi(scope, assetLinksService, {
         routePath: "/asset-links/single/{assetLinkId}",
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
+
     attachFunctionToApi(scope, assetLinksService, {
         routePath: "/asset-links/{assetLinkId}",
         method: apigwv2.HttpMethod.PUT,
@@ -716,6 +720,12 @@ export function apiBuilder(
         api: api,
     });
 
+    attachFunctionToApi(scope, assetFilesFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/createFolder",
+        method: apigwv2.HttpMethod.POST,
+        api: api,
+    });
+
     const createAssetFunction = buildCreateAssetFunction(
         scope,
         lambdaCommonBaseLayer,
@@ -747,12 +757,6 @@ export function apiBuilder(
 
     attachFunctionToApi(scope, uploadFileFunction, {
         routePath: "/uploads/{uploadId}/complete",
-        method: apigwv2.HttpMethod.POST,
-        api: api,
-    });
-
-    attachFunctionToApi(scope, uploadFileFunction, {
-        routePath: "/database/{databaseId}/assets/{assetId}/createFolder",
         method: apigwv2.HttpMethod.POST,
         api: api,
     });

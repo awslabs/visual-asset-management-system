@@ -398,18 +398,19 @@ export const fetchAssetLinks = async (
         let response;
         if (assetId) {
             const queryParams = {};
-            if (databaseId) {
-                queryParams.databaseId = databaseId;
-            }
             if (childTreeView) {
                 queryParams.childTreeView = "true";
             }
 
             console.log("Fetching asset links with params:", queryParams);
 
-            response = await api.get("api", `asset-links/${assetId}`, {
-                queryStringParameters: queryParams,
-            });
+            response = await api.get(
+                "api",
+                `database/${databaseId}/assets/${assetId}/asset-links`,
+                {
+                    queryStringParameters: queryParams,
+                }
+            );
 
             console.log("Raw asset links response:", response);
 
@@ -463,6 +464,7 @@ export const fetchAssetLinks = async (
         };
     }
 };
+
 export const deleteAssetLink = async ({ relationId }, api = API) => {
     try {
         let response;

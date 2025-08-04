@@ -118,12 +118,12 @@ class CreatePipeline():
             'resourceId': ''
         }
 
-        if 'lambdaName' in body:
+        if 'lambdaName' in body and body.get('lambdaName', "") != "":
             userResource['isProvided'] = True
             userResource['resourceId'] = body['lambdaName']
 
         #Create new lambda function if one not provided
-        if 'lambdaName' not in body:
+        if userResource['isProvided'] == False:
 
             #Generate unique name for the Lambda with randomization
             #Workflow name must have 'vams' in it for permissing
@@ -131,6 +131,12 @@ class CreatePipeline():
             lambdaName = body['pipelineId']
             if len(lambdaName) > 50:
                 lambdaName = lambdaName[-50:]  # use 50 characters
+
+            #strip out any special characters from pipelineId, make everything lowercase, and strip any numbers at the start
+            lambdaName = ''.join(e for e in lambdaName if e.isalnum())
+            lambdaName = lambdaName.lower()
+            lambdaName = lambdaName.lstrip(string.digits)
+
             lambdaName = lambdaName + generate_random_string(8)
             lambdaName = "vams-"+ lambdaName
             if len(lambdaName) > 64:

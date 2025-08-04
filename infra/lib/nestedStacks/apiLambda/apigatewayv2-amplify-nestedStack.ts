@@ -52,7 +52,6 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
      */
     public apiGatewayV2: apigw.HttpApi;
     public apiEndpoint: string;
-    public csp: string;
 
     constructor(parent: Construct, name: string, props: ApiGatewayV2AmplifyNestedStackProps) {
         super(parent, name);
@@ -135,18 +134,6 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
             authDomain = props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl;
         }
 
-        const cspPolicy = generateContentSecurityPolicy(
-            props.storageResources,
-            authDomain,
-            apiEndpoint,
-            props.config
-        );
-        this.csp = cspPolicy;
-
-        //Set amplify CSP (only when Cloudfront can't deploy, like with ALB)
-        let amplifyCsp = "";
-        if (props.config.app.useAlb.enabled) amplifyCsp = cspPolicy;
-
         //Setup Initial Amplify Config
         const amplifyConfigProps: AmplifyConfigLambdaConstructProps = {
             ...props,
@@ -154,7 +141,6 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
             apiUrl: `https://${this.apiEndpoint}/`,
             authResources: props.authResources,
             region: props.config.env.region,
-            contentSecurityPolicy: amplifyCsp,
         };
 
         if (props.config.app.authProvider.useCognito.useSaml) {

@@ -8,6 +8,7 @@
         "@aws-cdk/aws-cloudfront:defaultSecurityPolicyTLSv1.2_2021": true,
         "@aws-cdk/customresources:installLatestAwsSdkDefault": false,
         "@aws-cdk/aws-iam:minimizePolicies": true,
+        "@aws-cdk/core:suppressTemplateIndentation": true,
         "environments": {
             "common": {
                 "SolutionName": "AWSVisualAssetManagementSystem",
