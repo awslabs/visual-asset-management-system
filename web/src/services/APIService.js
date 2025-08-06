@@ -1496,6 +1496,46 @@ export const setPrimaryType = async (
     }
 };
 
+/**
+ * Fetches file information for a specific file in an asset
+ * @param {Object} params - Parameters object
+ * @param {string} params.databaseId - Database ID
+ * @param {string} params.assetId - Asset ID
+ * @param {string} params.fileKey - File key/path
+ * @returns {Promise<any>}
+ */
+export const fetchFileInfo = async ({ databaseId, assetId, fileKey }, api = API) => {
+    try {
+        if (!databaseId || !assetId || !fileKey) {
+            return [false, "Missing required parameters"];
+        }
+
+        const response = await api.get("api", `database/${databaseId}/assets/${assetId}/fileInfo`, {
+            queryStringParameters: { filePath: fileKey }
+        });
+
+        // Handle different response formats
+        if (response.message) {
+            if (
+                response.message.indexOf &&
+                (response.message.indexOf("error") !== -1 ||
+                    response.message.indexOf("Error") !== -1)
+            ) {
+                console.log("Fetch file info error:", response.message);
+                return [false, response.message];
+            } else {
+                return [true, response.message];
+            }
+        } else {
+            // Direct response format
+            return [true, response];
+        }
+    } catch (error) {
+        console.log("Error fetching file info:", error);
+        return [false, error?.message || "Failed to fetch file information"];
+    }
+};
+
 export const ACTIONS = {
     CREATE: {
         DATABASE: createDatabase,

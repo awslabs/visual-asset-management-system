@@ -5,12 +5,15 @@
  */
 
 import { useEffect, useState } from "react";
+import { archiveFile } from "../../services/FileOperationsService";
 import {
     Box,
     BreadcrumbGroup,
+    Button,
     Container,
     Grid,
     Header,
+    Modal,
     SegmentedControl,
     SpaceBetween,
 } from "@cloudscape-design/components";
@@ -47,6 +50,7 @@ interface FileInfo {
     dateCreatedCurrentVersion?: string;
     isArchived?: boolean;
     primaryType?: string | null;
+    previewFile?: string;
 }
 
 interface ViewFileState {
@@ -59,6 +63,7 @@ interface ViewFileState {
     dateCreatedCurrentVersion?: string;
     isArchived?: boolean;
     primaryType?: string | null;
+    previewFile?: string;
 
     // Multi-file mode (new functionality)
     files?: FileInfo[];
@@ -198,6 +203,7 @@ export default function ViewFile() {
               dateCreatedCurrentVersion: state?.dateCreatedCurrentVersion,
               isArchived: state?.isArchived,
               primaryType: state?.primaryType,
+              previewFile: state?.previewFile,
           };
 
     // Check if any files are archived
@@ -211,6 +217,8 @@ export default function ViewFile() {
 
     const [viewerOptions, setViewerOptions] = useState<ViewerOption[]>([]);
     const [viewerMode, setViewerMode] = useState("collapse");
+    const [showDeletePreviewModal, setShowDeletePreviewModal] = useState(false);
+    const [isPreviewDeleting, setIsPreviewDeleting] = useState(false);
 
     const changeViewerMode = (mode: string) => {
         if (mode === "fullscreen" && viewerMode === "fullscreen") {
@@ -278,13 +286,14 @@ export default function ViewFile() {
     useEffect(() => {
         const getData = async () => {
             if (databaseId && assetId) {
+                console.log("Fetching asset details for:", assetId);
                 const item = await fetchAsset({
                     databaseId: databaseId,
                     assetId: assetId,
                     showArchived: true,
                 });
                 if (item !== false) {
-                    console.log(item);
+                    console.log("Asset details fetched:", item);
                     setAsset(item);
 
                     let defaultViewType: string;
@@ -315,15 +324,18 @@ export default function ViewFile() {
                         }
                         // Add other view types as needed
                     } else {
-                        // Single file mode: existing logic
-                        defaultViewType = checkFileFormat(
-                            singleFileInfo?.filename || "",
-                            singleFileInfo?.isDirectory || false
-                        );
-                        console.log("default view type", defaultViewType);
+                                // Single file mode: check file format first
+                                defaultViewType = checkFileFormat(
+                                    singleFileInfo?.filename || "",
+                                    singleFileInfo?.isDirectory || false
+                                );
+                                console.log("default view type", defaultViewType);
 
-                        // Hide Preview tab but keep functionality in background
-                        // newViewerOptions.push({ text: "Preview", id: "preview" });
+                                // Add Preview tab if the file has a preview file
+                                if (singleFileInfo?.previewFile) {
+                                    console.log("Using preview file:", singleFileInfo.previewFile);
+                                    newViewerOptions.push({ text: "Preview", id: "preview" });
+                                }
 
                         if (defaultViewType === "plot") {
                             newViewerOptions.push({ text: "Plot", id: "plot" });
@@ -357,10 +369,6 @@ export default function ViewFile() {
         assetId,
         databaseId,
         pathViewType,
-        singleFileInfo?.filename,
-        singleFileInfo?.isDirectory,
-        isMultiFileMode,
-        currentFiles,
     ]);
 
     // Generate breadcrumb text
@@ -459,29 +467,81 @@ export default function ViewFile() {
                                                     </Grid>
                                                 }
                                             >
-                                                <AssetVisualizer
-                                                    viewType={viewType}
-                                                    asset={asset}
-                                                    assetKey={
-                                                        isMultiFileMode
-                                                            ? undefined
-                                                            : singleFileInfo?.key
-                                                    }
-                                                    multiFileKeys={
-                                                        isMultiFileMode
-                                                            ? currentFiles.map((f) => f.key)
-                                                            : undefined
-                                                    }
-                                                    versionId={
-                                                        isMultiFileMode
-                                                            ? undefined
-                                                            : singleFileInfo?.versionId
-                                                    }
-                                                    viewerMode={viewerMode}
-                                                    onViewerModeChange={(newViewerMode: string) =>
-                                                        changeViewerMode(newViewerMode)
-                                                    }
-                                                />
+                                                <>
+                                                    <AssetVisualizer
+                                                        viewType={viewType}
+                                                        asset={asset}
+                                                        assetKey={
+                                                            isMultiFileMode
+                                                                ? undefined
+                                                                : viewType === "preview" 
+                                                                    ? singleFileInfo?.previewFile 
+                                                                    : singleFileInfo?.key
+                                                        }
+                                                        multiFileKeys={
+                                                            isMultiFileMode
+                                                                ? currentFiles.map((f) => f.previewFile || f.key)
+                                                                : undefined
+                                                        }
+                                                        versionId={
+                                                            isMultiFileMode
+                                                                ? undefined
+                                                                : singleFileInfo?.versionId
+                                                        }
+                                                        viewerMode={viewerMode}
+                                                        onViewerModeChange={(newViewerMode: string) =>
+                                                            changeViewerMode(newViewerMode)
+                                                        }
+                                                        // Don't show delete button in ViewFile.tsx
+                                                        onDeletePreview={undefined}
+                                                    />
+                                                    
+                                                    {/* Delete Preview Modal */}
+                                                    <Modal
+                                                        visible={showDeletePreviewModal}
+                                                        onDismiss={() => setShowDeletePreviewModal(false)}
+                                                        header="Delete Preview File"
+                                                        footer={
+                                                            <Box float="right">
+                                                                <SpaceBetween direction="horizontal" size="xs">
+                                                                    <Button
+                                                                        variant="link"
+                                                                        onClick={() => setShowDeletePreviewModal(false)}
+                                                                        disabled={isPreviewDeleting}
+                                                                    >
+                                                                        Cancel
+                                                                    </Button>
+                                                                    <Button
+                                                                        variant="primary"
+                                                                        onClick={async () => {
+                                                                            setIsPreviewDeleting(true);
+                                                                            try {
+                                                                                // File preview deletion
+                                                                                await archiveFile(databaseId!, assetId!, {
+                                                                                    filePath: singleFileInfo!.previewFile!,
+                                                                                });
+                                                                                // Refresh the page to show updated file
+                                                                                window.location.reload();
+                                                                                setShowDeletePreviewModal(false);
+                                                                            } catch (error) {
+                                                                                console.error("Error deleting preview:", error);
+                                                                            } finally {
+                                                                                setIsPreviewDeleting(false);
+                                                                            }
+                                                                        }}
+                                                                        loading={isPreviewDeleting}
+                                                                    >
+                                                                        Delete
+                                                                    </Button>
+                                                                </SpaceBetween>
+                                                            </Box>
+                                                        }
+                                                    >
+                                                        <p>
+                                                            Are you sure you want to delete this preview file? This action cannot be undone.
+                                                        </p>
+                                                    </Modal>
+                                                </>
                                             </Container>
                                         </SpaceBetween>
                                     </div>

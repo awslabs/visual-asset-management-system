@@ -665,6 +665,7 @@ export function apiBuilder(
         vpc,
         subnets
     );
+
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/listFiles",
         method: apigwv2.HttpMethod.GET,
@@ -692,6 +693,18 @@ export function apiBuilder(
 
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/archiveFile",
+        method: apigwv2.HttpMethod.DELETE,
+        api: api,
+    });
+
+     attachFunctionToApi(scope, assetFilesFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/deleteAssetPreview",
+        method: apigwv2.HttpMethod.DELETE,
+        api: api,
+    });
+
+     attachFunctionToApi(scope, assetFilesFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/deleteAuxiliaryPreviewAssetFiles",
         method: apigwv2.HttpMethod.DELETE,
         api: api,
     });

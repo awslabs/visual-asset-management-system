@@ -49,7 +49,9 @@ export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
 
                 // Get the preview key from the asset details
                 const assetPreviewKey =
-                    assetDetails.previewLocation?.Key || assetDetails.previewLocation?.key;
+                    assetDetails.previewLocation?.Key || 
+                    assetDetails.previewLocation?.key || 
+                    assetDetails.previewFile;
 
                 if (!assetPreviewKey) {
                     console.log(`No preview key found for asset ${assetId}`);
@@ -61,12 +63,15 @@ export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
                 console.log(`Loading preview for asset ${assetId} with key: ${assetPreviewKey}`);
 
                 // Now download the preview image
+                // If the preview key comes from previewFile, use assetFile download type
+                const downloadType = assetDetails.previewFile === assetPreviewKey ? "assetFile" : "assetPreview";
+                
                 const response = await downloadAsset({
                     databaseId,
                     assetId,
                     key: assetPreviewKey,
                     versionId: "",
-                    downloadType: "assetPreview",
+                    downloadType: downloadType,
                 });
 
                 if (response !== false && Array.isArray(response)) {

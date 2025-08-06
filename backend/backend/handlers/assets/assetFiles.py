@@ -4,6 +4,7 @@
 import os
 import boto3
 import json
+import re
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
 from boto3.dynamodb.conditions import Key
@@ -23,7 +24,8 @@ from models.assetsV3 import (
     FileInfoRequestModel, FileInfoResponseModel, MoveFileRequestModel,
     CopyFileRequestModel, ArchiveFileRequestModel, UnarchiveFileRequestModel, DeleteFileRequestModel,
     FileOperationResponseModel, RevertFileVersionRequestModel, RevertFileVersionResponseModel,
-    SetPrimaryFileRequestModel, SetPrimaryFileResponseModel, CreateFolderRequestModel, CreateFolderResponseModel
+    SetPrimaryFileRequestModel, SetPrimaryFileResponseModel, CreateFolderRequestModel, CreateFolderResponseModel,
+    DeleteAssetPreviewResponseModel, DeleteAuxiliaryPreviewAssetFilesRequestModel, DeleteAuxiliaryPreviewAssetFilesResponseModel
 )
 
 # Configure AWS clients with retry configuration
@@ -58,6 +60,9 @@ except Exception as e:
 buckets_table = dynamodb.Table(s3_asset_buckets_table)
 asset_table = dynamodb.Table(asset_database_table_name)
 asset_version_files_table = dynamodb.Table(asset_version_files_table_name)
+
+# Define allowed extensions
+allowed_previewFile_extensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
 
 #######################
 # Utility Functions
@@ -268,6 +273,32 @@ def filter_archived_files(file_list: List[Dict], include_archived: bool = False)
         return file_list
     
     return [f for f in file_list if not f.get('isArchived', False)]
+
+def check_destination_file_exists(bucket: str, key: str, path_display: str) -> bool:
+    """Check if a destination file exists in S3, with improved error handling for new folders
+    
+    Args:
+        bucket: The S3 bucket
+        key: The S3 object key
+        path_display: The path to display in error messages
+        
+    Returns:
+        True if file exists, False if it doesn't exist
+        
+    Raises:
+        VAMSGeneralErrorResponse: For errors other than 'file not found'
+    """
+    try:
+        s3_client.head_object(Bucket=bucket, Key=key)
+        return True
+    except ClientError as e:
+        error_code = e.response.get('Error', {}).get('Code')
+        # NoSuchKey or 404 means the file doesn't exist, which is what we want
+        if error_code == 'NoSuchKey' or error_code == '404':
+            return False
+        # For any other error, log details and raise a user-friendly message
+        logger.exception(f"Error checking destination file {key} in bucket {bucket}: {e}")
+        raise VAMSGeneralErrorResponse(f"Error accessing destination path: {path_display}. Please verify the folder exists.")
 
 def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str, source_asset_id: str = None, source_database_id: str = None, dest_asset_id: str = None, dest_database_id: str = None) -> bool:
     """Copy an S3 object from one location to another
@@ -1080,6 +1111,115 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
     logger.info(f"Found {len(result['items'])} files in the path")
     return result
 
+def is_preview_file(file_path: str) -> bool:
+    """Determine if a file is a preview file based on its path
+    
+    Args:
+        file_path: The file path to check
+        
+    Returns:
+        True if the file is a preview file, False otherwise
+    """
+    # Check if the file path contains the preview file pattern
+    return '.previewFile.' in file_path
+
+def get_base_file_for_preview(preview_file_path: str) -> str:
+    """Get the base file path for a preview file
+    
+    Args:
+        preview_file_path: The preview file path
+        
+    Returns:
+        The base file path
+    """
+    # Remove the .previewFile.X suffix
+    return preview_file_path.split('.previewFile.')[0]
+
+def is_allowed_preview_extension(file_path: str) -> bool:
+    """Check if a preview file has an allowed extension
+    
+    Args:
+        file_path: The file path to check
+        
+    Returns:
+        True if the file has an allowed extension, False otherwise
+    """
+    
+    # Extract the extension after .previewFile.
+    if '.previewFile.' in file_path:
+        extension = '.' + file_path.split('.previewFile.')[1]
+        return extension.lower() in allowed_previewFile_extensions
+    
+    return False
+
+def find_preview_files_for_base(bucket: str, base_key: str) -> List[str]:
+    """Find preview files for a base file
+    
+    Args:
+        bucket: The S3 bucket
+        base_key: The base file key
+        
+    Returns:
+        List of preview file keys
+    """
+    preview_files = []
+    
+    try:
+        # Get the directory and filename parts
+        directory = os.path.dirname(base_key)
+        filename = os.path.basename(base_key)
+        
+        # Create the prefix for listing objects
+        prefix = f"{directory}/" if directory else ""
+        
+        # Create the pattern to match preview files for this base file
+        pattern = f"{filename}.previewFile."
+        
+        logger.info(f"Searching for preview files in bucket {bucket} with prefix {prefix}")
+        logger.info(f"Looking for pattern: {pattern}")
+        
+        # List objects in the directory
+        paginator = s3_client.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get('Contents', []):
+                key = obj['Key']
+                base_filename = os.path.basename(key)
+                
+                # Check if this is a preview file for our base file
+                if base_filename.startswith(pattern):
+                    preview_files.append(key)
+        
+        # Sort the preview files alphabetically
+        preview_files.sort()
+        
+    except Exception as e:
+        logger.warning(f"Error finding preview files for {base_key}: {e}")
+    
+    return preview_files
+
+def get_top_preview_file(preview_files: List[str], filter_extensions: bool = True) -> Optional[str]:
+    """Get the top preview file from a list of preview files
+    
+    Args:
+        preview_files: List of preview file keys
+        filter_extensions: Whether to filter by allowed extensions
+        
+    Returns:
+        The top preview file key or None if no valid preview files
+    """
+    if not preview_files:
+        return None
+    
+    if filter_extensions:
+        # Filter by allowed extensions
+        allowed_files = [f for f in preview_files if is_allowed_preview_extension(f)]
+        if allowed_files:
+            return allowed_files[0]  # Return the first allowed file
+        return None
+    else:
+        # Return the first file without filtering
+        return preview_files[0]
+
 def get_asset_file_versions(assetId: str, assetVersionId: str, relativeFileKey: Optional[str]) -> Optional[Dict]:
     """Get file versions for a specific asset version
     
@@ -1217,7 +1357,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         # Delete all files under prefix including all versions
         deleted_keys = delete_s3_prefix_all_versions(bucket, full_key)
 
-        #Delete aux files under prefix if they exist
+        # Delete aux files under prefix if they exist
         delete_assetAuxiliary_files(full_key)
         
         # Convert full keys to relative paths
@@ -1226,10 +1366,27 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
                 relative_path = key[len(base_key):]
                 affected_files.append(relative_path)
     else:
-        # Delete single file including all versions
+        # Check if this is a preview file - don't allow direct operations on preview files
+        if is_preview_file(file_path):
+            raise VAMSGeneralErrorResponse(f"Cannot directly delete preview files. Delete the base file instead.")
+            
+        # For base files, also delete any associated preview files
+        preview_files = find_preview_files_for_base(bucket, full_key)
+        for preview_file in preview_files:
+            if delete_s3_object_all_versions(bucket, preview_file):
+                # Get relative path for reporting
+                if preview_file.startswith(base_key):
+                    rel_preview_path = '/' + preview_file[len(base_key):]
+                else:
+                    rel_preview_path = '/' + preview_file
+                
+                affected_files.append(rel_preview_path)
+                logger.info(f"Deleted preview file: {rel_preview_path}")
+        
+        # Delete the main file including all versions
         success = delete_s3_object_all_versions(bucket, full_key)
 
-        #Delete aux files if they exist
+        # Delete aux files if they exist
         delete_assetAuxiliary_files(full_key)
         
         if not success:
@@ -1237,7 +1394,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         
         affected_files.append(file_path)
 
-    #send email for asset file change
+    # Send email for asset file change
     send_subscription_email(databaseId, assetId)
     
     # Return response
@@ -1317,7 +1474,22 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
                 relative_path = key[len(base_key):]
                 affected_files.append(relative_path)
     else:
-        # Archive single file
+        # Check if this is a preview file - allow direct archive operations on preview files
+        if not is_preview_file(file_path):
+            # For base files, also archive any associated preview files
+            preview_files = find_preview_files_for_base(bucket, full_key)
+            for preview_file in preview_files:
+                if delete_s3_object(bucket, preview_file):
+                    # Get relative path for reporting
+                    if preview_file.startswith(base_key):
+                        rel_preview_path = '/' + preview_file[len(base_key):]
+                    else:
+                        rel_preview_path = '/' + preview_file
+                    
+                    affected_files.append(rel_preview_path)
+                    logger.info(f"Archived preview file: {rel_preview_path}")
+        
+        # Archive the main file
         success = delete_s3_object(bucket, full_key)
         
         if not success:
@@ -1325,7 +1497,7 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
         
         affected_files.append(file_path)
 
-    #send email for asset file change
+    # Send email for asset file change
     send_subscription_email(databaseId, assetId)
     
     # Return response
@@ -1428,15 +1600,107 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
         )
         
         new_version_id = copy_response.get('VersionId', 'null')
+        affected_files = [file_path]
+        
+        # If this is a base file, also unarchive any associated preview files
+        if not is_preview_file(file_path):
+            # Find preview files for this base file
+            preview_files = find_preview_files_for_base(bucket, full_key)
+            
+            for preview_file in preview_files:
+                try:
+                    # Check if the preview file exists and is archived
+                    try:
+                        # Try to get the object - if it succeeds, the file exists and is not archived
+                        s3_client.head_object(Bucket=bucket, Key=preview_file)
+                        # If we get here, the file exists and is not archived - skip it
+                        logger.info(f"Preview file {preview_file} exists and is not archived - skipping")
+                        continue
+                    except ClientError as e:
+                        # If NoSuchKey, the file might be archived or doesn't exist
+                        if e.response['Error']['Code'] != 'NoSuchKey':
+                            # Some other error - log and continue with next preview file
+                            logger.warning(f"Error checking preview file {preview_file}: {e}")
+                            continue
+                    
+                    # Get versions to check if file is archived
+                    preview_versions_response = s3_client.list_object_versions(
+                        Bucket=bucket,
+                        Prefix=preview_file,
+                        MaxKeys=100
+                    )
+                    
+                    # Check if the preview file is archived (has delete markers and versions)
+                    preview_delete_markers = []
+                    preview_versions = []
+                    
+                    # Filter for exact key matches
+                    for marker in preview_versions_response.get('DeleteMarkers', []):
+                        if marker['Key'] == preview_file:
+                            preview_delete_markers.append(marker)
+                    
+                    for version in preview_versions_response.get('Versions', []):
+                        if version['Key'] == preview_file:
+                            preview_versions.append(version)
+                    
+                    # Check if the file is archived (has delete marker as latest version)
+                    preview_is_archived = False
+                    for marker in preview_delete_markers:
+                        if marker.get('IsLatest', False):
+                            preview_is_archived = True
+                            break
+                    
+                    # If no versions, skip this preview file
+                    if not preview_versions:
+                        logger.info(f"Preview file {preview_file} has no versions - skipping")
+                        continue
+                        
+                    # If not archived but has versions, it's already unarchived
+                    if not preview_is_archived:
+                        logger.info(f"Preview file {preview_file} is not archived - skipping")
+                        continue
+                    
+                    # Find the latest version before the delete marker
+                    preview_latest_version = None
+                    for version in preview_versions:
+                        if not preview_latest_version or version['LastModified'] > preview_latest_version['LastModified']:
+                            preview_latest_version = version
+                    
+                    if preview_latest_version:
+                        # Copy the latest version to create a new current version (effectively unarchiving)
+                        s3_client.copy_object(
+                            CopySource={
+                                'Bucket': bucket,
+                                'Key': preview_file,
+                                'VersionId': preview_latest_version['VersionId']
+                            },
+                            Bucket=bucket,
+                            Key=preview_file,
+                            MetadataDirective='COPY'  # Preserve metadata from source version
+                        )
+                        logger.info(f"Successfully unarchived preview file {preview_file} from version {preview_latest_version['VersionId']}")
+                            
+                        # Get relative path for reporting
+                        if preview_file.startswith(base_key):
+                            rel_preview_path = '/' + preview_file[len(base_key):]
+                        else:
+                            rel_preview_path = '/' + preview_file
+                        
+                        affected_files.append(rel_preview_path)
+                        logger.info(f"Unarchived preview file: {rel_preview_path}")
+                except Exception as e:
+                    # Log error but continue with other preview files
+                    logger.warning(f"Error unarchiving preview file {preview_file}: {e}")
 
-        #send email for asset file change
+        # Send email for asset file change
         send_subscription_email(databaseId, assetId)
         
         # Return response
         return FileOperationResponseModel(
             success=True,
-            message=f"Successfully unarchived file: {file_path}",
-            affectedFiles=[file_path]
+            message=f"Successfully unarchived file: {file_path}" + 
+                    (f" and {len(affected_files) - 1} associated preview files" if len(affected_files) > 1 else ""),
+            affectedFiles=affected_files
         )
         
     except ClientError as e:
@@ -1459,6 +1723,10 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     """
     # Get source asset and verify permissions
     source_asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
+    
+    # Check if this is a preview file - don't allow direct operations on preview files
+    if is_preview_file(source_path):
+        raise VAMSGeneralErrorResponse(f"Cannot directly copy preview files. Copy the base file instead.")
     
     # Determine if this is a cross-asset operation
     is_cross_asset = dest_asset_id is not None and dest_asset_id != assetId
@@ -1489,13 +1757,9 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
             raise VAMSGeneralErrorResponse(f"Source file not found: {source_path}")
         raise VAMSGeneralErrorResponse(f"Error checking source file: {str(e)}")
     
-    # Check if destination already exists
-    try:
-        s3_client.head_object(Bucket=dest_bucket, Key=dest_key)
+    # Check if destination already exists using the helper function
+    if check_destination_file_exists(dest_bucket, dest_key, dest_path):
         raise VAMSGeneralErrorResponse(f"Destination file already exists: {dest_path}")
-    except ClientError as e:
-        if e.response['Error']['Code'] != 'NoSuchKey':
-            raise VAMSGeneralErrorResponse(f"Error checking destination file: {str(e)}")
     
     # Copy the file
     success = copy_s3_object(
@@ -1512,18 +1776,62 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     if not success:
         raise VAMSGeneralErrorResponse(f"Failed to copy file from {source_path} to {dest_path}")
     
+    # Find and copy any preview files associated with this file
+    logger.info(f"Looking for preview files for base file: {source_key}")
+    preview_files = find_preview_files_for_base(source_bucket, source_key)
+    logger.info(f"Found {len(preview_files)} preview files: {preview_files}")
+    copied_preview_files = []
+    
+    for preview_file in preview_files:
+        # Calculate the destination preview file path properly
+        source_dir = os.path.dirname(source_key)
+        dest_dir = os.path.dirname(dest_key)
+        preview_filename = os.path.basename(preview_file)
+        # Replace the base filename in the preview filename
+        source_filename = os.path.basename(source_key)
+        dest_filename = os.path.basename(dest_key)
+        new_preview_filename = preview_filename.replace(source_filename, dest_filename, 1)
+        preview_dest = os.path.join(dest_dir, new_preview_filename).replace('\\', '/')
+        
+        logger.info(f"Copying preview file from {preview_file} to {preview_dest}")
+        
+        # Copy the preview file
+        copy_success = copy_s3_object(
+            source_bucket, 
+            preview_file, 
+            dest_bucket, 
+            preview_dest,
+            source_asset_id=assetId,
+            source_database_id=databaseId,
+            dest_asset_id=dest_asset_id if is_cross_asset else assetId,
+            dest_database_id=databaseId
+        )
+        
+        if copy_success:
+            # Get relative paths for reporting
+            if preview_dest.startswith(dest_base_key):
+                rel_preview_dest = '/' + preview_dest[len(dest_base_key):]
+            else:
+                rel_preview_dest = '/' + preview_dest
+                
+            copied_preview_files.append(rel_preview_dest)
+            logger.info(f"Successfully copied preview file to {rel_preview_dest}")
+        else:
+            logger.error(f"Failed to copy preview file from {preview_file} to {preview_dest}")
+    
     # Copy auxiliary files if they exist
     copy_auxiliary_files(source_key, dest_key)
 
-    #send email for asset file change
-    send_subscription_email(databaseId, dest_asset_id)
+    # Send email for asset file change
+    send_subscription_email(databaseId, dest_asset_id if is_cross_asset else assetId)
     
     # Return response
-    affected_files = [dest_path]
+    affected_files = [dest_path] + copied_preview_files
     return FileOperationResponseModel(
         success=True,
         message=f"Successfully copied file from {source_path} to {dest_path}" + 
-                (f" in asset {dest_asset_id}" if is_cross_asset else ""),
+                (f" in asset {dest_asset_id}" if is_cross_asset else "") +
+                (f" and {len(copied_preview_files)} associated preview files" if copied_preview_files else ""),
         affectedFiles=affected_files
     )
 
@@ -1543,6 +1851,10 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     # Get asset and verify permissions (need POST permission to modify)
     asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
     
+    # Check if this is a preview file - don't allow direct operations on preview files
+    if is_preview_file(source_path):
+        raise VAMSGeneralErrorResponse(f"Cannot directly move preview files. Move the base file instead.")
+    
     # Get asset location
     bucket, base_key = get_asset_s3_location(asset)
     
@@ -1558,13 +1870,9 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
             raise VAMSGeneralErrorResponse(f"Source file not found: {source_path}")
         raise VAMSGeneralErrorResponse(f"Error checking source file: {str(e)}")
     
-    # Check if destination already exists
-    try:
-        s3_client.head_object(Bucket=bucket, Key=dest_key)
+    # Check if destination already exists using the helper function
+    if check_destination_file_exists(bucket, dest_key, dest_path):
         raise VAMSGeneralErrorResponse(f"Destination file already exists: {dest_path}")
-    except ClientError as e:
-        if e.response['Error']['Code'] != 'NoSuchKey':
-            raise VAMSGeneralErrorResponse(f"Error checking destination file: {str(e)}")
     
     # Move the file
     success = move_s3_object(bucket, source_key, bucket, dest_key)
@@ -1572,17 +1880,58 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     if not success:
         raise VAMSGeneralErrorResponse(f"Failed to move file from {source_path} to {dest_path}")
     
+    # Find and move any preview files associated with this file
+    logger.info(f"Looking for preview files for base file: {source_key}")
+    preview_files = find_preview_files_for_base(bucket, source_key)
+    logger.info(f"Found {len(preview_files)} preview files: {preview_files}")
+    moved_preview_files = []
+    
+    for preview_file in preview_files:
+        # Calculate the destination preview file path properly
+        source_dir = os.path.dirname(source_key)
+        dest_dir = os.path.dirname(dest_key)
+        preview_filename = os.path.basename(preview_file)
+        # Replace the base filename in the preview filename
+        source_filename = os.path.basename(source_key)
+        dest_filename = os.path.basename(dest_key)
+        new_preview_filename = preview_filename.replace(source_filename, dest_filename, 1)
+        preview_dest = os.path.join(dest_dir, new_preview_filename).replace('\\', '/')
+        
+        logger.info(f"Moving preview file from {preview_file} to {preview_dest}")
+        
+        # Move the preview file
+        move_success = move_s3_object(bucket, preview_file, bucket, preview_dest)
+        
+        if move_success:
+            # Get relative paths for reporting
+            if preview_file.startswith(base_key):
+                rel_preview_source = '/' + preview_file[len(base_key):]
+            else:
+                rel_preview_source = '/' + preview_file
+                
+            if preview_dest.startswith(base_key):
+                rel_preview_dest = '/' + preview_dest[len(base_key):]
+            else:
+                rel_preview_dest = '/' + preview_dest
+                
+            moved_preview_files.append(rel_preview_source)
+            moved_preview_files.append(rel_preview_dest)
+            logger.info(f"Successfully moved preview file from {rel_preview_source} to {rel_preview_dest}")
+        else:
+            logger.error(f"Failed to move preview file from {preview_file} to {preview_dest}")
+    
     # Move auxiliary files if they exist
     move_auxiliary_files(source_key, dest_key)
 
-    #send email for asset file change
+    # Send email for asset file change
     send_subscription_email(databaseId, assetId)
     
     # Return response
-    affected_files = [source_path, dest_path]
+    affected_files = [source_path, dest_path] + moved_preview_files
     return FileOperationResponseModel(
         success=True,
-        message=f"Successfully moved file from {source_path} to {dest_path}",
+        message=f"Successfully moved file from {source_path} to {dest_path}" + 
+                (f" and {len(moved_preview_files) // 2} associated preview files" if moved_preview_files else ""),
         affectedFiles=affected_files
     )
 
@@ -1700,7 +2049,7 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
     # Get object metadata
     metadata = get_s3_object_metadata(bucket, full_key, include_versions)
     
-    #Check for Asset Version Mismatch
+    # Check for Asset Version Mismatch
     # Get current asset version ID if available and versions are requested and not a folder
     if include_versions and 'versions' in metadata and metadata.get("isFolder", False) and asset.get('currentVersionId'):
         current_version_id = asset.get('currentVersionId', '0')
@@ -1730,6 +2079,28 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
                         version['currentAssetVersionFileVersionMismatch'] = False
                     else:
                         version['currentAssetVersionFileVersionMismatch'] = True
+    
+    # Add preview file information if this is not a preview file itself
+    if not is_preview_file(file_path) and not metadata.get('isFolder', False):
+        # Find preview files for this base file
+        preview_files = find_preview_files_for_base(bucket, full_key)
+        
+        # Get the top preview file with allowed extension
+        top_preview_file = get_top_preview_file(preview_files)
+        
+        if top_preview_file:
+            # Add relative path to the preview file
+            if top_preview_file.startswith(base_key):
+                relative_preview_path = '/' + top_preview_file[len(base_key):]
+            else:
+                relative_preview_path = '/' + top_preview_file
+            
+            metadata['previewFile'] = relative_preview_path
+        else:
+            metadata['previewFile'] = ""
+    else:
+        # For preview files or folders, set empty preview file
+        metadata['previewFile'] = ""
     
     # Return response model
     return FileInfoResponseModel(**metadata)
@@ -1894,10 +2265,57 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
     
     # Convert to response model
     file_items = []
-    for item in result.get('items', []):
-        file_items.append(AssetFileItemModel(**item))
+    preview_files = []
+    base_files = {}
     
-    ##Check for Asset Version Mismatch
+    # First pass: separate preview files and base files
+    for item in result.get('items', []):
+        if is_preview_file(item['key']):
+            # This is a preview file
+            preview_files.append(item)
+        else:
+            # This is a base file
+            file_items.append(AssetFileItemModel(**item))
+            # Store in lookup dictionary for preview file matching
+            base_files[item['key']] = len(file_items) - 1
+    
+    # Process preview files
+    orphaned_preview_files = []
+    
+    for preview_item in preview_files:
+        # Get the base file key for this preview file
+        base_key = get_base_file_for_preview(preview_item['key'])
+        
+        # Check if the base file exists
+        if base_key in base_files:
+            # Base file exists, add this preview file to it if it has an allowed extension
+            if is_allowed_preview_extension(preview_item['key']):
+                base_file_index = base_files[base_key]
+                
+                # Only add if the base file doesn't already have a preview file
+                if not hasattr(file_items[base_file_index], 'previewFile') or not file_items[base_file_index].previewFile:
+                    # Add relative path to the preview file
+                    if preview_item['key'].startswith(key):
+                        relative_preview_path = '/' + preview_item['key'][len(key):]
+                    else:
+                        relative_preview_path = '/' + preview_item['key']
+                    
+                    # Add preview file to base file
+                    file_items[base_file_index].previewFile = relative_preview_path
+        else:
+            # Base file doesn't exist, this is an orphaned preview file
+            orphaned_preview_files.append(preview_item['key'])
+    
+    # Log orphaned preview files
+    if orphaned_preview_files:
+        logger.warning(f"Found {len(orphaned_preview_files)} orphaned preview files: {orphaned_preview_files}")
+    
+    # Initialize previewFile field for files that don't have one
+    for file_item in file_items:
+        if not hasattr(file_item, 'previewFile'):
+            file_item.previewFile = ""
+    
+    # Check for Asset Version Mismatch
     # Get current asset version ID if available
     current_version_id = None
     if asset.get('currentVersionId'):
@@ -1918,11 +2336,10 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
         
         # Check each file against the asset version files
         for file_item in file_items:
-
-            #Separate Folder assets are not included ever in asset versions
+            # Separate Folder assets are not included ever in asset versions
             if file_item.isFolder:
                 continue
-
+                
             # If file is archived, it's automatically a mismatch
             if file_item.isArchived:
                 file_item.currentAssetVersionFileVersionMismatch = True
@@ -2571,6 +2988,245 @@ def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
         logger.exception(f"Internal error: {e}")
         return internal_error()
 
+def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_path: str, claims_and_roles: Dict) -> DeleteAuxiliaryPreviewAssetFilesResponseModel:
+    """Delete auxiliary preview asset files for a specific file path
+    
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        file_path: The file path to delete auxiliary files for (treated as a prefix)
+        claims_and_roles: The claims and roles from the request
+        
+    Returns:
+        DeleteAuxiliaryPreviewAssetFilesResponseModel with the result of the operation
+    """
+    # Get asset and verify permissions (need POST permission to modify)
+    asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
+    
+    # Get asset location
+    bucket, base_key = get_asset_s3_location(asset)
+    
+    # Use smart path resolution to avoid duplication
+    full_key = resolve_asset_file_path(base_key, file_path)
+    
+    # Check if auxiliary files exist under the prefix
+    file_count = 0
+    deleted_files = []
+    
+    try:
+        # List objects in the auxiliary bucket with the prefix
+        paginator = s3_client.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=full_key):
+            if 'Contents' in page:
+                file_count += len(page['Contents'])
+                for item in page['Contents']:
+                    deleted_files.append(item['Key'])
+        
+        if file_count == 0:
+            raise VAMSGeneralErrorResponse(f"No auxiliary files found under prefix: {file_path}")
+        
+        # Delete the auxiliary files
+        delete_assetAuxiliary_files(full_key)
+        
+        # Send email notification for asset change
+        send_subscription_email(databaseId, assetId)
+        
+        return DeleteAuxiliaryPreviewAssetFilesResponseModel(
+            success=True,
+            message=f"Successfully deleted {file_count} auxiliary preview files under prefix: {file_path}",
+            filePath=file_path,
+            deletedCount=file_count
+        )
+    except Exception as e:
+        if isinstance(e, VAMSGeneralErrorResponse):
+            raise e
+        logger.exception(f"Error deleting auxiliary preview files: {e}")
+        raise VAMSGeneralErrorResponse(f"Failed to delete auxiliary preview files: {str(e)}")
+
+def delete_asset_preview(databaseId: str, assetId: str, claims_and_roles: Dict) -> DeleteAssetPreviewResponseModel:
+    """Delete an asset preview file and clear the previewLocation from the asset record
+    
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        claims_and_roles: The claims and roles from the request
+        
+    Returns:
+        DeleteAssetPreviewResponseModel with the result of the operation
+    """
+    # Get asset and verify permissions (need POST permission to modify)
+    asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
+    
+    # Check if asset has a preview
+    preview_location = asset.get('previewLocation')
+    if not preview_location or not preview_location.get('Key'):
+        raise VAMSGeneralErrorResponse(f"Asset {assetId} does not have a preview file")
+    
+    # Get bucket details
+    bucketDetails = get_default_bucket_details(asset.get('bucketId'))
+    bucket = bucketDetails['bucketName']
+    preview_key = preview_location.get('Key')
+    
+    # Delete the preview file from S3
+    try:
+        # Delete all versions of the preview file
+        delete_s3_object_all_versions(bucket, preview_key)
+        
+        # Clear the previewLocation from the asset record
+        asset.pop('previewLocation', None)
+        
+        # Update the asset record in DynamoDB
+        asset_table.put_item(Item=asset)
+        
+        # Send email notification for asset change
+        send_subscription_email(databaseId, assetId)
+        
+        return DeleteAssetPreviewResponseModel(
+            success=True,
+            message=f"Successfully deleted preview file for asset {assetId}",
+            assetId=assetId
+        )
+    except Exception as e:
+        logger.exception(f"Error deleting asset preview: {e}")
+        raise VAMSGeneralErrorResponse(f"Failed to delete asset preview: {str(e)}")
+
+def handle_delete_asset_preview(event, context) -> APIGatewayProxyResponseV2:
+    """Handle DELETE /deleteAssetPreview requests
+    
+    Args:
+        event: The API Gateway event
+        context: The Lambda context
+        
+    Returns:
+        APIGatewayProxyResponseV2 with the response
+    """
+    try:
+        # Get claims and roles
+        claims_and_roles = request_to_claims(event)
+        
+        # Check API authorization
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforceAPI(event):
+                return authorization_error()
+        
+        # Get path parameters
+        path_params = event.get('pathParameters', {})
+        if 'databaseId' not in path_params:
+            return validation_error(body={'message': "No database ID in API Call"})
+        
+        if 'assetId' not in path_params:
+            return validation_error(body={'message': "No asset ID in API Call"})
+        
+        # Validate path parameters
+        (valid, message) = validate({
+            'databaseId': {
+                'value': path_params['databaseId'],
+                'validator': 'ID'
+            },
+            'assetId': {
+                'value': path_params['assetId'],
+                'validator': 'ASSET_ID'
+            },
+        })
+        
+        if not valid:
+            return validation_error(body={'message': message})
+        
+        # Process request
+        response = delete_asset_preview(
+            path_params['databaseId'],
+            path_params['assetId'],
+            claims_and_roles
+        )
+        
+        return success(body=response.dict())
+    
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Internal error: {e}")
+        return internal_error()
+
+def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayProxyResponseV2:
+    """Handle DELETE /deleteAuxiliaryPreviewAssetFiles requests
+    
+    Args:
+        event: The API Gateway event
+        context: The Lambda context
+        
+    Returns:
+        APIGatewayProxyResponseV2 with the response
+    """
+    try:
+        # Get claims and roles
+        claims_and_roles = request_to_claims(event)
+        
+        # Check API authorization
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforceAPI(event):
+                return authorization_error()
+        
+        # Get path parameters
+        path_params = event.get('pathParameters', {})
+        if 'databaseId' not in path_params:
+            return validation_error(body={'message': "No database ID in API Call"})
+        
+        if 'assetId' not in path_params:
+            return validation_error(body={'message': "No asset ID in API Call"})
+        
+        # Validate path parameters
+        (valid, message) = validate({
+            'databaseId': {
+                'value': path_params['databaseId'],
+                'validator': 'ID'
+            },
+            'assetId': {
+                'value': path_params['assetId'],
+                'validator': 'ASSET_ID'
+            },
+        })
+        
+        if not valid:
+            return validation_error(body={'message': message})
+        
+        # Parse request body
+        if not event.get('body'):
+            return validation_error(body={'message': "Request body is required"})
+        
+        if isinstance(event['body'], str):
+            body = json.loads(event['body'])
+        else:
+            body = event['body']
+        
+        # Parse request model
+        request_model = parse(body, model=DeleteAuxiliaryPreviewAssetFilesRequestModel)
+        
+        # Process request
+        response = delete_auxiliary_preview_asset_files(
+            path_params['databaseId'],
+            path_params['assetId'],
+            request_model.filePath,
+            claims_and_roles
+        )
+        
+        return success(body=response.dict())
+    
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        return general_error(body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Internal error: {e}")
+        return internal_error()
+
 def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
     """Handle PUT /setPrimaryFile requests
     
@@ -2751,6 +3407,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             return handle_archive_file(event, context)
         elif method == 'DELETE' and path.endswith('/deleteFile'):
             return handle_delete_file(event, context)
+        elif method == 'DELETE' and path.endswith('/deleteAssetPreview'):
+            return handle_delete_asset_preview(event, context)
+        elif method == 'DELETE' and path.endswith('/deleteAuxiliaryPreviewAssetFiles'):
+            return handle_delete_auxiliary_preview_asset_files(event, context)
         elif method == 'POST' and '/revertFileVersion/' in path:
             return handle_revert_file_version(event, context)
         elif method == 'PUT' and path.endswith('/setPrimaryFile'):

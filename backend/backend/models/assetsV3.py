@@ -279,6 +279,7 @@ class AssetFileItemModel(BaseModel, extra=Extra.ignore):
     isArchived: bool = False  # Computed field based on metadata
     currentAssetVersionFileVersionMismatch: bool = False  # Indicates if file version doesn't match asset version
     primaryType: Optional[str] = None  # Primary type metadata from S3
+    previewFile: Optional[str] = ""  # Path to preview file for this file
 
 class ListAssetFilesRequestModel(BaseModel, extra=Extra.ignore):
     """Query parameters for listing asset files"""
@@ -322,6 +323,7 @@ class FileInfoResponseModel(BaseModel, extra=Extra.ignore):
     storageClass: Optional[str] = None
     isArchived: bool = False
     primaryType: Optional[str] = None  # Primary type metadata from S3
+    previewFile: Optional[str] = ""  # Path to preview file for this file
     versions: Optional[List[FileVersionModel]] = None
 
 class MoveFileRequestModel(BaseModel, extra=Extra.ignore):
@@ -416,6 +418,23 @@ class SetPrimaryFileResponseModel(BaseModel, extra=Extra.ignore):
     message: str
     filePath: str
     primaryType: Optional[str] = None  # The primary type that was set
+
+class DeleteAssetPreviewResponseModel(BaseModel, extra=Extra.ignore):
+    """Response model for deleting an asset preview"""
+    success: bool
+    message: str
+    assetId: str
+
+class DeleteAuxiliaryPreviewAssetFilesRequestModel(BaseModel, extra=Extra.ignore):
+    """Request model for deleting auxiliary preview asset files"""
+    filePath: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
+
+class DeleteAuxiliaryPreviewAssetFilesResponseModel(BaseModel, extra=Extra.ignore):
+    """Response model for deleting auxiliary preview asset files"""
+    success: bool
+    message: str
+    filePath: str
+    deletedCount: int  # Number of auxiliary files deleted
 
 ######################## Ingest Asset API Models ##########################
 class IngestAssetInitializeRequestModel(BaseModel, extra=Extra.ignore):

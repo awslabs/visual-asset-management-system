@@ -24,6 +24,7 @@ import AssetUploadService, {
 } from "../../services/AssetUploadService";
 import { Metadata } from "../../components/single/Metadata";
 import { AssetDetail } from "./AssetUpload";
+import { safeGetFile } from "../../utils/fileHandleCompat";
 
 // Maximum number of concurrent uploads
 const MAX_CONCURRENT_UPLOADS = 6;
@@ -50,8 +51,8 @@ interface UploadState {
     uploadInitStatus: "pending" | "in-progress" | "completed" | "failed" | "skipped";
     previewUploadInitStatus: "pending" | "in-progress" | "completed" | "failed" | "skipped";
     uploadStatus: "pending" | "in-progress" | "completed" | "failed" | "skipped";
-    completionStatus: "pending" | "in-progress" | "completed" | "failed" | "skipped";
-    previewCompletionStatus: "pending" | "in-progress" | "completed" | "failed" | "skipped";
+    completionStatus: "pending" | "in-progress" | "completed" | "failed" | "partial" | "skipped";
+    previewCompletionStatus: "pending" | "in-progress" | "completed" | "failed" | "partial" | "skipped";
     createdAssetId?: string;
     uploadId?: string;
     previewUploadId?: string;
@@ -328,8 +329,8 @@ export default function UploadManager({
                             )
                         );
 
-                        // Get the file and create blob
-                        const file = await fileUploadItems[part.fileIndex].handle.getFile();
+                        // Get the file and create blob using our safe utility
+                        const file = await safeGetFile(fileUploadItems[part.fileIndex].handle);
                         const blob = file.slice(part.start, part.end);
 
                         // Upload the part
@@ -964,7 +965,7 @@ export default function UploadManager({
                 let hasLargeFiles = false;
                 const files = await Promise.all(
                     fileUploadItems.map(async (item) => {
-                        const file = await item.handle.getFile();
+                        const file = await safeGetFile(item.handle);
 
                         // Calculate if this file would exceed MAX_NUM_PARTS_PER_FILE with standard part size
                         const standardNumParts = Math.ceil(file.size / MAX_PART_SIZE);
@@ -1184,10 +1185,10 @@ export default function UploadManager({
                 // Update UI to show preview upload in progress
                 const previewFileItem: FileUploadTableItem = {
                     handle: { getFile: () => Promise.resolve(previewFile) },
-                    index: 999, // Use a high index to distinguish from regular files
+                    index: 99999, // Use a high index to distinguish from regular files
                     name: previewFile.name,
                     size: previewFile.size,
-                    relativePath: `preview/${previewFile.name}`,
+                    relativePath: `previews/${previewFile.name}`,
                     progress: 0,
                     status: "In Progress",
                     loaded: 0,
@@ -1227,7 +1228,7 @@ export default function UploadManager({
                     );
                     setFileUploadItems((prev) =>
                         prev.map((item) =>
-                            item.index === 999
+                            item.index === 99999
                                 ? {
                                       ...item,
                                       progress: progress,
@@ -1435,6 +1436,11 @@ export default function UploadManager({
 
             console.log("Completion response:", JSON.stringify(response, null, 2));
 
+            // Check if the response indicates partial failure (overallSuccess is false)
+            const hasPartialFailure = response.overallSuccess === false;
+            const failedFiles = response.fileResults?.filter(file => !file.success) || [];
+            const allFilesFailed = failedFiles.length === response.fileResults?.length;
+            
             // Only mark as complete if there are no preview errors
             const hasPreviewErrors =
                 uploadState.previewUploadInitStatus === "failed" ||
@@ -1460,6 +1466,27 @@ export default function UploadManager({
                     message: response.message + " (Preview file upload failed)",
                 };
                 onUploadComplete(modifiedResponse);
+            } else if (hasPartialFailure) {
+                console.log("Upload completed with partial failures:", failedFiles);
+                
+                // Add error messages for failed files
+                const failedFileErrors = failedFiles.map(file => ({
+                    step: "File Upload",
+                    message: `${file.relativeKey}: ${file.error || "Unknown error"}`
+                }));
+                
+                setUploadState((prev) => ({
+                    ...prev,
+                    completionStatus: allFilesFailed ? "failed" : "partial",
+                    errors: [
+                        ...prev.errors,
+                        ...failedFileErrors
+                    ],
+                    hasFailedParts: true
+                }));
+                
+                // Call onUploadComplete with the response
+                onUploadComplete(response);
             } else {
                 setUploadState((prev) => ({ ...prev, completionStatus: "completed" }));
                 onUploadComplete(response);
@@ -1837,16 +1864,18 @@ export default function UploadManager({
                         </SpaceBetween>
                     </Box>
 
-                    <Box>
-                        <SpaceBetween direction="vertical" size="xs">
-                            <Box variant="awsui-key-label">Metadata</Box>
-                            <StatusIndicator
-                                type={getStatusIndicatorType(uploadState.metadataStatus)}
-                            >
-                                {getStatusText(uploadState.metadataStatus)}
-                            </StatusIndicator>
-                        </SpaceBetween>
-                    </Box>
+                    {uploadState.metadataStatus !== "skipped" && (
+                        <Box>
+                            <SpaceBetween direction="vertical" size="xs">
+                                <Box variant="awsui-key-label">Metadata</Box>
+                                <StatusIndicator
+                                    type={getStatusIndicatorType(uploadState.metadataStatus)}
+                                >
+                                    {getStatusText(uploadState.metadataStatus)}
+                                </StatusIndicator>
+                            </SpaceBetween>
+                        </Box>
+                    )}
 
                     {uploadState.assetLinksStatus !== "skipped" && (
                         <Box>
@@ -2003,6 +2032,8 @@ function getStatusIndicatorType(
             return "loading";
         case "completed":
             return "success";
+        case "partial":
+            return "warning";
         case "failed":
             return "error";
         default:
@@ -2018,6 +2049,8 @@ function getStatusText(status: string): string {
             return "In Progress";
         case "completed":
             return "Completed";
+        case "partial":
+            return "Completed with Errors";
         case "failed":
             return "Failed";
         default:

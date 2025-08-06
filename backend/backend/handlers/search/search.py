@@ -201,8 +201,9 @@ def property_token_filter_to_opensearch_query(token_filter, uniqueMappingFieldsF
     if 'tokens' not in token_filter:
         token_filter['tokens'] = []
 
-    #Add filter token to ignore #delete databaseId entries
-    token_filter["tokens"].append({"operator":"!=","propertyKey":"str_databaseid","value":"#deleted"})
+    #Add filter token exclusions
+    #token_filter["tokens"].append({"operation":"AND","operator":"!=","propertyKey":"str_databaseid","value":"#deleted"})
+    #token_filter["tokens"].append({"operation":"AND","operator":"!=","propertyKey":"str_key","value":".previewFile."})
 
     #Add properly formatted tokens
     if len(token_filter.get("tokens", [])) > 0:
@@ -237,9 +238,15 @@ def property_token_filter_to_opensearch_query(token_filter, uniqueMappingFieldsF
                 }
             })
 
+    #Conduct exclusions
+    must_not_criteria.append({
+                "regexp": {
+                    "str_databaseid": ".*#deleted.*"
+                }
+            })
+
 
     #Conduct database access checks to reduce record count for processing
-
     #Parse filters and look if there is a record with "str_databaseid" in it. 
     #If there is, parse out the database name, then remove the database query string record from the original token_filter filters 
     #Test if we have access to the database, if not remove it. If so, leave it and don't add back all allowed databases

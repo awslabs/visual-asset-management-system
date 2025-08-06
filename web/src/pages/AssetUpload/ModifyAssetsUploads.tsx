@@ -7,11 +7,13 @@ import {
     TextContent,
 } from "@cloudscape-design/components";
 import Header from "@cloudscape-design/components/header";
-import React, { useEffect, useState } from "react";
+import Alert from "@cloudscape-design/components/alert";
+import StatusIndicator from "@cloudscape-design/components/status-indicator";
+import React, { useEffect, useState, useMemo } from "react";
 import { AssetDetail } from "./AssetUpload";
 import { useLocation, useNavigate, useParams } from "react-router";
 import localforage from "localforage";
-import { FileUploadTable, FileUploadTableItem } from "./FileUploadTable";
+import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUploadTable";
 import Synonyms from "../../synonyms";
 import { FileInfo, MultiFileSelect } from "../../components/multifile/MultiFileSelect";
 import { Link } from "@cloudscape-design/components";
@@ -20,12 +22,29 @@ import { previewFileFormats } from "../../common/constants/fileFormats";
 import AssetUploadWorkflow from "./AssetUploadWorkflow";
 import { Metadata } from "../../components/single/Metadata";
 import { CompleteUploadResponse } from "../../services/AssetUploadService";
+import { safeGetFile } from "../../utils/fileHandleCompat";
 
 // Maximum preview file size (5MB)
 const MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024;
 
 // Constants
 const previewFileFormatsStr = previewFileFormats.join(", ");
+
+// Helper function to determine status indicator type
+const getStatusIndicator = (status?: string) => {
+    switch (status) {
+        case "Queued":
+            return "pending";
+        case "In Progress":
+            return "info";
+        case "Completed":
+            return "success";
+        case "Failed":
+            return "error";
+        default:
+            return "info";
+    }
+};
 
 export async function verifyPermission(fileHandle: any, readWrite: any) {
     const options = {};
@@ -58,29 +77,48 @@ const convertToFileUploadTableItems = async (
     const items: FileUploadTableItem[] = [];
 
     for (let index = 0; index < fileInfo.length; index++) {
-        const file = fileInfo[index];
-        // Get the actual file to access its size
-        const actualFile = await file.handle.getFile();
+        try {
+            const file = fileInfo[index];
+            
+            // Use our safe utility to get the file regardless of handle type
+            const actualFile = await safeGetFile(file.handle);
 
-        // Prepend the folder path to the relative path if a prefix exists
-        const relativePath = prefix
-            ? prefix.endsWith("/")
-                ? prefix + file.path
-                : prefix + "/" + file.path
-            : file.path;
+            // Prepend the folder path to the relative path if a prefix exists
+            const relativePath = prefix
+                ? prefix.endsWith("/")
+                    ? prefix + file.path
+                    : prefix + "/" + file.path
+                : file.path;
 
-        items.push({
-            index: index,
-            name: file.path,
-            size: actualFile.size,
-            status: "Queued",
-            progress: 0,
-            loaded: 0,
-            total: actualFile.size,
-            startedAt: 0,
-            handle: file.handle,
-            relativePath: relativePath,
-        });
+            items.push({
+                index: index,
+                name: file.path,
+                size: actualFile.size,
+                status: "Queued",
+                progress: 0,
+                loaded: 0,
+                total: actualFile.size,
+                startedAt: 0,
+                handle: file.handle,
+                relativePath: relativePath,
+            });
+        } catch (error) {
+            console.error(`Error processing file at index ${index}:`, error);
+            
+            // Add a placeholder entry with error status
+            items.push({
+                index: index,
+                name: fileInfo[index].path || `File ${index}`,
+                size: 0,
+                status: "Failed",
+                progress: 0,
+                loaded: 0,
+                total: 0,
+                relativePath: fileInfo[index].path || "",
+                handle: fileInfo[index].handle,
+                error: "Browser compatibility issue: Cannot access file"
+            });
+        }
     }
 
     return items;
@@ -183,6 +221,11 @@ export default function ModifyAssetsUploadsPage() {
         const selectedItems = await convertToFileUploadTableItems(fileSelection, keyPrefix);
         setFileItems(selectedItems);
     };
+    
+    // Check for preview files in the selected files
+    const hasPreviewFiles = useMemo(() => {
+        return fileItems.some(item => item.name.includes('.previewFile.'));
+    }, [fileItems]);
 
     // Handle preview file selection with size validation
     const handlePreviewFileSelection = (file: File | null) => {
@@ -288,6 +331,43 @@ export default function ModifyAssetsUploadsPage() {
                                             resume={false}
                                             showCount={true}
                                             allowRemoval={true}
+                                            columnDefinitions={[
+                                                {
+                                                    id: "type",
+                                                    header: "Type",
+                                                    cell: (item: FileUploadTableItem) => 
+                                                        item.name.includes('.previewFile.') ? "Preview File" : "Asset File",
+                                                    sortingField: "type",
+                                                    isRowHeader: false,
+                                                },
+                                                {
+                                                    id: "filepath",
+                                                    header: "Path",
+                                                    cell: (item: FileUploadTableItem) => item.relativePath,
+                                                    sortingField: "filepath",
+                                                    isRowHeader: true,
+                                                },
+                                                {
+                                                    id: "filesize",
+                                                    header: "Size",
+                                                    cell: (item: FileUploadTableItem) => 
+                                                        item.total ? shortenBytes(item.total) : "0b",
+                                                    sortingField: "filesize",
+                                                    isRowHeader: false,
+                                                },
+                                                {
+                                                    id: "status",
+                                                    header: "Status",
+                                                    cell: (item: FileUploadTableItem) => (
+                                                        <StatusIndicator type={getStatusIndicator(item.status)}>
+                                                            {" "}
+                                                            {item.status}{" "}
+                                                        </StatusIndicator>
+                                                    ),
+                                                    sortingField: "status",
+                                                    isRowHeader: false,
+                                                },
+                                            ]}
                                             onRemoveItem={(index) => {
                                                 const updatedFiles = fileItems.filter(
                                                     (item) => item.index !== index
@@ -314,6 +394,33 @@ export default function ModifyAssetsUploadsPage() {
                                 {/* File Selection */}
                                 <Container header={<Header variant="h2">Add Files</Header>}>
                                     <SpaceBetween direction="vertical" size="l">
+                                        <Alert
+                                            header="Preview File Information"
+                                            type="info"
+                                        >
+                                            <p>
+                                                Files with <strong>.previewFile.</strong> in the filename will be ingested as preview files for their associated files.
+                                                For example, <code>model.gltf.previewFile.png</code> will be used as a preview for <code>model.gltf</code>.
+                                            </p>
+                                            <p>
+                                                <strong>Important notes:</strong>
+                                                <ul>
+                                                    <li>You cannot upload a preview file for a file that is not part of this upload or is already uploaded as part of the asset.</li>
+                            <li>Only {previewFileFormats.map((ext, index) => (
+                                <React.Fragment key={ext}>
+                                    {index > 0 && ", "}
+                                    <code>{ext}</code>
+                                </React.Fragment>
+                            ))} are valid file extensions for preview files.</li>
+                            <li>Preview files must be 5MB or less in size.</li>
+                                                </ul>
+                                            </p>
+                                            {hasPreviewFiles && (
+                                                <p>
+                                                    <strong>Note:</strong> Some of your selected files will be treated as preview files based on their filenames.
+                                                </p>
+                                            )}
+                                        </Alert>
                                         <Grid
                                             gridDefinition={
                                                 isRootPath
@@ -327,7 +434,7 @@ export default function ModifyAssetsUploadsPage() {
                                             {/* Preview File Selection - Only show when uploading to root path (including "/") */}
                                             {isRootPath && (
                                                 <FileUpload
-                                                    label="Preview File (Optional)"
+                                                    label="Asset Overall Preview File (Optional)"
                                                     disabled={false}
                                                     setFile={handlePreviewFileSelection}
                                                     fileFormats={previewFileFormatsStr}
