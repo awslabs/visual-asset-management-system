@@ -127,7 +127,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
     let enhancedColumnDefinitions = columnNames?.map((name: string) => {
         // Custom headers based on record type
         const isFileMode = state.filters._rectype.value === "s3object";
-        
+
         if (name === "str_asset") {
             return {
                 id: name,
@@ -202,10 +202,18 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
     if (state.filters._rectype.value === "s3object") {
         // Rearrange columns for file mode - move Database before Key
         // First, find the indices of the columns we want to rearrange
-        const databaseColumnIndex = enhancedColumnDefinitions.findIndex((col: TableProps.ColumnDefinition<string>) => col.id === "str_databaseid");
-        const keyColumnIndex = enhancedColumnDefinitions.findIndex((col: TableProps.ColumnDefinition<string>) => col.id === "str_key");
-        
-        if (databaseColumnIndex !== -1 && keyColumnIndex !== -1 && databaseColumnIndex > keyColumnIndex) {
+        const databaseColumnIndex = enhancedColumnDefinitions.findIndex(
+            (col: TableProps.ColumnDefinition<string>) => col.id === "str_databaseid"
+        );
+        const keyColumnIndex = enhancedColumnDefinitions.findIndex(
+            (col: TableProps.ColumnDefinition<string>) => col.id === "str_key"
+        );
+
+        if (
+            databaseColumnIndex !== -1 &&
+            keyColumnIndex !== -1 &&
+            databaseColumnIndex > keyColumnIndex
+        ) {
             // Remove the database column
             const databaseColumn = enhancedColumnDefinitions.splice(databaseColumnIndex, 1)[0];
             // Insert it before the key column
@@ -248,7 +256,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                             assetId={item.str_assetid}
                             databaseId={item.str_databaseid}
                             fileKey={item.str_key}
-                            fileName={item.str_key.split('/').pop() || item.str_key}
+                            fileName={item.str_key.split("/").pop() || item.str_key}
                             fileSize={item.num_size}
                             onOpenFullPreview={(url, fileName, previewKey) =>
                                 handleOpenPreview(url, fileName, previewKey, item)

@@ -324,18 +324,18 @@ export default function ViewFile() {
                         }
                         // Add other view types as needed
                     } else {
-                                // Single file mode: check file format first
-                                defaultViewType = checkFileFormat(
-                                    singleFileInfo?.filename || "",
-                                    singleFileInfo?.isDirectory || false
-                                );
-                                console.log("default view type", defaultViewType);
+                        // Single file mode: check file format first
+                        defaultViewType = checkFileFormat(
+                            singleFileInfo?.filename || "",
+                            singleFileInfo?.isDirectory || false
+                        );
+                        console.log("default view type", defaultViewType);
 
-                                // Add Preview tab if the file has a preview file
-                                if (singleFileInfo?.previewFile) {
-                                    console.log("Using preview file:", singleFileInfo.previewFile);
-                                    newViewerOptions.push({ text: "Preview", id: "preview" });
-                                }
+                        // Add Preview tab if the file has a preview file
+                        if (singleFileInfo?.previewFile) {
+                            console.log("Using preview file:", singleFileInfo.previewFile);
+                            newViewerOptions.push({ text: "Preview", id: "preview" });
+                        }
 
                         if (defaultViewType === "plot") {
                             newViewerOptions.push({ text: "Plot", id: "plot" });
@@ -364,12 +364,7 @@ export default function ViewFile() {
         if (reload && !pathViewType) {
             getData();
         }
-    }, [
-        reload,
-        assetId,
-        databaseId,
-        pathViewType,
-    ]);
+    }, [reload, assetId, databaseId, pathViewType]);
 
     // Generate breadcrumb text
     const getBreadcrumbText = (): string => {
@@ -474,13 +469,15 @@ export default function ViewFile() {
                                                         assetKey={
                                                             isMultiFileMode
                                                                 ? undefined
-                                                                : viewType === "preview" 
-                                                                    ? singleFileInfo?.previewFile 
-                                                                    : singleFileInfo?.key
+                                                                : viewType === "preview"
+                                                                ? singleFileInfo?.previewFile
+                                                                : singleFileInfo?.key
                                                         }
                                                         multiFileKeys={
                                                             isMultiFileMode
-                                                                ? currentFiles.map((f) => f.previewFile || f.key)
+                                                                ? currentFiles.map(
+                                                                      (f) => f.previewFile || f.key
+                                                                  )
                                                                 : undefined
                                                         }
                                                         versionId={
@@ -489,24 +486,33 @@ export default function ViewFile() {
                                                                 : singleFileInfo?.versionId
                                                         }
                                                         viewerMode={viewerMode}
-                                                        onViewerModeChange={(newViewerMode: string) =>
-                                                            changeViewerMode(newViewerMode)
-                                                        }
+                                                        onViewerModeChange={(
+                                                            newViewerMode: string
+                                                        ) => changeViewerMode(newViewerMode)}
                                                         // Don't show delete button in ViewFile.tsx
                                                         onDeletePreview={undefined}
                                                     />
-                                                    
+
                                                     {/* Delete Preview Modal */}
                                                     <Modal
                                                         visible={showDeletePreviewModal}
-                                                        onDismiss={() => setShowDeletePreviewModal(false)}
+                                                        onDismiss={() =>
+                                                            setShowDeletePreviewModal(false)
+                                                        }
                                                         header="Delete Preview File"
                                                         footer={
                                                             <Box float="right">
-                                                                <SpaceBetween direction="horizontal" size="xs">
+                                                                <SpaceBetween
+                                                                    direction="horizontal"
+                                                                    size="xs"
+                                                                >
                                                                     <Button
                                                                         variant="link"
-                                                                        onClick={() => setShowDeletePreviewModal(false)}
+                                                                        onClick={() =>
+                                                                            setShowDeletePreviewModal(
+                                                                                false
+                                                                            )
+                                                                        }
                                                                         disabled={isPreviewDeleting}
                                                                     >
                                                                         Cancel
@@ -514,19 +520,34 @@ export default function ViewFile() {
                                                                     <Button
                                                                         variant="primary"
                                                                         onClick={async () => {
-                                                                            setIsPreviewDeleting(true);
+                                                                            setIsPreviewDeleting(
+                                                                                true
+                                                                            );
                                                                             try {
                                                                                 // File preview deletion
-                                                                                await archiveFile(databaseId!, assetId!, {
-                                                                                    filePath: singleFileInfo!.previewFile!,
-                                                                                });
+                                                                                await archiveFile(
+                                                                                    databaseId!,
+                                                                                    assetId!,
+                                                                                    {
+                                                                                        filePath:
+                                                                                            singleFileInfo!
+                                                                                                .previewFile!,
+                                                                                    }
+                                                                                );
                                                                                 // Refresh the page to show updated file
                                                                                 window.location.reload();
-                                                                                setShowDeletePreviewModal(false);
+                                                                                setShowDeletePreviewModal(
+                                                                                    false
+                                                                                );
                                                                             } catch (error) {
-                                                                                console.error("Error deleting preview:", error);
+                                                                                console.error(
+                                                                                    "Error deleting preview:",
+                                                                                    error
+                                                                                );
                                                                             } finally {
-                                                                                setIsPreviewDeleting(false);
+                                                                                setIsPreviewDeleting(
+                                                                                    false
+                                                                                );
                                                                             }
                                                                         }}
                                                                         loading={isPreviewDeleting}
@@ -538,7 +559,9 @@ export default function ViewFile() {
                                                         }
                                                     >
                                                         <p>
-                                                            Are you sure you want to delete this preview file? This action cannot be undone.
+                                                            Are you sure you want to delete this
+                                                            preview file? This action cannot be
+                                                            undone.
                                                         </p>
                                                     </Modal>
                                                 </>

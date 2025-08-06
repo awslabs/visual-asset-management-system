@@ -98,9 +98,13 @@ export default function AssetUploadWorkflow({
                                         but there were issues with the preview file upload.
                                     </Alert>
                                 ) : uploadResponse?.overallSuccess === false ? (
-                                    <Alert type="warning" header="Upload Completed with Some Failures">
-                                        Some files have been added to asset {uploadResponse?.assetId},
-                                        but there were issues with some file uploads. See the error details below.
+                                    <Alert
+                                        type="warning"
+                                        header="Upload Completed with Some Failures"
+                                    >
+                                        Some files have been added to asset{" "}
+                                        {uploadResponse?.assetId}, but there were issues with some
+                                        file uploads. See the error details below.
                                     </Alert>
                                 ) : (
                                     <Alert type="success" header="Upload Complete">
@@ -117,8 +121,8 @@ export default function AssetUploadWorkflow({
                                 </Alert>
                             ) : uploadResponse?.overallSuccess === false ? (
                                 <Alert type="warning" header="Upload Completed with Some Failures">
-                                    Asset {uploadResponse?.assetId} has been created, but there were issues 
-                                    with some file uploads. See the error details below.
+                                    Asset {uploadResponse?.assetId} has been created, but there were
+                                    issues with some file uploads. See the error details below.
                                 </Alert>
                             ) : (
                                 <Alert type="success" header="Upload Complete">
@@ -126,23 +130,24 @@ export default function AssetUploadWorkflow({
                                     and all files have been uploaded.
                                 </Alert>
                             )}
-                            
+
                             {/* Display failed file details if there are any */}
-                            {uploadResponse?.overallSuccess === false && uploadResponse?.fileResults && (
-                                <Alert type="error" header="Failed File Details">
-                                    <ul>
-                                        {uploadResponse.fileResults
-                                            .filter(file => !file.success)
-                                            .map((file, index) => (
-                                                <li key={index}>
-                                                    <strong>{file.relativeKey}:</strong> {file.error || "Unknown error"}
-                                                </li>
-                                            ))
-                                        }
-                                    </ul>
-                                </Alert>
-                            )}
-                            
+                            {uploadResponse?.overallSuccess === false &&
+                                uploadResponse?.fileResults && (
+                                    <Alert type="error" header="Failed File Details">
+                                        <ul>
+                                            {uploadResponse.fileResults
+                                                .filter((file) => !file.success)
+                                                .map((file, index) => (
+                                                    <li key={index}>
+                                                        <strong>{file.relativeKey}:</strong>{" "}
+                                                        {file.error || "Unknown error"}
+                                                    </li>
+                                                ))}
+                                        </ul>
+                                    </Alert>
+                                )}
+
                             <SpaceBetween direction="horizontal" size="xs">
                                 <Button onClick={handleViewAsset} variant="primary">
                                     View Asset

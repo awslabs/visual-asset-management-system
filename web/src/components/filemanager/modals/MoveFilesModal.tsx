@@ -179,14 +179,14 @@ export function MoveFilesModal({
 
             // Check if all operations were successful
             const allSuccessful = results.every((result) => result.success);
-            
+
             // Always update the results
             setOperationResults(results);
-            
+
             if (allSuccessful) {
                 // Call onSuccess to refresh the tree view
                 onSuccess(operationMode, results);
-                
+
                 // Close the modal automatically on complete success
                 // Small delay to ensure parent state updates complete
                 setTimeout(() => {

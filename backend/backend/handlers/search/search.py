@@ -155,7 +155,7 @@ def get_databases(show_deleted=False):
 
 def get_unique_mapping_fields(mapping):
     ignorePropertiesFields = ["_rectype"] #exclude these exact fields from search
-    ignorePropertiesFieldPrefixes = ["num_", "date_", "geo_"] #exclude these field prefixes from search
+    ignorePropertiesFieldPrefixes = ["num_", "date_", "geo_", "bool_"] #exclude these field prefixes from search
 
     arr = []
     if "mappings" in mapping and "properties" in mapping["mappings"]:

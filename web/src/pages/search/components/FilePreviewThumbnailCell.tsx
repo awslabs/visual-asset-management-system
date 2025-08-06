@@ -64,9 +64,7 @@ export const FilePreviewThumbnailCell: React.FC<FilePreviewThumbnailCellProps> =
                     setPreviewKey(filePreviewKey);
                 } else {
                     // If no preview file, check if the file itself is a previewable image
-                    const fileExt = fileName
-                        .substring(fileName.lastIndexOf("."))
-                        .toLowerCase();
+                    const fileExt = fileName.substring(fileName.lastIndexOf(".")).toLowerCase();
 
                     // Check if file extension is in previewFileFormats
                     const isPreviewFormat = previewFileFormats.includes(fileExt);
@@ -75,7 +73,9 @@ export const FilePreviewThumbnailCell: React.FC<FilePreviewThumbnailCellProps> =
                     const isSizeOk = fileSize !== undefined && fileSize < 5 * 1024 * 1024;
 
                     if (!isPreviewFormat || !isSizeOk) {
-                        console.log(`File ${fileName} is not previewable (format: ${isPreviewFormat}, size OK: ${isSizeOk})`);
+                        console.log(
+                            `File ${fileName} is not previewable (format: ${isPreviewFormat}, size OK: ${isSizeOk})`
+                        );
                         setError(true);
                         setLoading(false);
                         return;

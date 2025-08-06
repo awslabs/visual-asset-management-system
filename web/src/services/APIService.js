@@ -1511,7 +1511,7 @@ export const fetchFileInfo = async ({ databaseId, assetId, fileKey }, api = API)
         }
 
         const response = await api.get("api", `database/${databaseId}/assets/${assetId}/fileInfo`, {
-            queryStringParameters: { filePath: fileKey }
+            queryStringParameters: { filePath: fileKey },
         });
 
         // Handle different response formats

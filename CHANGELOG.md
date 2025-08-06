@@ -138,7 +138,8 @@ This version includes significant enhancements to VAMS infrastructure, a complet
 -   Fixed bug with PointClouder viewer / pipeline from executing and showing final outputs
 -   Fixed various bugs with asset comments editing and deleting
 -   Fixed various UI and backend bugs related to the asset management overhaul
--   Fixed fullscreen mode on visualizers not wokring on certain visualizers after exiting from a previous fullscreen session; removed compact mode as this had no benefit. 
+-   Fixed fullscreen mode on visualizers not working on certain visualizers after exiting from a previous fullscreen session; removed compact mode as this had no benefit.
+-   Fixed OpenSearch search to exclude `bool_` fields that may get added to dynamodb tables it indexes. Wildcard searches in query don't work on bool fields.
 
 ### Chores
 

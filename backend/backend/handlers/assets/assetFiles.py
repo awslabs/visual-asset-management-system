@@ -1197,6 +1197,102 @@ def find_preview_files_for_base(bucket: str, base_key: str) -> List[str]:
     
     return preview_files
 
+def find_preview_files_for_base_including_archived(bucket: str, base_key: str) -> List[Dict]:
+    """Find preview files for a base file, including archived ones
+    
+    Args:
+        bucket: The S3 bucket
+        base_key: The base file key
+        
+    Returns:
+        List of dictionaries with preview file information including key and archive status
+    """
+    preview_files = []
+    
+    try:
+        # Get the directory and filename parts
+        directory = os.path.dirname(base_key)
+        filename = os.path.basename(base_key)
+        
+        # Create the prefix for listing objects
+        prefix = f"{directory}/" if directory else ""
+        
+        # Create the pattern to match preview files for this base file
+        pattern = f"{filename}.previewFile."
+        
+        logger.info(f"Searching for preview files (including archived) in bucket {bucket} with prefix {prefix}")
+        logger.info(f"Looking for pattern: {pattern}")
+        
+        # Use list_object_versions to find both current and archived files
+        versions_response = s3_client.list_object_versions(
+            Bucket=bucket,
+            Prefix=prefix,
+            MaxKeys=1000
+        )
+        
+        # Track keys we've already processed to avoid duplicates
+        processed_keys = set()
+        
+        # Process all versions to find preview files
+        for version in versions_response.get('Versions', []):
+            key = version['Key']
+            base_filename = os.path.basename(key)
+            
+            # Skip if already processed or not a preview file for our base file
+            if key in processed_keys or not base_filename.startswith(pattern):
+                continue
+            
+            # Add to processed keys to avoid duplicates
+            processed_keys.add(key)
+            
+            # Check if this version is the latest
+            is_latest = version.get('IsLatest', False)
+            
+            # Check if this file is archived
+            is_archived = False
+            for marker in versions_response.get('DeleteMarkers', []):
+                if marker['Key'] == key and marker.get('IsLatest', False):
+                    is_archived = True
+                    break
+            
+            # Add to preview files list with metadata
+            preview_files.append({
+                'key': key,
+                'isArchived': is_archived,
+                'isLatest': is_latest,
+                'versionId': version.get('VersionId')
+            })
+        
+        # Also check delete markers for files that might only have delete markers
+        for marker in versions_response.get('DeleteMarkers', []):
+            key = marker['Key']
+            base_filename = os.path.basename(key)
+            
+            # Skip if already processed or not a preview file for our base file
+            if key in processed_keys or not base_filename.startswith(pattern):
+                continue
+            
+            # Add to processed keys to avoid duplicates
+            processed_keys.add(key)
+            
+            # Add to preview files list with metadata
+            preview_files.append({
+                'key': key,
+                'isArchived': True,
+                'isLatest': marker.get('IsLatest', False),
+                'versionId': marker.get('VersionId')
+            })
+        
+        # Sort the preview files alphabetically by key
+        preview_files.sort(key=lambda x: x['key'])
+        
+        logger.info(f"Found {len(preview_files)} preview files (including archived) for {base_key}")
+        
+    except Exception as e:
+        logger.warning(f"Error finding preview files (including archived) for {base_key}: {e}")
+    
+    return preview_files
+
 def get_top_preview_file(preview_files: List[str], filter_extensions: bool = True) -> Optional[str]:
     """Get the top preview file from a list of preview files
     
@@ -1604,63 +1700,41 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
         
         # If this is a base file, also unarchive any associated preview files
         if not is_preview_file(file_path):
-            # Find preview files for this base file
-            preview_files = find_preview_files_for_base(bucket, full_key)
+            # Find preview files for this base file, including archived ones
+            logger.info(f"Looking for preview files (including archived) for base file: {full_key}")
+            preview_files_info = find_preview_files_for_base_including_archived(bucket, full_key)
             
-            for preview_file in preview_files:
+            logger.info(f"Found {len(preview_files_info)} preview files (including archived)")
+            
+            for preview_file_info in preview_files_info:
+                preview_file = preview_file_info['key']
+                is_archived = preview_file_info['isArchived']
+                
                 try:
-                    # Check if the preview file exists and is archived
-                    try:
-                        # Try to get the object - if it succeeds, the file exists and is not archived
-                        s3_client.head_object(Bucket=bucket, Key=preview_file)
-                        # If we get here, the file exists and is not archived - skip it
-                        logger.info(f"Preview file {preview_file} exists and is not archived - skipping")
+                    # Skip if the preview file is not archived
+                    if not is_archived:
+                        logger.info(f"Preview file {preview_file} is not archived - skipping")
                         continue
-                    except ClientError as e:
-                        # If NoSuchKey, the file might be archived or doesn't exist
-                        if e.response['Error']['Code'] != 'NoSuchKey':
-                            # Some other error - log and continue with next preview file
-                            logger.warning(f"Error checking preview file {preview_file}: {e}")
-                            continue
                     
-                    # Get versions to check if file is archived
+                    # Get versions to find the latest version before the delete marker
                     preview_versions_response = s3_client.list_object_versions(
                         Bucket=bucket,
                         Prefix=preview_file,
                         MaxKeys=100
                     )
                     
-                    # Check if the preview file is archived (has delete markers and versions)
-                    preview_delete_markers = []
+                    # Find all versions for this preview file
                     preview_versions = []
-                    
-                    # Filter for exact key matches
-                    for marker in preview_versions_response.get('DeleteMarkers', []):
-                        if marker['Key'] == preview_file:
-                            preview_delete_markers.append(marker)
-                    
                     for version in preview_versions_response.get('Versions', []):
                         if version['Key'] == preview_file:
                             preview_versions.append(version)
-                    
-                    # Check if the file is archived (has delete marker as latest version)
-                    preview_is_archived = False
-                    for marker in preview_delete_markers:
-                        if marker.get('IsLatest', False):
-                            preview_is_archived = True
-                            break
                     
                     # If no versions, skip this preview file
                     if not preview_versions:
                         logger.info(f"Preview file {preview_file} has no versions - skipping")
                         continue
-                        
-                    # If not archived but has versions, it's already unarchived
-                    if not preview_is_archived:
-                        logger.info(f"Preview file {preview_file} is not archived - skipping")
-                        continue
                     
-                    # Find the latest version before the delete marker
+                    # Find the latest version
                     preview_latest_version = None
                     for version in preview_versions:
                         if not preview_latest_version or version['LastModified'] > preview_latest_version['LastModified']:

@@ -697,13 +697,13 @@ export function apiBuilder(
         api: api,
     });
 
-     attachFunctionToApi(scope, assetFilesFunction, {
+    attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/deleteAssetPreview",
         method: apigwv2.HttpMethod.DELETE,
         api: api,
     });
 
-     attachFunctionToApi(scope, assetFilesFunction, {
+    attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/deleteAuxiliaryPreviewAssetFiles",
         method: apigwv2.HttpMethod.DELETE,
         api: api,
