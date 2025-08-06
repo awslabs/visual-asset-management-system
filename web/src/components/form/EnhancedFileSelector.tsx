@@ -122,13 +122,13 @@ export default function EnhancedFileSelector({
             onSelect(directoryHandle, fileHandles);
         } catch (err: any) {
             // Check for user cancellation in multiple ways
-            const isUserCancellation = 
-                err.name === "AbortError" || 
+            const isUserCancellation =
+                err.name === "AbortError" ||
                 err.message?.includes("aborted") ||
                 err.message?.includes("cancelled") ||
                 err.message?.includes("canceled") ||
                 err.code === 20; // DOMException.ABORT_ERR
-            
+
             if (!isUserCancellation) {
                 console.error("Error selecting folder:", err);
                 setError(err.message || "Failed to select folder");
@@ -170,13 +170,13 @@ export default function EnhancedFileSelector({
             }
         } catch (err: any) {
             // Check for user cancellation in multiple ways
-            const isUserCancellation = 
-                err.name === "AbortError" || 
+            const isUserCancellation =
+                err.name === "AbortError" ||
                 err.message?.includes("aborted") ||
                 err.message?.includes("cancelled") ||
                 err.message?.includes("canceled") ||
                 err.code === 20; // DOMException.ABORT_ERR
-            
+
             if (!isUserCancellation) {
                 console.error("Error selecting files:", err);
                 setError(err.message || "Failed to select files");

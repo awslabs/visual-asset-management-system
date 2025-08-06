@@ -715,7 +715,7 @@ const getFilesFromFileHandles = async (fileHandles: any[]) => {
                 status: "Failed",
                 loaded: 0,
                 total: 0,
-                error: "Browser compatibility issue: Cannot access file"
+                error: "Browser compatibility issue: Cannot access file",
             });
         }
     }
@@ -740,11 +740,11 @@ const AssetFileInfo = ({
         assetDetailState.isMultiFile ? "folder" : "files"
     );
     const [previewFileError, setPreviewFileError] = useState<string | undefined>(undefined);
-    
+
     // Check for preview files in the selected files
     const hasPreviewFiles = useMemo(() => {
         if (!assetDetailState.Asset) return false;
-        return assetDetailState.Asset.some(item => item.name.includes('.previewFile.'));
+        return assetDetailState.Asset.some((item) => item.name.includes(".previewFile."));
     }, [assetDetailState.Asset]);
 
     useEffect(() => {
@@ -793,30 +793,37 @@ const AssetFileInfo = ({
     return (
         <Container>
             <SpaceBetween direction="vertical" size="l">
-                <Alert
-                    header="Preview File Information"
-                    type="info"
-                >
+                <Alert header="Preview File Information" type="info">
                     <p>
-                        Files with <strong>.previewFile.</strong> in the filename will be ingested as preview files for their associated files.
-                        For example, <code>model.gltf.previewFile.png</code> will be used as a preview for <code>model.gltf</code>.
+                        Files with <strong>.previewFile.</strong> in the filename will be ingested
+                        as preview files for their associated files. For example,{" "}
+                        <code>model.gltf.previewFile.png</code> will be used as a preview for{" "}
+                        <code>model.gltf</code>.
                     </p>
                     <p>
                         <strong>Important notes:</strong>
                         <ul>
-                            <li>You cannot upload a preview file for a file that is not part of this upload or is already uploaded as part of the asset.</li>
-                            <li>Only {previewFileFormats.map((ext, index) => (
-                                <React.Fragment key={ext}>
-                                    {index > 0 && ", "}
-                                    <code>{ext}</code>
-                                </React.Fragment>
-                            ))} are valid file extensions for preview files.</li>
+                            <li>
+                                You cannot upload a preview file for a file that is not part of this
+                                upload or is already uploaded as part of the asset.
+                            </li>
+                            <li>
+                                Only{" "}
+                                {previewFileFormats.map((ext, index) => (
+                                    <React.Fragment key={ext}>
+                                        {index > 0 && ", "}
+                                        <code>{ext}</code>
+                                    </React.Fragment>
+                                ))}{" "}
+                                are valid file extensions for preview files.
+                            </li>
                             <li>Preview files must be 5MB or less in size.</li>
                         </ul>
                     </p>
                     {hasPreviewFiles && (
                         <p>
-                            <strong>Note:</strong> Some of your selected files will be treated as preview files based on their filenames.
+                            <strong>Note:</strong> Some of your selected files will be treated as
+                            preview files based on their filenames.
                         </p>
                     )}
                 </Alert>
@@ -1014,7 +1021,7 @@ const AssetUploadReview = ({
                     ))}
                 </ColumnLayout>
             </Container>
-                {allFiles.length > 0 && (
+            {allFiles.length > 0 && (
                 <FileUploadTable
                     allItems={allFiles}
                     resume={false}
@@ -1025,7 +1032,7 @@ const AssetUploadReview = ({
                             header: "Type",
                             cell: (item: FileUploadTableItem) => {
                                 if (item.index === 99999) return "Preview File";
-                                if (item.name.includes('.previewFile.')) return "Preview File";
+                                if (item.name.includes(".previewFile.")) return "Preview File";
                                 return "Asset File";
                             },
                             sortingField: "type",

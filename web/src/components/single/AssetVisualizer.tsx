@@ -23,7 +23,7 @@ interface AssetVisualizerPropTypes {
 
 function AssetVisualizer(props: AssetVisualizerPropTypes) {
     const [viewerMode, setViewerMode] = useState<string>(props.viewerMode);
-    
+
     // Listen for fullscreen change events
     useEffect(() => {
         const handleFullscreenChange = () => {
@@ -31,13 +31,15 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
             if (!document.fullscreenElement && viewerMode === "fullscreen") {
                 setViewerMode(props.viewerMode !== "fullscreen" ? props.viewerMode : "wide");
                 if (props.onViewerModeChange) {
-                    props.onViewerModeChange(props.viewerMode !== "fullscreen" ? props.viewerMode : "wide");
+                    props.onViewerModeChange(
+                        props.viewerMode !== "fullscreen" ? props.viewerMode : "wide"
+                    );
                 }
             }
         };
 
         document.addEventListener("fullscreenchange", handleFullscreenChange);
-        
+
         // Clean up the event listener when component unmounts
         return () => {
             document.removeEventListener("fullscreenchange", handleFullscreenChange);
@@ -68,7 +70,7 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                             databaseId={props.asset.databaseId}
                             assetKey={props.assetKey || ""}
                             altAssetKey={props.assetKey || ""}
-                            versionId={""}  // Use empty versionId for preview files
+                            versionId={""} // Use empty versionId for preview files
                             onDeletePreview={props.onDeletePreview}
                             isPreviewFile={true}
                         />

@@ -79,7 +79,7 @@ const convertToFileUploadTableItems = async (
     for (let index = 0; index < fileInfo.length; index++) {
         try {
             const file = fileInfo[index];
-            
+
             // Use our safe utility to get the file regardless of handle type
             const actualFile = await safeGetFile(file.handle);
 
@@ -104,7 +104,7 @@ const convertToFileUploadTableItems = async (
             });
         } catch (error) {
             console.error(`Error processing file at index ${index}:`, error);
-            
+
             // Add a placeholder entry with error status
             items.push({
                 index: index,
@@ -116,7 +116,7 @@ const convertToFileUploadTableItems = async (
                 total: 0,
                 relativePath: fileInfo[index].path || "",
                 handle: fileInfo[index].handle,
-                error: "Browser compatibility issue: Cannot access file"
+                error: "Browser compatibility issue: Cannot access file",
             });
         }
     }
@@ -221,10 +221,10 @@ export default function ModifyAssetsUploadsPage() {
         const selectedItems = await convertToFileUploadTableItems(fileSelection, keyPrefix);
         setFileItems(selectedItems);
     };
-    
+
     // Check for preview files in the selected files
     const hasPreviewFiles = useMemo(() => {
-        return fileItems.some(item => item.name.includes('.previewFile.'));
+        return fileItems.some((item) => item.name.includes(".previewFile."));
     }, [fileItems]);
 
     // Handle preview file selection with size validation
@@ -335,23 +335,28 @@ export default function ModifyAssetsUploadsPage() {
                                                 {
                                                     id: "type",
                                                     header: "Type",
-                                                    cell: (item: FileUploadTableItem) => 
-                                                        item.name.includes('.previewFile.') ? "Preview File" : "Asset File",
+                                                    cell: (item: FileUploadTableItem) =>
+                                                        item.name.includes(".previewFile.")
+                                                            ? "Preview File"
+                                                            : "Asset File",
                                                     sortingField: "type",
                                                     isRowHeader: false,
                                                 },
                                                 {
                                                     id: "filepath",
                                                     header: "Path",
-                                                    cell: (item: FileUploadTableItem) => item.relativePath,
+                                                    cell: (item: FileUploadTableItem) =>
+                                                        item.relativePath,
                                                     sortingField: "filepath",
                                                     isRowHeader: true,
                                                 },
                                                 {
                                                     id: "filesize",
                                                     header: "Size",
-                                                    cell: (item: FileUploadTableItem) => 
-                                                        item.total ? shortenBytes(item.total) : "0b",
+                                                    cell: (item: FileUploadTableItem) =>
+                                                        item.total
+                                                            ? shortenBytes(item.total)
+                                                            : "0b",
                                                     sortingField: "filesize",
                                                     isRowHeader: false,
                                                 },
@@ -359,7 +364,9 @@ export default function ModifyAssetsUploadsPage() {
                                                     id: "status",
                                                     header: "Status",
                                                     cell: (item: FileUploadTableItem) => (
-                                                        <StatusIndicator type={getStatusIndicator(item.status)}>
+                                                        <StatusIndicator
+                                                            type={getStatusIndicator(item.status)}
+                                                        >
                                                             {" "}
                                                             {item.status}{" "}
                                                         </StatusIndicator>
@@ -394,30 +401,42 @@ export default function ModifyAssetsUploadsPage() {
                                 {/* File Selection */}
                                 <Container header={<Header variant="h2">Add Files</Header>}>
                                     <SpaceBetween direction="vertical" size="l">
-                                        <Alert
-                                            header="Preview File Information"
-                                            type="info"
-                                        >
+                                        <Alert header="Preview File Information" type="info">
                                             <p>
-                                                Files with <strong>.previewFile.</strong> in the filename will be ingested as preview files for their associated files.
-                                                For example, <code>model.gltf.previewFile.png</code> will be used as a preview for <code>model.gltf</code>.
+                                                Files with <strong>.previewFile.</strong> in the
+                                                filename will be ingested as preview files for their
+                                                associated files. For example,{" "}
+                                                <code>model.gltf.previewFile.png</code> will be used
+                                                as a preview for <code>model.gltf</code>.
                                             </p>
                                             <p>
                                                 <strong>Important notes:</strong>
                                                 <ul>
-                                                    <li>You cannot upload a preview file for a file that is not part of this upload or is already uploaded as part of the asset.</li>
-                            <li>Only {previewFileFormats.map((ext, index) => (
-                                <React.Fragment key={ext}>
-                                    {index > 0 && ", "}
-                                    <code>{ext}</code>
-                                </React.Fragment>
-                            ))} are valid file extensions for preview files.</li>
-                            <li>Preview files must be 5MB or less in size.</li>
+                                                    <li>
+                                                        You cannot upload a preview file for a file
+                                                        that is not part of this upload or is
+                                                        already uploaded as part of the asset.
+                                                    </li>
+                                                    <li>
+                                                        Only{" "}
+                                                        {previewFileFormats.map((ext, index) => (
+                                                            <React.Fragment key={ext}>
+                                                                {index > 0 && ", "}
+                                                                <code>{ext}</code>
+                                                            </React.Fragment>
+                                                        ))}{" "}
+                                                        are valid file extensions for preview files.
+                                                    </li>
+                                                    <li>
+                                                        Preview files must be 5MB or less in size.
+                                                    </li>
                                                 </ul>
                                             </p>
                                             {hasPreviewFiles && (
                                                 <p>
-                                                    <strong>Note:</strong> Some of your selected files will be treated as preview files based on their filenames.
+                                                    <strong>Note:</strong> Some of your selected
+                                                    files will be treated as preview files based on
+                                                    their filenames.
                                                 </p>
                                             )}
                                         </Alert>

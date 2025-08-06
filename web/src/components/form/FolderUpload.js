@@ -47,13 +47,13 @@ function FolderUpload(props) {
             return { directoryHandle, fileHandles };
         } catch (err) {
             // Check for user cancellation in multiple ways
-            const isUserCancellation = 
-                err.name === "AbortError" || 
+            const isUserCancellation =
+                err.name === "AbortError" ||
                 err.message?.includes("aborted") ||
                 err.message?.includes("cancelled") ||
                 err.message?.includes("canceled") ||
                 err.code === 20; // DOMException.ABORT_ERR
-            
+
             if (!isUserCancellation) {
                 console.error("Error selecting directory:", err);
             } else {
@@ -73,13 +73,13 @@ function FolderUpload(props) {
             return { handles, fileHandles };
         } catch (err) {
             // Check for user cancellation in multiple ways
-            const isUserCancellation = 
-                err.name === "AbortError" || 
+            const isUserCancellation =
+                err.name === "AbortError" ||
                 err.message?.includes("aborted") ||
                 err.message?.includes("cancelled") ||
                 err.message?.includes("canceled") ||
                 err.code === 20; // DOMException.ABORT_ERR
-            
+
             if (!isUserCancellation) {
                 console.error("Error selecting files:", err);
             } else {

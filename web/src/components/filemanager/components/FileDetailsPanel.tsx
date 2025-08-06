@@ -516,10 +516,13 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                 onClick={async () => {
                                     setIsPreviewDeleting(true);
                                     try {
-                                        if (selectedItem.relativePath === "/" && selectedItem.level === 0) {
+                                        if (
+                                            selectedItem.relativePath === "/" &&
+                                            selectedItem.level === 0
+                                        ) {
                                             // Asset preview deletion
                                             await deleteAssetPreview(databaseId!, assetId!);
-                                            
+
                                             // Refresh the whole ViewAsset page for asset preview deletion
                                             window.location.reload();
                                         } else {
@@ -527,7 +530,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                             await archiveFile(databaseId!, assetId!, {
                                                 filePath: selectedItem.previewFile!,
                                             });
-                                            
+
                                             // Refresh file list
                                             dispatch({ type: "REFRESH_FILES", payload: null });
                                         }
@@ -781,13 +784,14 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                 setShowPreviewModal(true);
                             }}
                             onDeletePreview={
-                                (asset?.previewLocation?.Key || 
-                                (asset?.previewLocation as any)?.key || 
-                                assetDetailState?.previewLocation?.Key || 
-                                (assetDetailState?.previewLocation as any)?.key || 
-                                (typeof assetDetailState?.previewLocation === "string" && assetDetailState?.previewLocation))
-                                ? () => setShowDeletePreviewModal(true)
-                                : undefined
+                                asset?.previewLocation?.Key ||
+                                (asset?.previewLocation as any)?.key ||
+                                assetDetailState?.previewLocation?.Key ||
+                                (assetDetailState?.previewLocation as any)?.key ||
+                                (typeof assetDetailState?.previewLocation === "string" &&
+                                    assetDetailState?.previewLocation)
+                                    ? () => setShowDeletePreviewModal(true)
+                                    : undefined
                             }
                         />
                     </div>
@@ -854,9 +858,12 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                             // Debug the selectedItem to see if previewFile is available
                             console.log("Selected item in FileDetailsPanel:", selectedItem);
                             console.log("Selected item previewFile:", selectedItem.previewFile);
-                            
+
                             // First check if the file has a previewFile
-                            if (selectedItem.previewFile && selectedItem.previewFile.trim() !== '') {
+                            if (
+                                selectedItem.previewFile &&
+                                selectedItem.previewFile.trim() !== ""
+                            ) {
                                 return (
                                     <div className="file-info-item">
                                         <div className="file-info-label">Preview:</div>
@@ -873,7 +880,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     </div>
                                 );
                             }
-                            
+
                             // If no previewFile, check if the file itself is previewable
                             const fileName = selectedItem.name;
                             const fileExt = fileName

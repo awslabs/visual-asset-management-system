@@ -52,7 +52,13 @@ interface UploadState {
     previewUploadInitStatus: "pending" | "in-progress" | "completed" | "failed" | "skipped";
     uploadStatus: "pending" | "in-progress" | "completed" | "failed" | "skipped";
     completionStatus: "pending" | "in-progress" | "completed" | "failed" | "partial" | "skipped";
-    previewCompletionStatus: "pending" | "in-progress" | "completed" | "failed" | "partial" | "skipped";
+    previewCompletionStatus:
+        | "pending"
+        | "in-progress"
+        | "completed"
+        | "failed"
+        | "partial"
+        | "skipped";
     createdAssetId?: string;
     uploadId?: string;
     previewUploadId?: string;
@@ -1438,9 +1444,9 @@ export default function UploadManager({
 
             // Check if the response indicates partial failure (overallSuccess is false)
             const hasPartialFailure = response.overallSuccess === false;
-            const failedFiles = response.fileResults?.filter(file => !file.success) || [];
+            const failedFiles = response.fileResults?.filter((file) => !file.success) || [];
             const allFilesFailed = failedFiles.length === response.fileResults?.length;
-            
+
             // Only mark as complete if there are no preview errors
             const hasPreviewErrors =
                 uploadState.previewUploadInitStatus === "failed" ||
@@ -1468,23 +1474,20 @@ export default function UploadManager({
                 onUploadComplete(modifiedResponse);
             } else if (hasPartialFailure) {
                 console.log("Upload completed with partial failures:", failedFiles);
-                
+
                 // Add error messages for failed files
-                const failedFileErrors = failedFiles.map(file => ({
+                const failedFileErrors = failedFiles.map((file) => ({
                     step: "File Upload",
-                    message: `${file.relativeKey}: ${file.error || "Unknown error"}`
+                    message: `${file.relativeKey}: ${file.error || "Unknown error"}`,
                 }));
-                
+
                 setUploadState((prev) => ({
                     ...prev,
                     completionStatus: allFilesFailed ? "failed" : "partial",
-                    errors: [
-                        ...prev.errors,
-                        ...failedFileErrors
-                    ],
-                    hasFailedParts: true
+                    errors: [...prev.errors, ...failedFileErrors],
+                    hasFailedParts: true,
                 }));
-                
+
                 // Call onUploadComplete with the response
                 onUploadComplete(response);
             } else {

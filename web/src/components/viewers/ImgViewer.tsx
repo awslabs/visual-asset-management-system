@@ -30,26 +30,26 @@ export default function ImgViewer({
         if (url !== init) {
             return;
         }
-        
+
         const loadImage = async () => {
             console.log("ImgViewer loading file:", {
                 assetId,
                 databaseId,
                 key: assetKey,
-                versionId: isPreviewFile ? "" : (versionId || ""),
+                versionId: isPreviewFile ? "" : versionId || "",
                 downloadType: "assetFile",
-                isPreviewFile
+                isPreviewFile,
             });
-            
+
             try {
                 const response = await downloadAsset({
                     assetId: assetId,
                     databaseId: databaseId,
                     key: assetKey,
-                    versionId: isPreviewFile ? "" : (versionId || ""), // Don't use versionId for preview files
+                    versionId: isPreviewFile ? "" : versionId || "", // Don't use versionId for preview files
                     downloadType: "assetFile",
                 });
-                
+
                 if (response !== false && Array.isArray(response)) {
                     if (response[0] === false) {
                         console.error("Error downloading file:", response);
@@ -64,11 +64,11 @@ export default function ImgViewer({
                 }
             } catch (error) {
                 console.error("Error in primary download:", error);
-                
+
                 // Only try fallback if we're not already using a preview file
                 if (!isPreviewFile && altAssetKey && altAssetKey !== assetKey) {
                     console.log("Trying fallback with altAssetKey:", altAssetKey);
-                    
+
                     try {
                         const fallbackResponse = await downloadAsset({
                             assetId: assetId,
@@ -77,12 +77,15 @@ export default function ImgViewer({
                             versionId: "", // Don't use versionId for fallback
                             downloadType: "assetFile",
                         });
-                        
+
                         if (fallbackResponse !== false && Array.isArray(fallbackResponse)) {
                             if (fallbackResponse[0] === false) {
                                 console.error("Error downloading fallback file:", fallbackResponse);
                             } else {
-                                console.log("Successfully loaded fallback URL:", fallbackResponse[1]);
+                                console.log(
+                                    "Successfully loaded fallback URL:",
+                                    fallbackResponse[1]
+                                );
                                 setUrl(fallbackResponse[1]);
                             }
                         }
@@ -111,11 +114,7 @@ export default function ImgViewer({
             />
             {onDeletePreview && (
                 <div style={{ marginTop: "10px" }}>
-                    <Button
-                        iconName="remove"
-                        variant="link"
-                        onClick={onDeletePreview}
-                    >
+                    <Button iconName="remove" variant="link" onClick={onDeletePreview}>
                         Delete Preview File
                     </Button>
                 </div>
