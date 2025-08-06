@@ -244,6 +244,10 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   `/database/{databaseId}/assets/{assetId}/unarchiveFile` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/deleteAssetPreview` - DELETE
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
+-   `/database/{databaseId}/assets/{assetId}/deleteAuxiliaryPreviewAssetFiles` - DELETE
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   `/database/{databaseId}/assets/{assetId}/deleteFile` - DELETE
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   `/database/{databaseId}/assets/{assetId}/archiveAsset` - DELETE

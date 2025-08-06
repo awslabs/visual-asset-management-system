@@ -1,4 +1,4 @@
-import React, { Suspense, useState } from "react";
+import React, { Suspense, useState, useEffect } from "react";
 import { Spinner } from "@cloudscape-design/components";
 import ImgViewer from "../viewers/ImgViewer";
 
@@ -18,10 +18,32 @@ interface AssetVisualizerPropTypes {
     assetKey?: string;
     multiFileKeys?: string[];
     versionId?: string;
+    onDeletePreview?: () => void;
 }
 
 function AssetVisualizer(props: AssetVisualizerPropTypes) {
     const [viewerMode, setViewerMode] = useState<string>(props.viewerMode);
+    
+    // Listen for fullscreen change events
+    useEffect(() => {
+        const handleFullscreenChange = () => {
+            // If we exit fullscreen but our state still thinks we're in fullscreen
+            if (!document.fullscreenElement && viewerMode === "fullscreen") {
+                setViewerMode(props.viewerMode !== "fullscreen" ? props.viewerMode : "wide");
+                if (props.onViewerModeChange) {
+                    props.onViewerModeChange(props.viewerMode !== "fullscreen" ? props.viewerMode : "wide");
+                }
+            }
+        };
+
+        document.addEventListener("fullscreenchange", handleFullscreenChange);
+        
+        // Clean up the event listener when component unmounts
+        return () => {
+            document.removeEventListener("fullscreenchange", handleFullscreenChange);
+        };
+    }, [viewerMode, props.viewerMode, props.onViewerModeChange]);
+
     const updateViewerMode = (newMode: string) => {
         setViewerMode(newMode);
         if (newMode !== viewerMode && props.onViewerModeChange) {
@@ -40,17 +62,15 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
         >
             <div className="visualizer-container">
                 <div className="visualizer-container-canvases">
-                    {props.viewType === "preview" && props.asset?.previewLocation?.Key && (
+                    {props.viewType === "preview" && (
                         <ImgViewer
                             assetId={props.asset.assetId}
                             databaseId={props.asset.databaseId}
-                            assetKey={
-                                props.assetKey ||
-                                props.asset?.generated_artifacts?.preview?.Key ||
-                                props.asset.previewLocation.Key
-                            }
-                            altAssetKey={props.asset.previewLocation.Key}
-                            versionId={props.versionId}
+                            assetKey={props.assetKey || ""}
+                            altAssetKey={props.assetKey || ""}
+                            versionId={""}  // Use empty versionId for preview files
+                            onDeletePreview={props.onDeletePreview}
+                            isPreviewFile={true}
                         />
                     )}
                     {props.viewType === "image" && (
@@ -60,6 +80,7 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                             assetKey={props.assetKey || props.asset?.assetLocation?.Key}
                             altAssetKey={props.assetKey || props.asset?.assetLocation?.Key}
                             versionId={props.versionId}
+                            onDeletePreview={props.onDeletePreview}
                         />
                     )}
                     {props.viewType === "model" && (
@@ -124,7 +145,7 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                 </div>
 
                 <div className="visualizer-footer">
-                    <a
+                    {/* <a
                         title="View Collapsed"
                         onClick={() => updateViewerMode("collapsed")}
                         className={props.viewerMode === "collapse" ? "selected" : ""}
@@ -139,7 +160,7 @@ function AssetVisualizer(props: AssetVisualizerPropTypes) {
                             <path d="M0 0h24v24H0V0z" fill="none" />
                             <path d="M19 11h-8v6h8v-6zm-2 4h-4v-2h4v2zm4-12H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V4.98C23 3.88 22.1 3 21 3zm0 16.02H3V4.97h18v14.05z" />
                         </svg>
-                    </a>
+                    </a> */}
                     <a
                         title="View Wide"
                         onClick={() => updateViewerMode("wide")}

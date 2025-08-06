@@ -55,6 +55,8 @@ import CustomTable from "../../components/table/CustomTable";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import { TagType } from "../Tag/TagType.interface";
 import { AssetLinksTab } from "../../components/asset/tabs/AssetLinksTab";
+import Alert from "@cloudscape-design/components/alert";
+import { safeGetFile } from "../../utils/fileHandleCompat";
 
 const previewFileFormatsStr = previewFileFormats.join(", ");
 var tags: any[] = [];
@@ -686,18 +688,36 @@ const AssetMetadataInfo = ({
 const getFilesFromFileHandles = async (fileHandles: any[]) => {
     const fileUploadTableItems: FileUploadTableItem[] = [];
     for (let i = 0; i < fileHandles.length; i++) {
-        const file = (await fileHandles[i].handle.getFile()) as File;
-        fileUploadTableItems.push({
-            handle: fileHandles[i].handle,
-            index: i,
-            name: fileHandles[i].handle.name,
-            size: file.size,
-            relativePath: fileHandles[i].path,
-            progress: 0,
-            status: "Queued",
-            loaded: 0,
-            total: file.size,
-        });
+        try {
+            // Use our safe utility to get the file regardless of handle type
+            const file = await safeGetFile(fileHandles[i].handle);
+            fileUploadTableItems.push({
+                handle: fileHandles[i].handle,
+                index: i,
+                name: fileHandles[i].handle.name || file.name,
+                size: file.size,
+                relativePath: fileHandles[i].path,
+                progress: 0,
+                status: "Queued",
+                loaded: 0,
+                total: file.size,
+            });
+        } catch (error) {
+            console.error(`Error processing file at index ${i}:`, error);
+            // Add a placeholder entry with error status
+            fileUploadTableItems.push({
+                handle: fileHandles[i].handle,
+                index: i,
+                name: fileHandles[i].handle.name || `File ${i}`,
+                size: 0,
+                relativePath: fileHandles[i].path || "",
+                progress: 0,
+                status: "Failed",
+                loaded: 0,
+                total: 0,
+                error: "Browser compatibility issue: Cannot access file"
+            });
+        }
     }
     return fileUploadTableItems;
 };
@@ -720,6 +740,12 @@ const AssetFileInfo = ({
         assetDetailState.isMultiFile ? "folder" : "files"
     );
     const [previewFileError, setPreviewFileError] = useState<string | undefined>(undefined);
+    
+    // Check for preview files in the selected files
+    const hasPreviewFiles = useMemo(() => {
+        if (!assetDetailState.Asset) return false;
+        return assetDetailState.Asset.some(item => item.name.includes('.previewFile.'));
+    }, [assetDetailState.Asset]);
 
     useEffect(() => {
         // Always set as valid since files are now optional for asset creation
@@ -767,6 +793,33 @@ const AssetFileInfo = ({
     return (
         <Container>
             <SpaceBetween direction="vertical" size="l">
+                <Alert
+                    header="Preview File Information"
+                    type="info"
+                >
+                    <p>
+                        Files with <strong>.previewFile.</strong> in the filename will be ingested as preview files for their associated files.
+                        For example, <code>model.gltf.previewFile.png</code> will be used as a preview for <code>model.gltf</code>.
+                    </p>
+                    <p>
+                        <strong>Important notes:</strong>
+                        <ul>
+                            <li>You cannot upload a preview file for a file that is not part of this upload or is already uploaded as part of the asset.</li>
+                            <li>Only {previewFileFormats.map((ext, index) => (
+                                <React.Fragment key={ext}>
+                                    {index > 0 && ", "}
+                                    <code>{ext}</code>
+                                </React.Fragment>
+                            ))} are valid file extensions for preview files.</li>
+                            <li>Preview files must be 5MB or less in size.</li>
+                        </ul>
+                    </p>
+                    {hasPreviewFiles && (
+                        <p>
+                            <strong>Note:</strong> Some of your selected files will be treated as preview files based on their filenames.
+                        </p>
+                    )}
+                </Alert>
                 {/* Display selected files with remove option */}
                 {assetDetailState.Asset && assetDetailState.Asset.length > 0 && (
                     <Box padding={{ bottom: "l" }}>
@@ -805,7 +858,7 @@ const AssetFileInfo = ({
                                 assetDetailDispatch({ type: "UPDATE_ASSET_FILES", payload: files });
                                 assetDetailDispatch({
                                     type: "UPDATE_ASSET_IS_MULTI_FILE",
-                                    payload: files.length > 1 || !!directoryHandle,
+                                    payload: !!directoryHandle,
                                 });
                             }}
                         />
@@ -830,7 +883,7 @@ const AssetFileInfo = ({
                     </SpaceBetween>
 
                     <FileUpload
-                        label="Preview (Optional)"
+                        label="Asset Overall Preview File (Optional)"
                         disabled={false}
                         setFile={handlePreviewFileSelection}
                         fileFormats={previewFileFormatsStr}
@@ -859,10 +912,10 @@ const AssetUploadReview = ({
     const previewFileItem = assetDetailState.Preview
         ? ({
               handle: { getFile: () => Promise.resolve(assetDetailState.Preview as File) },
-              index: 999, // Use a high index to distinguish from regular files
+              index: 99999, // Use a high index to distinguish from regular files
               name: assetDetailState.Preview.name,
               size: assetDetailState.Preview.size,
-              relativePath: `preview/${assetDetailState.Preview.name}`,
+              relativePath: `previews/${assetDetailState.Preview.name}`,
               progress: 0,
               status: "Queued" as "Queued" | "In Progress" | "Completed" | "Failed", // Explicitly type the status
               loaded: 0,
@@ -961,7 +1014,7 @@ const AssetUploadReview = ({
                     ))}
                 </ColumnLayout>
             </Container>
-            {allFiles.length > 0 && (
+                {allFiles.length > 0 && (
                 <FileUploadTable
                     allItems={allFiles}
                     resume={false}
@@ -970,8 +1023,11 @@ const AssetUploadReview = ({
                         {
                             id: "type",
                             header: "Type",
-                            cell: (item: FileUploadTableItem) =>
-                                item.index === 999 ? "Preview File" : "Asset File",
+                            cell: (item: FileUploadTableItem) => {
+                                if (item.index === 99999) return "Preview File";
+                                if (item.name.includes('.previewFile.')) return "Preview File";
+                                return "Asset File";
+                            },
                             sortingField: "type",
                             isRowHeader: false,
                         },

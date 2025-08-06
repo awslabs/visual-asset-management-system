@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { Box, Button, Spinner } from "@cloudscape-design/components";
+import { Box, Button, SpaceBetween, Spinner } from "@cloudscape-design/components";
 import { downloadAsset } from "../../../services/APIService";
 import "./AssetPreviewThumbnail.css";
 
@@ -13,6 +13,7 @@ interface AssetPreviewThumbnailProps {
     databaseId: string;
     previewKey?: string;
     onOpenFullPreview: (previewUrl: string) => void;
+    onDeletePreview?: () => void;
 }
 
 /**
@@ -24,6 +25,7 @@ export const AssetPreviewThumbnail: React.FC<AssetPreviewThumbnailProps> = ({
     databaseId,
     previewKey,
     onOpenFullPreview,
+    onDeletePreview,
 }) => {
     const [url, setUrl] = useState<string | null>(null);
     const [loading, setLoading] = useState<boolean>(true);
@@ -122,13 +124,24 @@ export const AssetPreviewThumbnail: React.FC<AssetPreviewThumbnailProps> = ({
                             />
                         </div>
                         <div className="asset-preview-actions">
-                            <Button
-                                iconName="external"
-                                variant="link"
-                                onClick={() => onOpenFullPreview(url)}
-                            >
-                                View full preview
-                            </Button>
+                            <SpaceBetween direction="vertical" size="xs">
+                                <Button
+                                    iconName="external"
+                                    variant="link"
+                                    onClick={() => onOpenFullPreview(url)}
+                                >
+                                    View full preview
+                                </Button>
+                                {onDeletePreview && (
+                                    <Button
+                                        iconName="remove"
+                                        variant="link"
+                                        onClick={onDeletePreview}
+                                    >
+                                        Delete Preview File
+                                    </Button>
+                                )}
+                            </SpaceBetween>
                         </div>
                     </>
                 )}

@@ -121,8 +121,20 @@ export default function EnhancedFileSelector({
 
             onSelect(directoryHandle, fileHandles);
         } catch (err: any) {
-            console.error("Error selecting folder:", err);
-            setError(err.message || "Failed to select folder");
+            // Check for user cancellation in multiple ways
+            const isUserCancellation = 
+                err.name === "AbortError" || 
+                err.message?.includes("aborted") ||
+                err.message?.includes("cancelled") ||
+                err.message?.includes("canceled") ||
+                err.code === 20; // DOMException.ABORT_ERR
+            
+            if (!isUserCancellation) {
+                console.error("Error selecting folder:", err);
+                setError(err.message || "Failed to select folder");
+            } else {
+                console.log("User cancelled folder selection");
+            }
         } finally {
             setIsLoading(false);
         }
@@ -157,10 +169,19 @@ export default function EnhancedFileSelector({
                 }
             }
         } catch (err: any) {
-            // User cancelled selection - don't show error
-            if (err.name !== "AbortError") {
+            // Check for user cancellation in multiple ways
+            const isUserCancellation = 
+                err.name === "AbortError" || 
+                err.message?.includes("aborted") ||
+                err.message?.includes("cancelled") ||
+                err.message?.includes("canceled") ||
+                err.code === 20; // DOMException.ABORT_ERR
+            
+            if (!isUserCancellation) {
                 console.error("Error selecting files:", err);
                 setError(err.message || "Failed to select files");
+            } else {
+                console.log("User cancelled file selection");
             }
         } finally {
             setIsLoading(false);

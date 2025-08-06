@@ -42,11 +42,11 @@ This version includes significant enhancements to VAMS infrastructure, a complet
     -   Supports the presigned URL and multi-stage API calls needed now for an upload (including support for splitting large files into multiple parts for parallel upload)
     -   Supports stage and file error recovery options, including proceeding with certain failed uploads that will be discarded
     -   Comments are no longer a supported field as part of upload, as this functionality has been moved to creating asset versions
--   The assetFiles API now supports additional paths for functionality including `../fileInfo`, `../moveFile`, `../copyFile`, `../archiveFile`, `../deleteFile`, `../revertFileVersion`. ListFiles now provides additional data about each file.
+-   The assetFiles API now supports additional paths for functionality including `../fileInfo`, `../createFolder`, `../moveFile`, `../copyFile`, `../archiveFile`, `../unarchiveFile`, `../deleteFile`, `../deleteAssetPreview`, `../deleteAuxiliaryPreviewAssetFiles`,`../revertFileVersion`. ListFiles now provides additional data about each file.
 -   **Web** The front-end asset download for multiple files has been updated to support downloading an entire folder's worth of files in parallel
     -   Note: This still fetches individual files based on their presigned URL for automation, it does not pre-ZIP files on a server and may still cause issues if hundreds or thousands of files need to be downloaded
 -   **Web** The asset viewer file manager has been rewritten to support new features and richer user experience
-    -   Instead of having a separate redundant icon view of files in the right pane of the file manager, it now shows file information such as file name, path, size, and any version information. For top-level asset nodes and image files, this will show the Preview file or actual file (image type files) now. This will also allow for support for file preview thumbnails in the future for all file types.
+    -   Instead of having a separate redundant icon view of files in the right pane of the file manager, it now shows file information such as file name, path, size, and any version information. For top-level asset nodes and image files, this will show the Preview file or actual file (image type files) now. This supports preview files now for both assets and files. See DeveloperGuide.md for documentation on preview file support (non-auxilliary).
     -   Added buttons for various downloads of files and folders
     -   Added ability and button to create sub-folders in an asset
     -   ViewAsset button still shown on files for asset 3D visualization, file-specific metadata, and file versioning
@@ -116,7 +116,7 @@ This version includes significant enhancements to VAMS infrastructure, a complet
     -   Metadata key/pair values can now be tracked against asset links with String and XYZ type. Translation, Rotation, and Scale are hard- XYZ typed fields that can be used before adding custom metadata
     -   Ability to see child sub-trees from all child assets recursively down
 -   **Web** Add file primary type attribute viewing and setting such as "primary", "lod1" - "lod5", and a custom primary type. These can be set on any file and are saved as metadata in S3 on the file. This is useful for identifying what the primary files are as part of an asset and if they are the prime or a particular level of detail (lod), or other designation. There is no logic tied to this value yet in VAMS but can be used for visual identification or in custom logic implementations.
--   **Web** Added option to show asset preview thumbnails on the Asset Search window.
+-   **Web** Added option to show asset and file preview thumbnails on the Asset Search page.
 -   Added a '/api/version' GET API path (NoOp authorizer) to get back the version of the current deployment of VAMS. This is stored in the config.ts file during CDK deployment and should be updated with VAMS version rollouts.
     -   Added '/database/{databaseId}/assets/{assetId}/setPrimaryFile' API endpoint to support this and returns this value as part of listing files and returning file information as part of those repsective APIs.
 -   Added feature in CDK configuration to allow for unsafe-eval web features. This is turned off by default as it may requires an organizations security team to evaluate this before enabling. This is implemented to allow for future plugins and libraries that require this flag to be enabled in the web browser.
@@ -138,6 +138,7 @@ This version includes significant enhancements to VAMS infrastructure, a complet
 -   Fixed bug with PointClouder viewer / pipeline from executing and showing final outputs
 -   Fixed various bugs with asset comments editing and deleting
 -   Fixed various UI and backend bugs related to the asset management overhaul
+-   Fixed fullscreen mode on visualizers not wokring on certain visualizers after exiting from a previous fullscreen session; removed compact mode as this had no benefit. 
 
 ### Chores
 

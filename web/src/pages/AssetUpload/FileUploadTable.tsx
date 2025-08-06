@@ -91,6 +91,7 @@ export interface FileUploadTableItem {
     startedAt?: number;
     loaded: number;
     total: number;
+    error?: string; // Error message for failed uploads
 }
 
 const getStatusIndicator = (status?: string) => {

@@ -197,6 +197,7 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
                     currentAssetVersionFileVersionMismatch:
                         fileKey.currentAssetVersionFileVersionMismatch,
                     primaryType: fileKey.primaryType,
+                    previewFile: fileKey.previewFile,
                 });
 
                 console.log("Added root level file:", relativePath);
@@ -268,6 +269,7 @@ export function addFiles(fileKeys: FileKey[], root: FileTree) {
                     currentAssetVersionFileVersionMismatch:
                         fileKey.currentAssetVersionFileVersionMismatch,
                     primaryType: fileKey.primaryType,
+                    previewFile: fileKey.previewFile,
                 });
 
                 console.log("Added nested file:", relativePath);

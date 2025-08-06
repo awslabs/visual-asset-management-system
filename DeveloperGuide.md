@@ -831,3 +831,132 @@ Once the solution is deployed, you will have to put in the below details as Glob
 # Updating and Testing Frontend
 
 Within the web folder You can do `npm run start` to start a local frontend application.
+
+# Preview Files
+
+## Overview
+
+Preview files are a key feature in VAMS that provide visual representations of assets and individual files. The system supports two types of preview files:
+
+1. **Asset-level previews**: Associated with an entire asset, typically shown in search results and asset listings.
+2. **File-level previews**: Associated with specific files within an asset, using the `.previewFile.{extension}` naming pattern.
+
+Preview files enhance the user experience by providing visual context for assets and files without requiring users to download or open the full content.
+
+## Preview File Types and Limitations
+
+VAMS supports the following preview file formats:
+- PNG (`.png`)
+- JPEG (`.jpg`, `.jpeg`)
+- SVG (`.svg`)
+- GIF (`.gif`)
+
+Preview files are subject to the following limitations:
+- Maximum file size: 5MB
+- Only image formats listed above are supported
+
+## Upload and Management
+
+### Asset-Level Preview Upload
+
+Asset-level previews are stored in the S3 bucket under the `previews/{assetId}/` prefix. These previews are associated with the entire asset and are referenced in the asset's metadata via the `previewLocation` field.
+
+To upload an asset-level preview:
+1. Use the `/uploads` API endpoint with `uploadType: "assetPreview"`
+2. Complete the upload using the `/uploads/{uploadId}/complete` endpoint
+3. The system will automatically update the asset's `previewLocation` field
+
+### File-Level Preview Upload
+
+File-level previews are associated with specific files within an asset using the `.previewFile.{extension}` naming pattern. For example, a file named `model.obj` could have a preview file named `model.obj.previewFile.png`.
+
+To upload a file-level preview:
+1. Use the `/uploads` API endpoint with `uploadType: "assetFile"`
+2. Include the file with the `.previewFile.{extension}` naming pattern
+3. Complete the upload using the `/uploads/{uploadId}/complete` endpoint
+4. The system will automatically associate the preview with its base file
+
+### Automatic Preview Management
+
+VAMS provides automatic management of preview files:
+
+- When a base file is moved, its associated preview files are moved automatically
+- When a base file is copied, its associated preview files are copied automatically
+- When a base file is archived or deleted, its associated preview files are archived or deleted automatically
+- When a new preview file is uploaded for a base file, any existing preview files for that base file are deleted
+
+## Frontend Integration
+
+### Search Results
+
+Preview files are displayed in search results using the `PreviewThumbnailCell` component. This component:
+1. Fetches the asset details to get the preview location
+2. Downloads and displays the preview image
+3. Provides a way to view the full-size preview
+
+### File Manager
+
+In the file manager, preview files are displayed using the `FilePreviewThumbnail` component when a file is selected. The component:
+1. Displays thumbnails for individual files
+2. Shows preview files associated with the selected file
+3. Provides a way to view the full-size preview
+
+### Data Structures
+
+Preview files are represented in the frontend data structures:
+- `FileKey` interface includes a `previewFile` field that contains the relative path to the preview file
+- `FileTree` interface also includes a `previewFile` field for use in the file manager
+
+## Technical Implementation
+
+### S3 Storage Structure
+
+- Asset-level previews: `{baseAssetsPrefix}/previews/{assetId}/{filename}`
+- File-level previews: `{baseAssetsPrefix}/{assetId}/{path}/{filename}.previewFile.{extension}`
+
+### Preview File Detection
+
+The system identifies preview files using the following methods:
+- For file-level previews: Checks if the file path contains `.previewFile.`
+- For asset-level previews: Checks if the file is stored in the previews directory
+
+### API Endpoints
+
+The following API endpoints are used for preview file operations:
+
+- **Upload Initialization**: `/uploads` with appropriate `uploadType`
+- **Upload Completion**: `/uploads/{uploadId}/complete`
+- **Preview Deletion**: `/deleteAssetPreview` for asset-level previews, or file operations for file-level previews
+
+### Backend Implementation
+
+The backend implementation for preview files is primarily in two files:
+- `uploadFile.py`: Handles upload and validation of preview files
+- `assetFiles.py`: Manages file operations that affect preview files (move, copy, delete, etc.)
+
+Key functions include:
+- `is_preview_file()`: Detects if a file is a preview file
+- `validate_preview_file_extension()`: Validates that preview files have allowed extensions
+- `find_preview_files_for_base()`: Finds all preview files associated with a base file
+- `get_top_preview_file()`: Gets the primary preview file for a base file
+
+## Best Practices
+
+1. **Use appropriate preview formats**:
+   - Use PNG for high-quality images with transparency
+   - Use JPEG for photographs or complex images where file size is a concern
+   - Use SVG for vector graphics, icons, or diagrams
+   - Use GIF for simple animations
+
+2. **Optimize preview file size**:
+   - Keep preview files under the 5MB limit
+   - Compress images appropriately before upload
+   - Use appropriate dimensions for thumbnails (recommended: 300-500px width)
+
+3. **Naming conventions for file-level previews**:
+   - Always use the exact base filename followed by `.previewFile.{extension}`
+   - Example: For `document.pdf`, use `document.pdf.previewFile.png`
+
+4. **Preview file management**:
+   - Let the system handle preview file lifecycle management
+   - Don't manually delete or move preview files outside of the VAMS API

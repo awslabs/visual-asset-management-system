@@ -20,6 +20,17 @@ export interface UnarchiveFileRequest {
     filePath: string;
 }
 
+export interface ArchiveFileRequest {
+    filePath: string;
+    isPrefix?: boolean;
+}
+
+export interface DeleteAssetPreviewResponse {
+    success: boolean;
+    message: string;
+    assetId: string;
+}
+
 export interface FileOperationResponse {
     success: boolean;
     message: string;
@@ -50,8 +61,9 @@ export const moveFile = async (
             }
         );
 
-        if (response.message) {
-            return response.message;
+        // The API returns the entire response object with success, message, and affectedFiles
+        if (response) {
+            return response;
         } else {
             throw new Error("Invalid response format");
         }
@@ -79,8 +91,9 @@ export const copyFile = async (
             }
         );
 
-        if (response.message) {
-            return response.message;
+        // The API returns the entire response object with success, message, and affectedFiles
+        if (response) {
+            return response;
         } else {
             throw new Error("Invalid response format");
         }
@@ -108,14 +121,72 @@ export const unarchiveFile = async (
             }
         );
 
-        if (response.message) {
-            return response.message;
+        // The API returns the entire response object with success, message, and affectedFiles
+        if (response) {
+            return response;
         } else {
             throw new Error("Invalid response format");
         }
     } catch (error: any) {
         console.error("Error unarchiving file:", error);
         throw new Error(error?.message || "Failed to unarchive file");
+    }
+};
+
+/**
+ * Archive a file (soft delete)
+ */
+export const archiveFile = async (
+    databaseId: string,
+    assetId: string,
+    request: ArchiveFileRequest,
+    api = API
+): Promise<FileOperationResponse> => {
+    try {
+        const response = await api.del(
+            "api",
+            `/database/${databaseId}/assets/${assetId}/archiveFile`,
+            {
+                body: request,
+            }
+        );
+
+        // The API returns the entire response object with success, message, and affectedFiles
+        if (response) {
+            return response;
+        } else {
+            throw new Error("Invalid response format");
+        }
+    } catch (error: any) {
+        console.error("Error archiving file:", error);
+        throw new Error(error?.message || "Failed to archive file");
+    }
+};
+
+/**
+ * Delete an asset preview file
+ */
+export const deleteAssetPreview = async (
+    databaseId: string,
+    assetId: string,
+    api = API
+): Promise<DeleteAssetPreviewResponse> => {
+    try {
+        const response = await api.del(
+            "api",
+            `/database/${databaseId}/assets/${assetId}/deleteAssetPreview`,
+            {}
+        );
+
+        // The API returns the entire response object with success, message, and assetId
+        if (response) {
+            return response;
+        } else {
+            throw new Error("Invalid response format");
+        }
+    } catch (error: any) {
+        console.error("Error deleting asset preview:", error);
+        throw new Error(error?.message || "Failed to delete asset preview");
     }
 };
 

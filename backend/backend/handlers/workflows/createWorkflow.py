@@ -119,7 +119,7 @@ def create_step_function(pipelines, databaseId, workflowId):
                 pipeline["name"] + "/" + job_names[i] + "/output/{}/files/', $.bucketAsset, $$.Execution.Name)"
 
         output_s3_asset_preview_uri = "States.Format('s3://{}/pipelines/" + \
-                pipeline["name"] + "/" + job_names[i] + "/output/{}/preview/', $.bucketAsset, $$.Execution.Name)"
+                pipeline["name"] + "/" + job_names[i] + "/output/{}/previews/', $.bucketAsset, $$.Execution.Name)"
 
         output_s3_asset_metadata_uri = "States.Format('s3://{}/pipelines/" + \
                 pipeline["name"] + "/" + job_names[i] + "/output/{}/metadata/', $.bucketAsset, $$.Execution.Name)"
@@ -158,7 +158,7 @@ def create_step_function(pipelines, databaseId, workflowId):
                 "metadataPathKey.$": "States.Format('pipelines/" + pipeline["name"] + "/" + job_names[
                     i] + "/output/{}/metadata/', $$.Execution.Name)",
                 "previewPathKey.$": "States.Format('pipelines/" + pipeline["name"] + "/" + job_names[
-                    i] + "/output/{}/preview/', $$.Execution.Name)",
+                    i] + "/output/{}/previews/', $$.Execution.Name)",
                 "description": f'Output from {pipeline["name"]}',
                 "executionId.$": "$$.Execution.Name",
                 "pipeline": pipeline["name"],

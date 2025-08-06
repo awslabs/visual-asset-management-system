@@ -8,6 +8,7 @@ import {
     Link,
     Modal,
 } from "@cloudscape-design/components";
+import { archiveFile, deleteAssetPreview } from "../../../services/FileOperationsService";
 import { useNavigate, useParams } from "react-router";
 import { AssetDetailContext, AssetDetailContextType } from "../../../context/AssetDetailContext";
 import { createFolder, fetchAsset } from "../../../services/APIService";
@@ -90,6 +91,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const [preloadedFileUrl, setPreloadedFileUrl] = useState<string | undefined>(undefined);
     const [showUnarchiveModal, setShowUnarchiveModal] = useState(false);
     const [showSetPrimaryTypeModal, setShowSetPrimaryTypeModal] = useState(false);
+    const [showDeletePreviewModal, setShowDeletePreviewModal] = useState(false);
+    const [isPreviewDeleting, setIsPreviewDeleting] = useState(false);
 
     if (!selectedItem) {
         return (
@@ -121,6 +124,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     dateCreatedCurrentVersion: file.dateCreatedCurrentVersion,
                     isArchived: file.isArchived,
                     primaryType: file.primaryType,
+                    previewFile: file.previewFile,
                 })),
             },
         });
@@ -386,6 +390,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 versionId: selectedItem.versionId,
                 isArchived: selectedItem.isArchived,
                 primaryType: selectedItem.primaryType,
+                previewFile: selectedItem.previewFile,
             },
         });
     };
@@ -491,6 +496,61 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 }}
             />
 
+            {/* Delete Preview Modal */}
+            <Modal
+                visible={showDeletePreviewModal}
+                onDismiss={() => setShowDeletePreviewModal(false)}
+                header="Delete Preview File"
+                footer={
+                    <Box float="right">
+                        <SpaceBetween direction="horizontal" size="xs">
+                            <Button
+                                variant="link"
+                                onClick={() => setShowDeletePreviewModal(false)}
+                                disabled={isPreviewDeleting}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                variant="primary"
+                                onClick={async () => {
+                                    setIsPreviewDeleting(true);
+                                    try {
+                                        if (selectedItem.relativePath === "/" && selectedItem.level === 0) {
+                                            // Asset preview deletion
+                                            await deleteAssetPreview(databaseId!, assetId!);
+                                            
+                                            // Refresh the whole ViewAsset page for asset preview deletion
+                                            window.location.reload();
+                                        } else {
+                                            // File preview deletion
+                                            await archiveFile(databaseId!, assetId!, {
+                                                filePath: selectedItem.previewFile!,
+                                            });
+                                            
+                                            // Refresh file list
+                                            dispatch({ type: "REFRESH_FILES", payload: null });
+                                        }
+                                        setShowDeletePreviewModal(false);
+                                    } catch (error) {
+                                        console.error("Error deleting preview:", error);
+                                    } finally {
+                                        setIsPreviewDeleting(false);
+                                    }
+                                }}
+                                loading={isPreviewDeleting}
+                            >
+                                Delete
+                            </Button>
+                        </SpaceBetween>
+                    </Box>
+                }
+            >
+                <p>
+                    Are you sure you want to delete this preview file? This action cannot be undone.
+                </p>
+            </Modal>
+
             {/* Asset Preview Modal */}
             <PreviewModal
                 visible={showPreviewModal}
@@ -507,7 +567,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 onDismiss={() => setShowFilePreviewModal(false)}
                 assetId={assetId || ""}
                 databaseId={databaseId || ""}
-                previewKey={selectedItem?.keyPrefix}
+                previewKey={selectedItem?.previewFile || selectedItem?.keyPrefix}
                 isFilePreview={true}
                 preloadedUrl={preloadedFileUrl}
             />
@@ -720,6 +780,15 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                 setPreloadedAssetUrl(url);
                                 setShowPreviewModal(true);
                             }}
+                            onDeletePreview={
+                                (asset?.previewLocation?.Key || 
+                                (asset?.previewLocation as any)?.key || 
+                                assetDetailState?.previewLocation?.Key || 
+                                (assetDetailState?.previewLocation as any)?.key || 
+                                (typeof assetDetailState?.previewLocation === "string" && assetDetailState?.previewLocation))
+                                ? () => setShowDeletePreviewModal(true)
+                                : undefined
+                            }
                         />
                     </div>
                 )}
@@ -780,9 +849,32 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 {/* Show preview thumbnail or message for previewable file nodes - at the bottom of the panel */}
                 {!isFolder && selectedItem.level > 0 && (
                     <>
-                        {/* Check if file format is previewable (matches previewFileFormats) */}
+                        {/* Check if file has a preview file or is a previewable format */}
                         {(() => {
-                            // Get file extension
+                            // Debug the selectedItem to see if previewFile is available
+                            console.log("Selected item in FileDetailsPanel:", selectedItem);
+                            console.log("Selected item previewFile:", selectedItem.previewFile);
+                            
+                            // First check if the file has a previewFile
+                            if (selectedItem.previewFile && selectedItem.previewFile.trim() !== '') {
+                                return (
+                                    <div className="file-info-item">
+                                        <div className="file-info-label">Preview:</div>
+                                        <FilePreviewThumbnail
+                                            assetId={assetId || ""}
+                                            databaseId={databaseId || ""}
+                                            fileKey={selectedItem.previewFile}
+                                            onOpenFullPreview={(url) => {
+                                                setPreloadedFileUrl(url);
+                                                setShowFilePreviewModal(true);
+                                            }}
+                                            onDeletePreview={() => setShowDeletePreviewModal(true)}
+                                        />
+                                    </div>
+                                );
+                            }
+                            
+                            // If no previewFile, check if the file itself is previewable
                             const fileName = selectedItem.name;
                             const fileExt = fileName
                                 .substring(fileName.lastIndexOf("."))

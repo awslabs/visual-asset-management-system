@@ -177,13 +177,24 @@ export function MoveFilesModal({
                 destinationAssetId
             );
 
-            setOperationResults(results);
-            setShowResults(true);
-
             // Check if all operations were successful
             const allSuccessful = results.every((result) => result.success);
+            
+            // Always update the results
+            setOperationResults(results);
+            
             if (allSuccessful) {
+                // Call onSuccess to refresh the tree view
                 onSuccess(operationMode, results);
+                
+                // Close the modal automatically on complete success
+                // Small delay to ensure parent state updates complete
+                setTimeout(() => {
+                    onDismiss();
+                }, 100);
+            } else {
+                // Only show results UI if there were failures
+                setShowResults(true);
             }
         } catch (error: any) {
             setError(error.message || `Failed to ${operationMode} files`);

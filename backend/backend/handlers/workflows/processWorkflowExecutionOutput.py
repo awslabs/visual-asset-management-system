@@ -401,7 +401,7 @@ def lambda_handler(event, context):
                         logger.error("Multiple files present in pipeline output preview folder. Limiting to top 1 for now.")
                     
                     # Filter for image files
-                    image_files = [f for f in files if f.endswith('.jpeg') or f.endswith('.jpg') or f.endswith('.png')]
+                    image_files = [f for f in files if f.endswith('.jpeg') or f.endswith('.jpg') or f.endswith('.png') or f.endswith('.gif') or f.endswith('.svg')]
                     
                     if image_files:
                         # Only process the first image file

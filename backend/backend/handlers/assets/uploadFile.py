@@ -6,6 +6,8 @@ import boto3
 import json
 import uuid
 import time
+import re
+from typing import List, Optional
 from datetime import datetime, timedelta
 from botocore.config import Config
 from boto3.dynamodb.conditions import Key
@@ -53,6 +55,7 @@ TEMPORARY_UPLOAD_PREFIX = 'temp-uploads/'  # Prefix for temporary uploads
 PREVIEW_PREFIX = 'previews/'
 MAX_PART_SIZE = 150 * 1024 * 1024  # 150MB per part
 MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
+allowed_preview_extensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
 
 # Load environment variables
 try:
@@ -398,6 +401,213 @@ def normalize_s3_path(asset_base_key, file_path):
         logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
         return resolved_path
 
+def is_preview_file(file_path: str) -> bool:
+    """Check if file is a preview file (.previewFile.X pattern)
+    
+    Args:
+        file_path: The file path to check
+        
+    Returns:
+        True if the file is a preview file, False otherwise
+    """
+    return '.previewFile.' in file_path
+
+def get_base_file_path(preview_file_path: str) -> str:
+    """Extract base file path from preview file path
+    
+    Args:
+        preview_file_path: The preview file path
+        
+    Returns:
+        The base file path
+    """
+    if not is_preview_file(preview_file_path):
+        return preview_file_path
+    
+    # Split at .previewFile. and take the first part
+    return preview_file_path.split('.previewFile.')[0]
+
+def validate_preview_files_with_base_files(files_in_request, asset_base_key, bucket_name):
+    """Validate that all preview files in the request have corresponding base files
+    
+    This function checks if all .previewFile. files in the request have their associated
+    base files either in the same request or already existing in S3.
+    
+    Args:
+        files_in_request: List of file details in the current request
+        asset_base_key: The base key for the asset in S3
+        bucket_name: The S3 bucket name
+        
+    Returns:
+        Tuple of (is_valid, error_message, invalid_files)
+        - is_valid: True if all preview files have valid base files, False otherwise
+        - error_message: Error message if validation fails, None otherwise
+        - invalid_files: List of preview files that failed validation
+    """
+    # Extract all preview files and their base paths
+    preview_files = []
+    base_files_in_request = set()
+    invalid_files = []
+    
+    # First pass: identify all files in the request
+    for file in files_in_request:
+        relative_key = file.get('relativeKey')
+        if is_preview_file(relative_key):
+            preview_files.append(file)
+        else:
+            # Add to the set of base files in this request
+            base_files_in_request.add(relative_key)
+    
+    # If no preview files, validation passes
+    if not preview_files:
+        return True, None, []
+    
+    # Second pass: validate each preview file
+    for preview_file in preview_files:
+        preview_relative_key = preview_file.get('relativeKey')
+        base_file_path = get_base_file_path(preview_relative_key)
+        
+        # Check if base file exists in the current request
+        if base_file_path in base_files_in_request:
+            continue
+        
+        # If not in request, check if it exists in S3
+        base_file_key = normalize_s3_path(asset_base_key, base_file_path)
+        try:
+            s3.head_object(Bucket=bucket_name, Key=base_file_key)
+            # Base file exists in S3, so this preview file is valid
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'NoSuchKey':
+                # Base file doesn't exist in S3 or in the current request
+                invalid_files.append(preview_relative_key)
+                logger.warning(f"Preview file {preview_relative_key} is missing its base file {base_file_path}")
+            else:
+                # Other error occurred, log and continue
+                logger.warning(f"Error checking if base file {base_file_key} exists: {e}")
+                # Conservatively mark as invalid if we can't verify
+                invalid_files.append(preview_relative_key)
+    
+    # If any invalid files were found, return validation failure
+    if invalid_files:
+        error_message = f"The following preview files are missing their base files: {', '.join(invalid_files)}"
+        return False, error_message, invalid_files
+    
+    return True, None, []
+
+def check_preview_file_size(bucket_name, key, file_path):
+    """Check if a preview file exceeds the maximum allowed size
+    
+    Args:
+        bucket_name: The S3 bucket name
+        key: The S3 object key
+        file_path: The file path for error reporting
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+        - is_valid: True if file size is valid, False otherwise
+        - error_message: Error message if validation fails, None otherwise
+    """
+    try:
+        head_response = s3.head_object(Bucket=bucket_name, Key=key)
+        file_size = head_response.get('ContentLength', 0)
+        
+        if file_size > MAX_PREVIEW_FILE_SIZE:
+            error_message = f"Preview file {file_path} exceeds maximum allowed size of 5MB"
+            return False, error_message
+        
+        return True, None
+    except Exception as e:
+        logger.warning(f"Error checking size of preview file {key}: {e}")
+        return False, f"Error checking size of preview file {file_path}: {str(e)}"
+
+def validate_preview_file_extension(file_path: str) -> bool:
+    """Validate preview file has allowed extension
+    
+    Args:
+        file_path: The file path to check
+        
+    Returns:
+        True if the file has an allowed extension, False otherwise
+    """
+    
+    # Extract the extension after .previewFile.
+    if '.previewFile.' in file_path:
+        extension = '.' + file_path.split('.previewFile.')[1].lower()
+        return extension in allowed_preview_extensions
+    
+    # For direct assetPreview uploads, check the file extension
+    file_extension = os.path.splitext(file_path)[1].lower()
+    return file_extension in allowed_preview_extensions
+
+def find_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
+    """Find existing preview files for a base file
+    
+    Args:
+        bucket: The S3 bucket name
+        base_file_key: The base file key
+        
+    Returns:
+        List of preview file keys
+    """
+    preview_files = []
+    
+    try:
+        # Get the directory and filename parts
+        directory = os.path.dirname(base_file_key)
+        filename = os.path.basename(base_file_key)
+        
+        # Create the prefix for listing objects
+        prefix = f"{directory}/" if directory else ""
+        
+        # Create the pattern to match preview files for this base file
+        pattern = f"{filename}.previewFile."
+        
+        # List objects in the directory
+        paginator = s3.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get('Contents', []):
+                key = obj['Key']
+                base_filename = os.path.basename(key)
+                
+                # Check if this is a preview file for our base file
+                if base_filename.startswith(pattern):
+                    preview_files.append(key)
+        
+        # Sort the preview files alphabetically
+        preview_files.sort()
+        
+    except Exception as e:
+        logger.warning(f"Error finding preview files for {base_file_key}: {e}")
+    
+    return preview_files
+
+def delete_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
+    """Delete existing preview files for a base file
+    
+    Args:
+        bucket: The S3 bucket name
+        base_file_key: The base file key
+        
+    Returns:
+        List of deleted preview file keys
+    """
+    deleted_files = []
+    
+    # Find existing preview files
+    preview_files = find_existing_preview_files(bucket, base_file_key)
+    
+    # Delete each preview file
+    for preview_file in preview_files:
+        try:
+            # Add delete marker (soft delete)
+            s3.delete_object(Bucket=bucket, Key=preview_file)
+            deleted_files.append(preview_file)
+            logger.info(f"Deleted preview file: {preview_file}")
+        except Exception as e:
+            logger.warning(f"Error deleting preview file {preview_file}: {e}")
+    
+    return deleted_files
+
 #######################
 # API Implementations
 #######################
@@ -421,6 +631,18 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     for file in request_model.files:
         if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
             raise ValidationError(f"File {file.relativeKey} has an unsupported file extension")
+        
+        # Additional validation for preview files
+        if uploadType == "assetPreview":
+            # Validate preview file extension
+            if not validate_preview_file_extension(file.relativeKey):
+                raise ValidationError(f"Preview file {file.relativeKey} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
+        
+        # Check if this is a preview file in an assetFile upload
+        if uploadType == "assetFile" and is_preview_file(file.relativeKey):
+            # Validate preview file extension
+            if not validate_preview_file_extension(file.relativeKey):
+                raise ValidationError(f"Preview file {file.relativeKey} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
     
     # Generate upload ID
     uploadId = f"y{str(uuid.uuid4())}"
@@ -606,8 +828,8 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                     Key=file.tempKey
                 )
                 
-                # Check file size for preview files
-                if uploadType == "assetPreview" and head_response.get('ContentLength', 0) > MAX_PREVIEW_FILE_SIZE:
+                # Check file size for preview files - both assetPreview type and .previewFile. files
+                if (uploadType == "assetPreview" or is_preview_file(file.relativeKey)) and head_response.get('ContentLength', 0) > MAX_PREVIEW_FILE_SIZE:
                     file_results.append(FileCompletionResult(
                         relativeKey=file.relativeKey,
                         uploadIdS3="external",
@@ -636,6 +858,47 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 ))
                 has_failures = True
                 continue
+                
+            # Check if this is a preview file in an assetFile upload
+            if uploadType == "assetFile" and is_preview_file(file.relativeKey):
+                # Get the base file path
+                base_file_path = get_base_file_path(file.relativeKey)
+                base_file_key = normalize_s3_path(asset_base_key, base_file_path)
+                
+                # Check if the base file exists in the current request
+                base_file_in_request = False
+                for other_file in request_model.files:
+                    if other_file.relativeKey == base_file_path:
+                        base_file_in_request = True
+                        break
+                
+                # If not in the current request, check if it exists in S3
+                if not base_file_in_request:
+                    try:
+                        s3.head_object(Bucket=bucket_name, Key=base_file_key)
+                    except ClientError as e:
+                        if e.response['Error']['Code'] == 'NoSuchKey':
+                            # Base file doesn't exist in S3 or in the current request
+                            file_results.append(FileCompletionResult(
+                                relativeKey=file.relativeKey,
+                                uploadIdS3="external",
+                                success=False,
+                                error=f"Base file {base_file_path} does not exist for preview file {file.relativeKey}"
+                            ))
+                            logger.warning(f"Preview file {file.relativeKey} is missing its base file {base_file_path}")
+                            has_failures = True
+                            continue
+                        else:
+                            # Other error occurred, log and conservatively reject the file
+                            logger.warning(f"Error checking if base file {base_file_key} exists: {e}")
+                            file_results.append(FileCompletionResult(
+                                relativeKey=file.relativeKey,
+                                uploadIdS3="external",
+                                success=False,
+                                error=f"Error verifying base file for preview file {file.relativeKey}"
+                            ))
+                            has_failures = True
+                            continue
             
             # Create a file_detail dictionary with the information we need
             file_detail = {
@@ -674,10 +937,67 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             overallSuccess=False
         )
     
-    # Copy successful files from temporary to final location
+    # Only for assetFile uploads, validate that .previewFile. files have corresponding base files
+    if uploadType == "assetFile":
+        asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
+        
+        # Check if there are any .previewFile. files in the successful files
+        preview_files = [file_detail for file_detail in successful_files if is_preview_file(file_detail['relativeKey'])]
+        
+        if preview_files:
+            # Create a list of file details for validation
+            files_for_validation = [{'relativeKey': file_detail['relativeKey']} for file_detail in successful_files]
+            
+            # Validate preview files have base files
+            is_valid, error_message, invalid_files = validate_preview_files_with_base_files(
+                files_for_validation, 
+                asset_base_key, 
+                bucket_name
+            )
+            
+            if not is_valid:
+                # Mark invalid files as failed
+                for file_detail in successful_files[:]:
+                    if file_detail['relativeKey'] in invalid_files:
+                        # Delete the uploaded file
+                        delete_s3_object(bucket_name, file_detail['temp_s3_key'])
+                        
+                        # Update file result
+                        for result in file_results:
+                            if result.relativeKey == file_detail['relativeKey'] and result.success:
+                                result.success = False
+                                result.error = f"Base file does not exist for preview file {file_detail['relativeKey']}"
+                                has_failures = True
+                        
+                        # Remove from successful files
+                        successful_files.remove(file_detail)
+                
+                # If no files remain successful, return error
+                if not successful_files:
+                    delete_upload_details(uploadId, assetId)
+                    return CompleteUploadResponseModel(
+                        message="No files were successfully uploaded",
+                        uploadId=uploadId,
+                        assetId=assetId,
+                        fileResults=file_results,
+                        overallSuccess=False
+                    )
+    
+            # Copy successful files from temporary to final location
     for file_detail in successful_files:
         
         logger.info(f"Copying file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
+        
+        # If this is a preview file in an assetFile upload, delete any existing preview files for the base file
+        if uploadType == "assetFile" and is_preview_file(file_detail['relativeKey']):
+            # Get the base file path
+            base_file_path = get_base_file_path(file_detail['relativeKey'])
+            base_file_key = normalize_s3_path(asset_base_key, base_file_path)
+            
+            # Delete existing preview files
+            deleted_files = delete_existing_preview_files(bucket_name, base_file_key)
+            if deleted_files:
+                logger.info(f"Deleted {len(deleted_files)} existing preview files for {base_file_path}")
         
         copy_success = copy_s3_object(
             bucket_name, 
@@ -902,8 +1222,8 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                     has_failures = True
                     continue
                 
-                # Check file size for preview files
-                if uploadType == "assetPreview" and head_response.get('ContentLength', 0) > MAX_PREVIEW_FILE_SIZE:
+                # Check file size for preview files - both assetPreview type and .previewFile. files
+                if (uploadType == "assetPreview" or is_preview_file(file.relativeKey)) and head_response.get('ContentLength', 0) > MAX_PREVIEW_FILE_SIZE:
                     # Delete the uploaded file since it exceeds the size limit
                     delete_s3_object(bucket_name, temp_s3_key)
                     
@@ -952,6 +1272,82 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                 has_failures = True
                 continue
             
+            # Additional validation for preview files
+            if uploadType == "assetPreview":
+                # Validate preview file extension
+                if not validate_preview_file_extension(file.relativeKey):
+                    # Delete the uploaded file
+                    delete_s3_object(bucket_name, temp_s3_key)
+                    
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3=file.uploadIdS3,
+                        success=False,
+                        error=f"Preview file {file.relativeKey} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
+                    ))
+                    has_failures = True
+                    continue
+            
+            # Check if this is a preview file in an assetFile upload
+            if uploadType == "assetFile" and is_preview_file(file.relativeKey):
+                # Validate preview file extension
+                if not validate_preview_file_extension(file.relativeKey):
+                    # Delete the uploaded file
+                    delete_s3_object(bucket_name, temp_s3_key)
+                    
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3=file.uploadIdS3,
+                        success=False,
+                        error=f"Preview file {file.relativeKey} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
+                    ))
+                    has_failures = True
+                    continue
+                
+                # Get the base file path
+                base_file_path = get_base_file_path(file.relativeKey)
+                base_file_key = normalize_s3_path(asset_base_key, base_file_path)
+                
+                # Check if the base file exists in the current request
+                base_file_in_request = False
+                for other_file in request_model.files:
+                    if other_file.relativeKey == base_file_path:
+                        base_file_in_request = True
+                        break
+                
+                # If not in the current request, check if it exists in S3
+                if not base_file_in_request:
+                    try:
+                        s3.head_object(Bucket=bucket_name, Key=base_file_key)
+                    except ClientError as e:
+                        if e.response['Error']['Code'] == 'NoSuchKey':
+                            # Base file doesn't exist in S3 or in the current request
+                            # Delete the uploaded file
+                            delete_s3_object(bucket_name, temp_s3_key)
+                            
+                            file_results.append(FileCompletionResult(
+                                relativeKey=file.relativeKey,
+                                uploadIdS3=file.uploadIdS3,
+                                success=False,
+                                error=f"Base file {base_file_path} does not exist for preview file {file.relativeKey}"
+                            ))
+                            logger.warning(f"Preview file {file.relativeKey} is missing its base file {base_file_path}")
+                            has_failures = True
+                            continue
+                        else:
+                            # Other error occurred, log and conservatively reject the file
+                            logger.warning(f"Error checking if base file {base_file_key} exists: {e}")
+                            delete_s3_object(bucket_name, temp_s3_key)
+                            
+                            file_results.append(FileCompletionResult(
+                                relativeKey=file.relativeKey,
+                                uploadIdS3=file.uploadIdS3,
+                                success=False,
+                                error=f"Error verifying base file for preview file {file.relativeKey}"
+                            ))
+                            has_failures = True
+                            continue
+            
             # Add to successful files list
             successful_files.append(file_detail)
             file_results.append(FileCompletionResult(
@@ -994,6 +1390,50 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
     
     # Get the asset's specified bucket and key location
     asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
+    
+    # Only for assetFile uploads, validate that .previewFile. files have corresponding base files
+    if uploadType == "assetFile":
+        # Check if there are any .previewFile. files in the successful files
+        preview_files = [file_detail for file_detail in successful_files if is_preview_file(file_detail['relativeKey'])]
+        
+        if preview_files:
+            # Create a list of file details for validation
+            files_for_validation = [{'relativeKey': file_detail['relativeKey']} for file_detail in successful_files]
+            
+            # Validate preview files have base files
+            is_valid, error_message, invalid_files = validate_preview_files_with_base_files(
+                files_for_validation, 
+                asset_base_key, 
+                bucket_name
+            )
+            
+            if not is_valid:
+                # Mark invalid files as failed
+                for file_detail in successful_files[:]:
+                    if file_detail['relativeKey'] in invalid_files:
+                        # Delete the uploaded file
+                        delete_s3_object(bucket_name, file_detail['temp_s3_key'])
+                        
+                        # Update file result
+                        for result in file_results:
+                            if result.relativeKey == file_detail['relativeKey'] and result.success:
+                                result.success = False
+                                result.error = f"Base file does not exist for preview file {file_detail['relativeKey']}"
+                                has_failures = True
+                        
+                        # Remove from successful files
+                        successful_files.remove(file_detail)
+                
+                # If no files remain successful, return error
+                if not successful_files:
+                    delete_upload_details(uploadId, assetId)
+                    return CompleteUploadResponseModel(
+                        message="No files were successfully uploaded",
+                        uploadId=uploadId,
+                        assetId=assetId,
+                        fileResults=file_results,
+                        overallSuccess=False
+                    )
     
     # Copy successful files from temporary to final location
     for file_detail in successful_files:

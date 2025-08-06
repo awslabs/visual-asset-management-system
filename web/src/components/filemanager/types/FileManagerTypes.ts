@@ -12,6 +12,7 @@ export interface FileKey {
     isArchived: boolean;
     currentAssetVersionFileVersionMismatch?: boolean;
     primaryType?: string | null;
+    previewFile?: string;
 }
 
 export interface FileTree {
@@ -29,6 +30,7 @@ export interface FileTree {
     isArchived?: boolean;
     currentAssetVersionFileVersionMismatch?: boolean;
     primaryType?: string | null;
+    previewFile?: string;
 }
 
 export interface FileManagerStateValues {

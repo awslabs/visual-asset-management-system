@@ -1774,6 +1774,114 @@ paths:
                     $ref: '#/components/schemas/id_regex'
             security:
               - DefaultCognitoAuthorizer: []
+              
+    /database/{databaseId}/assets/{assetId}/deleteAssetPreview:
+        delete:
+            summary: "Delete the asset preview file."
+            description: "Deletes the asset preview file from the S3 bucket and clears the previewLocation from the asset record in DynamoDB."
+            responses:
+                "200":
+                    description: Asset preview deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/deleteAssetPreviewResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete asset preview.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset preview not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
+              
+    /database/{databaseId}/assets/{assetId}/deleteAuxiliaryPreviewAssetFiles:
+        delete:
+            summary: "Delete auxiliary preview asset files."
+            description: "Deletes auxiliary preview asset files for a specific file path (treated as a prefix). This endpoint is used to clean up temporary auxiliary files that may be created during preview generation."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/deleteAuxiliaryPreviewAssetFilesRequest"
+            responses:
+                "200":
+                    description: Auxiliary preview files deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/deleteAuxiliaryPreviewAssetFilesResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete auxiliary preview files.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: No auxiliary files found under the specified prefix.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
     
     /database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}:
         post:
@@ -4379,6 +4487,9 @@ components:
                     type: string
                     description: "Primary type metadata for the file (e.g., primary, lod1-lod5, other). Only present for non-folder objects."
                     nullable: true
+                previewFile:
+                    type: string
+                    description: "Path to the preview file for this file, if any. Empty string if no preview file exists."
             required:
                 - fileName
                 - key
@@ -4471,6 +4582,9 @@ components:
                     type: string
                     description: "Primary type metadata for the file (e.g., primary, lod1-lod5, other). Only present for non-folder objects."
                     nullable: true
+                previewFile:
+                    type: string
+                    description: "Path to the preview file for this file, if any. Empty string if no preview file exists."
                 versions:
                     type: array
                     items:
@@ -5270,6 +5384,53 @@ components:
                 - success
                 - message
                 - filePath
+                
+        deleteAssetPreviewResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Asset ID whose preview was deleted"
+            required:
+                - success
+                - message
+                - assetId
+                
+        deleteAuxiliaryPreviewAssetFilesRequest:
+            type: object
+            properties:
+                filePath:
+                    type: string
+                    description: "Path to the file or prefix relative to the asset root. Will be treated as a prefix for deletion."
+            required:
+                - filePath
+                
+        deleteAuxiliaryPreviewAssetFilesResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                filePath:
+                    type: string
+                    description: "File path or prefix that was used for deletion"
+                deletedCount:
+                    type: integer
+                    description: "Number of auxiliary files deleted"
+            required:
+                - success
+                - message
+                - filePath
+                - deletedCount
     parameters:
       maxItemsParam:
         name: maxItems

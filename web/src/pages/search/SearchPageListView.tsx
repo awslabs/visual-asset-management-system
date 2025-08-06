@@ -16,6 +16,7 @@ import {
 } from "@cloudscape-design/components";
 import AssetDeleteModal from "../../components/modals/AssetDeleteModal";
 import PreviewThumbnailCell from "./components/PreviewThumbnailCell";
+import FilePreviewThumbnailCell from "./components/FilePreviewThumbnailCell";
 import AssetPreviewModal from "../../components/filemanager/modals/AssetPreviewModal";
 import {
     changeFilter,
@@ -124,6 +125,9 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
 
     // Add preview column if showPreviewThumbnails is enabled
     let enhancedColumnDefinitions = columnNames?.map((name: string) => {
+        // Custom headers based on record type
+        const isFileMode = state.filters._rectype.value === "s3object";
+        
         if (name === "str_asset") {
             return {
                 id: name,
@@ -145,7 +149,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
         if (name === "str_assettype") {
             return {
                 id: name,
-                header: "Type",
+                header: isFileMode ? "Asset Type" : "Type",
                 cell: (e: any) => columnRender(e, name, e[name]),
                 sortingField: name,
                 isRowHeader: false,
@@ -154,7 +158,25 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
         if (name === "list_tags") {
             return {
                 id: name,
-                header: "Tags",
+                header: isFileMode ? "Asset Tags" : "Tags",
+                cell: (e: any) => columnRender(e, name, e[name]),
+                sortingField: name,
+                isRowHeader: false,
+            };
+        }
+        if (name === "str_key" && isFileMode) {
+            return {
+                id: name,
+                header: "File Path",
+                cell: (e: any) => columnRender(e, name, e[name]),
+                sortingField: name,
+                isRowHeader: false,
+            };
+        }
+        if (name === "str_description" && isFileMode) {
+            return {
+                id: name,
+                header: "Asset Description",
                 cell: (e: any) => columnRender(e, name, e[name]),
                 sortingField: name,
                 isRowHeader: false,
@@ -176,27 +198,69 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
         };
     });
 
+    // Rearrange columns for file mode if needed
+    if (state.filters._rectype.value === "s3object") {
+        // Rearrange columns for file mode - move Database before Key
+        // First, find the indices of the columns we want to rearrange
+        const databaseColumnIndex = enhancedColumnDefinitions.findIndex((col: TableProps.ColumnDefinition<string>) => col.id === "str_databaseid");
+        const keyColumnIndex = enhancedColumnDefinitions.findIndex((col: TableProps.ColumnDefinition<string>) => col.id === "str_key");
+        
+        if (databaseColumnIndex !== -1 && keyColumnIndex !== -1 && databaseColumnIndex > keyColumnIndex) {
+            // Remove the database column
+            const databaseColumn = enhancedColumnDefinitions.splice(databaseColumnIndex, 1)[0];
+            // Insert it before the key column
+            enhancedColumnDefinitions.splice(keyColumnIndex, 0, databaseColumn);
+        }
+    }
+
     // Add preview column if showPreviewThumbnails is enabled
-    if (state.showPreviewThumbnails && state.filters._rectype.value === "asset") {
-        enhancedColumnDefinitions = [
-            {
-                id: "preview",
-                header: "Preview",
-                cell: (item: any) => (
-                    <PreviewThumbnailCell
-                        assetId={item.str_assetid}
-                        databaseId={item.str_databaseid}
-                        onOpenFullPreview={(url, assetName, previewKey) =>
-                            handleOpenPreview(url, assetName, previewKey, item)
-                        }
-                        assetName={item.str_assetname}
-                    />
-                ),
-                sortingField: "preview",
-                isRowHeader: false,
-            },
-            ...enhancedColumnDefinitions,
-        ];
+    if (state.showPreviewThumbnails) {
+        // Different preview cell based on record type
+        if (state.filters._rectype.value === "asset") {
+            // Asset preview cell
+            enhancedColumnDefinitions = [
+                {
+                    id: "preview",
+                    header: "Preview",
+                    cell: (item: any) => (
+                        <PreviewThumbnailCell
+                            assetId={item.str_assetid}
+                            databaseId={item.str_databaseid}
+                            onOpenFullPreview={(url, assetName, previewKey) =>
+                                handleOpenPreview(url, assetName, previewKey, item)
+                            }
+                            assetName={item.str_assetname}
+                        />
+                    ),
+                    sortingField: "preview",
+                    isRowHeader: false,
+                },
+                ...enhancedColumnDefinitions,
+            ];
+        } else if (state.filters._rectype.value === "s3object") {
+            // File preview cell
+            enhancedColumnDefinitions = [
+                {
+                    id: "preview",
+                    header: "Preview",
+                    cell: (item: any) => (
+                        <FilePreviewThumbnailCell
+                            assetId={item.str_assetid}
+                            databaseId={item.str_databaseid}
+                            fileKey={item.str_key}
+                            fileName={item.str_key.split('/').pop() || item.str_key}
+                            fileSize={item.num_size}
+                            onOpenFullPreview={(url, fileName, previewKey) =>
+                                handleOpenPreview(url, fileName, previewKey, item)
+                            }
+                        />
+                    ),
+                    sortingField: "preview",
+                    isRowHeader: false,
+                },
+                ...enhancedColumnDefinitions,
+            ];
+        }
 
         // Add preview to visible columns if not already there
         if (

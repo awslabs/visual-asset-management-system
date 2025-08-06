@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { Box, Button, Spinner } from "@cloudscape-design/components";
+import { Box, Button, SpaceBetween, Spinner } from "@cloudscape-design/components";
 import { downloadAsset } from "../../../services/APIService";
 import "./AssetPreviewThumbnail.css"; // Reusing the same CSS as AssetPreviewThumbnail
 
@@ -13,6 +13,8 @@ interface FilePreviewThumbnailProps {
     databaseId: string;
     fileKey: string;
     onOpenFullPreview: (previewUrl: string) => void;
+    isPreviewFile?: boolean;
+    onDeletePreview?: () => void;
 }
 
 /**
@@ -24,6 +26,8 @@ export const FilePreviewThumbnail: React.FC<FilePreviewThumbnailProps> = ({
     databaseId,
     fileKey,
     onOpenFullPreview,
+    isPreviewFile = false,
+    onDeletePreview,
 }) => {
     const [url, setUrl] = useState<string | null>(null);
     const [loading, setLoading] = useState<boolean>(true);
@@ -51,7 +55,7 @@ export const FilePreviewThumbnail: React.FC<FilePreviewThumbnailProps> = ({
                     assetId,
                     key: fileKey,
                     versionId: "",
-                    downloadType: "assetFile", // Using "file" instead of "assetPreview" since we're downloading the actual file
+                    downloadType: isPreviewFile ? "assetFile" : "assetFile", // Using "assetFile" for both regular files and preview files
                 });
 
                 if (response !== false && Array.isArray(response)) {
@@ -122,13 +126,24 @@ export const FilePreviewThumbnail: React.FC<FilePreviewThumbnailProps> = ({
                             />
                         </div>
                         <div className="asset-preview-actions">
-                            <Button
-                                iconName="external"
-                                variant="link"
-                                onClick={() => onOpenFullPreview(url)}
-                            >
-                                View full preview
-                            </Button>
+                            <SpaceBetween direction="vertical" size="xs">
+                                <Button
+                                    iconName="external"
+                                    variant="link"
+                                    onClick={() => onOpenFullPreview(url)}
+                                >
+                                    View full preview
+                                </Button>
+                                {onDeletePreview && (
+                                    <Button
+                                        iconName="remove"
+                                        variant="link"
+                                        onClick={onDeletePreview}
+                                    >
+                                        Delete Preview File
+                                    </Button>
+                                )}
+                            </SpaceBetween>
                         </div>
                     </>
                 )}
