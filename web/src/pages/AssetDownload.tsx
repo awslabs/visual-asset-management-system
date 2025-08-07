@@ -123,12 +123,12 @@ const downloadSingleFile = async (
             const fileHandle = await fileDirectoryHandle.getFileHandle(fileName, { create: true });
             const writable = await fileHandle.createWritable();
 
-            // Get download URL with new downloadType parameter
+            // Get download URL with new downloadType parameter and pass the versionId if available
             const response = await downloadAsset({
                 databaseId,
                 assetId,
                 key: file.keyPrefix,
-                versionId: "",
+                versionId: file.versionId || "",
                 downloadType: "assetFile",
             });
 
@@ -304,16 +304,20 @@ const convertFileTreeItemsToFileUploadTableItems = (fileTree: FileTree): FileUpl
     const processNode = (node: FileTree) => {
         // If it's a file (no subtree or empty subtree)
         if (!node.isFolder && (!node.subTree || node.subTree.length === 0)) {
+            // Ensure we have a valid size value
+            const fileSize = node.size || 0;
+
             allItems.push({
                 name: node.name,
                 index: 0,
-                size: node.size || 0,
+                size: fileSize,
                 relativePath: node.relativePath,
                 status: "Queued",
                 progress: 0,
                 startedAt: Date.now(),
                 loaded: 0,
-                total: 0,
+                total: fileSize, // Set total to the actual file size for proper progress calculation
+                versionId: node.versionId || "", // Extract versionId from the node
             });
         } else {
             // Process each child node
@@ -421,7 +425,8 @@ function assetDownloadReducer(
                 progress: 0,
                 startedAt: Date.now(),
                 loaded: 0,
-                total: 0,
+                total: item.size || 0, // Preserve the file size information
+                // versionId is preserved via the spread operator
             }));
 
         default:

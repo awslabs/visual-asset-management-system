@@ -245,6 +245,15 @@ def property_token_filter_to_opensearch_query(token_filter, uniqueMappingFieldsF
                 }
             })
 
+    must_not_criteria.append({
+            "wildcard": {
+                            "str_key": {
+                                "value": "*.previewFile.*",
+                                "case_insensitive": True
+                            }
+                        }
+    })
+
 
     #Conduct database access checks to reduce record count for processing
     #Parse filters and look if there is a record with "str_databaseid" in it. 

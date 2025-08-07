@@ -1,5 +1,10 @@
 import { FileManagerState, FileManagerAction, FileTree } from "../types/FileManagerTypes";
-import { toggleExpanded, downloadFile, searchFileTree } from "./FileManagerUtils";
+import {
+    toggleExpanded,
+    downloadFile,
+    searchFileTree,
+    calculateTotalAssetSize,
+} from "./FileManagerUtils";
 
 // Helper function to flatten the file tree into an array for shift-selection
 function flattenFileTree(tree: FileTree, result: FileTree[] = []): FileTree[] {
@@ -158,6 +163,8 @@ export function fileManagerReducer(
         case "FETCH_SUCCESS":
             // Update flattened items whenever tree structure changes
             const newFlattenedItems = flattenFileTree(action.payload);
+            // Calculate total asset size
+            const totalSize = calculateTotalAssetSize(action.payload);
             return {
                 ...state,
                 fileTree: action.payload,
@@ -169,6 +176,7 @@ export function fileManagerReducer(
                 multiSelectMode: false,
                 lastSelectedIndex: -1,
                 flattenedItems: newFlattenedItems,
+                totalAssetSize: totalSize,
             };
 
         case "FETCH_ERROR":

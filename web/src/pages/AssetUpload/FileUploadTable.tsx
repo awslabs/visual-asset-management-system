@@ -65,6 +65,7 @@ interface FileUploadTableProps {
     showCount?: boolean;
     mode?: "Upload" | "Download" | "Delete";
     onRemoveItem?: (index: number) => void;
+    onRemoveAll?: () => void;
     allowRemoval?: boolean;
 }
 
@@ -92,6 +93,7 @@ export interface FileUploadTableItem {
     loaded: number;
     total: number;
     error?: string; // Error message for failed uploads
+    versionId?: string; // Version ID for download mode
 }
 
 const getStatusIndicator = (status?: string) => {
@@ -207,19 +209,39 @@ function getActions(
     allItems: FileUploadTableItem[],
     resume: boolean,
     onRetry?: () => void,
+    onRemoveAll?: () => void,
     mode: "Upload" | "Download" | "Delete" = "Upload"
 ) {
-    // Only show retry button for failed items when onRetry is provided
+    const actions = [];
+
+    // Add retry button for failed items when onRetry is provided
     const failed = allItems.filter((item) => item.status === "Failed").length;
     if (failed > 0 && onRetry) {
-        return (
-            <Button variant={"primary"} onClick={onRetry}>
+        actions.push(
+            <Button key="retry" variant={"primary"} onClick={onRetry}>
                 Retry {failed} failed Items
             </Button>
         );
-    } else {
+    }
+
+    // Add remove all button when onRemoveAll is provided and there are items
+    if (onRemoveAll && allItems.length > 0) {
+        actions.push(
+            <Button key="removeAll" variant={"normal"} onClick={onRemoveAll}>
+                Remove All Files
+            </Button>
+        );
+    }
+
+    if (actions.length === 0) {
         return <></>;
     }
+
+    return (
+        <SpaceBetween direction="horizontal" size="xs">
+            {actions}
+        </SpaceBetween>
+    );
 }
 
 export const FileUploadTable = ({
@@ -231,6 +253,7 @@ export const FileUploadTable = ({
     showCount,
     mode = "Upload",
     onRemoveItem,
+    onRemoveAll,
     allowRemoval = false,
 }: FileUploadTableProps) => {
     let visibleContent = ["filesize", "status", "progress"];
@@ -239,6 +262,30 @@ export const FileUploadTable = ({
     if (!columnDefinitions) {
         // Start with the default column definitions
         let customColumnDefinitions = [...FileUploadTableColumnDefinitions];
+
+        // Find the index of the status column to insert version ID before it
+        const statusColumnIndex = customColumnDefinitions.findIndex((col) => col.id === "status");
+
+        // Add Version ID column if in Download mode (before status column)
+        if (mode === "Download") {
+            const versionColumn = {
+                id: "versionId",
+                header: "Version ID",
+                cell: (item: FileUploadTableItem) => (
+                    <div>{item.versionId && item.versionId.trim() ? item.versionId : "Latest"}</div>
+                ),
+                sortingField: "versionId",
+                isRowHeader: false,
+            };
+
+            if (statusColumnIndex !== -1) {
+                // Insert before status column
+                customColumnDefinitions.splice(statusColumnIndex, 0, versionColumn);
+            } else {
+                // Fallback: add to the end if status column not found
+                customColumnDefinitions.push(versionColumn);
+            }
+        }
 
         // Add actions column if we need retry or removal functionality
         if (onRetryItem || (allowRemoval && onRemoveItem)) {
@@ -300,7 +347,7 @@ export const FileUploadTable = ({
                                     ? `${getCompletedItemsCount(allItems)}/${allItems.length}`
                                     : `(${allItems.length})`
                             }
-                            actions={getActions(allItems, true, onRetry, mode)}
+                            actions={getActions(allItems, true, onRetry, onRemoveAll, mode)}
                         >
                             Files
                         </Header>

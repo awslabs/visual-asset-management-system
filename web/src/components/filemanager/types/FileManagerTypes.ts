@@ -50,6 +50,7 @@ export interface FileManagerStateValues {
     showArchived: boolean; // Toggle to show/hide archived files
     showNonIncluded: boolean; // Toggle to show/hide non-included files
     flattenedItems: FileTree[]; // Flattened array of all items for shift-selection
+    totalAssetSize: number; // Total size of all files in the asset (excluding folders)
 }
 
 export type FileManagerState = FileManagerStateValues;

@@ -142,12 +142,14 @@ export default function ModifyAssetsUploadsPage() {
         state?.assetDetailState || defaultAssetDetail
     );
     const [showUploadWorkflow, setShowUploadWorkflow] = useState(false);
-    const [fileItems, setFileItems] = useState<FileUploadTableItem[]>(assetDetail.Asset || []);
+    // Initialize with empty array since we're uploading new files, not showing existing ones
+    const [fileItems, setFileItems] = useState<FileUploadTableItem[]>([]);
     const [metadata, setMetadata] = useState<Metadata>({});
     const [previewFile, setPreviewFile] = useState<File | null>(null);
     const [previewFileError, setPreviewFileError] = useState<string | undefined>(undefined);
     const [folderPath, setFolderPath] = useState<string>("");
     const [keyPrefix, setKeyPrefix] = useState<string>("");
+    const [multiFileSelectKey, setMultiFileSelectKey] = useState<number>(0); // Key to force MultiFileSelect re-render
 
     // Update assetDetail when fileItems change
     useEffect(() => {
@@ -218,8 +220,38 @@ export default function ModifyAssetsUploadsPage() {
 
     // Handle file selection
     const handleFileSelection = async (fileSelection: FileInfo[]) => {
-        const selectedItems = await convertToFileUploadTableItems(fileSelection, keyPrefix);
-        setFileItems(selectedItems);
+        // Get new files from the file selection
+        const newItems = await convertToFileUploadTableItems(fileSelection, keyPrefix);
+
+        // Combine with existing files if any exist
+        let combinedItems = newItems;
+        if (fileItems && fileItems.length > 0) {
+            // Create a set of existing file paths to avoid duplicates
+            // Normalize paths by removing any leading slashes and converting to lowercase for case-insensitive comparison
+            const existingFilePaths = new Set(
+                fileItems.map((item) => item.relativePath.replace(/^\/+/, "").toLowerCase())
+            );
+
+            // Filter out any new files that would be duplicates
+            const uniqueNewItems = newItems.filter((file) => {
+                // Normalize the path for comparison
+                const normalizedPath = file.relativePath.replace(/^\/+/, "").toLowerCase();
+                return !existingFilePaths.has(normalizedPath);
+            });
+
+            // Combine existing files with unique new files
+            const existingFiles = [...fileItems];
+            combinedItems = [
+                ...existingFiles,
+                ...uniqueNewItems.map((file, idx) => ({
+                    ...file,
+                    index: existingFiles.length + idx,
+                })),
+            ];
+        }
+
+        console.log("File selection - combined items:", combinedItems.length);
+        setFileItems(combinedItems);
     };
 
     // Check for preview files in the selected files
@@ -240,6 +272,28 @@ export default function ModifyAssetsUploadsPage() {
 
         // Update the state with the valid file
         setPreviewFile(file);
+    };
+
+    // Function to remove a file
+    const handleRemoveFile = (index: number) => {
+        if (fileItems) {
+            const updatedFiles = fileItems.filter((item) => item.index !== index);
+
+            // Update indices to be sequential
+            const reindexedFiles = updatedFiles.map((item, idx) => ({
+                ...item,
+                index: idx,
+            }));
+
+            setFileItems(reindexedFiles);
+        }
+    };
+
+    // Function to remove all files
+    const handleRemoveAllFiles = () => {
+        setFileItems([]);
+        // Increment the key to force MultiFileSelect to re-render with fresh state
+        setMultiFileSelectKey((prev) => prev + 1);
     };
 
     // Handle upload completion
@@ -314,7 +368,7 @@ export default function ModifyAssetsUploadsPage() {
                         {showUploadWorkflow ? (
                             <AssetUploadWorkflow
                                 assetDetail={assetDetail}
-                                metadata={metadata}
+                                metadata={{}} // Pass empty metadata object to ensure the step is skipped
                                 fileItems={fileItems}
                                 onComplete={handleUploadComplete}
                                 onCancel={handleCancel}
@@ -331,65 +385,8 @@ export default function ModifyAssetsUploadsPage() {
                                             resume={false}
                                             showCount={true}
                                             allowRemoval={true}
-                                            columnDefinitions={[
-                                                {
-                                                    id: "type",
-                                                    header: "Type",
-                                                    cell: (item: FileUploadTableItem) =>
-                                                        item.name.includes(".previewFile.")
-                                                            ? "Preview File"
-                                                            : "Asset File",
-                                                    sortingField: "type",
-                                                    isRowHeader: false,
-                                                },
-                                                {
-                                                    id: "filepath",
-                                                    header: "Path",
-                                                    cell: (item: FileUploadTableItem) =>
-                                                        item.relativePath,
-                                                    sortingField: "filepath",
-                                                    isRowHeader: true,
-                                                },
-                                                {
-                                                    id: "filesize",
-                                                    header: "Size",
-                                                    cell: (item: FileUploadTableItem) =>
-                                                        item.total
-                                                            ? shortenBytes(item.total)
-                                                            : "0b",
-                                                    sortingField: "filesize",
-                                                    isRowHeader: false,
-                                                },
-                                                {
-                                                    id: "status",
-                                                    header: "Status",
-                                                    cell: (item: FileUploadTableItem) => (
-                                                        <StatusIndicator
-                                                            type={getStatusIndicator(item.status)}
-                                                        >
-                                                            {" "}
-                                                            {item.status}{" "}
-                                                        </StatusIndicator>
-                                                    ),
-                                                    sortingField: "status",
-                                                    isRowHeader: false,
-                                                },
-                                            ]}
-                                            onRemoveItem={(index) => {
-                                                const updatedFiles = fileItems.filter(
-                                                    (item) => item.index !== index
-                                                );
-
-                                                // Update indices to be sequential
-                                                const reindexedFiles = updatedFiles.map(
-                                                    (item, idx) => ({
-                                                        ...item,
-                                                        index: idx,
-                                                    })
-                                                );
-
-                                                setFileItems(reindexedFiles);
-                                            }}
+                                            onRemoveItem={handleRemoveFile}
+                                            onRemoveAll={handleRemoveAllFiles}
                                         />
                                     ) : (
                                         <Box textAlign="center" padding="l">
@@ -448,7 +445,10 @@ export default function ModifyAssetsUploadsPage() {
                                             }
                                         >
                                             {/* Asset Files Selection */}
-                                            <MultiFileSelect onChange={handleFileSelection} />
+                                            <MultiFileSelect
+                                                key={multiFileSelectKey}
+                                                onChange={handleFileSelection}
+                                            />
 
                                             {/* Preview File Selection - Only show when uploading to root path (including "/") */}
                                             {isRootPath && (

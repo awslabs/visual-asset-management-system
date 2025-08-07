@@ -3,6 +3,34 @@ import { downloadAsset } from "../../../services/APIService";
 
 // Helper functions for file manager operations
 
+// Calculate total size of all files in the tree (excluding folders)
+export function calculateTotalAssetSize(fileTree: FileTree): number {
+    let totalSize = 0;
+
+    // Helper function to recursively traverse the tree
+    function traverseTree(node: FileTree) {
+        // Check if this is a file (not a folder)
+        const isFolder =
+            node.isFolder !== undefined
+                ? node.isFolder
+                : node.subTree.length > 0 || node.keyPrefix.endsWith("/");
+
+        // If it's a file, add its size to the total
+        if (!isFolder && node.size !== undefined) {
+            totalSize += node.size;
+        }
+
+        // Recursively process all children
+        for (const child of node.subTree) {
+            traverseTree(child);
+        }
+    }
+
+    // Start traversal from the root
+    traverseTree(fileTree);
+    return totalSize;
+}
+
 export function getRootByPath(root: FileTree | null, path: string): FileTree | null {
     if (!root) {
         return null;

@@ -772,6 +772,15 @@ const AssetFileInfo = ({
         }
     };
 
+    // Function to remove all files
+    const handleRemoveAllFiles = () => {
+        setFileUploadTableItems([]);
+        assetDetailDispatch({
+            type: "UPDATE_ASSET_FILES",
+            payload: [],
+        });
+    };
+
     // Function to handle preview file selection with size validation
     const handlePreviewFileSelection = (file: File | null) => {
         if (file && file.size > MAX_PREVIEW_FILE_SIZE) {
@@ -836,6 +845,7 @@ const AssetFileInfo = ({
                             showCount={true}
                             allowRemoval={true}
                             onRemoveItem={handleRemoveFile}
+                            onRemoveAll={handleRemoveAllFiles}
                         />
                     </Box>
                 )}
@@ -856,13 +866,45 @@ const AssetFileInfo = ({
                             multiFile={true}
                             selectionMode={selectionMode}
                             onSelect={async (directoryHandle: any, fileHandles: any[]) => {
-                                const files = await getFilesFromFileHandles(fileHandles);
-                                setFileUploadTableItems(files);
+                                // Get new files from the file handles
+                                const newFiles = await getFilesFromFileHandles(fileHandles);
+
+                                // Combine with existing files if any exist
+                                let combinedFiles = newFiles;
+                                if (assetDetailState.Asset && assetDetailState.Asset.length > 0) {
+                                    // Create a map of existing file paths to avoid duplicates
+                                    const existingFilePaths = new Map(
+                                        assetDetailState.Asset.map((item) => [
+                                            item.relativePath,
+                                            item,
+                                        ])
+                                    );
+
+                                    // Filter out any new files that would be duplicates
+                                    const uniqueNewFiles = newFiles.filter(
+                                        (file) => !existingFilePaths.has(file.relativePath)
+                                    );
+
+                                    // Combine existing files with unique new files
+                                    const existingFiles = [...assetDetailState.Asset];
+                                    combinedFiles = [
+                                        ...existingFiles,
+                                        ...uniqueNewFiles.map((file, idx) => ({
+                                            ...file,
+                                            index: existingFiles.length + idx,
+                                        })),
+                                    ];
+                                }
+
+                                setFileUploadTableItems(combinedFiles);
                                 assetDetailDispatch({
                                     type: "UPDATE_ASSET_DIRECTORY_HANDLE",
                                     payload: directoryHandle,
                                 });
-                                assetDetailDispatch({ type: "UPDATE_ASSET_FILES", payload: files });
+                                assetDetailDispatch({
+                                    type: "UPDATE_ASSET_FILES",
+                                    payload: combinedFiles,
+                                });
                                 assetDetailDispatch({
                                     type: "UPDATE_ASSET_IS_MULTI_FILE",
                                     payload: !!directoryHandle,

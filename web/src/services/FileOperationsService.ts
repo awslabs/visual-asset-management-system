@@ -43,6 +43,22 @@ export interface FileOperationResult {
     error?: string;
 }
 
+export interface GeneratePresignedUrlsRequest {
+    databaseId: string;
+    assetId: string;
+    files: {
+        key: string;
+        name: string;
+        versionId?: string;
+    }[];
+}
+
+export interface PresignedUrlResult {
+    fileName: string;
+    url: string;
+    error?: string;
+}
+
 /**
  * Move a file within an asset
  */
@@ -187,6 +203,82 @@ export const deleteAssetPreview = async (
     } catch (error: any) {
         console.error("Error deleting asset preview:", error);
         throw new Error(error?.message || "Failed to delete asset preview");
+    }
+};
+
+/**
+ * Generate presigned URLs for sharing files
+ * Uses the same API as downloadAsset but returns the URLs instead of initiating downloads
+ */
+export const generatePresignedUrls = async (
+    request: GeneratePresignedUrlsRequest,
+    api = API
+): Promise<[boolean, PresignedUrlResult[] | string]> => {
+    try {
+        const { databaseId, assetId, files } = request;
+
+        if (!files || files.length === 0) {
+            return [false, "No files specified"];
+        }
+
+        // Process each file to get its presigned URL
+        const results: PresignedUrlResult[] = [];
+
+        for (const file of files) {
+            try {
+                // Use the downloadAsset API to get the presigned URL
+                const response = await api.post(
+                    "api",
+                    `/database/${databaseId}/assets/${assetId}/download`,
+                    {
+                        body: {
+                            downloadType: "assetFile",
+                            key: file.key,
+                            versionId: file.versionId || "",
+                        },
+                    }
+                );
+
+                // Handle response format
+                if (response.downloadUrl) {
+                    // New API response format
+                    results.push({
+                        fileName: file.name,
+                        url: response.downloadUrl,
+                    });
+                } else if (
+                    response.message &&
+                    typeof response.message === "string" &&
+                    !response.message.includes("error") &&
+                    !response.message.includes("Error")
+                ) {
+                    // Legacy format with URL in message
+                    results.push({
+                        fileName: file.name,
+                        url: response.message,
+                    });
+                } else {
+                    // Error response
+                    results.push({
+                        fileName: file.name,
+                        url: "",
+                        error: response.message || "Failed to generate URL",
+                    });
+                }
+            } catch (fileError: any) {
+                // Handle individual file errors
+                results.push({
+                    fileName: file.name,
+                    url: "",
+                    error: fileError?.message || "Failed to generate URL",
+                });
+            }
+        }
+
+        return [true, results];
+    } catch (error: any) {
+        console.error("Error generating presigned URLs:", error);
+        return [false, error?.message || "Failed to generate presigned URLs"];
     }
 };
 

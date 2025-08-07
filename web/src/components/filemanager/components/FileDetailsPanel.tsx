@@ -7,6 +7,7 @@ import {
     SpaceBetween,
     Link,
     Modal,
+    ButtonDropdown,
 } from "@cloudscape-design/components";
 import { archiveFile, deleteAssetPreview } from "../../../services/FileOperationsService";
 import { useNavigate, useParams } from "react-router";
@@ -25,6 +26,7 @@ import UnarchiveFileModal from "../../modals/UnarchiveFileModal";
 import { MoveFilesModal } from "../modals/MoveFilesModal";
 import { FileVersionsModal } from "../modals/FileVersionsModal";
 import { SetPrimaryTypeModal } from "../modals/SetPrimaryTypeModal";
+import { ShareUrlsModal } from "../modals/ShareUrlsModal";
 import AssetPreviewThumbnail from "./AssetPreviewThumbnail";
 import FilePreviewThumbnail from "./FilePreviewThumbnail";
 import PreviewModal from "./PreviewModal";
@@ -93,6 +95,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const [showSetPrimaryTypeModal, setShowSetPrimaryTypeModal] = useState(false);
     const [showDeletePreviewModal, setShowDeletePreviewModal] = useState(false);
     const [isPreviewDeleting, setIsPreviewDeleting] = useState(false);
+    const [showShareUrlsModal, setShowShareUrlsModal] = useState(false);
 
     if (!selectedItem) {
         return (
@@ -222,6 +225,27 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     }}
                 />
 
+                <SetPrimaryTypeModal
+                    visible={showSetPrimaryTypeModal}
+                    onDismiss={() => setShowSetPrimaryTypeModal(false)}
+                    selectedFiles={selectedItems.filter((item) => !item.isFolder)}
+                    databaseId={databaseId!}
+                    assetId={assetId!}
+                    onSuccess={() => {
+                        setShowSetPrimaryTypeModal(false);
+                        // Refresh file list
+                        dispatch({ type: "REFRESH_FILES", payload: null });
+                    }}
+                />
+
+                <ShareUrlsModal
+                    visible={showShareUrlsModal}
+                    onDismiss={() => setShowShareUrlsModal(false)}
+                    selectedFiles={selectedItems.filter((item) => !item.isFolder)}
+                    databaseId={databaseId!}
+                    assetId={assetId!}
+                />
+
                 <div
                     className="file-info-header"
                     style={{
@@ -281,32 +305,69 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     ) : (
                                         // All files are non-archived
                                         <>
-                                            {canDelete && (
-                                                <Button
-                                                    iconName="remove"
-                                                    onClick={() => setShowDeleteModal(true)}
-                                                >
-                                                    Delete Files
-                                                </Button>
-                                            )}
-                                            <Button
-                                                iconName="copy"
-                                                onClick={() => setShowMoveFilesModal(true)}
+                                            <ButtonDropdown
+                                                items={[
+                                                    {
+                                                        id: "set-primary",
+                                                        text: "Set Primary Type",
+                                                        iconName: "settings",
+                                                    },
+                                                    {
+                                                        id: "move-copy",
+                                                        text: "Move/Copy Files",
+                                                        iconName: "copy",
+                                                    },
+                                                    {
+                                                        id: "delete",
+                                                        text: "Delete Files",
+                                                        iconName: "remove",
+                                                        disabled: !canDelete,
+                                                    },
+                                                ]}
+                                                onItemClick={({ detail }) => {
+                                                    switch (detail.id) {
+                                                        case "delete":
+                                                            setShowDeleteModal(true);
+                                                            break;
+                                                        case "move-copy":
+                                                            setShowMoveFilesModal(true);
+                                                            break;
+                                                        case "set-primary":
+                                                            setShowSetPrimaryTypeModal(true);
+                                                            break;
+                                                    }
+                                                }}
                                             >
-                                                Move/Copy Files
-                                            </Button>
-                                            <Button
-                                                iconName="settings"
-                                                onClick={() => setShowSetPrimaryTypeModal(true)}
+                                                File Operations
+                                            </ButtonDropdown>
+
+                                            <ButtonDropdown
+                                                items={[
+                                                    {
+                                                        id: "download",
+                                                        text: "Download Files",
+                                                        iconName: "download",
+                                                    },
+                                                    {
+                                                        id: "share",
+                                                        text: "Share File(s) URL",
+                                                        iconName: "share",
+                                                    },
+                                                ]}
+                                                onItemClick={({ detail }) => {
+                                                    switch (detail.id) {
+                                                        case "download":
+                                                            handleMultiFileDownload();
+                                                            break;
+                                                        case "share":
+                                                            setShowShareUrlsModal(true);
+                                                            break;
+                                                    }
+                                                }}
                                             >
-                                                Set Primary Type
-                                            </Button>
-                                            <Button
-                                                iconName="download"
-                                                onClick={handleMultiFileDownload}
-                                            >
-                                                Download Files
-                                            </Button>
+                                                Export
+                                            </ButtonDropdown>
+
                                             <Button
                                                 iconName="external"
                                                 variant={"primary"}
@@ -340,20 +401,6 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         ))}
                     </div>
                 </div>
-
-                {/* Set Primary Type Modal for multi-select */}
-                <SetPrimaryTypeModal
-                    visible={showSetPrimaryTypeModal}
-                    onDismiss={() => setShowSetPrimaryTypeModal(false)}
-                    selectedFiles={selectedItems.filter((item) => !item.isFolder)}
-                    databaseId={databaseId!}
-                    assetId={assetId!}
-                    onSuccess={() => {
-                        setShowSetPrimaryTypeModal(false);
-                        // Refresh file list
-                        dispatch({ type: "REFRESH_FILES", payload: null });
-                    }}
-                />
             </div>
         );
     }
@@ -494,6 +541,14 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     // Refresh file list
                     dispatch({ type: "REFRESH_FILES", payload: null });
                 }}
+            />
+
+            <ShareUrlsModal
+                visible={showShareUrlsModal}
+                onDismiss={() => setShowShareUrlsModal(false)}
+                selectedFiles={selectedItem ? [selectedItem] : []}
+                databaseId={databaseId!}
+                assetId={assetId!}
             />
 
             {/* Delete Preview Modal */}
@@ -643,22 +698,63 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 >
                     {isFolder ? (
                         <SpaceBetween direction="horizontal" size="xs">
-                            {/* Only show Delete Folder button if not top-level asset node */}
-                            {!(selectedItem.relativePath === "/" && selectedItem.level === 0) && (
-                                <Button iconName="remove" onClick={() => setShowDeleteModal(true)}>
-                                    Delete Folder
-                                </Button>
-                            )}
-                            <Button
-                                iconName="folder"
-                                onClick={() => setCreateFolderModalVisible(true)}
+                            {/* Show operations dropdown for all folders, with different options based on level */}
+                            <ButtonDropdown
+                                items={
+                                    selectedItem.relativePath === "/" && selectedItem.level === 0
+                                        ? [
+                                              {
+                                                  id: "create-subfolder",
+                                                  text: "Create Sub-Folder",
+                                                  iconName: "folder",
+                                              },
+                                          ]
+                                        : [
+                                              {
+                                                  id: "create-subfolder",
+                                                  text: "Create Sub-Folder",
+                                                  iconName: "folder",
+                                              },
+                                              {
+                                                  id: "delete-folder",
+                                                  text: "Delete Folder",
+                                                  iconName: "remove",
+                                              },
+                                          ]
+                                }
+                                onItemClick={({ detail }) => {
+                                    switch (detail.id) {
+                                        case "delete-folder":
+                                            setShowDeleteModal(true);
+                                            break;
+                                        case "create-subfolder":
+                                            setCreateFolderModalVisible(true);
+                                            break;
+                                    }
+                                }}
                             >
-                                Create Sub-Folder
-                            </Button>
-                            {hasFolderContent(selectedItem) && (
-                                <Button
-                                    iconName="download"
-                                    onClick={() => {
+                                {selectedItem.relativePath === "/" && selectedItem.level === 0
+                                    ? "Asset Operations"
+                                    : "Folder Operations"}
+                            </ButtonDropdown>
+
+                            <ButtonDropdown
+                                items={[
+                                    {
+                                        id: "download-folder",
+                                        text: "Download Folder",
+                                        iconName: "download",
+                                        disabled: !hasFolderContent(selectedItem),
+                                    },
+                                    {
+                                        id: "share-folder",
+                                        text: "Share Files URL",
+                                        iconName: "share",
+                                        disabled: !hasFolderContent(selectedItem),
+                                    },
+                                ]}
+                                onItemClick={({ detail }) => {
+                                    if (detail.id === "download-folder") {
                                         navigate(
                                             `/databases/${databaseId}/assets/${assetId}/download`,
                                             {
@@ -667,11 +763,14 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                 },
                                             }
                                         );
-                                    }}
-                                >
-                                    Download Folder
-                                </Button>
-                            )}
+                                    } else if (detail.id === "share-folder") {
+                                        setShowShareUrlsModal(true);
+                                    }
+                                }}
+                            >
+                                Export
+                            </ButtonDropdown>
+
                             <Button iconName="upload" variant={"primary"} onClick={handleUpload}>
                                 Upload Files
                             </Button>
@@ -695,27 +794,68 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                 </>
                             ) : (
                                 <>
-                                    <Button
-                                        iconName="remove"
-                                        onClick={() => setShowDeleteModal(true)}
+                                    <ButtonDropdown
+                                        items={[
+                                            {
+                                                id: "set-primary",
+                                                text: "Set Primary Type",
+                                                iconName: "settings",
+                                            },
+                                            {
+                                                id: "move-copy",
+                                                text: "Move/Copy File",
+                                                iconName: "copy",
+                                            },
+                                            {
+                                                id: "delete",
+                                                text: "Delete File",
+                                                iconName: "remove",
+                                            },
+                                        ]}
+                                        onItemClick={({ detail }) => {
+                                            switch (detail.id) {
+                                                case "delete":
+                                                    setShowDeleteModal(true);
+                                                    break;
+                                                case "move-copy":
+                                                    setShowMoveFilesModal(true);
+                                                    break;
+                                                case "set-primary":
+                                                    setShowSetPrimaryTypeModal(true);
+                                                    break;
+                                            }
+                                        }}
                                     >
-                                        Delete File
-                                    </Button>
-                                    <Button
-                                        iconName="copy"
-                                        onClick={() => setShowMoveFilesModal(true)}
+                                        File Operations
+                                    </ButtonDropdown>
+
+                                    <ButtonDropdown
+                                        items={[
+                                            {
+                                                id: "download",
+                                                text: "Download File",
+                                                iconName: "download",
+                                            },
+                                            {
+                                                id: "share",
+                                                text: "Share File URL",
+                                                iconName: "share",
+                                            },
+                                        ]}
+                                        onItemClick={({ detail }) => {
+                                            switch (detail.id) {
+                                                case "download":
+                                                    handleDownload();
+                                                    break;
+                                                case "share":
+                                                    setShowShareUrlsModal(true);
+                                                    break;
+                                            }
+                                        }}
                                     >
-                                        Move/Copy File
-                                    </Button>
-                                    <Button
-                                        iconName="settings"
-                                        onClick={() => setShowSetPrimaryTypeModal(true)}
-                                    >
-                                        Set Primary Type
-                                    </Button>
-                                    <Button iconName="download" onClick={handleDownload}>
-                                        Download File
-                                    </Button>
+                                        Export
+                                    </ButtonDropdown>
+
                                     <Button
                                         iconName="external"
                                         variant={"primary"}
@@ -761,6 +901,16 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                             <div className="file-info-value">{asset.bucketName}</div>
                         </div>
                     )}
+
+                {/* Show Total Asset Size for the top-level Asset Node */}
+                {selectedItem.relativePath === "/" && selectedItem.level === 0 && (
+                    <div className="file-info-item">
+                        <div className="file-info-label">Total Asset Size:</div>
+                        <div className="file-info-value">
+                            {formatFileSize(state.totalAssetSize)}
+                        </div>
+                    </div>
+                )}
 
                 {/* Show preview thumbnail for the top-level Asset Node */}
                 {selectedItem.relativePath === "/" && selectedItem.level === 0 && (
