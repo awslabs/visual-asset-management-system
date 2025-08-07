@@ -475,9 +475,7 @@ export default function ViewFile() {
                                                         }
                                                         multiFileKeys={
                                                             isMultiFileMode
-                                                                ? currentFiles.map(
-                                                                      (f) => f.previewFile || f.key
-                                                                  )
+                                                                ? currentFiles.map((f) => f.key) // Always use main files for visualizer
                                                                 : undefined
                                                         }
                                                         versionId={
