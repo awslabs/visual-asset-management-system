@@ -641,7 +641,7 @@ def migrate_asset_links(dynamodb, asset_links_table_name, asset_links_table_v2_n
                     continue
                 
                 # Transform relationship type
-                if relationship_type in ['parent', 'child']:
+                if relationship_type in ['parent', 'child', 'parent-child']:
                     new_relationship_type = 'parentChild'
                 else:
                     new_relationship_type = relationship_type

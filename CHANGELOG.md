@@ -36,6 +36,7 @@ This version includes significant enhancements to VAMS infrastructure, a complet
     -   Support for empty asset creation and/or throughout life cycle of an asset (uploads no longer required during asset creation)
     -   Asset uploads in the UI now keep their original filenames and no longer change them to the asset name.
     -   The concept of "primary file" in an asset has been removed to support assets being truly multi-file
+    -   New File URL Sharing action/modal for files in the file manager that generates presigned URLs for all files or folder selected
 -   **Web** The front-end asset upload has been heavily modified to support the new backend asset changes
     -   Now supports choosing multiple files and/or entire folders
     -   Files now keep their original names and are no longer changed to the assetName
@@ -140,6 +141,7 @@ This version includes significant enhancements to VAMS infrastructure, a complet
 -   Fixed various UI and backend bugs related to the asset management overhaul
 -   Fixed fullscreen mode on visualizers not working on certain visualizers after exiting from a previous fullscreen session; removed compact mode as this had no benefit.
 -   Fixed OpenSearch search to exclude `bool_` fields that may get added to dynamodb tables it indexes. Wildcard searches in query don't work on bool fields.
+-   Added check to metadataschema creation API to make sure the database ID exists before creating the schema
 
 ### Chores
 

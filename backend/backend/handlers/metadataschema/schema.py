@@ -13,6 +13,7 @@ from decimal import Decimal
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from common.constants import STANDARD_JSON_RESPONSE
+from models.common import VAMSGeneralErrorResponse
 from common.validators import validate
 from common.dynamodb import validate_pagination_info
 from boto3.dynamodb.conditions import Key
@@ -23,6 +24,12 @@ claims_and_roles = {}
 logger = safeLogger(service="MetadataSchema")
 dynamodb_client = boto3.client('dynamodb')
 
+# Load environment variables
+try:
+    db_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
+except Exception as e:
+    logger.exception("Failed loading environment variables")
+    raise e
 
 class DecimalEncoder(json.JSONEncoder):
     def default(self, o):
@@ -61,6 +68,19 @@ class MetadataSchema:
         self.table_name = table_name
         self.dynamodb = dynamodb or boto3.resource('dynamodb')
         self.table = self.dynamodb.Table(table_name)
+
+    def verify_database_exists(self, database_id: str):
+        table = self.dynamodb.Table(db_table_name)
+        try:
+            response = table.get_item(Key={'databaseId': database_id})
+            if 'Item' not in response:
+                raise VAMSGeneralErrorResponse(f"Database with ID {database_id} does not exist")
+            return True
+        except Exception as e:
+            if isinstance(e, VAMSGeneralErrorResponse):
+                raise e
+            logger.exception(f"Error verifying database: {e}")
+            raise VAMSGeneralErrorResponse(f"Error verifying database: {str(e)}")
 
     @staticmethod
     def from_env():
@@ -245,6 +265,9 @@ def lambda_handler(event: APIGatewayProxyEvent, context: LambdaContext,
         schema = metadata_schema_fn()
         databaseId = event.get("pathParameters", {}).get("databaseId")
         method = event['requestContext']['http']['method']
+
+        # Check if database even exists before proceeding
+        schema.verify_database_exists(databaseId)
 
         method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:

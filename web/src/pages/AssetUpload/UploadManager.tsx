@@ -101,11 +101,8 @@ export default function UploadManager({
                 assetDetail.assetLinksFe.related?.length)
                 ? "pending"
                 : "skipped",
-        metadataStatus: isExistingAsset
-            ? "completed"
-            : Object.keys(metadata).length > 0
-            ? "pending"
-            : "skipped",
+        metadataStatus:
+            isExistingAsset || Object.keys(metadata).length === 0 ? "skipped" : "pending",
         uploadInitStatus: fileItems.length > 0 ? "pending" : "skipped",
         previewUploadInitStatus: assetDetail.Preview ? "pending" : "skipped",
         uploadStatus: fileItems.length > 0 ? "pending" : "skipped",

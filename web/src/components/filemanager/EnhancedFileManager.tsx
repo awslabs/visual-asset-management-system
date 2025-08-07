@@ -45,6 +45,7 @@ export function EnhancedFileManager({ assetName, assetFiles = [] }: EnhancedFile
         showArchived: false,
         showNonIncluded: false,
         flattenedItems: [],
+        totalAssetSize: 0,
     };
 
     const [state, dispatch] = useReducer(fileManagerReducer, initialState);
