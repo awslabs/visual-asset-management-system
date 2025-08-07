@@ -382,6 +382,22 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                     S: "route__path",
                                 },
                                 id: {
+                                    S: `7_${roleNameIDClean}_api_paths`,
+                                },
+                                operator: {
+                                    S: "starts_with",
+                                },
+                                value: {
+                                    S: "/metadataschema",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
                                     S: `8_${roleNameIDClean}_api_paths`,
                                 },
                                 operator: {
@@ -469,22 +485,6 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                                 value: {
                                     S: "/tag-types",
-                                },
-                            },
-                        },
-                        {
-                            M: {
-                                field: {
-                                    S: "route__path",
-                                },
-                                id: {
-                                    S: `14_${roleNameIDClean}_api_paths`,
-                                },
-                                operator: {
-                                    S: "starts_with",
-                                },
-                                value: {
-                                    S: "/auxiliaryPreviewAssets",
                                 },
                             },
                         },
