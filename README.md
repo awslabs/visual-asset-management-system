@@ -7,11 +7,9 @@
 
 ## _Notice_
 
-_Visual Asset Management System (VAMS) version 2.X+ is the official recognized and approved version series._
+_Visual Asset Management System (VAMS) is considered a sample project that is non-production-grade. Evaluate with your organizional security before deploying to production environments._
 
-_All previous 1.X versions of VAMS, although still available, will no longer be supported or recommended for use._
-
-_VAMS is considered a sample project that is non-production-grade_
+_VAMS version 2.X+ is the official recognized and approved version series. 1.X versions are no longer recommended for use._
 
 ## Introduction
 
