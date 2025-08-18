@@ -318,6 +318,15 @@ def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
     claims_and_roles = request_to_claims(event)
     logger.info(event)
+
+    # Parse request body
+    if not event.get('body'):
+        message = 'Request body is required'
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        logger.error(response)
+        return response
+
     if isinstance(event['body'], str):
         event['body'] = json.loads(event['body'])
     # event['body']=json.loads(event['body'])

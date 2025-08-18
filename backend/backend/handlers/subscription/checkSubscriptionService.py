@@ -59,6 +59,15 @@ def check_subscriptions(body):
 
 def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
+
+    # Parse request body
+    if not event.get('body'):
+        message = 'Request body is required'
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        logger.error(response)
+        return response
+
     if isinstance(event['body'], str):
         event['body'] = json.loads(event['body'])
 

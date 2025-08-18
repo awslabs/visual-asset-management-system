@@ -27,6 +27,7 @@ interface ShareUrlsModalProps {
 
 interface UrlItem {
     fileName: string;
+    filePath: string;
     url: string;
     copied: boolean;
     error?: string;
@@ -63,39 +64,140 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
 
         try {
             // Process both files and folders
-            const filesToShare: { key: string; name: string; versionId?: string }[] = [];
+            const filesToShare: {
+                key: string;
+                name: string;
+                versionId?: string;
+                relativePath: string;
+            }[] = [];
+
+            // Enhanced function to collect all files from a folder recursively
+            const collectFilesFromFolder = (folder: FileTree, isRootAsset: boolean = false) => {
+                console.log(
+                    `Collecting files from folder: ${folder.name} (level: ${folder.level}, isRootAsset: ${isRootAsset})`
+                );
+
+                for (const subItem of folder.subTree) {
+                    // Determine if this subItem is a folder
+                    const subItemIsFolder =
+                        subItem.isFolder === true ||
+                        (subItem.isFolder === undefined &&
+                            (subItem.subTree.length > 0 || subItem.keyPrefix.endsWith("/")));
+
+                    if (subItemIsFolder) {
+                        console.log(`Found subfolder: ${subItem.name}, recursing...`);
+                        // Recursively process subfolders
+                        collectFilesFromFolder(subItem, false);
+                    } else {
+                        // This is a file - add it to the list
+                        // Skip files that are empty or have invalid keys
+                        if (subItem.keyPrefix && subItem.name && subItem.keyPrefix.trim() !== "") {
+                            console.log(`Adding file: ${subItem.name} (key: ${subItem.keyPrefix})`);
+
+                            // Format the relative path for display
+                            let displayPath = subItem.relativePath || "/";
+
+                            // Clean up the path for better display
+                            if (displayPath === "/" || displayPath === "") {
+                                displayPath = "/"; // Root level
+                            } else if (displayPath.startsWith("/")) {
+                                // Remove leading slash for cleaner display
+                                displayPath = displayPath.substring(1);
+                            }
+
+                            // If it's just the filename, show it as root level
+                            if (displayPath === subItem.name) {
+                                displayPath = "/";
+                            } else if (displayPath.endsWith("/" + subItem.name)) {
+                                // Remove the filename from the path to show just the folder
+                                displayPath = displayPath.substring(
+                                    0,
+                                    displayPath.length - subItem.name.length - 1
+                                );
+                                if (displayPath === "") {
+                                    displayPath = "/";
+                                }
+                            }
+
+                            filesToShare.push({
+                                key: subItem.keyPrefix,
+                                name: subItem.name,
+                                versionId: subItem.versionId,
+                                relativePath: displayPath,
+                            });
+                        } else {
+                            console.warn(`Skipping invalid file entry:`, subItem);
+                        }
+                    }
+                }
+            };
 
             // Process each selected item
             for (const item of selectedFiles) {
-                if (item.isFolder) {
-                    // For folders, include all files within the folder
-                    // We'll use the subTree to find all files in the folder
-                    const collectFilesFromFolder = (folder: FileTree) => {
-                        for (const subItem of folder.subTree) {
-                            if (subItem.isFolder) {
-                                // Recursively process subfolders
-                                collectFilesFromFolder(subItem);
-                            } else {
-                                // Add file to the list
-                                filesToShare.push({
-                                    key: subItem.keyPrefix,
-                                    name: subItem.name,
-                                    versionId: subItem.versionId,
-                                });
+                // Determine if this item is a folder
+                const itemIsFolder =
+                    item.isFolder === true ||
+                    (item.isFolder === undefined &&
+                        (item.subTree.length > 0 || item.keyPrefix.endsWith("/")));
+
+                // Check if this is the root asset (level 0 or root path)
+                const isRootAsset =
+                    item.level === 0 ||
+                    item.relativePath === "/" ||
+                    item.relativePath === "" ||
+                    item.keyPrefix === "/" ||
+                    item.keyPrefix === "";
+
+                console.log(
+                    `Processing item: ${item.name} (isFolder: ${itemIsFolder}, isRootAsset: ${isRootAsset}, level: ${item.level})`
+                );
+
+                if (itemIsFolder || isRootAsset) {
+                    // For folders (including root asset), collect all files within
+                    collectFilesFromFolder(item, isRootAsset);
+                } else {
+                    // Regular file - add it directly
+                    if (item.keyPrefix && item.name && item.keyPrefix.trim() !== "") {
+                        console.log(`Adding direct file: ${item.name} (key: ${item.keyPrefix})`);
+
+                        // Format the relative path for display
+                        let displayPath = item.relativePath || "/";
+
+                        // Clean up the path for better display
+                        if (displayPath === "/" || displayPath === "") {
+                            displayPath = "/"; // Root level
+                        } else if (displayPath.startsWith("/")) {
+                            // Remove leading slash for cleaner display
+                            displayPath = displayPath.substring(1);
+                        }
+
+                        // If it's just the filename, show it as root level
+                        if (displayPath === item.name) {
+                            displayPath = "/";
+                        } else if (displayPath.endsWith("/" + item.name)) {
+                            // Remove the filename from the path to show just the folder
+                            displayPath = displayPath.substring(
+                                0,
+                                displayPath.length - item.name.length - 1
+                            );
+                            if (displayPath === "") {
+                                displayPath = "/";
                             }
                         }
-                    };
 
-                    collectFilesFromFolder(item);
-                } else {
-                    // Regular file
-                    filesToShare.push({
-                        key: item.keyPrefix,
-                        name: item.name,
-                        versionId: item.versionId,
-                    });
+                        filesToShare.push({
+                            key: item.keyPrefix,
+                            name: item.name,
+                            versionId: item.versionId,
+                            relativePath: displayPath,
+                        });
+                    } else {
+                        console.warn(`Skipping invalid direct file entry:`, item);
+                    }
                 }
             }
+
+            console.log(`Total files collected for sharing: ${filesToShare.length}`);
 
             if (filesToShare.length === 0) {
                 setError("No valid files found to share");
@@ -120,9 +222,14 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
             const urlItems: UrlItem[] = [];
 
             if (Array.isArray(response)) {
-                response.forEach((item) => {
+                response.forEach((item, index) => {
+                    // Find the corresponding file from filesToShare to get the relative path
+                    const correspondingFile = filesToShare[index];
+                    const filePath = correspondingFile ? correspondingFile.relativePath : "/";
+
                     urlItems.push({
                         fileName: item.fileName || "Unknown file",
+                        filePath: filePath,
                         url: item.url,
                         copied: false,
                         error: item.error,
@@ -220,7 +327,24 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
             id: "fileName",
             header: "File Name",
             cell: (item: UrlItem) => item.fileName,
-            width: 180,
+            width: 200,
+        },
+        {
+            id: "filePath",
+            header: "Folder Path",
+            cell: (item: UrlItem) => (
+                <div
+                    style={{
+                        fontFamily: "monospace",
+                        fontSize: "0.9em",
+                        color: "#666",
+                    }}
+                    title={item.filePath}
+                >
+                    {item.filePath}
+                </div>
+            ),
+            width: 150,
         },
         {
             id: "url",
@@ -260,7 +384,7 @@ export const ShareUrlsModal: React.FC<ShareUrlsModalProps> = ({
                                 whiteSpace: "nowrap",
                                 overflow: "hidden",
                                 textOverflow: "ellipsis",
-                                maxWidth: "1250px",
+                                maxWidth: "1000px",
                                 cursor: "pointer",
                             }}
                             title="Click to see full URL"

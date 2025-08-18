@@ -702,7 +702,23 @@ def lambda_handler(event, context):
     Example of a NoOp pipeline
     Uploads input file to output
     """
-    print(event)
+    logger.info(event)
+    response = {
+        'statusCode': 200,
+        'body': '',
+        'headers': {
+            'Content-Type': 'application/json'
+        }
+    }
+
+    # Parse request body
+    if not event.get('body'):
+        message = 'Request body is required'
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        logger.error(response)
+        return response
+
     if isinstance(event['body'], str):
         data = json.loads(event['body'])
     else:

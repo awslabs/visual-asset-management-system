@@ -47,7 +47,7 @@ import AssetUploadWorkflow from "./AssetUploadWorkflow";
 import ControlledMetadata from "../../components/metadata/ControlledMetadata";
 import Synonyms from "../../synonyms";
 import onSubmit, { onUploadRetry, UploadExecutionProps } from "./onSubmit";
-import EnhancedFileSelector from "../../components/form/EnhancedFileSelector";
+import DragDropFileUpload from "../../components/form/DragDropFileUpload";
 import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUploadTable";
 import localforage from "localforage";
 import { fetchTags, fetchAllAssets, fetchtagTypes } from "../../services/APIService";
@@ -836,6 +836,118 @@ const AssetFileInfo = ({
                         </p>
                     )}
                 </Alert>
+                <Container>
+                    <Grid
+                        gridDefinition={[{ colspan: { default: 6 } }, { colspan: { default: 6 } }]}
+                    >
+                        <SpaceBetween direction="vertical" size="m">
+                            <FormField
+                                label="Asset Files"
+                                description={
+                                    assetDetailState.Asset
+                                        ? `Total Files to Upload: ${assetDetailState.Asset.length}`
+                                        : "Select a folder or multiple files"
+                                }
+                                errorText={
+                                    (!assetDetailState.Asset &&
+                                        showErrors &&
+                                        "Asset is required") ||
+                                    undefined
+                                }
+                            >
+                                <SpaceBetween direction="vertical" size="xs">
+                                    <Toggle
+                                        onChange={({ detail }) => {
+                                            assetDetailDispatch({
+                                                type: "UPDATE_ASSET_IS_MULTI_FILE",
+                                                payload: detail.checked,
+                                            });
+                                            setSelectionMode(detail.checked ? "folder" : "files");
+                                        }}
+                                        checked={assetDetailState.isMultiFile}
+                                    >
+                                        {assetDetailState.isMultiFile
+                                            ? "Folder Upload"
+                                            : "File Upload"}
+                                    </Toggle>
+
+                                    <DragDropFileUpload
+                                        label=""
+                                        description=""
+                                        multiFile={true}
+                                        selectionMode={selectionMode}
+                                        onSelect={async (
+                                            directoryHandle: any,
+                                            fileHandles: any[]
+                                        ) => {
+                                            // Get new files from the file handles
+                                            const newFiles = await getFilesFromFileHandles(
+                                                fileHandles
+                                            );
+
+                                            // Combine with existing files if any exist
+                                            let combinedFiles = newFiles;
+                                            if (
+                                                assetDetailState.Asset &&
+                                                assetDetailState.Asset.length > 0
+                                            ) {
+                                                // Create a map of existing file paths to avoid duplicates
+                                                const existingFilePaths = new Map(
+                                                    assetDetailState.Asset.map((item) => [
+                                                        item.relativePath,
+                                                        item,
+                                                    ])
+                                                );
+
+                                                // Filter out any new files that would be duplicates
+                                                const uniqueNewFiles = newFiles.filter(
+                                                    (file) =>
+                                                        !existingFilePaths.has(file.relativePath)
+                                                );
+
+                                                // Combine existing files with unique new files
+                                                const existingFiles = [...assetDetailState.Asset];
+                                                combinedFiles = [
+                                                    ...existingFiles,
+                                                    ...uniqueNewFiles.map((file, idx) => ({
+                                                        ...file,
+                                                        index: existingFiles.length + idx,
+                                                    })),
+                                                ];
+                                            }
+
+                                            setFileUploadTableItems(combinedFiles);
+                                            assetDetailDispatch({
+                                                type: "UPDATE_ASSET_DIRECTORY_HANDLE",
+                                                payload: directoryHandle,
+                                            });
+                                            assetDetailDispatch({
+                                                type: "UPDATE_ASSET_FILES",
+                                                payload: combinedFiles,
+                                            });
+                                            assetDetailDispatch({
+                                                type: "UPDATE_ASSET_IS_MULTI_FILE",
+                                                payload: !!directoryHandle,
+                                            });
+                                        }}
+                                    />
+                                </SpaceBetween>
+                            </FormField>
+                        </SpaceBetween>
+
+                        <FileUpload
+                            label="Asset Overall Preview File (Optional)"
+                            disabled={false}
+                            setFile={handlePreviewFileSelection}
+                            fileFormats={previewFileFormatsStr}
+                            file={assetDetailState.Preview || undefined}
+                            errorText={previewFileError}
+                            description={`File types: ${previewFileFormatsStr}. Maximum allowed size: 5MB.`}
+                            data-testid="preview-file"
+                        />
+                    </Grid>
+                </Container>
+
                 {/* Display selected files with remove option */}
                 {assetDetailState.Asset && assetDetailState.Asset.length > 0 && (
                     <Box padding={{ bottom: "l" }}>
@@ -849,99 +961,6 @@ const AssetFileInfo = ({
                         />
                     </Box>
                 )}
-
-                <Grid gridDefinition={[{ colspan: { default: 6 } }, { colspan: { default: 6 } }]}>
-                    <SpaceBetween direction="vertical" size="m">
-                        <EnhancedFileSelector
-                            label="Select Assets"
-                            description={
-                                assetDetailState.Asset
-                                    ? `Total Files to Upload: ${assetDetailState.Asset.length}`
-                                    : "Select a folder or multiple files"
-                            }
-                            errorText={
-                                (!assetDetailState.Asset && showErrors && "Asset is required") ||
-                                undefined
-                            }
-                            multiFile={true}
-                            selectionMode={selectionMode}
-                            onSelect={async (directoryHandle: any, fileHandles: any[]) => {
-                                // Get new files from the file handles
-                                const newFiles = await getFilesFromFileHandles(fileHandles);
-
-                                // Combine with existing files if any exist
-                                let combinedFiles = newFiles;
-                                if (assetDetailState.Asset && assetDetailState.Asset.length > 0) {
-                                    // Create a map of existing file paths to avoid duplicates
-                                    const existingFilePaths = new Map(
-                                        assetDetailState.Asset.map((item) => [
-                                            item.relativePath,
-                                            item,
-                                        ])
-                                    );
-
-                                    // Filter out any new files that would be duplicates
-                                    const uniqueNewFiles = newFiles.filter(
-                                        (file) => !existingFilePaths.has(file.relativePath)
-                                    );
-
-                                    // Combine existing files with unique new files
-                                    const existingFiles = [...assetDetailState.Asset];
-                                    combinedFiles = [
-                                        ...existingFiles,
-                                        ...uniqueNewFiles.map((file, idx) => ({
-                                            ...file,
-                                            index: existingFiles.length + idx,
-                                        })),
-                                    ];
-                                }
-
-                                setFileUploadTableItems(combinedFiles);
-                                assetDetailDispatch({
-                                    type: "UPDATE_ASSET_DIRECTORY_HANDLE",
-                                    payload: directoryHandle,
-                                });
-                                assetDetailDispatch({
-                                    type: "UPDATE_ASSET_FILES",
-                                    payload: combinedFiles,
-                                });
-                                assetDetailDispatch({
-                                    type: "UPDATE_ASSET_IS_MULTI_FILE",
-                                    payload: !!directoryHandle,
-                                });
-                            }}
-                        />
-
-                        {/* Move the toggle below the file selector */}
-                        <FormField label="Selection Mode">
-                            <SpaceBetween direction="horizontal" size="xs">
-                                <Toggle
-                                    onChange={({ detail }) => {
-                                        assetDetailDispatch({
-                                            type: "UPDATE_ASSET_IS_MULTI_FILE",
-                                            payload: detail.checked,
-                                        });
-                                        setSelectionMode(detail.checked ? "folder" : "files");
-                                    }}
-                                    checked={assetDetailState.isMultiFile}
-                                >
-                                    Folder Upload?
-                                </Toggle>
-                            </SpaceBetween>
-                        </FormField>
-                    </SpaceBetween>
-
-                    <FileUpload
-                        label="Asset Overall Preview File (Optional)"
-                        disabled={false}
-                        setFile={handlePreviewFileSelection}
-                        fileFormats={previewFileFormatsStr}
-                        file={assetDetailState.Preview || undefined}
-                        errorText={previewFileError}
-                        description={`File types: ${previewFileFormatsStr}. Maximum allowed size: 5MB.`}
-                        data-testid="preview-file"
-                    />
-                </Grid>
             </SpaceBetween>
         </Container>
     );

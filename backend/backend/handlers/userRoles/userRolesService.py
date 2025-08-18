@@ -377,6 +377,14 @@ def lambda_handler(event, context):
         if http_method == 'GET' and method_allowed_on_api:
             return get_user_roles(queryParameters)
 
+        # Parse request body
+        if not event.get('body'):
+            message = 'Request body is required'
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            logger.error(response)
+            return response
+
         if isinstance(event['body'], str):
             event['body'] = json.loads(event['body'])
 

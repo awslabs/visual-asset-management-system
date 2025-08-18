@@ -435,6 +435,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     
     try:
         # Parse request body
+        if not event.get('body'):
+            return validation_error(body={'message': "Request body is required"})
+        
+        # Parse request body
         if isinstance(event['body'], str):
             event['body'] = json.loads(event['body'])
         

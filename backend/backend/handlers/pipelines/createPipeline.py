@@ -242,7 +242,15 @@ def lambda_handler(event, context, create_pipeline_fn=CreatePipeline.from_env):
     logger.info(event)
     create_pipeline = create_pipeline_fn()
     response = STANDARD_JSON_RESPONSE
-    logger.info(event['body'])
+    logger.info(event)
+
+    # Parse request body
+    if not event.get('body'):
+        message = 'Request body is required'
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        logger.error(response)
+        return response
     
     if isinstance(event['body'], str):
         event['body'] = json.loads(event['body'])
