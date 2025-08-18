@@ -12,6 +12,8 @@ import {
     Header,
     SpaceBetween,
     StatusIndicator,
+    Toggle,
+    Alert,
 } from "@cloudscape-design/components";
 
 // Utility class for managing concurrent downloads
@@ -97,6 +99,7 @@ const downloadSingleFile = async (
     file: FileTree,
     directoryHandle: any,
     dispatch: any,
+    flattenHierarchy: boolean = false,
     maxRetries = 3
 ): Promise<boolean> => {
     let retries = 0;
@@ -109,15 +112,25 @@ const downloadSingleFile = async (
                 payload: { relativePath: file.relativePath, status: "In Progress" },
             });
 
-            // Get the directory path and filename
-            const pathParts = file.relativePath.split("/");
-            const fileName = pathParts.pop() || file.name;
-            const directoryPath = pathParts.join("/");
+            // Handle path based on flatten mode
+            let fileName: string;
+            let fileDirectoryHandle: any;
 
-            // Create directory structure if needed
-            const fileDirectoryHandle = directoryPath
-                ? await createDirectoryStructure(directoryHandle, directoryPath)
-                : directoryHandle;
+            if (flattenHierarchy) {
+                // Flatten mode: use only the filename, ignore directory structure
+                fileName = file.name;
+                fileDirectoryHandle = directoryHandle;
+            } else {
+                // Preserve mode: maintain original directory structure
+                const pathParts = file.relativePath.split("/");
+                fileName = pathParts.pop() || file.name;
+                const directoryPath = pathParts.join("/");
+
+                // Create directory structure if needed
+                fileDirectoryHandle = directoryPath
+                    ? await createDirectoryStructure(directoryHandle, directoryPath)
+                    : directoryHandle;
+            }
 
             // Get file handle and writable
             const fileHandle = await fileDirectoryHandle.getFileHandle(fileName, { create: true });
@@ -146,16 +159,19 @@ const downloadSingleFile = async (
                 method: "GET",
                 responseType: "blob",
                 onDownloadProgress: (progressEvent) => {
-                    dispatch({
-                        type: "UPDATE_PROGRESS",
-                        payload: {
-                            status: "In Progress",
-                            relativePath: file.relativePath,
-                            progress: progressEvent.loaded,
-                            loaded: progressEvent.loaded,
-                            total: progressEvent.total,
-                        },
-                    });
+                    // Only update progress if we have valid progress data
+                    if (progressEvent.total && progressEvent.loaded !== undefined) {
+                        dispatch({
+                            type: "UPDATE_PROGRESS",
+                            payload: {
+                                status: "In Progress",
+                                relativePath: file.relativePath,
+                                progress: progressEvent.loaded,
+                                loaded: progressEvent.loaded,
+                                total: progressEvent.total,
+                            },
+                        });
+                    }
                 },
             });
 
@@ -169,12 +185,11 @@ const downloadSingleFile = async (
                 `File ${file.relativePath} downloaded successfully, size: ${fileSize} bytes`
             );
 
-            // Force progress to 100% when completed
+            // Ensure completion is properly set with final file size
             dispatch({
                 type: "COMPLETE_FILE",
                 payload: {
                     relativePath: file.relativePath,
-                    status: "Completed",
                     loaded: fileSize,
                     total: fileSize,
                 },
@@ -212,6 +227,7 @@ const downloadFilesInParallel = async (
     files: Array<FileTree>,
     directoryHandle: any,
     dispatch: any,
+    flattenHierarchy: boolean = false,
     concurrencyLimit = 5
 ): Promise<void> => {
     const downloadQueue = new DownloadQueue(concurrencyLimit);
@@ -219,7 +235,14 @@ const downloadFilesInParallel = async (
     // Create an array of promises for all file downloads
     const downloadPromises = files.map((file) =>
         downloadQueue.add(() =>
-            downloadSingleFile(assetId, databaseId, file, directoryHandle, dispatch)
+            downloadSingleFile(
+                assetId,
+                databaseId,
+                file,
+                directoryHandle,
+                dispatch,
+                flattenHierarchy
+            )
         )
     );
 
@@ -260,7 +283,9 @@ async function downloadFolder(
     assetId: string,
     databaseId: string,
     tree: FileTree,
-    dispatch: any
+    dispatch: any,
+    flattenHierarchy: boolean = false,
+    setSelectedFolderName?: (name: string) => void
 ): Promise<void> {
     try {
         // Check if File System Access API is supported
@@ -275,12 +300,28 @@ async function downloadFolder(
         // @ts-ignore
         const directoryHandle = await window.showDirectoryPicker();
 
+        // Capture the selected folder name for display purposes
+        if (setSelectedFolderName && directoryHandle.name) {
+            setSelectedFolderName(directoryHandle.name);
+        }
+
         // Flatten the file tree
         const files = flattenFileTree(tree);
-        console.log(`Starting download of ${files.length} files`);
+        console.log(
+            `Starting download of ${files.length} files in ${
+                flattenHierarchy ? "flatten" : "preserve"
+            } mode`
+        );
 
         // Download all files in parallel
-        await downloadFilesInParallel(assetId, databaseId, files, directoryHandle, dispatch);
+        await downloadFilesInParallel(
+            assetId,
+            databaseId,
+            files,
+            directoryHandle,
+            dispatch,
+            flattenHierarchy
+        );
 
         console.log("All downloads have been processed");
     } catch (error) {
@@ -349,15 +390,30 @@ function assetDownloadReducer(
         case "UPDATE_PROGRESS":
             return state.map((item) => {
                 if (item.relativePath === action.payload.relativePath) {
+                    // Prevent status regression - don't update if already completed
+                    if (item.status === "Completed") {
+                        console.log(
+                            `Skipping progress update for completed file: ${item.relativePath}`
+                        );
+                        return item;
+                    }
+
                     // Calculate progress safely
                     let progress = 0;
                     if (action.payload.total > 0) {
                         progress = Math.floor((action.payload.loaded / action.payload.total) * 100);
                     }
 
+                    // Auto-complete when progress reaches 100%
+                    const newStatus = progress >= 100 ? "Completed" : action.payload.status;
+
+                    console.log(
+                        `Progress update for ${item.relativePath}: ${progress}%, status: ${newStatus}`
+                    );
+
                     return {
                         ...item,
-                        status: action.payload.status,
+                        status: newStatus,
                         size: action.payload.total,
                         progress: progress,
                         loaded: action.payload.loaded,
@@ -371,8 +427,21 @@ function assetDownloadReducer(
         case "UPDATE_STATUS":
             return state.map((item) => {
                 if (item.relativePath === action.payload.relativePath) {
+                    // Prevent status regression from Completed to any other status
+                    if (item.status === "Completed" && action.payload.status !== "Completed") {
+                        console.log(
+                            `Preventing status regression for completed file: ${item.relativePath}`
+                        );
+                        return item;
+                    }
+
                     // If status is "Completed", ensure progress is 100%
                     const progress = action.payload.status === "Completed" ? 100 : item.progress;
+
+                    console.log(
+                        `Status update for ${item.relativePath}: ${action.payload.status}, progress: ${progress}%`
+                    );
+
                     return {
                         ...item,
                         status: action.payload.status,
@@ -390,6 +459,10 @@ function assetDownloadReducer(
                     const total = action.payload.total || item.total || 1;
                     const loaded = action.payload.loaded || total;
 
+                    console.log(
+                        `Completing file: ${item.relativePath}, loaded: ${loaded}, total: ${total}`
+                    );
+
                     return {
                         ...item,
                         status: "Completed",
@@ -405,6 +478,16 @@ function assetDownloadReducer(
         case "FORCE_COMPLETE":
             return state.map((item) => {
                 if (item.relativePath === action.payload.relativePath) {
+                    // Only force complete if not already completed
+                    if (item.status === "Completed") {
+                        console.log(
+                            `File already completed, skipping force complete: ${item.relativePath}`
+                        );
+                        return item;
+                    }
+
+                    console.log(`Force completing file: ${item.relativePath}`);
+
                     // Force the item to be completed with 100% progress
                     return {
                         ...item,
@@ -434,6 +517,42 @@ function assetDownloadReducer(
     }
 }
 
+// Detect duplicate file names when flattening hierarchy
+const detectDuplicateFileNames = (files: FileTree[]): string[] => {
+    const fileNameCounts = new Map<string, number>();
+    const duplicates: string[] = [];
+
+    files.forEach((file) => {
+        const fileName = file.name;
+        const count = fileNameCounts.get(fileName) || 0;
+        fileNameCounts.set(fileName, count + 1);
+
+        if (count === 1) {
+            // This is the second occurrence, so it's a duplicate
+            duplicates.push(fileName);
+        }
+    });
+
+    return duplicates;
+};
+
+// Compute final download path based on mode and selected folder
+const computeFinalDownloadPath = (
+    file: FileUploadTableItem,
+    selectedFolder: string,
+    flattenMode: boolean
+): string => {
+    if (!selectedFolder) return "Select folder first";
+
+    if (flattenMode) {
+        // Flatten mode: just the filename in the selected folder
+        return `${selectedFolder}/${file.name}`;
+    } else {
+        // Preserve mode: maintain the original path structure
+        return `${selectedFolder}/${file.relativePath}`;
+    }
+};
+
 // Main component
 export default function AssetDownloadsPage() {
     const { state } = useLocation();
@@ -443,12 +562,27 @@ export default function AssetDownloadsPage() {
     const [resume, setResume] = useState(true);
     const [isDownloading, setIsDownloading] = useState(false);
 
+    // Toggle state for flatten hierarchy mode (default to true as requested)
+    const [flattenHierarchy, setFlattenHierarchy] = useState(true);
+    const [selectedFolderName, setSelectedFolderName] = useState<string>("");
+
     // Initialize table items
     const fileUploadTableItems = convertFileTreeItemsToFileUploadTableItems(fileTree);
     const [fileUploadTableItemsState, dispatch] = useReducer(
         assetDownloadReducer,
         fileUploadTableItems
     );
+
+    // Check for duplicate file names when in flatten mode
+    const flattenedFiles = flattenFileTree(fileTree);
+    const duplicateFileNames = flattenHierarchy ? detectDuplicateFileNames(flattenedFiles) : [];
+    const hasDuplicates = duplicateFileNames.length > 0;
+
+    // Update final download paths when flatten mode or selected folder changes
+    const updatedTableItems = fileUploadTableItemsState.map((item) => ({
+        ...item,
+        finalDownloadPath: computeFinalDownloadPath(item, selectedFolderName, flattenHierarchy),
+    }));
 
     // Update indices when items change
     useEffect(() => {
@@ -465,21 +599,19 @@ export default function AssetDownloadsPage() {
                 dispatch({ type: "RESET_ITEMS", payload: fileUploadTableItems });
             }
 
-            // Start download
-            await downloadFolder(assetId!, databaseId!, fileTree, dispatch);
+            // Start download with flatten hierarchy parameter
+            await downloadFolder(
+                assetId!,
+                databaseId!,
+                fileTree,
+                dispatch,
+                flattenHierarchy,
+                setSelectedFolderName
+            );
 
-            // Force a final update of all items to ensure UI is up to date
-            setTimeout(() => {
-                const items = fileUploadTableItemsState.filter(
-                    (item) => item.status === "In Progress"
-                );
-                items.forEach((item) => {
-                    dispatch({
-                        type: "FORCE_COMPLETE",
-                        payload: { relativePath: item.relativePath },
-                    });
-                });
-            }, 500);
+            console.log("Download process completed successfully");
+        } catch (error) {
+            console.error("Error during download process:", error);
         } finally {
             setIsDownloading(false);
             setResume(false);
@@ -530,6 +662,29 @@ export default function AssetDownloadsPage() {
     return (
         <Container header={<Header variant="h2">Downloading Folder ({fileTree.name})</Header>}>
             <SpaceBetween size="l" direction="vertical">
+                {/* Download Mode Toggle */}
+                <Box>
+                    <SpaceBetween size="m" direction="vertical">
+                        <Toggle
+                            onChange={({ detail }) => setFlattenHierarchy(detail.checked)}
+                            checked={flattenHierarchy}
+                        >
+                            {flattenHierarchy
+                                ? "Flatten Asset Paths on Download"
+                                : "Keep Asset Paths on Download"}
+                        </Toggle>
+
+                        {/* Error Alert for Duplicate Files */}
+                        {flattenHierarchy && hasDuplicates && (
+                            <Alert type="error" header="Duplicate File Names Detected">
+                                The following files have duplicate names and cannot be downloaded in
+                                flatten mode: {duplicateFileNames.join(", ")}. Please switch to
+                                "Keep Asset Paths on Download" mode or rename the conflicting files.
+                            </Alert>
+                        )}
+                    </SpaceBetween>
+                </Box>
+
                 <Box>
                     <SpaceBetween size="m" direction="vertical">
                         <SpaceBetween size="xs" direction="horizontal">
@@ -537,7 +692,7 @@ export default function AssetDownloadsPage() {
                                 variant="primary"
                                 onClick={handleDownload}
                                 loading={isDownloading}
-                                disabled={isDownloading}
+                                disabled={isDownloading || (flattenHierarchy && hasDuplicates)}
                             >
                                 {resume ? "Start Download" : "Restart Download"}
                             </Button>
@@ -562,7 +717,7 @@ export default function AssetDownloadsPage() {
                 </Box>
 
                 <FileUploadTable
-                    allItems={fileUploadTableItemsState}
+                    allItems={updatedTableItems}
                     resume={resume}
                     onRetry={handleDownload}
                     mode={"Download"}

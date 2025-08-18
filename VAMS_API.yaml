@@ -1021,7 +1021,7 @@ paths:
             security:
               - DefaultCognitoAuthorizer: []
     /database:
-        put:
+        post:
             summary: "Create or update a database."
             requestBody:
                 required: true

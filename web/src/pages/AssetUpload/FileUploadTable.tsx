@@ -94,6 +94,7 @@ export interface FileUploadTableItem {
     total: number;
     error?: string; // Error message for failed uploads
     versionId?: string; // Version ID for download mode
+    finalDownloadPath?: string; // Final download path for download mode
 }
 
 const getStatusIndicator = (status?: string) => {
@@ -266,8 +267,31 @@ export const FileUploadTable = ({
         // Find the index of the status column to insert version ID before it
         const statusColumnIndex = customColumnDefinitions.findIndex((col) => col.id === "status");
 
-        // Add Version ID column if in Download mode (before status column)
+        // Add Download-specific columns if in Download mode
         if (mode === "Download") {
+            // Update the existing filepath column to show "Asset Preview Path"
+            const filepathColumnIndex = customColumnDefinitions.findIndex(
+                (col) => col.id === "filepath"
+            );
+            if (filepathColumnIndex !== -1) {
+                customColumnDefinitions[filepathColumnIndex] = {
+                    ...customColumnDefinitions[filepathColumnIndex],
+                    header: "Asset Preview Path",
+                };
+            }
+
+            // Add Final Download Path column
+            const finalDownloadPathColumn = {
+                id: "finalDownloadPath",
+                header: "Final Download Path",
+                cell: (item: FileUploadTableItem) => (
+                    <div>{item.finalDownloadPath || "Select folder first"}</div>
+                ),
+                sortingField: "finalDownloadPath",
+                isRowHeader: false,
+            };
+
+            // Add Version ID column
             const versionColumn = {
                 id: "versionId",
                 header: "Version ID",
@@ -279,11 +303,16 @@ export const FileUploadTable = ({
             };
 
             if (statusColumnIndex !== -1) {
-                // Insert before status column
-                customColumnDefinitions.splice(statusColumnIndex, 0, versionColumn);
+                // Insert final download path and version columns before status column
+                customColumnDefinitions.splice(
+                    statusColumnIndex,
+                    0,
+                    finalDownloadPathColumn,
+                    versionColumn
+                );
             } else {
                 // Fallback: add to the end if status column not found
-                customColumnDefinitions.push(versionColumn);
+                customColumnDefinitions.push(finalDownloadPathColumn, versionColumn);
             }
         }
 

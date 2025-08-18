@@ -9,13 +9,16 @@ import {
 import Header from "@cloudscape-design/components/header";
 import Alert from "@cloudscape-design/components/alert";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { AssetDetail } from "./AssetUpload";
 import { useLocation, useNavigate, useParams } from "react-router";
 import localforage from "localforage";
 import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUploadTable";
 import Synonyms from "../../synonyms";
-import { FileInfo, MultiFileSelect } from "../../components/multifile/MultiFileSelect";
+import {
+    FileInfo,
+    DragDropMultiFileSelect,
+} from "../../components/multifile/DragDropMultiFileSelect";
 import { Link } from "@cloudscape-design/components";
 import { FileUpload } from "./components";
 import { previewFileFormats } from "../../common/constants/fileFormats";
@@ -23,6 +26,7 @@ import AssetUploadWorkflow from "./AssetUploadWorkflow";
 import { Metadata } from "../../components/single/Metadata";
 import { CompleteUploadResponse } from "../../services/AssetUploadService";
 import { safeGetFile } from "../../utils/fileHandleCompat";
+import { fetchAsset } from "../../services/APIService";
 
 // Maximum preview file size (5MB)
 const MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024;
@@ -163,7 +167,19 @@ export default function ModifyAssetsUploadsPage() {
 
     // Extract folder information and asset details from state if available
     useEffect(() => {
+        console.log("ModifyAssetsUploads - Full state received:", state);
+        console.log("ModifyAssetsUploads - URL params:", { databaseId, assetId });
+
         if (state) {
+            // Extract asset detail state if available
+            if (state.assetDetailState) {
+                console.log(
+                    "ModifyAssetsUploads - Setting asset detail from state:",
+                    state.assetDetailState
+                );
+                setAssetDetail(state.assetDetailState);
+            }
+
             // Extract folder information if available
             if (state.fileTree) {
                 const relativePath = state.fileTree.relativePath || "";
@@ -182,19 +198,58 @@ export default function ModifyAssetsUploadsPage() {
                     prefix,
                     originalKeyPrefix: state.fileTree.keyPrefix,
                 });
-
-                // If we have assetId and databaseId from URL params but no assetDetailState,
-                // update the assetDetail with the available information
-                if (!state.assetDetailState && assetId && databaseId) {
-                    setAssetDetail((prev) => ({
-                        ...prev,
-                        assetId: assetId,
-                        databaseId: databaseId,
-                    }));
-                }
             }
         }
+
+        // Always ensure we have at least the URL params set
+        if (assetId && databaseId) {
+            setAssetDetail((prev) => ({
+                ...prev,
+                assetId: assetId,
+                databaseId: databaseId,
+                // Only update assetName if it's not already set and we don't have it from state
+                assetName: prev.assetName || state?.assetDetailState?.assetName || assetId,
+            }));
+        }
     }, [state, assetId, databaseId]);
+
+    // Fetch asset information directly if not available in state
+    useEffect(() => {
+        const fetchAssetInfo = async () => {
+            // Only fetch if we don't have a proper asset name and we have the required params
+            if (
+                assetId &&
+                databaseId &&
+                (!assetDetail.assetName || assetDetail.assetName === assetId)
+            ) {
+                try {
+                    console.log("ModifyAssetsUploads - Fetching asset info directly from API");
+                    const assetInfo = await fetchAsset({
+                        databaseId,
+                        assetId,
+                        showArchived: false,
+                    });
+
+                    if (assetInfo && assetInfo !== false) {
+                        console.log("ModifyAssetsUploads - Fetched asset info:", assetInfo);
+                        setAssetDetail((prev) => ({
+                            ...prev,
+                            assetName: assetInfo.assetName || assetInfo.assetId || prev.assetName,
+                            description: assetInfo.description || prev.description,
+                            isDistributable:
+                                assetInfo.isDistributable !== undefined
+                                    ? assetInfo.isDistributable
+                                    : prev.isDistributable,
+                        }));
+                    }
+                } catch (error) {
+                    console.error("ModifyAssetsUploads - Error fetching asset info:", error);
+                }
+            }
+        };
+
+        fetchAssetInfo();
+    }, [assetId, databaseId, assetDetail.assetName]);
 
     // Clear preview file when not uploading to root path
     useEffect(() => {
@@ -219,40 +274,16 @@ export default function ModifyAssetsUploadsPage() {
     }, [assetDetail]);
 
     // Handle file selection
-    const handleFileSelection = async (fileSelection: FileInfo[]) => {
-        // Get new files from the file selection
-        const newItems = await convertToFileUploadTableItems(fileSelection, keyPrefix);
+    const handleFileSelection = useCallback(
+        async (fileSelection: FileInfo[]) => {
+            // Convert the file selection directly to FileUploadTableItems
+            const newItems = await convertToFileUploadTableItems(fileSelection, keyPrefix);
 
-        // Combine with existing files if any exist
-        let combinedItems = newItems;
-        if (fileItems && fileItems.length > 0) {
-            // Create a set of existing file paths to avoid duplicates
-            // Normalize paths by removing any leading slashes and converting to lowercase for case-insensitive comparison
-            const existingFilePaths = new Set(
-                fileItems.map((item) => item.relativePath.replace(/^\/+/, "").toLowerCase())
-            );
-
-            // Filter out any new files that would be duplicates
-            const uniqueNewItems = newItems.filter((file) => {
-                // Normalize the path for comparison
-                const normalizedPath = file.relativePath.replace(/^\/+/, "").toLowerCase();
-                return !existingFilePaths.has(normalizedPath);
-            });
-
-            // Combine existing files with unique new files
-            const existingFiles = [...fileItems];
-            combinedItems = [
-                ...existingFiles,
-                ...uniqueNewItems.map((file, idx) => ({
-                    ...file,
-                    index: existingFiles.length + idx,
-                })),
-            ];
-        }
-
-        console.log("File selection - combined items:", combinedItems.length);
-        setFileItems(combinedItems);
-    };
+            console.log("File selection - new items:", newItems.length);
+            setFileItems(newItems);
+        },
+        [keyPrefix]
+    );
 
     // Check for preview files in the selected files
     const hasPreviewFiles = useMemo(() => {
@@ -293,6 +324,13 @@ export default function ModifyAssetsUploadsPage() {
     const handleRemoveAllFiles = () => {
         setFileItems([]);
         // Increment the key to force MultiFileSelect to re-render with fresh state
+        setMultiFileSelectKey((prev) => prev + 1);
+    };
+
+    // Function to remove a single file - also increment key to force re-render
+    const handleRemoveFileWithReset = (index: number) => {
+        handleRemoveFile(index);
+        // Force component re-render to clear internal state
         setMultiFileSelectKey((prev) => prev + 1);
     };
 
@@ -350,7 +388,11 @@ export default function ModifyAssetsUploadsPage() {
                                         href={`#/databases/${assetDetail.databaseId}/assets/${assetDetail.assetId}`}
                                         target="_blank"
                                     >
-                                        {` ${assetDetail.assetName || assetDetail.assetId}`}
+                                        {` ${
+                                            assetDetail.assetName ||
+                                            assetDetail.assetId ||
+                                            "Loading..."
+                                        }`}
                                     </Link>
                                 </Box>
                                 <Box variant="awsui-key-label">
@@ -376,67 +418,47 @@ export default function ModifyAssetsUploadsPage() {
                                 keyPrefix={keyPrefix}
                             />
                         ) : (
-                            <>
-                                {/* Selected Files */}
-                                <Container header={<Header variant="h2">Selected Files</Header>}>
-                                    {fileItems.length > 0 ? (
-                                        <FileUploadTable
-                                            allItems={fileItems}
-                                            resume={false}
-                                            showCount={true}
-                                            allowRemoval={true}
-                                            onRemoveItem={handleRemoveFile}
-                                            onRemoveAll={handleRemoveAllFiles}
-                                        />
-                                    ) : (
-                                        <Box textAlign="center" padding="l">
-                                            No files selected. Please add files below.
-                                        </Box>
-                                    )}
-                                </Container>
+                            <Container header={<Header variant="h2">Select Files</Header>}>
+                                <SpaceBetween direction="vertical" size="l">
+                                    <Alert header="Preview File Information" type="info">
+                                        <p>
+                                            Files with <strong>.previewFile.</strong> in the
+                                            filename will be ingested as preview files for their
+                                            associated files. For example,{" "}
+                                            <code>model.gltf.previewFile.png</code> will be used as
+                                            a preview for <code>model.gltf</code>.
+                                        </p>
+                                        <p>
+                                            <strong>Important notes:</strong>
+                                            <ul>
+                                                <li>
+                                                    You cannot upload a preview file for a file that
+                                                    is not part of this upload or is already
+                                                    uploaded as part of the asset.
+                                                </li>
+                                                <li>
+                                                    Only{" "}
+                                                    {previewFileFormats.map((ext, index) => (
+                                                        <React.Fragment key={ext}>
+                                                            {index > 0 && ", "}
+                                                            <code>{ext}</code>
+                                                        </React.Fragment>
+                                                    ))}{" "}
+                                                    are valid file extensions for preview files.
+                                                </li>
+                                                <li>Preview files must be 5MB or less in size.</li>
+                                            </ul>
+                                        </p>
+                                        {hasPreviewFiles && (
+                                            <p>
+                                                <strong>Note:</strong> Some of your selected files
+                                                will be treated as preview files based on their
+                                                filenames.
+                                            </p>
+                                        )}
+                                    </Alert>
 
-                                {/* File Selection */}
-                                <Container header={<Header variant="h2">Add Files</Header>}>
-                                    <SpaceBetween direction="vertical" size="l">
-                                        <Alert header="Preview File Information" type="info">
-                                            <p>
-                                                Files with <strong>.previewFile.</strong> in the
-                                                filename will be ingested as preview files for their
-                                                associated files. For example,{" "}
-                                                <code>model.gltf.previewFile.png</code> will be used
-                                                as a preview for <code>model.gltf</code>.
-                                            </p>
-                                            <p>
-                                                <strong>Important notes:</strong>
-                                                <ul>
-                                                    <li>
-                                                        You cannot upload a preview file for a file
-                                                        that is not part of this upload or is
-                                                        already uploaded as part of the asset.
-                                                    </li>
-                                                    <li>
-                                                        Only{" "}
-                                                        {previewFileFormats.map((ext, index) => (
-                                                            <React.Fragment key={ext}>
-                                                                {index > 0 && ", "}
-                                                                <code>{ext}</code>
-                                                            </React.Fragment>
-                                                        ))}{" "}
-                                                        are valid file extensions for preview files.
-                                                    </li>
-                                                    <li>
-                                                        Preview files must be 5MB or less in size.
-                                                    </li>
-                                                </ul>
-                                            </p>
-                                            {hasPreviewFiles && (
-                                                <p>
-                                                    <strong>Note:</strong> Some of your selected
-                                                    files will be treated as preview files based on
-                                                    their filenames.
-                                                </p>
-                                            )}
-                                        </Alert>
+                                    <Container>
                                         <Grid
                                             gridDefinition={
                                                 isRootPath
@@ -445,8 +467,15 @@ export default function ModifyAssetsUploadsPage() {
                                             }
                                         >
                                             {/* Asset Files Selection */}
-                                            <MultiFileSelect
+                                            <DragDropMultiFileSelect
                                                 key={multiFileSelectKey}
+                                                label="Asset Files"
+                                                description={
+                                                    fileItems.length > 0
+                                                        ? `Total Files to Upload: ${fileItems.length}`
+                                                        : "Select a folder or multiple files"
+                                                }
+                                                externalFileCount={fileItems.length}
                                                 onChange={handleFileSelection}
                                             />
 
@@ -464,37 +493,51 @@ export default function ModifyAssetsUploadsPage() {
                                                 />
                                             )}
                                         </Grid>
+                                    </Container>
 
-                                        {/* Upload Button */}
-                                        <Box textAlign="right">
-                                            <SpaceBetween direction="vertical" size="xs">
-                                                {fileItems.length === 0 &&
-                                                    (isRootPath ? !previewFile : true) && (
-                                                        <Box
-                                                            color="text-status-error"
-                                                            fontSize="body-s"
-                                                        >
-                                                            {isRootPath
-                                                                ? "Please select at least one asset file or preview file to upload."
-                                                                : "Please select at least one asset file to upload."}
-                                                        </Box>
-                                                    )}
-                                                <Button
-                                                    variant="primary"
-                                                    onClick={startUpload}
-                                                    disabled={
-                                                        (fileItems.length === 0 &&
-                                                            (isRootPath ? !previewFile : true)) ||
-                                                        !!previewFileError
-                                                    }
-                                                >
-                                                    Finalize and Upload
-                                                </Button>
-                                            </SpaceBetween>
+                                    {/* Display selected files with remove option */}
+                                    {fileItems && fileItems.length > 0 && (
+                                        <Box padding={{ bottom: "l" }}>
+                                            <FileUploadTable
+                                                allItems={fileItems}
+                                                resume={false}
+                                                showCount={true}
+                                                allowRemoval={true}
+                                                onRemoveItem={handleRemoveFile}
+                                                onRemoveAll={handleRemoveAllFiles}
+                                            />
                                         </Box>
-                                    </SpaceBetween>
-                                </Container>
-                            </>
+                                    )}
+
+                                    {/* Upload Button */}
+                                    <Box textAlign="right">
+                                        <SpaceBetween direction="vertical" size="xs">
+                                            {fileItems.length === 0 &&
+                                                (isRootPath ? !previewFile : true) && (
+                                                    <Box
+                                                        color="text-status-error"
+                                                        fontSize="body-s"
+                                                    >
+                                                        {isRootPath
+                                                            ? "Please select at least one asset file or preview file to upload."
+                                                            : "Please select at least one asset file to upload."}
+                                                    </Box>
+                                                )}
+                                            <Button
+                                                variant="primary"
+                                                onClick={startUpload}
+                                                disabled={
+                                                    (fileItems.length === 0 &&
+                                                        (isRootPath ? !previewFile : true)) ||
+                                                    !!previewFileError
+                                                }
+                                            >
+                                                Finalize and Upload
+                                            </Button>
+                                        </SpaceBetween>
+                                    </Box>
+                                </SpaceBetween>
+                            </Container>
                         )}
                     </div>
                 </Grid>

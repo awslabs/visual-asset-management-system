@@ -402,6 +402,14 @@ def lambda_handler(event, context):
         #Handle GET request
         if httpMethod == 'GET':
             return get_subscriptions(queryParameters)
+        
+        # Parse request body
+        if not event.get('body'):
+            message = 'Request body is required'
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            logger.error(response)
+            return response
 
         #Expect body from this point forward and non-GET requests
         if isinstance(event['body'], str):
