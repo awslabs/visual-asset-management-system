@@ -315,7 +315,7 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Role` (roleName) - DELETE (api: DELETE)
 -   `/search` - GET/POST (Both GET/POST considered non-mutating to retrieve data only)
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET/POST)
--   `/secure-config` - GET (No API authorization logic checks on base call)
+-   `/secure-config` - GET (No API authorization logic checks on base call, does require Authentication header)
 -   `/subscriptions` - GET/PUT/POST/DELETE
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: PUT)
