@@ -916,6 +916,24 @@ def handle_get_request(event):
     query_parameters = event.get('queryStringParameters', {}) or {}
 
     try:
+        # Get body from event with default empty dict (Pattern 2: Optional Body)
+        body = event.get('body', {})
+        
+        # If body exists, parse it safely
+        if body:
+            # Parse JSON body safely
+            if isinstance(body, str):
+                try:
+                    body = json.loads(body)
+                except json.JSONDecodeError as e:
+                    logger.exception(f"Invalid JSON in request body: {e}")
+                    return validation_error(body={'message': "Invalid JSON in request body"})
+            elif isinstance(body, dict):
+                body = body
+            else:
+                logger.error("Request body is not a string or dict")
+                return validation_error(body={'message': "Request body cannot be parsed"})
+
         # Case 1: Get a specific [domain]
         if '[domain]Id' in path_parameters:
             logger.info(f"Getting [domain] {path_parameters['[domain]Id']}")
@@ -1010,10 +1028,23 @@ def handle_post_request(event):
         APIGatewayProxyResponseV2 response
     """
     try:
-        # Parse request body
-        body = event.get('body', {})
+        # Parse request body with enhanced error handling (Pattern 1: Required Body)
+        body = event.get('body')
+        if not body:
+            return validation_error(body={'message': "Request body is required"})
+        
+        # Parse JSON body safely
         if isinstance(body, str):
-            body = json.loads(body)
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
+        else:
+            logger.error("Request body is not a string")
+            return validation_error(body={'message': "Request body cannot be parsed"})
 
         # Parse and validate the request model
         request_model = parse(body, model=[Domain]CreateRequestModel)
@@ -1572,6 +1603,116 @@ if __name__ == '__main__':
 -   [ ] End-to-end testing completed
 
 ## 🎯 **Common Implementation Patterns**
+
+### **Event Body Validation Patterns**
+
+All backend handlers MUST follow standardized event body validation patterns based on whether the request body is required or optional:
+
+#### **Pattern 1: Required Event Body (POST/PUT/DELETE operations)**
+
+```python
+# ✅ CORRECT - Required body validation pattern (from createAsset.py)
+def handle_post_request(event):
+    """Handle POST requests with required body"""
+    try:
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
+            return validation_error(body={'message': "Request body is required"})
+        
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
+        else:
+            logger.error("Request body is not a string")
+            return validation_error(body={'message': "Request body cannot be parsed"})
+        
+        # Optional: Validate required fields in the request body
+        required_fields = ['databaseId', 'assetName', 'description', 'isDistributable']
+        for field in required_fields:
+            if field not in body:
+                return validation_error(body={'message': f"Missing required field: {field}"})
+        
+        # Parse and validate the request model
+        request_model = parse(body, model=CreateAssetRequestModel)
+        
+        # Process the request...
+        
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Error handling POST request: {e}")
+        return internal_error()
+```
+
+#### **Pattern 2: Optional Event Body (GET operations or optional body)**
+
+```python
+# ✅ CORRECT - Optional body validation pattern
+def handle_get_request(event):
+    """Handle GET requests with optional body"""
+    try:
+        # Get body from event with default empty dict
+        body = event.get('body', {})
+        
+        # If body exists, parse it safely
+        if body:
+            # Parse JSON body safely
+            if isinstance(body, str):
+                try:
+                    body = json.loads(body)
+                except json.JSONDecodeError as e:
+                    logger.exception(f"Invalid JSON in request body: {e}")
+                    return validation_error(body={'message': "Invalid JSON in request body"})
+            elif isinstance(body, dict):
+                body = body
+            else:
+                logger.error("Request body is not a string or dict")
+                return validation_error(body={'message': "Request body cannot be parsed"})
+        
+        # Now body is always a dict (either parsed or empty)
+        # Parse request model (works with both empty and populated body)
+        request_model = parse(body, model=RequestModel)
+        
+        # Process the request...
+        
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        return validation_error(body={'message': str(v)})
+    except Exception as e:
+        logger.exception(f"Error handling GET request: {e}")
+        return internal_error()
+```
+
+#### **Key Validation Rules:**
+
+1. **Always check for body existence** when required using `event.get('body')`
+2. **Use consistent error messages** for missing body, invalid JSON, and parsing errors
+3. **Handle both string and dict body types** safely
+4. **Always use try/catch blocks** around JSON parsing
+5. **Log exceptions** with appropriate detail level
+6. **Return proper HTTP status codes** (400 for validation errors)
+7. **Use Pydantic parse()** for model validation after body parsing
+8. **Validate required fields** explicitly when needed before Pydantic parsing
+9. **Ensure body is always a dict** before passing to Pydantic models
+10. **Follow the same error handling pattern** across all handlers
+
+#### **Common Error Messages:**
+
+```python
+# Standard error messages to use consistently
+"Request body is required"
+"Invalid JSON in request body"
+"Request body cannot be parsed"
+"Missing required field: {field_name}"
+```
 
 ### **Environment Variable Loading Pattern**
 
