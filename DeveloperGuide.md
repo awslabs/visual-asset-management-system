@@ -49,6 +49,7 @@ Federated authentication with SAML is available with additional configuration. S
 | cdk deployment            | infra            |
 | api and backend           | backend          |
 | use-case pipeline backend | backendPipelines |
+| command line interface    | tools/VamsCLI    |
 
 ## Install
 
@@ -843,6 +844,22 @@ Please see the corresponding [Postman Collection](https://github.com/awslabs/vis
 Once the solution is deployed, you will have to put in the below details as Global Variables in the Postman Collection
 
 ![Postman Variables](https://github.com/awslabs/visual-asset-management-system/blob/main/Postman_Test_Variables.png)
+
+# VamsCLI Development
+
+VamsCLI is a comprehensive command-line interface for VAMS located in the `tools/VamsCLI` directory. For developers interested in contributing to or extending the CLI tool, comprehensive development documentation is available within the CLI tool itself.
+
+## Developer Resources
+
+For detailed VamsCLI development information, see the documentation in the CLI tool directory:
+
+**Development Resources:**
+
+-   **[Development Guide](./tools/VamsCLI/docs/DEVELOPMENT.md)** - Complete development setup, architecture, and contribution guidelines
+-   **[Installation Guide](./tools/VamsCLI/docs/INSTALLATION.md)** - Installation methods and requirements
+-   **[Authentication Guide](./tools/VamsCLI/docs/AUTHENTICATION.md)** - Authentication system details
+
+The CLI tool includes comprehensive developer documentation covering architecture, testing strategies, development patterns, and extension guidelines for organizations wanting to customize or extend the CLI functionality.
 
 # Updating and Testing Frontend
 
