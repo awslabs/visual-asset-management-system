@@ -230,6 +230,8 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Asset` (assetId, assetName, databaseId, assetType, tags) - GET (api: GET)
 -   `/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
+-   `/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}` - GET
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/database/{databaseId}/assets/{assetId}/createFolder` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: POST)
 -   `/database/{databaseId}/assets/{assetId}/listFiles` - GET

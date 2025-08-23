@@ -1,19 +1,5 @@
 .enhanced-file-manager {
-    display: grid;
-    grid-template-columns: 1fr 2fr;
-    gap: 20px;
     height: 600px;
     border-top: 1px solid #eaeded;
     margin-top: 15px;
-}
-
-.file-manager-tree {
-    overflow: auto;
-    border-right: 1px solid #eaeded;
-    padding: 10px 0;
-}
-
-.file-manager-info {
-    overflow: auto;
-    padding: 0 10px;
 }

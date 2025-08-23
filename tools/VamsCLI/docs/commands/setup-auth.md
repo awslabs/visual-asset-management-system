@@ -23,7 +23,6 @@ vamscli --profile production auth status
 vamscli --profile staging assets list
 ```
 
-
 ## Setup Commands
 
 ### `vamscli setup <api-gateway-url>`

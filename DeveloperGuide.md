@@ -293,6 +293,103 @@ RUN pip config set global.cert /var/task/Combined.crt
 
 4. You may need to add additional environment variables to allow using the ceritificate to be used for for `apk install` or `apt-get` system actions.
 
+### CSP Configuration
+
+VAMS supports configurable Content Security Policy (CSP) settings to allow organizations to add their specific external API endpoints and resources without modifying core code. This is particularly useful when integrating with external SaaS APIs or third-party services.
+
+#### Configuration File Location
+
+The CSP configuration is stored in `/infra/config/csp/cspAdditionalConfig.json`. This file allows you to specify additional CSP sources for different categories.
+
+#### Configuration Structure
+
+The configuration file supports the following CSP categories:
+
+```json
+{
+    "connectSrc": ["https://api.example.com", "https://external-service.com"],
+    "scriptSrc": ["https://cdn.example.com"],
+    "imgSrc": ["https://images.example.com"],
+    "mediaSrc": ["https://media.example.com"],
+    "fontSrc": ["https://fonts.example.com"],
+    "styleSrc": ["https://styles.example.com"]
+}
+```
+
+#### CSP Categories Explained
+
+-   **`connectSrc`**: Controls which URLs the application can connect to via XMLHttpRequest, WebSocket, EventSource, etc. Use this for external APIs and services.
+-   **`scriptSrc`**: Controls which scripts can be executed. Use this for external JavaScript libraries or CDNs.
+-   **`imgSrc`**: Controls which image sources can be loaded. Use this for external image services or CDNs.
+-   **`mediaSrc`**: Controls which media sources (audio/video) can be loaded.
+-   **`fontSrc`**: Controls which font sources can be loaded. Use this for external font services like Google Fonts.
+-   **`styleSrc`**: Controls which stylesheets can be loaded. Use this for external CSS libraries or CDNs.
+
+#### Common Use Cases
+
+**External API Integration**
+
+```json
+{
+    "connectSrc": [
+        "https://api.mapbox.com",
+        "https://api.openweathermap.org",
+        "https://api.stripe.com"
+    ]
+}
+```
+
+**CDN Resources**
+
+```json
+{
+    "scriptSrc": ["https://cdn.jsdelivr.net", "https://unpkg.com"],
+    "styleSrc": ["https://cdn.jsdelivr.net", "https://fonts.googleapis.com"],
+    "fontSrc": ["https://fonts.gstatic.com"]
+}
+```
+
+**Image and Media Services**
+
+```json
+{
+    "imgSrc": ["https://images.unsplash.com", "https://cdn.example.com"],
+    "mediaSrc": ["https://media.example.com"]
+}
+```
+
+#### Error Handling and Validation
+
+The CSP configuration system includes robust error handling:
+
+-   **Missing File**: If the configuration file doesn't exist, VAMS will use default CSP settings without failing.
+-   **Invalid JSON**: Malformed JSON will be logged as a warning, and default CSP settings will be used.
+-   **Empty Categories**: Empty arrays are ignored, and only default CSP sources are used for those categories.
+-   **Invalid Entries**: Non-string entries or empty strings are filtered out with appropriate warnings.
+
+#### Security Considerations
+
+-   Only add trusted domains to your CSP configuration
+-   Avoid using wildcards (`*`) as they can compromise security
+-   Regularly review and audit your CSP configuration
+-   Test your configuration in a development environment before deploying to production
+-   Monitor browser console for CSP violations to identify missing or incorrect entries
+
+#### Troubleshooting
+
+**CSP Violations in Browser Console**
+If you see CSP violation errors in the browser console, you may need to add the blocked domain to the appropriate CSP category.
+
+**Build Failures**
+The CSP configuration system is designed to never cause build failures. If you experience build issues, check the CDK deployment logs for CSP-related warnings.
+
+**Configuration Not Taking Effect**
+
+-   Ensure the JSON syntax is valid
+-   Verify the file is located at `/infra/config/csp/cspAdditionalConfig.json`
+-   Check CDK deployment logs for CSP configuration loading messages
+-   Redeploy the CDK stack after making configuration changes
+
 ### Web Development
 
 The web front-end runs on NodeJS React with a supporting library of amplify-js SDK. The React web page is setup as a single page app using React routes with a hash (#) router.
@@ -864,6 +961,36 @@ The CLI tool includes comprehensive developer documentation covering architectur
 # Updating and Testing Frontend
 
 Within the web folder You can do `npm run start` to start a local frontend application.
+
+## Adding New File Visualizers
+
+VAMS uses a modular plugin system for file viewers that allows easy addition of new visualizers without modifying core code. The system supports various file types including 3D models, point clouds, images, videos, audio, HTML documents, and data visualizations.
+
+For complete documentation on adding new file visualizers, see the **[Visualizer Plugin System Documentation](./web/src/visualizerPlugin/README.md)**.
+
+### Quick Start - Adding a New Viewer
+
+Adding a new file viewer requires only 3 simple steps:
+
+1. **Create Component**: Create your React component in `web/src/visualizerPlugin/viewers/MyViewerPlugin/MyViewerComponent.tsx`
+2. **Update Manifest**: Add your component to the constants in `web/src/visualizerPlugin/viewers/manifest.ts`
+3. **Add Configuration**: Add your viewer configuration to `web/src/visualizerPlugin/config/viewerConfig.json`
+
+No core code modifications are required - the system automatically discovers and loads your viewer based on the configuration.
+
+### Supported File Types
+
+The current plugin system includes viewers for:
+
+-   **3D Models**: `.obj`, `.gltf`, `.glb`, `.stl`, `.fbx`, `.dae`, etc. (Online3dViewerPlugin)
+-   **Point Clouds**: `.e57`, `.las`, `.laz`, `.ply` (PotreeViewerPlugin)
+-   **Images**: `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif` (ImageViewerPlugin)
+-   **Videos**: `.mp4`, `.webm`, `.mov`, `.avi`, etc. (VideoViewerPlugin)
+-   **Audio**: `.mp3`, `.wav`, `.ogg`, `.aac`, etc. (AudioViewerPlugin)
+-   **HTML**: `.html` (HTMLViewerPlugin)
+-   **Data**: `.rds`, `.fcs`, `.csv` (ThreeDimensionalPlotterPlugin, ColumnarViewerPlugin)
+
+For detailed information on the architecture, configuration options, and step-by-step instructions, see the **[Visualizer Plugin System Documentation](./web/src/visualizerPlugin/README.md)**.
 
 # Preview Files
 

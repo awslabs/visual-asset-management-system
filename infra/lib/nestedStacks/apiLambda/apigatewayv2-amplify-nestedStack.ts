@@ -20,7 +20,6 @@ import { Construct } from "constructs";
 import { NestedStack } from "aws-cdk-lib";
 import { Service } from "../../helper/service-helper";
 import { authResources } from "../auth/authBuilder-nestedStack";
-import { generateContentSecurityPolicy } from "../../helper/security";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
 
 export interface ApiGatewayV2AmplifyNestedStackProps extends cdk.StackProps {
