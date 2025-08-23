@@ -50,8 +50,10 @@ def validate_id(name, value):
     return (True, '')
 
 def validate_asset_id(name, value):
+    if len(value) > 256: #Currently at 256 but S3 can handle up to 1024 characters per object
+        return (False, name + " exceeds maximum length of 256 characters")
     if not asset_id_regex.fullmatch(value):
-        return (False, name + " is invalid. Must follow the regexp "+asset_id_regex)
+        return (False, name + " is invalid. Must follow the regexp "+filename_pattern)
     return (True, '')
 
 def validate_uuid(name, value):

@@ -434,22 +434,32 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     claims_and_roles = request_to_claims(event)
     
     try:
-        # Parse request body
-        if not event.get('body'):
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
             return validation_error(body={'message': "Request body is required"})
         
-        # Parse request body
-        if isinstance(event['body'], str):
-            event['body'] = json.loads(event['body'])
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
+        else:
+            logger.error("Request body is not a string")
+            return validation_error(body={'message': "Request body cannot be parsed"})
         
         # Validate required fields in the request body
         required_fields = ['databaseId', 'assetName', 'description', 'isDistributable']
         for field in required_fields:
-            if field not in event['body']:
+            if field not in body:
                 return validation_error(body={'message': f"Missing required field: {field}"})
         
         # Parse request model
-        request_model = parse(event['body'], model=CreateAssetRequestModel)
+        request_model = parse(body, model=CreateAssetRequestModel)
         
         # Check authorization
         asset = {

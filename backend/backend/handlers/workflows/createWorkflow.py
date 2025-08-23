@@ -328,7 +328,13 @@ def lambda_handler(event, context):
         return response
 
     if isinstance(event['body'], str):
-        event['body'] = json.loads(event['body'])
+        try:
+            event['body'] = json.loads(event['body'])
+        except json.JSONDecodeError as e:
+            logger.exception(f"Invalid JSON in request body: {e}")
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": "Invalid JSON in request body"})
+            return response
     # event['body']=json.loads(event['body'])
     try:
         method_allowed_on_api = False

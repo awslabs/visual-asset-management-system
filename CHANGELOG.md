@@ -196,6 +196,7 @@ This version includes significant enhancements to VAMS infrastructure, a complet
 
 -   With updating to support multiple S3 buckets, there are scenarios that can occur where if there are multiple buckets/prefixes across different databases where the assetId are now the same, there will be lookup conflicts within Comments and subscriptions functionality. This can only occur right now with manual changes/updates as done directly to S3 as assetIds generated from VAMS uploads still generate unique GUIDs.
 -   Using the same pipeline ID in a GLOBAL and non-GLOBAL database will cause overlap conflicts and issues.
+-   There is an issue with OpenSearch recognizing asset fields as numbers if they contain all numbers instead of strings. Future updates will provide utility script to clear OpenSearch index and rebuild with the new mapping schema. Avoid using asset names or descriptions with all numbers to avoid them showing blank in asset search.
 
 ## [2.1.1] (2025-01-17)
 

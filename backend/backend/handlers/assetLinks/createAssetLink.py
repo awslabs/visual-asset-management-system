@@ -275,10 +275,23 @@ def create_asset_link(request_model: CreateAssetLinkRequestModel, claims_and_rol
 def handle_post_request(event):
     """Handle POST requests to create asset links"""
     try:
-        # Parse request body
-        body = event.get('body', {})
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
+            return validation_error(body={'message': "Request body is required"})
+        
+        # Parse JSON body safely
         if isinstance(body, str):
-            body = json.loads(body)
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
+        else:
+            logger.error("Request body is not a string")
+            return validation_error(body={'message': "Request body cannot be parsed"})
         
         # Validate required fields
         required_fields = ['fromAssetId', 'fromAssetDatabaseId', 'toAssetId', 'toAssetDatabaseId', 'relationshipType']

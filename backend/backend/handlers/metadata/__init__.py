@@ -174,13 +174,23 @@ def validate_event(event):
 
 def validate_body(event):
 
-    if "body" not in event:
+    # Parse request body with enhanced error handling
+    body = event.get('body')
+    if not body:
         raise ValidationError(400, {"error": "missing request body"})
-
-    if isinstance(event['body'], str):
-        event['body'] = json.loads(event['body'])
     
-    body = event['body']
+    # Parse JSON body safely
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except json.JSONDecodeError as e:
+            logger.exception(f"Invalid JSON in request body: {e}")
+            raise ValidationError(400, {"error": "Request body cannot be parsed"})
+    elif isinstance(body, dict):
+        body = body
+    else:
+        logger.error("Request body is not a string")
+        raise ValidationError(400, {"error": "Request body cannot be parsed"})
 
     for req_field in ["metadata", "version"]:
         if req_field not in body:

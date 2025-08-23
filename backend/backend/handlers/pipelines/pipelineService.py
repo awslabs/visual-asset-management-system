@@ -308,11 +308,31 @@ def lambda_handler(event, context):
     pathParameters = event.get('pathParameters', {})
     queryParameters = event.get('queryStringParameters', {})
 
-    showDeleted = False
-    if 'showDeleted' in queryParameters:
-        showDeleted = queryParameters['showDeleted']
+    # Enhanced parameter validation for query parameters
+    try:
+        # Validate showDeleted parameter if present
+        showDeleted = False
+        if 'showDeleted' in queryParameters:
+            show_deleted_value = queryParameters['showDeleted']
+            if isinstance(show_deleted_value, str):
+                if show_deleted_value.lower() in ['true', '1', 'yes']:
+                    showDeleted = True
+                elif show_deleted_value.lower() in ['false', '0', 'no']:
+                    showDeleted = False
+                else:
+                    response['statusCode'] = 400
+                    response['body'] = json.dumps({"message": "showDeleted parameter must be a valid boolean value (true/false)"})
+                    return response
+            else:
+                showDeleted = bool(show_deleted_value)
 
-    validate_pagination_info(queryParameters)
+        validate_pagination_info(queryParameters)
+
+    except Exception as e:
+        logger.exception(f"Error validating query parameters: {e}")
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": "Invalid query parameters"})
+        return response
 
     try:
         http_method = event['requestContext']['http']['method']

@@ -285,7 +285,13 @@ def lambda_handler(event: APIGatewayProxyEvent, context: LambdaContext,
 
         # create/update
         elif (method == "POST" or method == "PUT") and method_allowed_on_api:
-            body = json.loads(event["body"])
+            try:
+                body = json.loads(event["body"])
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                response['statusCode'] = 400
+                response['body'] = json.dumps({"message": "Invalid JSON in request body"})
+                return response
             if "field" not in body:
                 raise ValidationError(400, "Missing field in path on POST/PUT request")
             resp = schema.update_schema(databaseId, body["field"], body)

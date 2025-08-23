@@ -111,22 +111,33 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         # Check if this is the correct API route for database creation
         if http_method == 'POST' and path.endswith('/database'):
 
-            # Parse request body
-            if not event.get('body'):
+            # Parse request body with enhanced error handling
+            body = event.get('body')
+            if not body:
                 return validation_error(body={'message': "Request body is required"})
             
-            # Parse request body
-            if isinstance(event['body'], str):
-                event['body'] = json.loads(event['body'])
+            # Parse JSON body safely
+            if isinstance(body, str):
+                try:
+                    body = json.loads(body)
+                except json.JSONDecodeError as e:
+                    logger.exception(f"Invalid JSON in request body: {e}")
+                    return validation_error(body={'message': "Invalid JSON in request body"})
+            elif isinstance(body, dict):
+                body = body
+            else:
+                logger.error("Request body is not a string")
+                return validation_error(body={'message': "Request body must be a string"})
+            
             
             # Validate required fields in the request body
             required_fields = ['databaseId', 'description', 'defaultBucketId']
             for field in required_fields:
-                if field not in event['body']:
+                if field not in body:
                     return validation_error(body={'message': f"Missing required field: {field}"})
             
             # Parse request model
-            request_model = parse(event['body'], model=CreateDatabaseRequestModel)
+            request_model = parse(body, model=CreateDatabaseRequestModel)
             
             # Check authorization
             database = {
@@ -156,7 +167,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except ClientError as e:
         if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
             logger.exception(f"Database already exists: {e}")
-            return validation_error(body={'message': f"Database {event['body']['databaseId']} already exists."})
+            return validation_error(body={'message': f"Database {body['databaseId']} already exists."})
         logger.exception(f"AWS error: {e}")
         return internal_error()
     except VAMSGeneralErrorResponse as v:

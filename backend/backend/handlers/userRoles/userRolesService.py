@@ -386,7 +386,13 @@ def lambda_handler(event, context):
             return response
 
         if isinstance(event['body'], str):
-            event['body'] = json.loads(event['body'])
+            try:
+                event['body'] = json.loads(event['body'])
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                response['statusCode'] = 400
+                response['body'] = json.dumps({"message": "Invalid JSON in request body"})
+                return response
 
         if http_method == 'POST' and method_allowed_on_api:
             if 'roleName' not in event['body'] or 'userId' not in event['body']:

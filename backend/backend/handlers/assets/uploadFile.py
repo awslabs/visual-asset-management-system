@@ -47,7 +47,7 @@ s3_resource = boto3.resource('s3', region_name=region, config=s3_config)
 lambda_client = boto3.client('lambda', config=s3_config)
 dynamodb = boto3.resource('dynamodb', config=s3_config)
 dynamodb_client = boto3.client('dynamodb', config=s3_config)
-logger = safeLogger(service_name="FileIngestion")
+logger = safeLogger(service_name="UploadFile")
 
 # Constants
 UPLOAD_EXPIRATION_DAYS = 7  # TTL for upload records and S3 multipart uploads
@@ -627,22 +627,22 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     if uploadType == "assetPreview" and asset.get('previewLocation'):
         logger.info(f"Asset {assetId} already has a preview. The existing preview will be replaced.")
         
-    # Validate file extensions before proceeding
-    for file in request_model.files:
-        if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
-            raise ValidationError(f"File {file.relativeKey} has an unsupported file extension")
-        
-        # Additional validation for preview files
-        if uploadType == "assetPreview":
-            # Validate preview file extension
-            if not validate_preview_file_extension(file.relativeKey):
-                raise ValidationError(f"Preview file {file.relativeKey} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
-        
-        # Check if this is a preview file in an assetFile upload
-        if uploadType == "assetFile" and is_preview_file(file.relativeKey):
-            # Validate preview file extension
-            if not validate_preview_file_extension(file.relativeKey):
-                raise ValidationError(f"Preview file {file.relativeKey} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
+        # Validate file extensions before proceeding
+        for file in request_model.files:
+            if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
+                raise VAMSGeneralErrorResponse(f"File {file.relativeKey} has an unsupported file extension")
+            
+            # Additional validation for preview files
+            if uploadType == "assetPreview":
+                # Validate preview file extension
+                if not validate_preview_file_extension(file.relativeKey):
+                    raise VAMSGeneralErrorResponse(f"Preview file {file.relativeKey} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
+            
+            # Check if this is a preview file in an assetFile upload
+            if uploadType == "assetFile" and is_preview_file(file.relativeKey):
+                # Validate preview file extension
+                if not validate_preview_file_extension(file.relativeKey):
+                    raise VAMSGeneralErrorResponse(f"Preview file {file.relativeKey} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
     
     # Generate upload ID
     uploadId = f"y{str(uuid.uuid4())}"
@@ -663,11 +663,11 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     for file in request_model.files:
         # Validate file extension
         if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
-            raise ValidationError(f"File {file.relativeKey} has an unsupported file extension")
+            raise VAMSGeneralErrorResponse(f"File {file.relativeKey} has an unsupported file extension")
         
         # Validate file size for preview files
         if uploadType == "assetPreview" and file.file_size > MAX_PREVIEW_FILE_SIZE:
-            raise ValidationError(f"Preview file {file.relativeKey} exceeds maximum allowed size of 5MB")
+            raise VAMSGeneralErrorResponse(f"Preview file {file.relativeKey} exceeds maximum allowed size of 5MB")
         
         # Determine final S3 key based on upload type
         if uploadType == "assetFile":
@@ -1539,13 +1539,23 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     claims_and_roles = request_to_claims(event)
     
     try:
-        # Parse request body
-        if not event.get('body'):
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
             return validation_error(body={'message': "Request body is required"})
-
-        # Parse request body
-        if isinstance(event['body'], str):
-            event['body'] = json.loads(event['body'])
+        
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
+        else:
+            logger.error("Request body is not a string")
+            return validation_error(body={'message': "Request body cannot be parsed"})
         
         # Get API path and method
         path = event['requestContext']['http']['path']
@@ -1554,7 +1564,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         # Determine which API to call based on path and method
         if method == 'POST' and path == '/uploads':
             # Initialize Upload API
-            request_model = parse(event['body'], model=InitializeUploadRequestModel)
+            request_model = parse(body, model=InitializeUploadRequestModel)
             
             # Check authorization
             asset = get_asset_details(request_model.databaseId, request_model.assetId)
@@ -1580,7 +1590,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             uploadId = event['pathParameters']['uploadId']
             
             # Parse request model
-            request_model = parse(event['body'], model=CompleteExternalUploadRequestModel)
+            request_model = parse(body, model=CompleteExternalUploadRequestModel)
             
             # Check authorization
             asset = get_asset_details(request_model.databaseId, request_model.assetId)
@@ -1610,7 +1620,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             uploadId = event['pathParameters']['uploadId']
             
             # Parse request model
-            request_model = parse(event['body'], model=CompleteUploadRequestModel)
+            request_model = parse(body, model=CompleteUploadRequestModel)
             
             # Check authorization
             asset = get_asset_details(request_model.databaseId, request_model.assetId)

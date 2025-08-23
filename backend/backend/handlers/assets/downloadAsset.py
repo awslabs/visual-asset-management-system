@@ -359,9 +359,23 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     claims_and_roles = request_to_claims(event)
     
     try:
-        # Parse request body
-        if isinstance(event.get('body'), str):
-            event['body'] = json.loads(event['body'])
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
+            return validation_error(body={'message': "Request body is required"})
+        
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
+        else:
+            logger.error("Request body is not a string")
+            return validation_error(body={'message': "Request body cannot be parsed"})
         
         # Get path parameters
         path_parameters = event.get('pathParameters', {})
@@ -389,7 +403,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         
         # Parse request model
         try:
-            request_model = parse(event['body'], model=DownloadAssetRequestModel)
+            request_model = parse(body, model=DownloadAssetRequestModel)
         except ValidationError as v:
             logger.error(f"Validation error: {v}")
             return validation_error(body={'message': str(v)})

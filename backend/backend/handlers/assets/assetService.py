@@ -1021,6 +1021,18 @@ def handle_get_request(event):
             
             # Parse and validate query parameters using GetAssetRequestModel
             try:
+                # Handle boolean parameter conversion for showArchived
+                if 'showArchived' in query_parameters:
+                    show_archived_value = query_parameters['showArchived']
+                    if isinstance(show_archived_value, str):
+                        if show_archived_value.lower() in ['true', '1', 'yes']:
+                            query_parameters['showArchived'] = True
+                        elif show_archived_value.lower() in ['false', '0', 'no', '']:
+                            query_parameters['showArchived'] = False
+                        else:
+                            logger.error(f"Invalid showArchived parameter: {show_archived_value}")
+                            return validation_error(body={'message': "showArchived parameter must be a valid boolean value (true/false)"})
+                
                 request_model = parse(query_parameters, model=GetAssetRequestModel)
                 show_archived = request_model.showArchived
             except ValidationError as v:
@@ -1073,6 +1085,18 @@ def handle_get_request(event):
             
             # Parse and validate query parameters using GetAssetsRequestModel
             try:
+                # Handle boolean parameter conversion for showArchived
+                if 'showArchived' in query_parameters:
+                    show_archived_value = query_parameters['showArchived']
+                    if isinstance(show_archived_value, str):
+                        if show_archived_value.lower() in ['true', '1', 'yes']:
+                            query_parameters['showArchived'] = True
+                        elif show_archived_value.lower() in ['false', '0', 'no', '']:
+                            query_parameters['showArchived'] = False
+                        else:
+                            logger.error(f"Invalid showArchived parameter: {show_archived_value}")
+                            return validation_error(body={'message': "showArchived parameter must be a valid boolean value (true/false)"})
+                
                 request_model = parse(query_parameters, model=GetAssetsRequestModel)
                 # Extract validated parameters for the query
                 query_params = {
@@ -1083,10 +1107,12 @@ def handle_get_request(event):
                 show_archived = request_model.showArchived
             except ValidationError as v:
                 logger.exception(f"Validation error in query parameters: {v}")
-                # Fall back to default pagination with validation
-                validate_pagination_info(query_parameters)
-                query_params = query_parameters
-                show_archived = query_parameters.get('showArchived', '').lower() == 'true'
+                error_msg = str(v)
+                return validation_error(body={'message': f"Invalid parameter: {error_msg}"})
+                # # Fall back to default pagination with validation
+                # validate_pagination_info(query_parameters)
+                # query_params = query_parameters
+                # show_archived = query_parameters.get('showArchived', '').lower() == 'true'
             
             # Get the assets
             assets_result = get_assets(path_parameters['databaseId'], query_params, show_archived)
@@ -1127,6 +1153,18 @@ def handle_get_request(event):
             
             # Parse and validate query parameters using GetAssetsRequestModel
             try:
+                # Handle boolean parameter conversion for showArchived
+                if 'showArchived' in query_parameters:
+                    show_archived_value = query_parameters['showArchived']
+                    if isinstance(show_archived_value, str):
+                        if show_archived_value.lower() in ['true', '1', 'yes']:
+                            query_parameters['showArchived'] = True
+                        elif show_archived_value.lower() in ['false', '0', 'no', '']:
+                            query_parameters['showArchived'] = False
+                        else:
+                            logger.error(f"Invalid showArchived parameter: {show_archived_value}")
+                            return validation_error(body={'message': "showArchived parameter must be a valid boolean value (true/false)"})
+                
                 request_model = parse(query_parameters, model=GetAssetsRequestModel)
                 # Extract validated parameters for the query
                 query_params = {
@@ -1137,10 +1175,12 @@ def handle_get_request(event):
                 show_archived = request_model.showArchived
             except ValidationError as v:
                 logger.exception(f"Validation error in query parameters: {v}")
-                # Fall back to default pagination with validation
-                validate_pagination_info(query_parameters)
-                query_params = query_parameters
-                show_archived = query_parameters.get('showArchived', '').lower() == 'true'
+                error_msg = str(v)
+                return validation_error(body={'message': f"Invalid parameter: {error_msg}"})
+                # # Fall back to default pagination with validation
+                # validate_pagination_info(query_parameters)
+                # query_params = query_parameters
+                # show_archived = query_parameters.get('showArchived', '').lower() == 'true'
             
             # Get all assets
             assets_result = get_all_assets(query_params, show_archived)
@@ -1215,11 +1255,24 @@ def handle_put_request(event):
         return validation_error(body={'message': message})
     
     try:
-        # Parse request body
-        body = event.get('body', {})
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
+            return validation_error(body={'message': "Request body is required"})
+        
+        # Parse JSON body safely
         if isinstance(body, str):
-            body = json.loads(body)
-            
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
+        else:
+            logger.error("Request body is not a string")
+            return validation_error(body={'message': "Request body cannot be parsed"})
+        
         # Parse and validate the update model
         update_model = parse(body, model=UpdateAssetRequestModel)
         
@@ -1279,12 +1332,23 @@ def handle_delete_request(event):
         return validation_error(body={'message': message})
     
     try:
-        # Parse request body
-        body = event.get('body', {})
-        if isinstance(body, str) and body:
-            body = json.loads(body)
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
+            return validation_error(body={'message': "Request body is required"})
+        
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
         else:
-            body = {}
+            logger.error("Request body is not a string")
+            return validation_error(body={'message': "Request body cannot be parsed"})
         
         # Determine which operation to perform based on the path
         if path.endswith('/archiveAsset'):
