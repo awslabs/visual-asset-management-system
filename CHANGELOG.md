@@ -11,6 +11,17 @@ This version includes significant enhancements to VAMS to include a new CLI tool
 ### Features
 
 -   **CLI** VAMS now has a CLI tool that can be used to automate VAMS operations. It includes operations so far for authentication, database, asset, assetLinks, assetLinkMetadata, metadata, metadataSchema, tags, TagTypes, search, featureSwitch, and files. More operations to match API functionality to come in future releases such as more admin functionalities of VAMS.
+-   **UI** The website viewer system has been rewritten to support a plugin based dynamically loaded viewing system which allows for much easier capability to add new viewers and adds more functionality. Documentation can be found at: `web\src\visualizerPlugin\README.md`
+    -   Support for multiple viewers per file types which is now controlled with a drop-down as part of the viewer
+    -   Support to define which viewers are for multiple files or single files
+    -   Support for custom parameters as part of viewer plugin configuration which allows for token configuration for paid/ISV integrations
+    -   Support for custom code, UI, and dependency management for each viewer. Also supports lazy loading of plugins when needed for a viewer.
+    -   Viewer is now shown both on the View File page and as a modal pop-up from the file manager for easier quick access
+    -   Added a PDF viewer for `.pdf` extension
+    -   Added a text viewer for `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, and `.ini` extensions
+    -   Added the CesiumJS viewer for `.json` tileset files which can load subsequent other files referenced in the asset (even if not selected for viewing directly). This is an initial/basic CesiumJS viewer implementation with default options as part of this release. Requires `allowUnsafeEvalFeatures` CDK `config.json` configuration flag to be turned on (off by default).
+-   **UI** Added a draggable splitter in ViewAsset page between the file manager tree view and details panel
+-   Added a new API endpoint for asset file streaming (similar to asset preview auxiliary files) at `GET /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`
 -   Added .clineRules for CLINE AI workflows for AI-assisted development for VAMS backend API development, CDK development, and CLI development
 
 ## [2.2.0] (2025-09-31)

@@ -243,6 +243,7 @@ vamscli auth login --user-id john.doe@example.com --token-override "your_token" 
 ```
 
 Token override options are now part of the `auth login` command for better organization:
+
 -   **`--user-id`** - User ID for token override authentication (required with --token-override)
 -   **`--token-override`** - Override token for external authentication
 -   **`--expires-at`** - Token expiration time (Unix timestamp, ISO 8601, or +seconds)
@@ -286,4 +287,4 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](../../
 
 ## Contributing
 
-We welcome contributions! Please see the [Development Guide](docs/DEVELOPMENT.md) for details on how to contribute to this project.
+We welcome contributions!!! Please see the [Development Guide](docs/DEVELOPMENT.md) for details on how to contribute to this project.

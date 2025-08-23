@@ -5,6 +5,7 @@ import { fetchAssetS3Files } from "../../services/AssetVersionService";
 import AssetPreviewModal from "./modals/AssetPreviewModal";
 import { DirectoryTree, FileManagerContext } from "./components/FileTreeView";
 import { FileDetailsPanel } from "./components/FileDetailsPanel";
+import { ResizableSplitter } from "./components/ResizableSplitter";
 import {
     FileKey,
     FileManagerState,
@@ -214,12 +215,13 @@ export function EnhancedFileManager({ assetName, assetFiles = [] }: EnhancedFile
     return (
         <FileManagerContext.Provider value={{ state, dispatch }}>
             <div className="enhanced-file-manager">
-                <div className="file-manager-tree">
-                    <DirectoryTree />
-                </div>
-                <div className="file-manager-info">
-                    <FileDetailsPanel />
-                </div>
+                <ResizableSplitter
+                    leftPanel={<DirectoryTree />}
+                    rightPanel={<FileDetailsPanel />}
+                    initialLeftWidth={300}
+                    minLeftWidth={250}
+                    maxLeftWidth={600}
+                />
             </div>
 
             {/* Asset Preview Modal */}

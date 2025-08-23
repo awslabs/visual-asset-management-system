@@ -14,6 +14,114 @@ import { Service } from "../helper/service-helper";
 import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import * as s3AssetBuckets from "./s3AssetBuckets";
+import { readFileSync } from "fs";
+import { join } from "path";
+
+/**
+ * Interface for additional CSP configuration
+ */
+interface CSPAdditionalConfig {
+    connectSrc?: string[];
+    scriptSrc?: string[];
+    imgSrc?: string[];
+    mediaSrc?: string[];
+    fontSrc?: string[];
+    styleSrc?: string[];
+}
+
+/**
+ * Loads additional CSP configuration from JSON file with proper error handling
+ * @returns CSPAdditionalConfig object or undefined if file doesn't exist or is invalid
+ */
+function loadCSPAdditionalConfig(): CSPAdditionalConfig | undefined {
+    try {
+        const configPath = join(__dirname, "../../config/csp/cspAdditionalConfig.json");
+        const fileContent = readFileSync(configPath, { encoding: "utf8", flag: "r" });
+
+        if (!fileContent || fileContent.trim().length === 0) {
+            console.log(
+                "CSP additional config file is empty, using default CSP configuration only"
+            );
+            return undefined;
+        }
+
+        const config: CSPAdditionalConfig = JSON.parse(fileContent);
+
+        // Validate that the config is an object
+        if (typeof config !== "object" || config === null) {
+            console.warn(
+                "CSP additional config is not a valid object, using default CSP configuration only"
+            );
+            return undefined;
+        }
+
+        // Filter out invalid entries (non-strings) and log warnings
+        const validatedConfig: CSPAdditionalConfig = {};
+
+        for (const [key, value] of Object.entries(config)) {
+            if (Array.isArray(value)) {
+                const validEntries = value.filter((entry) => {
+                    if (typeof entry === "string" && entry.trim().length > 0) {
+                        return true;
+                    } else {
+                        console.warn(
+                            `CSP additional config: Invalid entry "${entry}" in ${key}, skipping`
+                        );
+                        return false;
+                    }
+                });
+
+                if (validEntries.length > 0) {
+                    validatedConfig[key as keyof CSPAdditionalConfig] = validEntries;
+                }
+            } else if (value !== undefined && value !== null) {
+                console.warn(`CSP additional config: ${key} should be an array, skipping`);
+            }
+        }
+
+        console.log("CSP additional config loaded successfully");
+        return validatedConfig;
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            console.log(
+                "CSP additional config file not found, using default CSP configuration only"
+            );
+        } else if (error instanceof SyntaxError) {
+            console.warn(
+                "CSP additional config file contains invalid JSON, using default CSP configuration only:",
+                error.message
+            );
+        } else {
+            console.warn(
+                "Error loading CSP additional config, using default CSP configuration only:",
+                error
+            );
+        }
+        return undefined;
+    }
+}
+
+/**
+ * Merges additional CSP sources with existing sources, avoiding duplicates
+ * @param existingSources Current CSP sources array
+ * @param additionalSources Additional sources to merge
+ * @returns Merged array without duplicates
+ */
+function mergeCSPSources(existingSources: string[], additionalSources?: string[]): string[] {
+    if (!additionalSources || additionalSources.length === 0) {
+        return existingSources;
+    }
+
+    const merged = [...existingSources];
+
+    for (const source of additionalSources) {
+        if (!merged.includes(source)) {
+            merged.push(source);
+        }
+    }
+
+    return merged;
+}
 
 export function globalLambdaEnvironmentsAndPermissions(
     lambdaFunction: lambda.Function,
@@ -154,39 +262,60 @@ export function generateContentSecurityPolicy(
     apiUrl: string,
     config: Config.Config
 ): string {
-    const connectSrc = [
+    // Load additional CSP configuration
+    const additionalCSPConfig = loadCSPAdditionalConfig();
+
+    // Base CSP sources
+    let connectSrc = [
         "'self'",
         "blob:",
-        authenticationDomain,
+        //authenticationDomain,
         `https://${apiUrl}`,
-        `https://${Service("S3").PrincipalString}/`,
+        //`https://${Service("S3").PrincipalString}/`,
         `https://${Service("S3").Endpoint}/`,
     ];
 
-    const scriptSrc = [
+    let scriptSrc = [
         "'self'",
         "blob:",
         "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
-        authenticationDomain,
+        //authenticationDomain,
         // `https://${apiUrl}`,
         // `https://${Service("S3").PrincipalString}/`,
         // `https://${Service("S3").Endpoint}/`,
     ];
 
-    const imgMediaSrc = [
+    let imgSrc = [
         "'self'",
         "blob:",
         "data:",
-        `https://${Service("S3").PrincipalString}/`,
+        //`https://${Service("S3").PrincipalString}/`,
         `https://${Service("S3").Endpoint}/`,
     ];
+
+    let mediaSrc = [
+        "'self'",
+        "blob:",
+        "data:",
+        //`https://${Service("S3").PrincipalString}/`,
+        `https://${Service("S3").Endpoint}/`,
+    ];
+
+    // Initialize font and style sources with defaults
+    let fontSrc = ["'self'"];
+    let styleSrc = ["'self'", "'unsafe-inline'"];
 
     //Add cognito
     if (config.app.authProvider.useCognito.enabled) {
         connectSrc.push(`https://${Service("COGNITO_IDP").Endpoint}/`);
         connectSrc.push(`https://${Service("COGNITO_IDENTITY").Endpoint}/`);
-        scriptSrc.push(`https://${Service("COGNITO_IDP").Endpoint}/`);
-        scriptSrc.push(`https://${Service("COGNITO_IDENTITY").Endpoint}/`);
+        // scriptSrc.push(`https://${Service("COGNITO_IDP").Endpoint}/`);
+        // scriptSrc.push(`https://${Service("COGNITO_IDENTITY").Endpoint}/`);
+    }
+
+    //If authDomain is non-null and not empty string, add to connectSrc
+    if (authenticationDomain && authenticationDomain != "") {
+        connectSrc.push(authenticationDomain);
     }
 
     //Add unsafe eval when enabled
@@ -199,14 +328,24 @@ export function generateContentSecurityPolicy(
         connectSrc.push(`https://maps.${Service("GEO").Endpoint}/`);
     }
 
+    // Merge additional CSP sources if configuration is loaded
+    if (additionalCSPConfig) {
+        connectSrc = mergeCSPSources(connectSrc, additionalCSPConfig.connectSrc);
+        scriptSrc = mergeCSPSources(scriptSrc, additionalCSPConfig.scriptSrc);
+        imgSrc = mergeCSPSources(imgSrc, additionalCSPConfig.imgSrc);
+        mediaSrc = mergeCSPSources(mediaSrc, additionalCSPConfig.mediaSrc);
+        fontSrc = mergeCSPSources(fontSrc, additionalCSPConfig.fontSrc);
+        styleSrc = mergeCSPSources(styleSrc, additionalCSPConfig.styleSrc);
+    }
+
     const csp =
-        `default-src 'none'; style-src 'self' 'unsafe-inline'; upgrade-insecure-requests;` +
+        `default-src 'none'; style-src ${styleSrc.join(" ")}; upgrade-insecure-requests;` +
         `connect-src ${connectSrc.join(" ")}; ` +
         `script-src ${scriptSrc.join(" ")}; ` +
-        `img-src ${imgMediaSrc.join(" ")}; ` +
-        `media-src ${imgMediaSrc.join(" ")}; ` +
+        `img-src ${imgSrc.join(" ")}; ` +
+        `media-src ${mediaSrc.join(" ")}; ` +
         `object-src 'none'; ` +
-        `frame-ancestors 'none'; font-src 'self'; ` +
+        `frame-ancestors 'none'; font-src ${fontSrc.join(" ")}; ` +
         `manifest-src 'self'`;
 
     return csp;

@@ -22,20 +22,8 @@ import { useLocation, useParams } from "react-router";
 import ControlledMetadata from "../metadata/ControlledMetadata";
 import { fetchAsset } from "../../services/APIService";
 import { FileVersionsTable } from "../filemanager/components/FileVersionsTable";
-/**
- * No viewer yet for cad and archive file formats
- */
-import {
-    audioFileFormats,
-    columnarFileFormats,
-    modelFileFormats,
-    imageFileFormats,
-    onlineViewer3DFileFormats,
-    pcFileFormats,
-    presentationFileFormats,
-    videoFileFormats,
-} from "../../common/constants/fileFormats";
-import AssetVisualizer from "./AssetVisualizer";
+// File format constants no longer needed - handled by plugin system
+import DynamicViewer from "../../visualizerPlugin/components/DynamicViewer";
 import AssetSelectorWithModal from "../selectors/AssetSelectorWithModal";
 import { ErrorBoundary } from "react-error-boundary";
 import Synonyms from "../../synonyms";
@@ -93,91 +81,7 @@ interface Asset {
     status?: string;
 }
 
-const checkFileFormat = (fileName: string, isDirectory: boolean): string => {
-    console.log(fileName);
-    if (isDirectory) {
-        return "folder";
-    }
-
-    let filetype = fileName.split(".").pop();
-    if (!filetype) return "preview";
-
-    filetype = filetype.toLowerCase();
-    if (
-        onlineViewer3DFileFormats.includes(filetype) ||
-        onlineViewer3DFileFormats.includes("." + filetype)
-    ) {
-        return "model";
-    }
-    if (pcFileFormats.includes(filetype) || pcFileFormats.includes("." + filetype)) {
-        return "pc";
-    }
-    if (imageFileFormats.includes(filetype) || imageFileFormats.includes("." + filetype)) {
-        return "image";
-    }
-    if (columnarFileFormats.includes(filetype) || columnarFileFormats.includes("." + filetype)) {
-        return "plot";
-    }
-    if (
-        presentationFileFormats.includes(filetype) ||
-        presentationFileFormats.includes("." + filetype)
-    ) {
-        return "html";
-    }
-    if (videoFileFormats.includes(filetype) || videoFileFormats.includes("." + filetype)) {
-        return "video";
-    }
-    if (audioFileFormats.includes(filetype) || audioFileFormats.includes("." + filetype)) {
-        return "audio";
-    }
-    return "preview";
-};
-
-// Helper function to determine primary view type for multiple files
-const determineMultiFileViewType = (files: FileInfo[]): string => {
-    // Check if any files are 3D model formats
-    const hasModelFiles = files.some((file) => {
-        const format = checkFileFormat(file.filename, file.isDirectory);
-        return format === "model";
-    });
-
-    if (hasModelFiles) {
-        return "model";
-    }
-
-    // Check for other formats
-    const hasImageFiles = files.some((file) => {
-        const format = checkFileFormat(file.filename, file.isDirectory);
-        return format === "image";
-    });
-
-    if (hasImageFiles) {
-        return "image";
-    }
-
-    // Check for video files
-    const hasVideoFiles = files.some((file) => {
-        const format = checkFileFormat(file.filename, file.isDirectory);
-        return format === "video";
-    });
-
-    if (hasVideoFiles) {
-        return "video";
-    }
-
-    // Check for audio files
-    const hasAudioFiles = files.some((file) => {
-        const format = checkFileFormat(file.filename, file.isDirectory);
-        return format === "audio";
-    });
-
-    if (hasAudioFiles) {
-        return "audio";
-    }
-
-    // Default to preview for mixed or unsupported formats
-    return "preview";
-};
+// File format detection now handled by plugin system - no longer needed
 
 export default function ViewFile() {
     const { state } = useLocation() as { state: ViewFileState };
@@ -300,36 +204,12 @@ export default function ViewFile() {
                     const newViewerOptions: ViewerOption[] = [];
 
                     if (isMultiFileMode) {
-                        // Multi-file mode: determine view type based on file collection
-                        defaultViewType = determineMultiFileViewType(currentFiles);
-
-                        // Don't show Preview tab for multi-file mode (as requested)
-                        // Only model viewer supports multi-file viewing
-                        if (defaultViewType === "model") {
-                            newViewerOptions.push({ text: "Model", id: "model" });
-                        } else {
-                            // For other types, default to model if available, otherwise use preview
-                            const hasModelFiles = currentFiles.some((file) => {
-                                const format = checkFileFormat(file.filename, file.isDirectory);
-                                return format === "model";
-                            });
-
-                            if (hasModelFiles) {
-                                newViewerOptions.push({ text: "Model", id: "model" });
-                                defaultViewType = "model";
-                            } else {
-                                // If no model files, use preview mode
-                                defaultViewType = "preview";
-                            }
-                        }
-                        // Add other view types as needed
+                        // Multi-file mode: simplified to just show Files tab
+                        defaultViewType = "files";
+                        newViewerOptions.push({ text: "Files", id: "files" });
                     } else {
-                        // Single file mode: check file format first
-                        defaultViewType = checkFileFormat(
-                            singleFileInfo?.filename || "",
-                            singleFileInfo?.isDirectory || false
-                        );
-                        console.log("default view type", defaultViewType);
+                        // Single file mode: show Preview and File tabs
+                        defaultViewType = "file"; // Always default to file view
 
                         // Add Preview tab if the file has a preview file
                         if (singleFileInfo?.previewFile) {
@@ -337,22 +217,8 @@ export default function ViewFile() {
                             newViewerOptions.push({ text: "Preview", id: "preview" });
                         }
 
-                        if (defaultViewType === "plot") {
-                            newViewerOptions.push({ text: "Plot", id: "plot" });
-                            newViewerOptions.push({ text: "Column", id: "column" });
-                        } else if (defaultViewType === "model") {
-                            newViewerOptions.push({ text: "Model", id: "model" });
-                        } else if (defaultViewType === "pc") {
-                            newViewerOptions.push({ text: "Point Cloud", id: "pc" });
-                        } else if (defaultViewType === "image") {
-                            newViewerOptions.push({ text: "Image", id: "image" });
-                        } else if (defaultViewType === "html") {
-                            newViewerOptions.push({ text: "HTML", id: "html" });
-                        } else if (defaultViewType === "video") {
-                            newViewerOptions.push({ text: "Video", id: "video" });
-                        } else if (defaultViewType === "audio") {
-                            newViewerOptions.push({ text: "Audio", id: "audio" });
-                        }
+                        // Always add File tab for the actual file
+                        newViewerOptions.push({ text: "File", id: "file" });
                     }
 
                     setViewerOptions(newViewerOptions);
@@ -463,32 +329,34 @@ export default function ViewFile() {
                                                 }
                                             >
                                                 <>
-                                                    <AssetVisualizer
-                                                        viewType={viewType}
-                                                        asset={asset}
-                                                        assetKey={
-                                                            isMultiFileMode
-                                                                ? undefined
-                                                                : viewType === "preview"
-                                                                ? singleFileInfo?.previewFile
-                                                                : singleFileInfo?.key
+                                                    <DynamicViewer
+                                                        key={`${viewType}-${assetId}-${
+                                                            singleFileInfo?.versionId ||
+                                                            "no-version"
+                                                        }`} // Force remount on tab switch
+                                                        files={
+                                                            isMultiFileMode || viewType === "files"
+                                                                ? currentFiles
+                                                                : singleFileInfo
+                                                                ? [
+                                                                      {
+                                                                          ...singleFileInfo,
+                                                                          key:
+                                                                              viewType === "preview"
+                                                                                  ? singleFileInfo.previewFile ||
+                                                                                    singleFileInfo.key
+                                                                                  : singleFileInfo.key,
+                                                                      },
+                                                                  ]
+                                                                : []
                                                         }
-                                                        multiFileKeys={
-                                                            isMultiFileMode
-                                                                ? currentFiles.map((f) => f.key) // Always use main files for visualizer
-                                                                : undefined
-                                                        }
-                                                        versionId={
-                                                            isMultiFileMode
-                                                                ? undefined
-                                                                : singleFileInfo?.versionId
-                                                        }
+                                                        assetId={assetId!}
+                                                        databaseId={databaseId!}
                                                         viewerMode={viewerMode}
-                                                        onViewerModeChange={(
-                                                            newViewerMode: string
-                                                        ) => changeViewerMode(newViewerMode)}
-                                                        // Don't show delete button in ViewFile.tsx
-                                                        onDeletePreview={undefined}
+                                                        onViewerModeChange={changeViewerMode}
+                                                        showViewerSelector={true} // Enable plugin-based viewer selection
+                                                        isPreviewMode={viewType === "preview"}
+                                                        onDeletePreview={undefined} // Don't show delete button in ViewFile.tsx
                                                     />
 
                                                     {/* Delete Preview Modal */}

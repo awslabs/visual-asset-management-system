@@ -52,6 +52,7 @@ Javascript Libraries:
 | draco                    | [draco@1.5.6](https://github.com/google/draco)                       | Apache-2.0              |
 | rhino3dm                 | [rhino3dm@7.15.0](https://github.com/mcneel/rhino3dm)                | MIT                     |
 | web-ifc                  | [web-ifc@0.0.39](https://github.com/IFCjs/web-ifc)                   | Mozilla-2.0             |
+| cesium                   | [cesium@1.118.0](https://github.com/CesiumGS/cesium)                 | Apache-2.0              |
 
 Python Libraries
 
