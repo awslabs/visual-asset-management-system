@@ -252,24 +252,34 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     claims_and_roles = request_to_claims(event)
     
     try:
-        # Parse request body
-        if not event.get('body'):
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
             return validation_error(body={'message': "Request body is required"})
         
-        # Parse request body
-        if isinstance(event['body'], str):
-            event['body'] = json.loads(event['body'])
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
+        else:
+            logger.error("Request body is not a string")
+            return validation_error(body={'message': "Request body cannot be parsed"})
         
         # Determine if this is stage 1 (initialize) or stage 2 (complete)
-        is_complete_stage = "uploadId" in event['body']
+        is_complete_stage = "uploadId" in body
         
         # Parse request model based on stage
         if is_complete_stage:
             # Stage 2 - Complete upload
-            request_model = parse(event['body'], model=IngestAssetCompleteRequestModel)
+            request_model = parse(body, model=IngestAssetCompleteRequestModel)
         else:
             # Stage 1 - Initialize upload
-            request_model = parse(event['body'], model=IngestAssetInitializeRequestModel)
+            request_model = parse(body, model=IngestAssetInitializeRequestModel)
         
         # Check authorization
         asset = {

@@ -230,7 +230,13 @@ def lambda_handler(event, context):
 
 
         elif 'body' in event and isinstance(event['body'], str):
-            body = json.loads(event['body'])
+            try:
+                body = json.loads(event['body'])
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                response['statusCode'] = 400
+                response['body'] = json.dumps({"message": "Invalid JSON in request body"})
+                return response
             if 'identifier' in body:
                 constraintId = body['identifier']
         elif 'body' in event and isinstance(event['body'], dict) and 'identifier' in event['body']:

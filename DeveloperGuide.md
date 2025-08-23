@@ -719,10 +719,24 @@ def lambda_handler(event, context):
         logger.error(response)
         return response
 
-    if isinstance(event['body'], str):
-        data = json.loads(event['body'])
-    else:
-        data = event['body']
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
+        else:
+            message = 'Request body cannot be parsed'
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            logger.error(response)
+            return response
 
     write_input_output(data['inputS3AssetFilePath'], data['outputS3AssetFilesPath'])
     return {

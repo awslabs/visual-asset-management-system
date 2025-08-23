@@ -454,7 +454,14 @@ def lambda_handler(
                     }
 
                 #Load body for POST after taking care of GET
-                body = json.loads(event['body'])
+                try:
+                    body = json.loads(event['body'])
+                except json.JSONDecodeError as e:
+                    logger.exception(f"Invalid JSON in request body: {e}")
+                    return {
+                        'statusCode': 400,
+                        'body': json.dumps({"message": "Invalid JSON in request body"})
+                    }
 
                 #POST Parameters
                 logger.info("Validating POST parameters")
@@ -493,10 +500,10 @@ def lambda_handler(
 
                     #Casbin ABAC check
                     hit_document = {
-                        "databaseId": hit["_source"]["str_databaseid"],
-                        "assetName": hit["_source"]["str_assetname"],
-                        "tags": hit["_source"]["list_tags"],
-                        "assetType": hit["_source"]["str_assettype"],
+                        "databaseId": hit["_source"].get("str_databaseid", ""),
+                        "assetName": hit["_source"].get("str_assetname", ""),
+                        "tags": hit["_source"].get("list_tags", ""),
+                        "assetType": hit["_source"].get("str_assettype", ""),
                         "object__type": "asset" #for the purposes of checking ABAC, this should always be type "asset" until ABAC is implemented with asset files object types
                     }
 

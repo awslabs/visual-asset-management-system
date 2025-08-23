@@ -3,7 +3,7 @@
 
 import json
 from customLogging.logger import safeLogger
-from common.validators import validate, relative_file_path_pattern, id_pattern, object_name_pattern
+from common.validators import validate, relative_file_path_pattern, id_pattern, object_name_pattern, filename_pattern
 from typing import Dict, List, Optional, Literal, Union, Any
 from typing_extensions import Annotated
 from pydantic import Json, EmailStr, PositiveInt, Field, Extra
@@ -48,7 +48,7 @@ class AssetVersionListItemModel(BaseModel, extra=Extra.ignore):
 class CreateAssetRequestModel(BaseModel, extra=Extra.ignore):
     """Request model for creating a new asset (metadata only)"""
     databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
-    assetId: Optional[str] = Field(None, min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
+    assetId: Optional[str] = Field(None, min_length=1, max_length=256, strip_whitespace=False, pattern=filename_pattern)
     s3AssetBucket: Optional[str] = None
     assetName: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
     description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
@@ -75,7 +75,7 @@ class CreateAssetRequestModel(BaseModel, extra=Extra.ignore):
 
 class CreateAssetResponseModel(BaseModel, extra=Extra.ignore):
     """Response model for creating a new asset"""
-    assetId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
+    assetId: str
     message: str
 
 ######################## Initialize Upload API Models ##########################
@@ -94,7 +94,7 @@ class UploadFileModel(BaseModel, extra=Extra.ignore):
 
 class InitializeUploadRequestModel(BaseModel, extra=Extra.ignore):
     """Request model for initializing a file upload"""
-    assetId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
+    assetId: str = Field(min_length=1, max_length=256, strip_whitespace=False, pattern=filename_pattern)
     databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
     uploadType: Literal["assetFile", "assetPreview"]
     files: List[UploadFileModel]
@@ -161,7 +161,7 @@ class UploadFileCompletionModel(BaseModel, extra=Extra.ignore):
 
 class CompleteUploadRequestModel(BaseModel, extra=Extra.ignore):
     """Request model for completing a file upload"""
-    assetId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
+    assetId: str = Field(min_length=1, max_length=256, strip_whitespace=False, pattern=filename_pattern)
     databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
     uploadType: Literal["assetFile", "assetPreview"]
     files: List[UploadFileCompletionModel]
@@ -210,7 +210,7 @@ class ExternalFileModel(BaseModel, extra=Extra.ignore):
 
 class CompleteExternalUploadRequestModel(BaseModel, extra=Extra.ignore):
     """Request model for completing an external file upload"""
-    assetId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
+    assetId: str = Field(min_length=1, max_length=256, strip_whitespace=False, pattern=filename_pattern)
     databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
     uploadType: Literal["assetFile", "assetPreview"]
     files: List[ExternalFileModel]
@@ -440,7 +440,7 @@ class DeleteAuxiliaryPreviewAssetFilesResponseModel(BaseModel, extra=Extra.ignor
 class IngestAssetInitializeRequestModel(BaseModel, extra=Extra.ignore):
     """Request model for initializing an asset ingest operation"""
     databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
-    assetId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
+    assetId: str = Field(min_length=1, max_length=256, strip_whitespace=False, pattern=filename_pattern)
     assetName: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
     description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
     isDistributable: bool = True
@@ -494,7 +494,7 @@ class IngestAssetInitializeResponseModel(BaseModel, extra=Extra.ignore):
 class IngestAssetCompleteRequestModel(BaseModel, extra=Extra.ignore):
     """Request model for completing an asset ingest operation"""
     databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
-    assetId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
+    assetId: str = Field(min_length=1, max_length=256, strip_whitespace=False, pattern=filename_pattern)
     assetName: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
     description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
     isDistributable: bool = True

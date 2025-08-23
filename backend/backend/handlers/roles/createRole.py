@@ -44,9 +44,13 @@ def create_role(body):
         response['body'] = json.dumps({"message": "success"})
         return response
     except Exception as e:
-        logger.exception(e)
-        response['statusCode'] = 500
-        response['body'] = json.dumps({"message": "Internal Server Error"})
+        if hasattr(e, 'response') and e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": "Role with name '" + body["roleName"] + "' already exists."})
+        else:
+            logger.exception(e)
+            response['statusCode'] = 500
+            response['body'] = json.dumps({"message": "Internal Server Error"})
         return response
 
 
@@ -94,7 +98,13 @@ def lambda_handler(event, context):
         return response
 
     if isinstance(event['body'], str):
-        event['body'] = json.loads(event['body'])
+        try:
+            event['body'] = json.loads(event['body'])
+        except json.JSONDecodeError as e:
+            logger.exception(f"Invalid JSON in request body: {e}")
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": "Invalid JSON in request body"})
+            return response
 
     try:
         if 'roleName' not in event['body'] or 'description' not in event['body']:

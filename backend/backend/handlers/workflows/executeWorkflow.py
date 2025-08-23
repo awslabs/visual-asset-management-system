@@ -350,8 +350,11 @@ def lambda_handler(event, context):
         try:
             request_body = json.loads(event['body'])
             logger.info("Request body: %s", request_body)
-        except:
-            logger.warning("Failed to parse request body as JSON")
+        except json.JSONDecodeError as e:
+            logger.exception(f"Invalid JSON in request body: {e}")
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": "Invalid JSON in request body"})
+            return response
 
     try:
         pathParams = event.get('pathParameters', {})

@@ -253,7 +253,13 @@ def lambda_handler(event, context, create_pipeline_fn=CreatePipeline.from_env):
         return response
     
     if isinstance(event['body'], str):
-        event['body'] = json.loads(event['body'])
+        try:
+            event['body'] = json.loads(event['body'])
+        except json.JSONDecodeError as e:
+            logger.exception(f"Invalid JSON in request body: {e}")
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": "Invalid JSON in request body"})
+            return response
     try:
         # Check for missing fields - TODO: would need to keep these synchronized
         #
@@ -331,6 +337,16 @@ def lambda_handler(event, context, create_pipeline_fn=CreatePipeline.from_env):
             response['statusCode'] = 403
             response['body'] = json.dumps({"message": "Not Authorized"})
             return response
+    except json.JSONDecodeError as e:
+        logger.exception(e)
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": "Could not decode JSON in input chain"})
+        return response
+    except ValueError as v:
+        logger.exception(v)
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": str(v)})
+        return response
     except Exception as e:
         logger.exception(e)
         response['statusCode'] = 500

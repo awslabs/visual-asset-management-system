@@ -2479,15 +2479,25 @@ def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
         if not valid:
             return validation_error(body={'message': message})
         
-        # Parse request body
-        if not event.get('body'):
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
             return validation_error(body={'message': "Request body is required"})
         
-        if isinstance(event['body'], str):
-            body = json.loads(event['body'])
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
         else:
-            body = event['body']
-        
+            logger.error("Request body is not a string")
+            return validation_error(body={'message': "Request body cannot be parsed"})
+
+    
         # Parse request model
         request_model = parse(body, model=DeleteFileRequestModel)
         
@@ -2556,14 +2566,23 @@ def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
         if not valid:
             return validation_error(body={'message': message})
         
-        # Parse request body
-        if not event.get('body'):
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
             return validation_error(body={'message': "Request body is required"})
         
-        if isinstance(event['body'], str):
-            body = json.loads(event['body'])
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
         else:
-            body = event['body']
+            logger.error("Request body is not a string")
+            return validation_error(body={'message': "Request body cannot be parsed"})
         
         # Parse request model
         request_model = parse(body, model=UnarchiveFileRequestModel)
@@ -2631,14 +2650,23 @@ def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
         if not valid:
             return validation_error(body={'message': message})
         
-        # Parse request body
-        if not event.get('body'):
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
             return validation_error(body={'message': "Request body is required"})
         
-        if isinstance(event['body'], str):
-            body = json.loads(event['body'])
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
         else:
-            body = event['body']
+            logger.error("Request body is not a string")
+            return validation_error(body={'message': "Request body cannot be parsed"})
         
         # Parse request model
         request_model = parse(body, model=ArchiveFileRequestModel)
@@ -2707,14 +2735,23 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
         if not valid:
             return validation_error(body={'message': message})
         
-        # Parse request body
-        if not event.get('body'):
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
             return validation_error(body={'message': "Request body is required"})
         
-        if isinstance(event['body'], str):
-            body = json.loads(event['body'])
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
         else:
-            body = event['body']
+            logger.error("Request body is not a string")
+            return validation_error(body={'message': "Request body cannot be parsed"})
         
         # Parse request model
         request_model = parse(body, model=CopyFileRequestModel)
@@ -2784,14 +2821,23 @@ def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
         if not valid:
             return validation_error(body={'message': message})
         
-        # Parse request body
-        if not event.get('body'):
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
             return validation_error(body={'message': "Request body is required"})
         
-        if isinstance(event['body'], str):
-            body = json.loads(event['body'])
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
         else:
-            body = event['body']
+            logger.error("Request body is not a string")
+            return validation_error(body={'message': "Request body cannot be parsed"})
         
         # Parse request model
         request_model = parse(body, model=MoveFileRequestModel)
@@ -2865,10 +2911,22 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
         
         # Parse request body if present
         if event.get('body'):
-            if isinstance(event['body'], str):
-                body = json.loads(event['body'])
+
+            # Parse request body with enhanced error handling
+            body = event.get('body')
+
+            # Parse JSON body safely
+            if isinstance(body, str):
+                try:
+                    body = json.loads(body)
+                except json.JSONDecodeError as e:
+                    logger.exception(f"Invalid JSON in request body: {e}")
+                    return validation_error(body={'message': "Invalid JSON in request body"})
+            elif isinstance(body, dict):
+                body = body
             else:
-                body = event['body']
+                logger.error("Request body is not a string")
+                return validation_error(body={'message': "Request body cannot be parsed"})
                 
             # Parse request model
             request_model = parse(body, model=FileInfoRequestModel)
@@ -2954,14 +3012,23 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
         if not valid:
             return validation_error(body={'message': message})
         
-        # Parse request body
-        if not event.get('body'):
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
             return validation_error(body={'message': "Request body is required"})
         
-        if isinstance(event['body'], str):
-            body = json.loads(event['body'])
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
         else:
-            body = event['body']
+            logger.error("Request body is not a string")
+            return validation_error(body={'message': "Request body cannot be parsed"})
         
         # Parse request model
         request_model = parse(body, model=RevertFileVersionRequestModel)
@@ -3030,14 +3097,23 @@ def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
         if not valid:
             return validation_error(body={'message': message})
         
-        # Parse request body
-        if not event.get('body'):
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
             return validation_error(body={'message': "Request body is required"})
         
-        if isinstance(event['body'], str):
-            body = json.loads(event['body'])
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
         else:
-            body = event['body']
+            logger.error("Request body is not a string")
+            return validation_error(body={'message': "Request body cannot be parsed"})
         
         # Parse request model
         request_model = parse(body, model=CreateFolderRequestModel)
@@ -3269,14 +3345,23 @@ def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayPro
         if not valid:
             return validation_error(body={'message': message})
         
-        # Parse request body
-        if not event.get('body'):
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
             return validation_error(body={'message': "Request body is required"})
         
-        if isinstance(event['body'], str):
-            body = json.loads(event['body'])
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
         else:
-            body = event['body']
+            logger.error("Request body is not a string")
+            return validation_error(body={'message': "Request body cannot be parsed"})
         
         # Parse request model
         request_model = parse(body, model=DeleteAuxiliaryPreviewAssetFilesRequestModel)
@@ -3344,14 +3429,23 @@ def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
         if not valid:
             return validation_error(body={'message': message})
         
-        # Parse request body
-        if not event.get('body'):
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
             return validation_error(body={'message': "Request body is required"})
         
-        if isinstance(event['body'], str):
-            body = json.loads(event['body'])
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
         else:
-            body = event['body']
+            logger.error("Request body is not a string")
+            return validation_error(body={'message': "Request body cannot be parsed"})
         
         # Parse request model
         request_model = parse(body, model=SetPrimaryFileRequestModel)

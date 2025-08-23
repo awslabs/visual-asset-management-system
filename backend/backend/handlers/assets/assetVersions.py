@@ -1157,14 +1157,23 @@ def handle_create_version(event, context) -> APIGatewayProxyResponseV2:
         if not valid:
             return validation_error(body={'message': message})
         
-        # Parse request body
-        if not event.get('body'):
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+        if not body:
             return validation_error(body={'message': "Request body is required"})
         
-        if isinstance(event['body'], str):
-            body = json.loads(event['body'])
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
         else:
-            body = event['body']
+            logger.error("Request body is not a string")
+            return validation_error(body={'message': "Request body cannot be parsed"})
         
         # Parse request model
         request_model = parse(body, model=CreateAssetVersionRequestModel)
@@ -1242,10 +1251,20 @@ def handle_revert_version(event, context) -> APIGatewayProxyResponseV2:
         # Get request body for optional comment
         body = {}
         if event.get('body'):
-            if isinstance(event['body'], str):
-                body = json.loads(event['body'])
+            # Parse request body with enhanced error handling
+            body = event.get('body')
+            # Parse JSON body safely
+            if isinstance(body, str):
+                try:
+                    body = json.loads(body)
+                except json.JSONDecodeError as e:
+                    logger.exception(f"Invalid JSON in request body: {e}")
+                    return validation_error(body={'message': "Invalid JSON in request body"})
+            elif isinstance(body, dict):
+                body = body
             else:
-                body = event['body']
+                logger.error("Request body is not a string")
+                return validation_error(body={'message': "Request body cannot be parsed"})
         
         # Create request model with assetVersionId from path parameter
         request_model = RevertAssetVersionRequestModel(
