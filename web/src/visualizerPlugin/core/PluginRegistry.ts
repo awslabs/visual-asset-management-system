@@ -7,19 +7,28 @@ import { ViewerPluginConfig, ViewerConfig, ViewerPluginProps } from "./types";
 import viewerConfig from "../config/viewerConfig.json";
 import { VIEWER_COMPONENTS, DEPENDENCY_MANAGERS } from "../viewers/manifest";
 import { Cache } from "aws-amplify";
+import { StylesheetManager } from "./StylesheetManager";
 import React from "react";
 
 export interface ViewerPlugin {
     config: ViewerPluginConfig;
     component: React.ComponentType<ViewerPluginProps>;
     dependencyManager?: any;
+    isLoaded?: boolean;
+}
+
+export interface ViewerPluginMetadata {
+    config: ViewerPluginConfig;
+    isLoaded: boolean;
 }
 
 export class PluginRegistry {
     private static instance: PluginRegistry;
     private plugins: Map<string, ViewerPlugin> = new Map();
+    private pluginMetadata: Map<string, ViewerPluginMetadata> = new Map();
     private config!: ViewerConfig;
     private initialized = false;
+    private currentlyLoadedPlugin: string | null = null;
 
     static getInstance(): PluginRegistry {
         if (!PluginRegistry.instance) {
@@ -68,13 +77,15 @@ export class PluginRegistry {
             // Load configuration
             this.config = viewerConfig as ViewerConfig;
 
-            // Register all plugins
+            // Register plugin metadata only (no component loading)
             for (const viewerConfig of this.config.viewers) {
-                await this.registerPlugin(viewerConfig);
+                await this.registerPluginMetadata(viewerConfig);
             }
 
             this.initialized = true;
-            console.log(`PluginRegistry initialized with ${this.plugins.size} plugins`);
+            console.log(
+                `PluginRegistry initialized with ${this.pluginMetadata.size} plugin metadata entries`
+            );
         } catch (error) {
             console.error("Failed to initialize PluginRegistry:", error);
             throw error;
@@ -122,9 +133,9 @@ export class PluginRegistry {
         }
     }
 
-    async registerPlugin(config: ViewerPluginConfig): Promise<void> {
+    async registerPluginMetadata(config: ViewerPluginConfig): Promise<void> {
         try {
-            // Check feature restrictions before attempting to load the plugin
+            // Check feature restrictions before registering metadata
             if (!this.checkFeatureRestrictions(config)) {
                 console.log(
                     `Skipping plugin ${config.id} (${config.name}) due to unmet feature requirements`
@@ -132,11 +143,40 @@ export class PluginRegistry {
                 return;
             }
 
-            console.log(`Attempting to load component from: ${config.componentPath}`);
+            // Create metadata object (no component loading)
+            const metadata: ViewerPluginMetadata = {
+                config,
+                isLoaded: false,
+            };
 
-            // Use internal helper function to load component
+            this.pluginMetadata.set(config.id, metadata);
+            console.log(`Registered plugin metadata: ${config.name} (${config.id})`);
+        } catch (error) {
+            console.error(`Failed to register plugin metadata ${config.id}:`, error);
+            // Don't throw here - continue with other plugins
+        }
+    }
+
+    async loadPlugin(pluginId: string): Promise<ViewerPlugin> {
+        // Check if already loaded
+        const existingPlugin = this.plugins.get(pluginId);
+        if (existingPlugin && existingPlugin.isLoaded) {
+            return existingPlugin;
+        }
+
+        // Get metadata
+        const metadata = this.pluginMetadata.get(pluginId);
+        if (!metadata) {
+            throw new Error(`Plugin metadata not found: ${pluginId}`);
+        }
+
+        const config = metadata.config;
+
+        try {
+            console.log(`Loading plugin component: ${config.name} (${pluginId})`);
+
+            // Load component
             const Component = await this.loadViewerComponent(config.componentPath);
-
             if (!Component) {
                 throw new Error(
                     `Component at ${config.componentPath} does not have a default export`
@@ -146,10 +186,7 @@ export class PluginRegistry {
             // Load dependency manager if specified
             let dependencyManager = null;
             if (config.dependencyManager) {
-                console.log(
-                    `Attempting to load dependency manager from: ${config.dependencyManager}`
-                );
-
+                console.log(`Loading dependency manager: ${config.dependencyManager}`);
                 try {
                     dependencyManager = await this.loadDependencyManager(config.dependencyManager);
                 } catch (error) {
@@ -162,13 +199,55 @@ export class PluginRegistry {
                 config,
                 component: Component,
                 dependencyManager,
+                isLoaded: true,
             };
 
-            this.plugins.set(config.id, plugin);
-            console.log(`Registered plugin: ${config.name} (${config.id})`);
+            this.plugins.set(pluginId, plugin);
+            metadata.isLoaded = true;
+
+            console.log(`Successfully loaded plugin: ${config.name} (${pluginId})`);
+            return plugin;
         } catch (error) {
-            console.error(`Failed to register plugin ${config.id}:`, error);
-            // Don't throw here - continue with other plugins
+            console.error(`Failed to load plugin ${pluginId}:`, error);
+            throw error;
+        }
+    }
+
+    async unloadPlugin(pluginId: string): Promise<void> {
+        const plugin = this.plugins.get(pluginId);
+        if (!plugin || !plugin.isLoaded) {
+            return; // Already unloaded or never loaded
+        }
+
+        try {
+            console.log(`Unloading plugin: ${plugin.config.name} (${pluginId})`);
+
+            // Clean up dependencies
+            if (plugin.dependencyManager) {
+                if (plugin.config.dependencyManagerClass && plugin.config.dependencyCleanupMethod) {
+                    const depClass = plugin.dependencyManager[plugin.config.dependencyManagerClass];
+                    if (depClass && depClass[plugin.config.dependencyCleanupMethod]) {
+                        await depClass[plugin.config.dependencyCleanupMethod]();
+                    }
+                } else if (plugin.dependencyManager.cleanup) {
+                    await plugin.dependencyManager.cleanup();
+                }
+            }
+
+            // Remove plugin stylesheets
+            StylesheetManager.removePluginStylesheets(pluginId);
+
+            // Remove from loaded plugins but keep metadata
+            this.plugins.delete(pluginId);
+            const metadata = this.pluginMetadata.get(pluginId);
+            if (metadata) {
+                metadata.isLoaded = false;
+            }
+
+            console.log(`Successfully unloaded plugin: ${pluginId}`);
+        } catch (error) {
+            console.error(`Error unloading plugin ${pluginId}:`, error);
+            throw error;
         }
     }
 
@@ -176,28 +255,28 @@ export class PluginRegistry {
         fileExtensions: string[],
         isMultiFile: boolean,
         isPreview: boolean = false
-    ): ViewerPlugin[] {
+    ): ViewerPluginMetadata[] {
         if (!this.initialized) {
             console.warn("PluginRegistry not initialized. Call initialize() first.");
             return [];
         }
 
-        // For preview mode, ONLY return the preview viewer
+        // For preview mode, ONLY return the preview viewer metadata
         if (isPreview) {
-            return Array.from(this.plugins.values())
-                .filter((plugin) => plugin.config.isPreviewViewer)
+            return Array.from(this.pluginMetadata.values())
+                .filter((metadata) => metadata.config.isPreviewViewer)
                 .sort((a, b) => a.config.priority - b.config.priority);
         }
 
-        // For non-preview mode, return all compatible viewers EXCEPT preview viewers
-        return Array.from(this.plugins.values())
-            .filter((plugin) => {
+        // For non-preview mode, return all compatible viewer metadata EXCEPT preview viewers
+        return Array.from(this.pluginMetadata.values())
+            .filter((metadata) => {
                 // Skip preview viewer for non-preview files
-                if (plugin.config.isPreviewViewer) {
+                if (metadata.config.isPreviewViewer) {
                     return false;
                 }
 
-                return this.canHandle(plugin.config, fileExtensions, isMultiFile);
+                return this.canHandle(metadata.config, fileExtensions, isMultiFile);
             })
             .sort((a, b) => a.config.priority - b.config.priority);
     }
@@ -227,23 +306,37 @@ export class PluginRegistry {
         return this.plugins.get(id);
     }
 
-    // Get viewers by category
-    getViewersByCategory(category: string): ViewerPlugin[] {
-        return Array.from(this.plugins.values()).filter(
-            (plugin) => plugin.config.category === category
+    getViewerMetadata(id: string): ViewerPluginMetadata | undefined {
+        return this.pluginMetadata.get(id);
+    }
+
+    isPluginLoaded(id: string): boolean {
+        const plugin = this.plugins.get(id);
+        return plugin ? plugin.isLoaded === true : false;
+    }
+
+    // Get viewers by category (metadata only)
+    getViewersByCategory(category: string): ViewerPluginMetadata[] {
+        return Array.from(this.pluginMetadata.values()).filter(
+            (metadata) => metadata.config.category === category
         );
     }
 
     // Get all available categories
     getCategories(): string[] {
         const categories = new Set<string>();
-        this.plugins.forEach((plugin) => categories.add(plugin.config.category));
+        this.pluginMetadata.forEach((metadata) => categories.add(metadata.config.category));
         return Array.from(categories);
     }
 
-    // Get all registered plugins
-    getAllPlugins(): ViewerPlugin[] {
-        return Array.from(this.plugins.values());
+    // Get all registered plugin metadata
+    getAllPluginMetadata(): ViewerPluginMetadata[] {
+        return Array.from(this.pluginMetadata.values());
+    }
+
+    // Get all loaded plugins
+    getAllLoadedPlugins(): ViewerPlugin[] {
+        return Array.from(this.plugins.values()).filter((plugin) => plugin.isLoaded);
     }
 
     // Check if registry is initialized
@@ -255,7 +348,7 @@ export class PluginRegistry {
     async loadPluginDependencies(pluginId: string): Promise<void> {
         const plugin = this.plugins.get(pluginId);
         if (!plugin) {
-            throw new Error(`Plugin ${pluginId} not found`);
+            throw new Error(`Plugin ${pluginId} not found or not loaded`);
         }
 
         // If plugin has a dependency manager, use it generically
@@ -276,27 +369,83 @@ export class PluginRegistry {
         console.log(`Dependencies loaded for plugin: ${pluginId}`);
     }
 
+    // Switch to a different plugin (unload current, load new)
+    async switchToPlugin(newPluginId: string): Promise<ViewerPlugin> {
+        // Unload current plugin if different
+        if (this.currentlyLoadedPlugin && this.currentlyLoadedPlugin !== newPluginId) {
+            await this.unloadPlugin(this.currentlyLoadedPlugin);
+        }
+
+        // Load new plugin
+        const plugin = await this.loadPlugin(newPluginId);
+        this.currentlyLoadedPlugin = newPluginId;
+
+        return plugin;
+    }
+
+    // Get currently loaded plugin ID
+    getCurrentlyLoadedPlugin(): string | null {
+        return this.currentlyLoadedPlugin;
+    }
+
     // Cleanup all plugins using configuration
     cleanup(): void {
-        this.plugins.forEach((plugin) => {
+        const loadedPlugins = Array.from(this.plugins.values());
+        loadedPlugins.forEach((plugin) => {
             try {
-                if (
-                    plugin.dependencyManager &&
-                    plugin.config.dependencyManagerClass &&
-                    plugin.config.dependencyCleanupMethod
-                ) {
-                    const depClass = plugin.dependencyManager[plugin.config.dependencyManagerClass];
-                    if (depClass && depClass[plugin.config.dependencyCleanupMethod]) {
-                        depClass[plugin.config.dependencyCleanupMethod]();
-                    }
-                } else if (plugin.dependencyManager && plugin.dependencyManager.cleanup) {
-                    // Fallback for generic cleanup method
-                    plugin.dependencyManager.cleanup();
+                if (plugin.isLoaded) {
+                    // Use synchronous cleanup for immediate cleanup
+                    this.unloadPluginSync(plugin.config.id);
                 }
             } catch (error) {
                 console.error(`Error cleaning up plugin ${plugin.config.id}:`, error);
             }
         });
+
+        // Clean up all stylesheets
+        StylesheetManager.cleanup();
+
+        // Reset state
+        this.currentlyLoadedPlugin = null;
+        console.log("PluginRegistry: Complete cleanup performed");
+    }
+
+    // Synchronous version of unloadPlugin for cleanup scenarios
+    private unloadPluginSync(pluginId: string): void {
+        const plugin = this.plugins.get(pluginId);
+        if (!plugin || !plugin.isLoaded) {
+            return; // Already unloaded or never loaded
+        }
+
+        try {
+            console.log(`Unloading plugin (sync): ${plugin.config.name} (${pluginId})`);
+
+            // Clean up dependencies synchronously
+            if (plugin.dependencyManager) {
+                if (plugin.config.dependencyManagerClass && plugin.config.dependencyCleanupMethod) {
+                    const depClass = plugin.dependencyManager[plugin.config.dependencyManagerClass];
+                    if (depClass && depClass[plugin.config.dependencyCleanupMethod]) {
+                        depClass[plugin.config.dependencyCleanupMethod]();
+                    }
+                } else if (plugin.dependencyManager.cleanup) {
+                    plugin.dependencyManager.cleanup();
+                }
+            }
+
+            // Remove plugin stylesheets
+            StylesheetManager.removePluginStylesheets(pluginId);
+
+            // Remove from loaded plugins but keep metadata
+            this.plugins.delete(pluginId);
+            const metadata = this.pluginMetadata.get(pluginId);
+            if (metadata) {
+                metadata.isLoaded = false;
+            }
+
+            console.log(`Successfully unloaded plugin (sync): ${pluginId}`);
+        } catch (error) {
+            console.error(`Error unloading plugin ${pluginId}:`, error);
+        }
     }
 }
 

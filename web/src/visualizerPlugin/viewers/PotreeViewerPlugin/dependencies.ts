@@ -3,9 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { StylesheetManager } from "../../core/StylesheetManager";
+
 export class PotreeDependencyManager {
     private static potreeInstance: any = null;
     private static loadedDependencies = new Set<string>();
+    private static readonly PLUGIN_ID = "potree-viewer";
 
     static async loadPotree(): Promise<any> {
         if (this.potreeInstance) {
@@ -48,9 +51,9 @@ export class PotreeDependencyManager {
             "/potree_libs/jstree/themes/mixed/style.css",
         ];
 
-        // Load stylesheets first
+        // Load stylesheets first using StylesheetManager
         for (const stylesheet of stylesheets) {
-            await this.loadStylesheet(stylesheet);
+            await StylesheetManager.loadStylesheet(this.PLUGIN_ID, stylesheet);
         }
 
         // Then load scripts in order
@@ -83,31 +86,6 @@ export class PotreeDependencyManager {
         });
     }
 
-    private static loadStylesheet(href: string): Promise<void> {
-        return new Promise((resolve, reject) => {
-            if (this.loadedDependencies.has(href)) {
-                resolve(); // Already loaded
-                return;
-            }
-
-            if (document.querySelector(`link[href="${href}"]`)) {
-                this.loadedDependencies.add(href);
-                resolve(); // Already in DOM
-                return;
-            }
-
-            const link = document.createElement("link");
-            link.rel = "stylesheet";
-            link.href = href;
-            link.onload = () => {
-                this.loadedDependencies.add(href);
-                resolve();
-            };
-            link.onerror = () => reject(new Error(`Failed to load stylesheet: ${href}`));
-            document.head.appendChild(link);
-        });
-    }
-
     static cleanup(): void {
         // Clean up Potree instances and event listeners
         if (this.potreeInstance) {
@@ -119,5 +97,13 @@ export class PotreeDependencyManager {
                 console.warn("Error during Potree cleanup:", error);
             }
         }
+
+        // Remove all stylesheets managed by this plugin
+        StylesheetManager.removePluginStylesheets(this.PLUGIN_ID);
+
+        // Clear loaded dependencies tracking
+        this.loadedDependencies.clear();
+
+        console.log("PotreeDependencyManager: Cleanup completed");
     }
 }

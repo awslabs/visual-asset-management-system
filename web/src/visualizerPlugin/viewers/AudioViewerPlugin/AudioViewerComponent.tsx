@@ -115,9 +115,7 @@ const AudioViewerComponent: React.FC<ViewerPluginProps> = ({
                     fontWeight: "bold",
                     color: "#333",
                 }}
-            >
-                Audio Player
-            </div>
+            ></div>
             <audio
                 src={audioUrl}
                 controls

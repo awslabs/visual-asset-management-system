@@ -5,7 +5,7 @@
 
 import React, { useState } from "react";
 import { Modal, Box, SpaceBetween, Button } from "@cloudscape-design/components";
-import DynamicViewer from "../../../visualizerPlugin/components/DynamicViewer";
+import { DynamicViewer } from "../../../visualizerPlugin/components/DynamicViewer";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
 
 interface FileViewerModalProps {
@@ -77,29 +77,32 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
                 </Box>
             }
         >
-            <Box padding={{ vertical: "s" }}>
-                {files.length > 0 ? (
-                    <div key={getViewerKey()}>
-                        <DynamicViewer
-                            files={files}
-                            assetId={assetId}
-                            databaseId={databaseId}
-                            viewerMode={viewerMode}
-                            onViewerModeChange={handleViewerModeChange}
-                            showViewerSelector={true}
-                            isPreviewMode={false}
-                            hideFullscreenControls={true}
-                        />
-                    </div>
-                ) : (
-                    <Box textAlign="center" padding="xl">
-                        <Box variant="h3">No Files to Display</Box>
-                        <Box variant="p" color="text-status-info" margin={{ top: "s" }}>
-                            No viewable files were selected.
-                        </Box>
+            {files.length > 0 ? (
+                <div
+                    key={getViewerKey()}
+                    style={{
+                        width: "100%",
+                    }}
+                >
+                    <DynamicViewer
+                        files={files}
+                        assetId={assetId}
+                        databaseId={databaseId}
+                        viewerMode={viewerMode}
+                        onViewerModeChange={handleViewerModeChange}
+                        showViewerSelector={true}
+                        isPreviewMode={false}
+                        hideFullscreenControls={true}
+                    />
+                </div>
+            ) : (
+                <Box textAlign="center" padding="xl">
+                    <Box variant="h3">No Files to Display</Box>
+                    <Box variant="p" color="text-status-info" margin={{ top: "s" }}>
+                        No viewable files were selected.
                     </Box>
-                )}
-            </Box>
+                </Box>
+            )}
         </Modal>
     );
 };

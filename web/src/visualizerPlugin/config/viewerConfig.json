@@ -5,6 +5,10 @@
             "name": "Online 3D Viewer",
             "description": "View common 3D models using Online3DViewer",
             "componentPath": "./viewers/Online3dViewerPlugin/Online3dViewerComponent",
+            "dependencyManager": "./viewers/Online3dViewerPlugin/dependencies",
+            "dependencyManagerClass": "Online3dViewerDependencyManager",
+            "dependencyManagerMethod": "loadOnline3dViewer",
+            "dependencyCleanupMethod": "cleanup",
             "supportedExtensions": [
                 ".3dm",
                 ".3ds",
@@ -169,7 +173,7 @@
         {
             "id": "text-viewer",
             "name": "Text Viewer",
-            "description": "View and syntax highlight text, JSON, XML, HTML, YAML, and TOML files with advanced formatting options",
+            "description": "View and syntax highlight text-based files with advanced formatting options",
             "componentPath": "./viewers/TextViewerPlugin/TextViewerComponent",
             "supportedExtensions": [
                 ".txt",
@@ -180,7 +184,8 @@
                 ".yaml",
                 ".yml",
                 ".toml",
-                ".ini"
+                ".ini",
+                ".ipynb"
             ],
             "supportsMultiFile": false,
             "canFullscreen": true,

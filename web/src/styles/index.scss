@@ -6,6 +6,7 @@
 html,
 body {
     touch-action: none;
+    overflow-x: hidden;
 }
 
 /* Firefox-specific rule to enable scrolling */
@@ -22,6 +23,7 @@ body {
         "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    padding-bottom: 20px;
 }
 
 code {
@@ -124,18 +126,15 @@ code {
 }
 
 .visualizer-container {
-    width: calc(100% + 40px);
+    width: 100%;
     //position: relative;
     background: repeating-linear-gradient(45deg, #606dbc, #606dbc 10px, #465298 10px, #465298 20px);
-    height: 525px;
+
     overflow: hidden;
-    margin-left: -20px;
+    margin-left: 0;
     margin-top: -20px;
     margin-bottom: -20px;
-}
-
-.visualizer-container canvas {
-    height: 525px;
+    box-sizing: border-box;
 }
 
 .visualizer-footer {
@@ -220,21 +219,14 @@ code {
     min-width: 100%;
 }
 
-.online_3d_viewer {
-    display: grid;
-    place-items: center;
-}
-
 .visualizer-container div[role="grid"] {
     height: 100%;
 }
 
 .visualizer-container h2 {
     position: absolute;
-    height: 525px;
     padding: 0;
     margin: 0;
-    line-height: 525px;
     text-align: center;
     width: 100%;
     background-color: #ffffff99;

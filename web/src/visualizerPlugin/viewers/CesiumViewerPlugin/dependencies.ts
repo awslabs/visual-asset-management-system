@@ -4,10 +4,12 @@
  */
 
 import * as Cesium from "cesium";
+import { StylesheetManager } from "../../core/StylesheetManager";
 
 export class CesiumDependencyManager {
     private static loaded = false;
     private static cesiumBaseUrl = "/cesium/";
+    private static readonly PLUGIN_ID = "cesium-viewer";
 
     static async loadCesium(): Promise<void> {
         if (this.loaded) return;
@@ -15,6 +17,19 @@ export class CesiumDependencyManager {
         try {
             // Set Cesium base URL for assets
             (window as any).CESIUM_BASE_URL = this.cesiumBaseUrl;
+
+            // Load Cesium CSS if it exists
+            const cesiumStylesheets = ["/cesium/Widgets/widgets.css"];
+
+            // Load stylesheets using StylesheetManager
+            for (const stylesheet of cesiumStylesheets) {
+                try {
+                    await StylesheetManager.loadStylesheet(this.PLUGIN_ID, stylesheet);
+                } catch (error) {
+                    console.warn(`Failed to load Cesium stylesheet ${stylesheet}:`, error);
+                    // Continue loading even if stylesheet fails
+                }
+            }
 
             // Configure Cesium Ion access token if available
             // This can be set via environment variables or configuration
@@ -38,6 +53,10 @@ export class CesiumDependencyManager {
     static cleanup(): void {
         // Cleanup Cesium resources if needed
         // Most cleanup is handled by individual viewer instances
+
+        // Remove all stylesheets managed by this plugin
+        StylesheetManager.removePluginStylesheets(this.PLUGIN_ID);
+
         this.loaded = false;
         console.log("CesiumJS dependencies cleaned up");
     }

@@ -1098,8 +1098,8 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 <div
                     style={{
                         position: "absolute",
-                        top: initError ? "80px" : "10px", // Adjust position if error is shown
-                        left: "10px",
+                        bottom: "10px",
+                        right: "10px",
                         backgroundColor: "rgba(0, 0, 0, 0.7)",
                         color: "white",
                         padding: "8px 12px",
@@ -1120,7 +1120,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                     style={{
                         position: "fixed",
                         top: initError ? "50px" : "20px",
-                        right: "10px",
+                        left: "10px",
                         bottom: "20px",
                         backgroundColor: "rgba(0, 0, 0, 0.8)",
                         color: "white",
@@ -1503,7 +1503,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                     style={{
                         position: "absolute",
                         top: initError ? "50px" : "20px",
-                        right: "10px",
+                        left: "10px",
                         backgroundColor: "rgba(0, 0, 0, 0.7)",
                         color: "white",
                         border: "1px solid rgba(255, 255, 255, 0.2)",

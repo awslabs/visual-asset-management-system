@@ -1,0 +1,73 @@
+/* ViewFile specific styles for horizontal splitter and scrolling */
+
+.viewfile-splitter {
+    height: 100%;
+}
+
+/* Ensure the main container has proper height and scrolling */
+.viewfile-main-container {
+    height: calc(100vh - 200px);
+    min-height: 400px;
+    overflow: hidden;
+}
+
+/* Fix scrolling issues in the viewer area */
+#view-edit-asset-right-column {
+    height: 100%;
+    overflow: auto;
+}
+
+/* Ensure DynamicViewer fills the available space */
+#view-edit-asset-right-column .visualizer-container {
+    height: 100%;
+    min-height: 300px;
+}
+
+/* Improve scrollbar visibility for top panel only */
+.horizontal-resizable-top-panel {
+    scrollbar-width: auto;
+}
+
+/* Ensure proper spacing in bottom panel */
+.horizontal-resizable-bottom-panel .awsui-space-between {
+    padding: 16px;
+}
+
+/* Remove scrollbar styling from bottom panel since it uses main page scroll */
+.horizontal-resizable-bottom-panel {
+    scrollbar-width: unset;
+}
+
+/* Fix any potential overflow issues with containers */
+.horizontal-resizable-bottom-panel .awsui-container {
+    margin-bottom: 16px;
+}
+
+.horizontal-resizable-bottom-panel .awsui-container:last-child {
+    margin-bottom: 0;
+}
+
+/* Ensure metadata and file versions tables are properly contained */
+.horizontal-resizable-bottom-panel .awsui-table {
+    max-height: none;
+}
+
+/* Fix fullscreen mode compatibility */
+.fullscreen #view-edit-asset-right-column {
+    height: 100vh;
+}
+
+/* Responsive adjustments for smaller screens */
+@media (max-height: 600px) {
+    .viewfile-main-container {
+        height: calc(100vh - 150px);
+        min-height: 300px;
+    }
+}
+
+@media (max-height: 400px) {
+    .viewfile-main-container {
+        height: calc(100vh - 100px);
+        min-height: 200px;
+    }
+}

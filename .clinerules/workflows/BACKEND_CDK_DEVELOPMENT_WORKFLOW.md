@@ -918,7 +918,7 @@ def handle_get_request(event):
     try:
         # Get body from event with default empty dict (Pattern 2: Optional Body)
         body = event.get('body', {})
-        
+
         # If body exists, parse it safely
         if body:
             # Parse JSON body safely
@@ -1032,7 +1032,7 @@ def handle_post_request(event):
         body = event.get('body')
         if not body:
             return validation_error(body={'message': "Request body is required"})
-        
+
         # Parse JSON body safely
         if isinstance(body, str):
             try:
@@ -1619,7 +1619,7 @@ def handle_post_request(event):
         body = event.get('body')
         if not body:
             return validation_error(body={'message': "Request body is required"})
-        
+
         # Parse JSON body safely
         if isinstance(body, str):
             try:
@@ -1632,18 +1632,18 @@ def handle_post_request(event):
         else:
             logger.error("Request body is not a string")
             return validation_error(body={'message': "Request body cannot be parsed"})
-        
+
         # Optional: Validate required fields in the request body
         required_fields = ['databaseId', 'assetName', 'description', 'isDistributable']
         for field in required_fields:
             if field not in body:
                 return validation_error(body={'message': f"Missing required field: {field}"})
-        
+
         # Parse and validate the request model
         request_model = parse(body, model=CreateAssetRequestModel)
-        
+
         # Process the request...
-        
+
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': str(v)})
@@ -1661,7 +1661,7 @@ def handle_get_request(event):
     try:
         # Get body from event with default empty dict
         body = event.get('body', {})
-        
+
         # If body exists, parse it safely
         if body:
             # Parse JSON body safely
@@ -1676,13 +1676,13 @@ def handle_get_request(event):
             else:
                 logger.error("Request body is not a string or dict")
                 return validation_error(body={'message': "Request body cannot be parsed"})
-        
+
         # Now body is always a dict (either parsed or empty)
         # Parse request model (works with both empty and populated body)
         request_model = parse(body, model=RequestModel)
-        
+
         # Process the request...
-        
+
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': str(v)})

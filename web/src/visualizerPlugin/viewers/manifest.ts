@@ -30,6 +30,7 @@ export const VIEWER_COMPONENTS = {
 export const DEPENDENCY_MANAGERS = {
     "./viewers/PotreeViewerPlugin/dependencies": "PotreeViewerPlugin/dependencies",
     "./viewers/CesiumViewerPlugin/dependencies": "CesiumViewerPlugin/dependencies",
+    "./viewers/Online3dViewerPlugin/dependencies": "Online3dViewerPlugin/dependencies",
     // Add new dependency managers here as needed:
     // './viewers/MyViewerPlugin/dependencies': 'MyViewerPlugin/dependencies',
 } as const;

@@ -18,11 +18,16 @@ This version includes significant enhancements to VAMS to include a new CLI tool
     -   Support for custom code, UI, and dependency management for each viewer. Also supports lazy loading of plugins when needed for a viewer.
     -   Viewer is now shown both on the View File page and as a modal pop-up from the file manager for easier quick access
     -   Added a PDF viewer for `.pdf` extension
-    -   Added a text viewer for `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, and `.ini` extensions
+    -   Added a text viewer for `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `ipynb`, and `.ini` extensions
     -   Added the CesiumJS viewer for `.json` tileset files which can load subsequent other files referenced in the asset (even if not selected for viewing directly). This is an initial/basic CesiumJS viewer implementation with default options as part of this release. Requires `allowUnsafeEvalFeatures` CDK `config.json` configuration flag to be turned on (off by default).
+    -   3D Online viewer now has additional UI added to support basic extra functionality
 -   **UI** Added a draggable splitter in ViewAsset page between the file manager tree view and details panel
 -   Added a new API endpoint for asset file streaming (similar to asset preview auxiliary files) at `GET /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`
 -   Added .clineRules for CLINE AI workflows for AI-assisted development for VAMS backend API development, CDK development, and CLI development
+
+### Bug Fixes
+
+-   **UI** Scrolling issues on browsers with MacOS should now hopefulyl be fixed. This was due to an issue with Potree libraries being loaded globally before.
 
 ## [2.2.0] (2025-09-31)
 

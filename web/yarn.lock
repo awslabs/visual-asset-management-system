@@ -13654,7 +13654,7 @@ onetime@^5.1.2:
   dependencies:
     mimic-fn "^2.1.0"
 
-online-3d-viewer@0.16.0:
+online-3d-viewer@^0.16.0:
   version "0.16.0"
   resolved "https://registry.yarnpkg.com/online-3d-viewer/-/online-3d-viewer-0.16.0.tgz#98cc6531cf14a2b960c60fa64d2cca86fd2d2dc0"
   integrity sha512-Mcmo41TM3K+svlMDRH8ySKSY2e8s7Sssdb5U9LV3gkFKVWGGuS304Vk5gqxopAJbE72DpsC67Ve3YNtcAuROwQ==

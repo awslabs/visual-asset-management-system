@@ -4,6 +4,9 @@
  */
 
 // Core exports
+// Initialize the plugin registry on import
+import { PluginRegistry } from "./core/PluginRegistry";
+
 export { PluginRegistry, getFileExtension, getFileExtensions } from "./core/PluginRegistry";
 export type { ViewerPlugin } from "./core/PluginRegistry";
 export type {
@@ -20,9 +23,6 @@ export type { DynamicViewerProps } from "./components/DynamicViewer";
 export { StandaloneViewer } from "./components/StandaloneViewer";
 export type { StandaloneViewerProps } from "./components/StandaloneViewer";
 export { ViewerSelector } from "./components/ViewerSelector";
-
-// Initialize the plugin registry on import
-import { PluginRegistry } from "./core/PluginRegistry";
 
 // Auto-initialize the registry when the module is imported
 let registryInitialized = false;

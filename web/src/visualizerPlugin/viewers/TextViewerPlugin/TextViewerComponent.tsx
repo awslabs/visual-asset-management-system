@@ -39,9 +39,6 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
     databaseId,
     assetKey,
     versionId,
-    viewerMode,
-    onDeletePreview,
-    isPreviewFile = false,
 }) => {
     const [state, setState] = useState<TextViewerState>({
         content: "",
@@ -89,16 +86,15 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
                     assetId,
                     databaseId,
                     key: assetKey,
-                    versionId: isPreviewFile ? "" : versionId || "",
+                    versionId: versionId || "",
                     downloadType: "assetFile",
-                    isPreviewFile,
                 });
 
                 const response = await downloadAsset({
                     assetId: assetId,
                     databaseId: databaseId,
                     key: assetKey || "",
-                    versionId: isPreviewFile ? "" : versionId || "",
+                    versionId: versionId || "",
                     downloadType: "assetFile",
                 });
 
@@ -138,7 +134,7 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
         if (assetKey) {
             loadFile();
         }
-    }, [assetId, assetKey, databaseId, versionId, isPreviewFile]);
+    }, [assetId, assetKey, databaseId, versionId]);
 
     // Copy content to clipboard
     const copyToClipboard = async () => {
@@ -321,21 +317,6 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
                     {formattedContent}
                 </SyntaxHighlighter>
             </div>
-
-            {/* Delete preview button */}
-            {onDeletePreview && (
-                <div
-                    style={{
-                        padding: "12px 16px",
-                        borderTop: "1px solid #e9ebed",
-                        backgroundColor: "white",
-                    }}
-                >
-                    <Button iconName="remove" variant="link" onClick={onDeletePreview}>
-                        Delete Preview File
-                    </Button>
-                </div>
-            )}
         </div>
     );
 };

@@ -3,10 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Suspense, useState, useEffect } from "react";
+import React, { Suspense, useState, useEffect, useRef } from "react";
 import { Container, Grid, Header, Spinner, Box } from "@cloudscape-design/components";
-import { PluginRegistry, getFileExtensions, ViewerPlugin } from "../core/PluginRegistry";
+import {
+    PluginRegistry,
+    getFileExtensions,
+    ViewerPlugin,
+    ViewerPluginMetadata,
+} from "../core/PluginRegistry";
 import { FileInfo } from "../core/types";
+import { StylesheetManager } from "../core/StylesheetManager";
 import ViewerSelector from "./ViewerSelector";
 
 export interface DynamicViewerProps {
@@ -33,11 +39,13 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
     hideFullscreenControls = false,
 }) => {
     const [selectedViewerId, setSelectedViewerId] = useState<string | null>(null);
-    const [compatibleViewers, setCompatibleViewers] = useState<ViewerPlugin[]>([]);
+    const [compatibleViewers, setCompatibleViewers] = useState<ViewerPluginMetadata[]>([]);
     const [loadedViewer, setLoadedViewer] = useState<ViewerPlugin | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [registryInitialized, setRegistryInitialized] = useState(false);
+    const [viewerLoading, setViewerLoading] = useState(false);
+    const mountedRef = useRef(true);
 
     // Initialize plugin registry
     useEffect(() => {
@@ -69,40 +77,52 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
 
         console.log("Finding viewers for:", { fileExtensions, isMultiFile, isPreviewMode });
 
-        const viewers = registry.getCompatibleViewers(fileExtensions, isMultiFile, isPreviewMode);
-        setCompatibleViewers(viewers);
+        const viewerMetadata = registry.getCompatibleViewers(
+            fileExtensions,
+            isMultiFile,
+            isPreviewMode
+        );
+        setCompatibleViewers(viewerMetadata);
 
-        // Auto-select the highest priority viewer
-        if (viewers.length > 0 && !selectedViewerId) {
-            setSelectedViewerId(viewers[0].config.id);
-        } else if (viewers.length === 0) {
+        // Auto-select the highest priority viewer only if no viewer is currently selected
+        if (viewerMetadata.length > 0 && !selectedViewerId) {
+            setSelectedViewerId(viewerMetadata[0].config.id);
+        } else if (viewerMetadata.length === 0) {
             setError(`No compatible viewers found for file types: ${fileExtensions.join(", ")}`);
             setLoading(false); // Stop loading when no viewers are found
         }
-    }, [files, selectedViewerId, isPreviewMode, registryInitialized]);
+    }, [files, isPreviewMode, registryInitialized]); // Removed selectedViewerId from dependencies
 
-    // Load selected viewer
+    // Load selected viewer lazily
     useEffect(() => {
         if (!selectedViewerId || !registryInitialized) return;
 
         const loadViewer = async () => {
-            setLoading(true);
+            if (!mountedRef.current) return;
+
+            setViewerLoading(true);
             setError(null);
+            setLoadedViewer(null); // Clear previous viewer immediately
 
             try {
                 const registry = PluginRegistry.getInstance();
-                const viewer = registry.getViewer(selectedViewerId);
 
-                if (!viewer) {
-                    throw new Error(`Viewer ${selectedViewerId} not found`);
-                }
+                // Switch to the new plugin (this handles unloading the previous one)
+                const viewer = await registry.switchToPlugin(selectedViewerId);
+
+                if (!mountedRef.current) return; // Check if component is still mounted
 
                 // Load dependencies if needed
                 await registry.loadPluginDependencies(selectedViewerId);
 
+                if (!mountedRef.current) return; // Check again after async operation
+
                 setLoadedViewer(viewer);
-                console.log(`Loaded viewer: ${viewer.config.name}`);
+                console.log(`Loaded viewer: ${viewer.config.name}`, viewer);
+                console.log(`Viewer component:`, viewer.component);
             } catch (error) {
+                if (!mountedRef.current) return;
+
                 console.error("Error loading viewer:", error);
                 setError(
                     `Failed to load viewer: ${
@@ -110,7 +130,10 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                     }`
                 );
             } finally {
-                setLoading(false);
+                if (mountedRef.current) {
+                    setViewerLoading(false);
+                    setLoading(false);
+                }
             }
         };
 
@@ -119,19 +142,47 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
 
     const handleViewerChange = (newViewerId: string) => {
         if (newViewerId !== selectedViewerId) {
+            console.log(`Switching viewer from ${selectedViewerId} to ${newViewerId}`);
             setSelectedViewerId(newViewerId);
-            setLoadedViewer(null); // Reset to trigger reload
+            // Don't need to manually reset loadedViewer - the effect will handle the switch
         }
     };
 
+    // Cleanup on unmount
+    useEffect(() => {
+        // Set mounted to true when component mounts
+        mountedRef.current = true;
+
+        return () => {
+            mountedRef.current = false;
+
+            // Cleanup current plugin when component unmounts
+            const registry = PluginRegistry.getInstance();
+            const currentPlugin = registry.getCurrentlyLoadedPlugin();
+            if (currentPlugin) {
+                console.log("DynamicViewer unmounting, cleaning up plugin:", currentPlugin);
+                try {
+                    // Use synchronous cleanup to avoid race conditions during unmount
+                    registry.cleanup();
+                } catch (error) {
+                    console.error("Error during cleanup:", error);
+                }
+            }
+        };
+    }, []);
+
     // Show loading state
-    if (!registryInitialized || loading) {
+    if (!registryInitialized || loading || viewerLoading) {
         return (
             <Container>
                 <Box textAlign="center" padding="xl">
                     <Spinner size="large" />
                     <Box variant="p" color="text-status-info" margin={{ top: "s" }}>
-                        {!registryInitialized ? "Initializing viewers..." : "Loading viewer..."}
+                        {!registryInitialized
+                            ? "Initializing viewers..."
+                            : viewerLoading
+                            ? "Loading viewer component..."
+                            : "Loading viewer..."}
                     </Box>
                 </Box>
             </Container>
@@ -169,104 +220,130 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
     }
 
     return (
-        <Container
-            header={
-                <Grid gridDefinition={[{ colspan: 6 }, { colspan: 6 }]}>
-                    <Box margin={{ bottom: "m" }}>
-                        <Header variant="h2">Visualizer</Header>
-                    </Box>
-                    <Box textAlign="right" margin={{ bottom: "m" }}>
-                        {showViewerSelector && compatibleViewers.length > 0 && (
-                            <ViewerSelector
-                                viewers={compatibleViewers}
-                                selectedViewerId={selectedViewerId}
-                                onViewerChange={handleViewerChange}
-                                className="visualizer-segment-control"
-                            />
-                        )}
-                    </Box>
-                </Grid>
-            }
-        >
-            <Suspense
-                fallback={
-                    <Box textAlign="center" padding="xl">
-                        <Spinner size="large" />
-                        <Box variant="p" color="text-status-info" margin={{ top: "s" }}>
-                            Loading viewer component...
+        <div style={{ height: "100%", width: "100%", display: "flex", flexDirection: "column" }}>
+            <Container
+                header={
+                    <Grid gridDefinition={[{ colspan: 6 }, { colspan: 6 }]}>
+                        <Box margin={{ bottom: "m" }}>
+                            <Header variant="h2">Visualizer</Header>
                         </Box>
-                    </Box>
+                        <Box textAlign="right" margin={{ bottom: "m" }}>
+                            {showViewerSelector && compatibleViewers.length > 0 && (
+                                <ViewerSelector
+                                    viewers={compatibleViewers.map((metadata) => ({
+                                        config: metadata.config,
+                                        component: null as any, // Not needed for selector
+                                        isLoaded: metadata.isLoaded,
+                                    }))}
+                                    selectedViewerId={selectedViewerId}
+                                    onViewerChange={handleViewerChange}
+                                    className="visualizer-segment-control"
+                                />
+                            )}
+                        </Box>
+                    </Grid>
                 }
             >
-                <div className="visualizer-container">
-                    <div className="visualizer-container-canvases">
-                        {loadedViewer && (
-                            <loadedViewer.component
-                                assetId={assetId}
-                                databaseId={databaseId}
-                                assetKey={files.length === 1 ? files[0].key : undefined}
-                                multiFileKeys={
-                                    files.length > 1 ? files.map((f) => f.key) : undefined
-                                }
-                                versionId={files.length === 1 ? files[0].versionId : undefined}
-                                viewerMode={viewerMode}
-                                onViewerModeChange={onViewerModeChange}
-                                onDeletePreview={onDeletePreview}
-                                isPreviewFile={isPreviewMode}
-                                customParameters={loadedViewer.config.customParameters}
-                            />
-                        )}
-                    </div>
+                <Suspense
+                    fallback={
+                        <Box textAlign="center" padding="xl">
+                            <Spinner size="large" />
+                            <Box variant="p" color="text-status-info" margin={{ top: "s" }}>
+                                Loading viewer component...
+                            </Box>
+                        </Box>
+                    }
+                >
+                    <div
+                        className={`visualizer-container ${
+                            loadedViewer
+                                ? StylesheetManager.getScopedClassName(loadedViewer.config.id)
+                                : ""
+                        }`}
+                        style={{
+                            height: "calc(100vh - 300px)", // Use viewport height minus space for modal header/footer/container header
+                            width: "100%",
+                            //minHeight: '400px', // Fallback minimum height
+                        }}
+                    >
+                        <div
+                            className="visualizer-container-canvases"
+                            style={{ height: "100%", width: "100%" }}
+                        >
+                            {loadedViewer ? (
+                                <loadedViewer.component
+                                    assetId={assetId}
+                                    databaseId={databaseId}
+                                    assetKey={files.length === 1 ? files[0].key : undefined}
+                                    multiFileKeys={
+                                        files.length > 1 ? files.map((f) => f.key) : undefined
+                                    }
+                                    versionId={files.length === 1 ? files[0].versionId : undefined}
+                                    viewerMode={viewerMode}
+                                    onViewerModeChange={onViewerModeChange}
+                                    onDeletePreview={onDeletePreview}
+                                    isPreviewFile={isPreviewMode}
+                                    customParameters={loadedViewer.config.customParameters}
+                                />
+                            ) : (
+                                <Box textAlign="center" padding="xl">
+                                    <Box variant="p" color="text-status-info">
+                                        No viewer component loaded
+                                    </Box>
+                                </Box>
+                            )}
+                        </div>
 
-                    {/* Viewer controls footer - only show if viewer supports fullscreen and controls are not hidden */}
-                    {loadedViewer &&
-                        loadedViewer.config.canFullscreen &&
-                        !hideFullscreenControls && (
-                            <div className="visualizer-footer">
-                                <a
-                                    title="View Wide"
-                                    onClick={() => onViewerModeChange("wide")}
-                                    className={viewerMode === "wide" ? "selected" : ""}
-                                >
-                                    <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        enableBackground="new 0 0 24 24"
-                                        height="24px"
-                                        viewBox="0 0 24 24"
-                                        width="24px"
-                                        fill="#000000"
+                        {/* Viewer controls footer - only show if viewer supports fullscreen and controls are not hidden */}
+                        {loadedViewer &&
+                            loadedViewer.config.canFullscreen &&
+                            !hideFullscreenControls && (
+                                <div className="visualizer-footer">
+                                    <a
+                                        title="View Wide"
+                                        onClick={() => onViewerModeChange("wide")}
+                                        className={viewerMode === "wide" ? "selected" : ""}
                                     >
-                                        <g>
-                                            <rect fill="none" height="24" width="24" />
-                                        </g>
-                                        <g>
+                                        <svg
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            enableBackground="new 0 0 24 24"
+                                            height="24px"
+                                            viewBox="0 0 24 24"
+                                            width="24px"
+                                            fill="#000000"
+                                        >
                                             <g>
-                                                <path d="M2,4v16h20V4H2z M20,18H4V6h16V18z" />
+                                                <rect fill="none" height="24" width="24" />
                                             </g>
-                                        </g>
-                                    </svg>
-                                </a>
-                                <a
-                                    title="View Fullscreen"
-                                    onClick={() => onViewerModeChange("fullscreen")}
-                                    className={viewerMode === "fullscreen" ? "selected" : ""}
-                                >
-                                    <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        height="24px"
-                                        viewBox="0 0 24 24"
-                                        width="24px"
-                                        fill="#000000"
+                                            <g>
+                                                <g>
+                                                    <path d="M2,4v16h20V4H2z M20,18H4V6h16V18z" />
+                                                </g>
+                                            </g>
+                                        </svg>
+                                    </a>
+                                    <a
+                                        title="View Fullscreen"
+                                        onClick={() => onViewerModeChange("fullscreen")}
+                                        className={viewerMode === "fullscreen" ? "selected" : ""}
                                     >
-                                        <path d="M0 0h24v24H0V0z" fill="none" />
-                                        <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z" />
-                                    </svg>
-                                </a>
-                            </div>
-                        )}
-                </div>
-            </Suspense>
-        </Container>
+                                        <svg
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            height="24px"
+                                            viewBox="0 0 24 24"
+                                            width="24px"
+                                            fill="#000000"
+                                        >
+                                            <path d="M0 0h24v24H0V0z" fill="none" />
+                                            <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z" />
+                                        </svg>
+                                    </a>
+                                </div>
+                            )}
+                    </div>
+                </Suspense>
+            </Container>
+        </div>
     );
 };
 

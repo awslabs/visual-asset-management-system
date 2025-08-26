@@ -114,9 +114,7 @@ const ThreeDimensionalPlotterComponent: React.FC<ViewerPluginProps> = ({
                     fontWeight: "bold",
                     color: "#333",
                 }}
-            >
-                3D Data Plotter
-            </div>
+            ></div>
             <div
                 style={{
                     padding: "20px",
