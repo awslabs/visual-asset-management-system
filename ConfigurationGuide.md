@@ -216,6 +216,14 @@ Example: Restrict access outside of a source IP (Fill in IP addresses and/or CID
 }
 ```
 
+## Cloudfront TLS 1.2 Enforcement
+
+Amazon CloudFront is deployed using the default CloudFront domain name and TLS certificate. To use a later TLS version (1.2), use your own custom domain name and custom SSL certificate. For more information, refer to using alternate domain names and HTTPS in the Amazon CloudFront Developer Guide.
+
+This is a post-configuration option or modification to the CDK and not a feature currently available as part of the VAMS CDK Configuration. Domains are currently only supported as part of VAMS CDK configuration with a web ALB deployment.
+
+https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/distribution-web-values-specify.html#DownloadDistValues-security-policy
+
 ## Additional Configuration Docker Options
 
 See [CDK SSL Deploy in the developer guide](./DeveloperGuide.md#CDK-Deploy-with-Custom-SSL-Cert-Proxy) for information on customized docker settings for CDK deployment builds
