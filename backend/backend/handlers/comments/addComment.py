@@ -78,18 +78,21 @@ def lambda_handler(event: dict, context: dict) -> dict:
     response = STANDARD_JSON_RESPONSE
     logger.info(event)
 
+    # Parse request body
+    if not event.get('body'):
+        message = 'Request body is required'
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        logger.error(response)
+        return response
+
     try:
-        if isinstance(event["body"], str):
-            try:
-                event["body"] = json.loads(event["body"])
-            except json.JSONDecodeError as e:
-                logger.exception(f"Invalid JSON in request body: {e}")
-                response["statusCode"] = 400
-                response["body"] = json.dumps({"message": "Invalid JSON in request body"})
-                return response
-    except Exception as e:
-        response["statusCode"] = 500
-        response["body"] = json.dumps({"message": "Internal Server Error"})
+        if isinstance(event['body'], str):
+            event['body'] = json.loads(event['body'])
+    except json.JSONDecodeError as e:
+        logger.exception(f"Invalid JSON in request body: {e}")
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": "Invalid JSON in request body"})
         return response
 
     pathParameters = event.get("pathParameters", {})

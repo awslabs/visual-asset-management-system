@@ -3,6 +3,7 @@ import boto3
 import json
 import uuid
 import datetime
+from botocore.exceptions import ClientError
 
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
@@ -43,14 +44,23 @@ def create_role(body):
         response['statusCode'] = 200
         response['body'] = json.dumps({"message": "success"})
         return response
-    except Exception as e:
-        if hasattr(e, 'response') and e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+    except ClientError as e:
+        error_code = e.response['Error']['Code']
+        if error_code == 'ConditionalCheckFailedException':
             response['statusCode'] = 400
             response['body'] = json.dumps({"message": "Role with name '" + body["roleName"] + "' already exists."})
+        elif error_code == 'ValidationException':
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": "Invalid request parameters."})
         else:
-            logger.exception(e)
+            logger.exception(f"DynamoDB ClientError: {error_code}")
             response['statusCode'] = 500
             response['body'] = json.dumps({"message": "Internal Server Error"})
+        return response
+    except Exception as e:
+        logger.exception(f"Unexpected error in create_role: {e}")
+        response['statusCode'] = 500
+        response['body'] = json.dumps({"message": "Internal Server Error"})
         return response
 
 
@@ -63,22 +73,35 @@ def update_role(body):
             Key={
                 'roleName': body["roleName"]
             },
-            UpdateExpression='SET description = :desc, sourceIdentifier = :sourceIdentifier, mfaRequired = :mfaRequired',
+            UpdateExpression='SET description = :desc, #source = :source, sourceIdentifier = :sourceIdentifier, mfaRequired = :mfaRequired',
+            ExpressionAttributeNames={
+                '#source': 'source'
+            },
             ExpressionAttributeValues={
                 ':desc': body["description"],
+                ':source': body.get("source"),
                 ':sourceIdentifier': body.get("sourceIdentifier"),
                 ':mfaRequired': body.get("mfaRequired", False)
             },
             ConditionExpression='attribute_exists(roleName)'
         )
-    except Exception as e:
-        if e.response['Error']['Code'] == 'ConditionalCheckFailedException' or e.response['Error']['Code'] == 'TransactionCanceledException':
+    except ClientError as e:
+        error_code = e.response['Error']['Code']
+        if error_code == 'ConditionalCheckFailedException':
             response['statusCode'] = 400
-            response['body'] = json.dumps({"message": "RoleName "+ body["roleName"] +" doesn't exists."})
+            response['body'] = json.dumps({"message": "RoleName " + body["roleName"] + " doesn't exist."})
+        elif error_code == 'ValidationException':
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": "Invalid request parameters."})
         else:
-            logger.exception(e)
+            logger.exception(f"DynamoDB ClientError: {error_code}")
             response['statusCode'] = 500
             response['body'] = json.dumps({"message": "Internal Server Error"})
+        return response
+    except Exception as e:
+        logger.exception(f"Unexpected error in update_role: {e}")
+        response['statusCode'] = 500
+        response['body'] = json.dumps({"message": "Internal Server Error"})
         return response
 
     response['statusCode'] = 200
@@ -121,6 +144,16 @@ def lambda_handler(event, context):
             'description': {
                 'value': event['body']['description'],
                 'validator': 'STRING_256'
+            },
+            'source': {
+                'value': event['body'].get('source'),
+                'validator': 'STRING_256',
+                'optional': True
+            },
+            'sourceIdentifier': {
+                'value': event['body'].get('sourceIdentifier'),
+                'validator': 'STRING_256',
+                'optional': True
             },
             'mfaRequired': {
                 'value': str(event['body'].get("mfaRequired", "False")),

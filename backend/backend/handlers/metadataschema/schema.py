@@ -285,16 +285,28 @@ def lambda_handler(event: APIGatewayProxyEvent, context: LambdaContext,
 
         # create/update
         elif (method == "POST" or method == "PUT") and method_allowed_on_api:
+
+            # Parse request body
+            if not event.get('body'):
+                message = 'Request body is required'
+                response['body'] = json.dumps({"message": message})
+                response['statusCode'] = 400
+                logger.error(response)
+                return response
+
             try:
-                body = json.loads(event["body"])
+                body = json.loads(event['body'])
             except json.JSONDecodeError as e:
                 logger.exception(f"Invalid JSON in request body: {e}")
                 response['statusCode'] = 400
                 response['body'] = json.dumps({"message": "Invalid JSON in request body"})
                 return response
+            
             if "field" not in body:
                 raise ValidationError(400, "Missing field in path on POST/PUT request")
+            
             resp = schema.update_schema(databaseId, body["field"], body)
+
             if resp == 403:
                 response['statusCode'] = 403
                 response['body'] = json.dumps({"message": "Not Authorized"})
@@ -321,6 +333,14 @@ def lambda_handler(event: APIGatewayProxyEvent, context: LambdaContext,
         response['statusCode'] = e.code
         response['body'] = json.dumps({
             "error": e.resp,
+            "requestid": event['requestContext']['requestId'],
+        })
+        return response
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        response['statusCode'] = 400
+        response['body'] = json.dumps({
+            "error": str(v),
             "requestid": event['requestContext']['requestId'],
         })
         return response

@@ -69,8 +69,14 @@ def lambda_handler(event, _):
 
         #Format body but body not required
         if 'body' in event:
-            if isinstance(event["body"], str):
-                event["body"] = json.loads(event["body"])
+            try:
+                if isinstance(event['body'], str):
+                    event['body'] = json.loads(event['body'])
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                response['statusCode'] = 400
+                response['body'] = json.dumps({"message": "Invalid JSON in request body"})
+                return response
         else:
             event["body"] = {}
 

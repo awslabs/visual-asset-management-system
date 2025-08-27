@@ -16,8 +16,22 @@ def lambda_handler(event, _):
 
     response = STANDARD_JSON_RESPONSE
 
-    if isinstance(event["body"], str):
-        event["body"] = json.loads(event["body"])
+    # Parse request body
+    if not event.get('body'):
+        message = 'Request body is required'
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        logger.error(response)
+        return response
+
+    try:
+        if isinstance(event['body'], str):
+            event['body'] = json.loads(event['body'])
+    except json.JSONDecodeError as e:
+        logger.exception(f"Invalid JSON in request body: {e}")
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": "Invalid JSON in request body"})
+        return response
 
     routes = event["body"]["routes"]
     allowed_routes = []
