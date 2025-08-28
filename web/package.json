@@ -83,8 +83,8 @@
         "@types/react": "^17.0.2"
     },
     "scripts": {
-        "start": "react-scripts start",
-        "build": "react-scripts build",
+        "start": "react-scripts --max-old-space-size=8192 start",
+        "build": "react-scripts --max-old-space-size=8192 build",
         "build.lowmem": "GENERATE_SOURCEMAP=false react-scripts --max_old_space_size=4096 build",
         "test": "react-scripts test --coverage",
         "eject": "react-scripts eject",
