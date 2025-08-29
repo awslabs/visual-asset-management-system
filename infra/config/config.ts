@@ -23,9 +23,13 @@ export const LAMBDA_MEMORY_SIZE = 3003;
 export const OPENSEARCH_VERSION = cdk.aws_opensearchservice.EngineVersion.OPENSEARCH_2_7;
 
 export const STACK_WAF_DESCRIPTION =
-    "WAF Components for the Visual Asset Management Systems (VAMS) (SO9299)";
+    "(SO9299) (uksb-1608h3hqer) (VAMS-WAF) (version:" +
+    VAMS_VERSION +
+    ") WAF Components for the Visual Asset Management Systems";
 export const STACK_CORE_DESCRIPTION =
-    "Primary Components for the Visual Asset Management Systems (VAMS) (SO9299)";
+    "(SO9299) (uksb-1608h3hqer) (VAMS-CORE) (version:" +
+    VAMS_VERSION +
+    ") Primary Components for the Visual Asset Management Systems";
 
 export function getConfig(app: cdk.App): Config {
     const file: string = readFileSync(join(__dirname, "config.json"), {
