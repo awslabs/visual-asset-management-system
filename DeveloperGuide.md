@@ -269,6 +269,149 @@ The default logic is for external OAUTH IDP is to just set the MFA enabled flag 
 
 NOTE: Be mindful of the logic used as this can have great performance impacts for VAMS. Try to use caches in this method or reduce the amount of external API calls as this method is called very frequently during VAMS API authorization checks.
 
+### Custom API Gateway Authorizer
+
+VAMS uses a custom Lambda authorizer system for all API Gateway endpoints that provides unified authentication for both Cognito and External OAuth IDP configurations, along with optional IP range restrictions and comprehensive JWT claims context.
+
+#### Authorizer Features
+
+The custom authorizer provides the following capabilities:
+
+1. **Unified Authentication**: Supports both Cognito and External OAuth IDP JWT token verification
+2. **Hybrid JWT Libraries**: Uses python-jose for Cognito (AWS best practices) and PyJWT for External IDP
+3. **IP Range Restrictions**: Optional IP-based access control using configurable IP range pairs
+4. **Path-Based Authorization**: Specific authorizers for ignored paths with `$context.routeKey` identity source
+5. **Payload Format Version 2.0**: Simple boolean `{"isAuthorized": true/false}` responses
+6. **Comprehensive JWT Claims Context**: All JWT claims passed to downstream Lambda functions
+7. **Token Caching**: Implements public key caching for improved performance
+8. **Dedicated Lambda Layer**: Isolated dependencies for security and performance
+
+#### Configuration
+
+The custom authorizer is configured through the `authProvider.authorizerOptions` section in the configuration:
+
+```json
+{
+    "authProvider": {
+        "authorizerOptions": {
+            "allowedIpRanges": [
+                ["192.168.1.1", "192.168.1.255"],
+                ["10.0.0.1", "10.0.0.255"]
+            ]
+        }
+    }
+}
+```
+
+**Configuration Options:**
+
+-   `allowedIpRanges`: Array of IP range pairs `[["min_ip", "max_ip"], ...]`
+    -   Optional: Leave empty array `[]` to allow all IPs
+    -   Each range is defined as a pair of minimum and maximum IP addresses
+    -   Supports multiple ranges for complex network configurations
+    -   IP validation performed before JWT verification for performance optimization
+
+#### Implementation Architecture
+
+The custom authorizer implementation consists of:
+
+-   **HTTP Authorizer**: `/backend/backend/handlers/auth/apiGatewayAuthorizerHttp.py`
+-   **WebSocket Authorizer**: `/backend/backend/handlers/auth/apiGatewayAuthorizerWebsocket.py`
+-   **CDK Lambda Builders**: `/infra/lib/lambdaBuilder/authFunctions.ts`
+-   **Dedicated Lambda Layer**: `/backend/lambdaLayers/authorizer/` with specialized dependencies
+-   **Configuration Constants**: `/infra/config/config.ts` with `CUSTOM_AUTHORIZER_IGNORED_PATHS`
+
+#### Lambda Layer Dependencies
+
+The authorizer Lambda layer includes:
+
+```
+# Cognito JWT verification
+python-jose[cryptography]==3.3.0
+# External IDP JWT verification
+PyJWT[crypto]==2.10.1
+cryptography==45.0.6
+requests==2.32.5
+aws-lambda-powertools==3.19.0
+```
+
+#### JWT Claims Context Integration
+
+The authorizer passes **all JWT claims** to downstream Lambda functions through the API Gateway context. Claims are accessible via:
+
+```python
+    #Handle both claims from APIGateway standard authorizer format, lambda authorizers, or lambda cross-calls
+    if 'jwt' in lambdaRequestEvent['requestContext']['authorizer'] and 'claims' in lambdaRequestEvent['requestContext']['authorizer']['jwt']:
+        claims = lambdaRequestEvent['requestContext']['authorizer']['jwt']['claims']
+    elif 'lambda' in lambdaRequestEvent['requestContext']['authorizer']:
+        claims = lambdaRequestEvent['requestContext']['authorizer']['lambda']
+    elif 'lambdaCrossCall' in lambdaRequestEvent: #currently this case wouldn't apply for now due to check above
+        claims = lambdaRequestEvent['lambdaCrossCall']
+    else:
+        claims = {}
+```
+
+**Supported Claims Processing:**
+
+-   **Cognito Claims**: `sub`, `cognito:username`, `email`, `token_use`, `aud`, `iss`, `exp`
+-   **External IDP Claims**: `sub`, `preferred_username`, `email`, `upn`, `username`
+-   **VAMS Custom Claims**: `vams:tokens`, `vams:roles`, `vams:externalAttributes`
+-   **Standard JWT Claims**: All standard JWT fields are preserved and passed through
+
+#### Authorizer Types and Configuration
+
+**Default API Routes:**
+
+-   **Identity Source**: `$request.header.Authorization`
+-   **Cache TTL**: 15 seconds
+-   **Response Type**: `SIMPLE` (payload format version 2.0)
+
+**Ignored Paths** (`/api/amplify-config`, `/api/version`):
+
+-   **Identity Source**: `$context.routeKey`
+-   **Cache TTL**: 3600 seconds (1 hour)
+-   **Response Type**: `SIMPLE` (payload format version 2.0)
+-   **Behavior**: Bypasses JWT verification, allows immediate access
+
+#### Customization
+
+Organizations can customize the authorizer behavior by modifying:
+
+1. **IP Validation Logic**: Modify `is_ip_authorized()` function for custom IP validation
+2. **Path Handling**: Update ignored paths in `/infra/config/config.ts` constant `CUSTOM_AUTHORIZER_IGNORED_PATHS`
+3. **JWT Verification**:
+    - Cognito: Modify `verify_cognito_jwt()` using python-jose library
+    - External IDP: Modify `verify_external_jwt()` using PyJWT library
+4. **Claims Processing**: Extend context generation to include additional custom claims
+5. **Error Handling**: Customize error responses and logging behavior
+
+#### Security Considerations
+
+-   **Performance Optimized**: IP validation performed before JWT verification
+-   **Public Key Caching**: 1-hour TTL to reduce external API calls and improve performance
+-   **Comprehensive Error Logging**: Detailed logging without exposing sensitive information
+-   **Token Support**: Supports both ID and Access tokens for Cognito authentication
+-   **Full JWT Validation**: Validates signature, expiration, audience, and issuer claims
+-   **Dedicated Layer**: Security isolation with minimal dependencies
+-   **Hybrid Verification**: Uses AWS-recommended libraries for each identity provider type
+
+#### Troubleshooting
+
+**Common Issues:**
+
+-   **Missing Claims**: Ensure JWT tokens include required claims for VAMS operation
+-   **IP Restrictions**: Check `allowedIpRanges` configuration if requests are being denied
+-   **Cache Issues**: Authorizer responses are cached; consider cache TTL settings
+-   **Token Format**: Ensure tokens follow proper Bearer token format in Authorization header
+-   **WebSocket Tokens**: For WebSocket connections, tokens can be passed via query parameters or headers
+
+**Debugging:**
+
+-   Check CloudWatch logs for detailed authorizer execution information
+-   Verify environment variables are properly set in Lambda functions
+-   Confirm JWKS endpoints are accessible from Lambda execution environment
+-   Validate JWT token structure and claims using online JWT decoders
+
 ### Local Docker Builds - Custom Build Settings
 
 If you are needing to add custom settings to your local docker builds, such as adding custom SSL CA certificates to get through HTTPS proxies, modify the following docker build files:

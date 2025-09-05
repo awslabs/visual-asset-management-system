@@ -269,9 +269,7 @@ export function generateContentSecurityPolicy(
     let connectSrc = [
         "'self'",
         "blob:",
-        //authenticationDomain,
         `https://${apiUrl}`,
-        //`https://${Service("S3").PrincipalString}/`,
         `https://${Service("S3").Endpoint}/`,
     ];
 
@@ -279,17 +277,12 @@ export function generateContentSecurityPolicy(
         "'self'",
         "blob:",
         "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
-        //authenticationDomain,
-        // `https://${apiUrl}`,
-        // `https://${Service("S3").PrincipalString}/`,
-        // `https://${Service("S3").Endpoint}/`,
     ];
 
     let imgSrc = [
         "'self'",
         "blob:",
         "data:",
-        //`https://${Service("S3").PrincipalString}/`,
         `https://${Service("S3").Endpoint}/`,
     ];
 
@@ -297,7 +290,6 @@ export function generateContentSecurityPolicy(
         "'self'",
         "blob:",
         "data:",
-        //`https://${Service("S3").PrincipalString}/`,
         `https://${Service("S3").Endpoint}/`,
     ];
 
@@ -309,8 +301,6 @@ export function generateContentSecurityPolicy(
     if (config.app.authProvider.useCognito.enabled) {
         connectSrc.push(`https://${Service("COGNITO_IDP").Endpoint}/`);
         connectSrc.push(`https://${Service("COGNITO_IDENTITY").Endpoint}/`);
-        // scriptSrc.push(`https://${Service("COGNITO_IDP").Endpoint}/`);
-        // scriptSrc.push(`https://${Service("COGNITO_IDENTITY").Endpoint}/`);
     }
 
     //If authDomain is non-null and not empty string, add to connectSrc

@@ -92,6 +92,9 @@ const createMockConfig = (): Config.Config => {
             },
             authProvider: {
                 presignedUrlTimeoutSeconds: 86400,
+                authorizerOptions: {
+                    allowedIpRanges: [],
+                },
                 useCognito: {
                     enabled: true,
                     useSaml: false,

@@ -1178,6 +1178,262 @@ export class ApiBuilderNestedStack extends cdk.NestedStack {
 4. **CDK Nag Compliance**: Add justified suppressions for security rules
 5. **Configuration Driven**: Use configuration to control security settings
 
+## 🔐 **Custom Authorizer Pattern**
+
+### **VAMS Custom Authorizer Standard**
+
+VAMS uses a unified custom Lambda authorizer pattern for all API Gateway endpoints. This pattern replaces built-in CDK authorizers and provides enhanced security features.
+
+#### **Custom Authorizer Architecture**
+
+```
+infra/lib/lambdaBuilder/authFunctions.ts
+├── buildApiGatewayAuthorizerHttpFunction()     # HTTP API authorizer
+└── buildApiGatewayAuthorizerWebsocketFunction() # WebSocket API authorizer
+
+backend/backend/handlers/auth/
+├── apiGatewayAuthorizerHttp.py      # HTTP authorizer implementation
+└── apiGatewayAuthorizerWebsocket.py # WebSocket authorizer implementation
+
+infra/config/config.ts
+└── CUSTOM_AUTHORIZER_IGNORED_PATHS  # Paths that bypass authorization
+```
+
+#### **Custom Authorizer Features**
+
+1. **Unified Authentication**: Supports both Cognito and External OAuth IDP
+2. **IP Range Restrictions**: Optional IP-based access control
+3. **Path-Based Bypass**: Configurable paths that skip authorization
+4. **Token Caching**: Public key caching for performance optimization
+5. **Comprehensive Logging**: AWS Lambda Powertools integration
+
+#### **Configuration Pattern**
+
+```typescript
+// ✅ CORRECT - Custom authorizer configuration
+export interface ConfigPublic {
+    app: {
+        authProvider: {
+            authorizerOptions: {
+                allowedIpRanges: string[][]; // [["min_ip", "max_ip"], ...]
+            };
+            useCognito: {
+                enabled: boolean;
+                // ... other Cognito settings
+            };
+            useExternalOAuthIdp: {
+                enabled: boolean;
+                // ... other External IDP settings
+            };
+        };
+    };
+}
+
+// ✅ CORRECT - IP range validation in getConfig()
+if (config.app.authProvider.authorizerOptions.allowedIpRanges) {
+    for (let i = 0; i < config.app.authProvider.authorizerOptions.allowedIpRanges.length; i++) {
+        const range = config.app.authProvider.authorizerOptions.allowedIpRanges[i];
+        if (!Array.isArray(range) || range.length !== 2) {
+            throw new Error(
+                `Configuration Error: IP range at index ${i} must be an array of exactly 2 IP addresses [min, max]`
+            );
+        }
+    }
+}
+```
+
+#### **Lambda Builder Pattern for Authorizers**
+
+```typescript
+// ✅ CORRECT - Custom authorizer builder pattern
+export function buildApiGatewayAuthorizerHttpFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "apiGatewayAuthorizerHttp";
+
+    // Determine auth mode based on configuration
+    const authMode = config.app.authProvider.useCognito.enabled
+        ? "cognito"
+        : config.app.authProvider.useExternalOAuthIdp.enabled
+        ? "external"
+        : "cognito";
+
+    // Build environment variables
+    const environment: { [key: string]: string } = {
+        AUTH_MODE: authMode,
+        ALLOWED_IP_RANGES: JSON.stringify(
+            config.app.authProvider.authorizerOptions.allowedIpRanges || []
+        ),
+        IGNORED_PATHS: JSON.stringify(CUSTOM_AUTHORIZER_IGNORED_PATHS),
+    };
+
+    // Add auth-specific environment variables
+    if (config.app.authProvider.useCognito.enabled) {
+        environment.USER_POOL_ID = "${cognito_user_pool_id}"; // Replaced at runtime
+        environment.APP_CLIENT_ID = "${cognito_app_client_id}"; // Replaced at runtime
+    }
+
+    if (config.app.authProvider.useExternalOAuthIdp.enabled) {
+        environment.JWT_ISSUER_URL =
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl;
+        environment.JWT_AUDIENCE =
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience;
+    }
+
+    const authorizerFunc = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.auth.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(1),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: environment,
+    });
+
+    // Grant API Gateway invoke permissions
+    authorizerFunc.grantInvoke(Service("APIGATEWAY").Principal);
+    globalLambdaEnvironmentsAndPermissions(authorizerFunc, config);
+
+    return authorizerFunc;
+}
+```
+
+#### **API Gateway Integration Pattern**
+
+```typescript
+// ✅ CORRECT - Custom authorizer integration
+export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
+    constructor(parent: Construct, name: string, props: ApiGatewayV2AmplifyNestedStackProps) {
+        super(parent, name);
+
+        // Create custom authorizer Lambda function
+        const customAuthorizerFunction = buildApiGatewayAuthorizerHttpFunction(
+            this,
+            props.lambdaCommonBaseLayer,
+            props.config,
+            props.vpc,
+            props.subnets
+        );
+
+        // Update environment variables with actual Cognito values if using Cognito
+        if (props.config.app.authProvider.useCognito.enabled) {
+            customAuthorizerFunction.addEnvironment(
+                "USER_POOL_ID",
+                props.authResources.cognito.userPoolId
+            );
+            customAuthorizerFunction.addEnvironment(
+                "APP_CLIENT_ID",
+                props.authResources.cognito.webClientId
+            );
+        }
+
+        // Setup custom Lambda authorizer
+        const apiGatewayAuthorizer = new apigwAuthorizers.HttpLambdaAuthorizer(
+            "CustomHttpAuthorizer",
+            customAuthorizerFunction,
+            {
+                authorizerName: "VamsCustomAuthorizer",
+                resultsCacheTtl: cdk.Duration.seconds(300), // 5 minutes cache
+                identitySource: ["$request.header.Authorization"],
+                responseTypes: [apigwAuthorizers.HttpLambdaResponseType.IAM],
+            }
+        );
+
+        // Use custom authorizer as default for API Gateway
+        const api = new apigw.HttpApi(this, "Api", {
+            defaultAuthorizer: apiGatewayAuthorizer,
+            // ... other API configuration
+        });
+    }
+}
+```
+
+#### **Path-Based Authorization Bypass**
+
+```typescript
+// ✅ CORRECT - Define ignored paths as constants
+export const CUSTOM_AUTHORIZER_IGNORED_PATHS = ["/api/amplify-config", "/api/version"];
+
+// ✅ CORRECT - Remove no-op authorizers from constructs
+export class AmplifyConfigLambdaConstruct extends Construct {
+    constructor(parent: Construct, name: string, props: AmplifyConfigLambdaConstructProps) {
+        // ... lambda function creation
+
+        // No authorizer needed - path is ignored by custom authorizer
+        props.api.addRoutes({
+            path: "/api/amplify-config",
+            methods: [apigatewayv2.HttpMethod.GET],
+            integration: lambdaFnIntegration,
+            // No authorizer property - uses default custom authorizer with path bypass
+        });
+    }
+}
+```
+
+### **Custom Authorizer Development Rules**
+
+#### **Rule 9: Use Custom Authorizer Pattern**
+
+```typescript
+// ✅ CORRECT - Use custom Lambda authorizer
+const customAuthorizer = new apigwAuthorizers.HttpLambdaAuthorizer(
+    "CustomAuthorizer",
+    authorizerFunction,
+    {
+        authorizerName: "VamsCustomAuthorizer",
+        resultsCacheTtl: cdk.Duration.seconds(300),
+        identitySource: ["$request.header.Authorization"],
+        responseTypes: [apigwAuthorizers.HttpLambdaResponseType.IAM],
+    }
+);
+
+// ❌ INCORRECT - Don't use built-in authorizers
+const builtInAuthorizer = new apigwAuthorizers.HttpUserPoolAuthorizer(); // VIOLATION
+```
+
+#### **Rule 10: Configure IP Restrictions Properly**
+
+```typescript
+// ✅ CORRECT - IP range configuration validation
+if (config.app.authProvider.authorizerOptions.allowedIpRanges) {
+    for (const range of config.app.authProvider.authorizerOptions.allowedIpRanges) {
+        if (!Array.isArray(range) || range.length !== 2) {
+            throw new Error(
+                "Configuration Error: Each IP range must be an array of exactly 2 IP addresses [min, max]"
+            );
+        }
+    }
+}
+
+// ❌ INCORRECT - Don't skip IP range validation
+// No validation for IP ranges - VIOLATION
+```
+
+#### **Rule 11: Handle Path Bypass Correctly**
+
+```typescript
+// ✅ CORRECT - Use constants for ignored paths
+import { CUSTOM_AUTHORIZER_IGNORED_PATHS } from "../../config/config";
+
+// Pass to authorizer environment
+environment.IGNORED_PATHS = JSON.stringify(CUSTOM_AUTHORIZER_IGNORED_PATHS);
+
+// ❌ INCORRECT - Don't hardcode ignored paths
+const ignoredPaths = ["/api/version"]; // VIOLATION - should use constant
+```
+
 ## 📝 **Development Templates**
 
 ### **New Lambda Builder Template**

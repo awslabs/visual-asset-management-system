@@ -22,6 +22,7 @@ const defaultProps: Partial<LambdaLayersBuilderNestedStackProps> = {};
 export class LambdaLayersBuilderNestedStack extends NestedStack {
     public lambdaCommonBaseLayer: lambda.LayerVersion;
     public lambdaCommonServiceSDKLayer: lambda.LayerVersion;
+    public lambdaAuthorizerLayer: lambda.LayerVersion;
 
     constructor(parent: Construct, name: string, props: LambdaLayersBuilderNestedStackProps) {
         super(parent, name);
@@ -51,6 +52,25 @@ export class LambdaLayersBuilderNestedStack extends NestedStack {
         this.lambdaCommonServiceSDKLayer = new lambda.LayerVersion(this, "VAMSLayerServiceSDK", {
             layerVersionName: "vams_layer_servicesdk",
             code: lambda.Code.fromAsset("../backend/lambdaLayers/serviceSDK", {
+                bundling: {
+                    image: cdk.DockerImage.fromBuild("./config/docker", {
+                        file: "Dockerfile-customDependencyBuildConfig",
+                        buildArgs: {
+                            IMAGE: LAMBDA_PYTHON_RUNTIME.bundlingImage.image,
+                        },
+                    }),
+                    user: "root",
+                    command: ["bash", "-c", layerBundlingCommand()],
+                },
+            }),
+            compatibleRuntimes: [LAMBDA_PYTHON_RUNTIME],
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+
+        //Deploy Authorizer Lambda Layer ../backend/lambdaLayers/authorizer
+        this.lambdaAuthorizerLayer = new lambda.LayerVersion(this, "VAMSLayerAuthorizer", {
+            layerVersionName: "vams_layer_authorizer",
+            code: lambda.Code.fromAsset("../backend/lambdaLayers/authorizer", {
                 bundling: {
                     image: cdk.DockerImage.fromBuild("./config/docker", {
                         file: "Dockerfile-customDependencyBuildConfig",
