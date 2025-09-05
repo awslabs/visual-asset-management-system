@@ -20,11 +20,22 @@ def request_to_claims(request):
             "mfaEnabled": False
         }
 
-    claims = request['requestContext']['authorizer']['jwt']['claims']
+    claims = {}
     tokens = []
     roles = []
     externalAttributes = []
     mfaEnabled = False
+
+    #Handle both claims from APIGateway standard authorizer format, lambda authorizers, or lambda cross-calls
+    if 'jwt' in request['requestContext']['authorizer'] and 'claims' in request['requestContext']['authorizer']['jwt']:
+        claims = request['requestContext']['authorizer']['jwt']['claims']
+    elif 'lambda' in request['requestContext']['authorizer']:
+        claims = request['requestContext']['authorizer']['lambda']
+    elif 'lambdaCrossCall' in request: #currently this case wouldn't apply for now due to check above
+        claims = request['lambdaCrossCall']
+    else:
+        claims = {}
+
 
     #For tokens, look at other fields if vams:tokens does not exist in claims
     if 'vams:tokens' in claims:

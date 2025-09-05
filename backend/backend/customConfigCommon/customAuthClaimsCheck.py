@@ -3,7 +3,7 @@ import boto3
 import os
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="CustomConfigAuthClaimsCheck")
+logger = safeLogger()
 
 #Possible environment variables used and passed in for various purposes
 try:

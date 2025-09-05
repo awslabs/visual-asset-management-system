@@ -7,7 +7,7 @@ from handlers.authz import CasbinEnforcer
 from common.constants import STANDARD_JSON_RESPONSE
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="CustomConfigAuthLoginProfile")
+logger = safeLogger()
 
 #Possible environment variables used and passed in for various purposes
 try:
@@ -16,6 +16,16 @@ except:
     logger.exception("Failed loading environment variables")
 
 def customAuthProfileLoginWriteOverride(userProfile, lambdaRequestEvent):
+
+    #Handle both claims from APIGateway standard authorizer format, lambda authorizers, or lambda cross-calls
+    if 'jwt' in lambdaRequestEvent['requestContext']['authorizer'] and 'claims' in lambdaRequestEvent['requestContext']['authorizer']['jwt']:
+        claims = lambdaRequestEvent['requestContext']['authorizer']['jwt']['claims']
+    elif 'lambda' in lambdaRequestEvent['requestContext']['authorizer']:
+        claims = lambdaRequestEvent['requestContext']['authorizer']['lambda']
+    elif 'lambdaCrossCall' in lambdaRequestEvent: #currently this case wouldn't apply for now due to check above
+        claims = lambdaRequestEvent['lambdaCrossCall']
+    else:
+        claims = {}
 
     ###################ADD CUSTOM LOGIC TO GET USER PROFILE DATA AT LOGIN FOR USER PROFILE###################
 
@@ -27,8 +37,8 @@ def customAuthProfileLoginWriteOverride(userProfile, lambdaRequestEvent):
     ###
 
     #Default to override incoming email with what's in the claims
-    if 'email' in lambdaRequestEvent['requestContext']['authorizer']['jwt']['claims']:
-        claimsEmail = lambdaRequestEvent['requestContext']['authorizer']['jwt']['claims']['email']
+    if 'email' in claims:
+        claimsEmail = claims['email']
         if claimsEmail != None and claimsEmail != "":
             userProfile["email"] = claimsEmail
 

@@ -8,6 +8,10 @@ This version includes significant enhancements to VAMS to include a new CLI tool
 
 ### ⚠ BREAKING CHANGES
 
+All APIGateway authorizers were swapped for custom lambda authorizers to provide more flexibility in implementing additional functionality. This may cause issues with your organization so please review with your security teams.
+
+Additionally authorizer changes may require forced cache resets on API gateways if new authorizations are not follwoing new rules set. (https://docs.aws.amazon.com/cli/latest/reference/apigatewayv2/reset-authorizers-cache.html)
+
 ### Features
 
 -   **CLI** VAMS now has a CLI tool that can be used to automate VAMS operations. It includes operations so far for authentication, database, asset, assetLinks, assetLinkMetadata, metadata, metadataSchema, tags, TagTypes, search, featureSwitch, and files. More operations to match API functionality to come in future releases such as more admin functionalities of VAMS.
@@ -24,6 +28,9 @@ This version includes significant enhancements to VAMS to include a new CLI tool
 -   **UI** Added a draggable splitter in ViewAsset page between the file manager tree view and details panel
 -   Added a new API endpoint for asset file streaming (similar to asset preview auxiliary files) at `GET /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`
 -   Added .clineRules for CLINE AI workflows for AI-assisted development for VAMS backend API development, CDK development, and CLI development
+-   All HTTP APIGateway authorizers were swapped for custom lambda authorizers.
+    -   New Lambda Layer specifically with libraries for the lambda authorizers
+    -   New support for CDK configured IP range restrictions for API Gateway calls that are managed in the authorizer
 
 ### Bug Fixes
 
