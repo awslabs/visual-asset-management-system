@@ -167,12 +167,7 @@ export function generateContentSecurityPolicy(
         "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
     ];
 
-    const imgMediaSrc = [
-        "'self'",
-        "blob:",
-        "data:",
-        `https://${Service("S3").Endpoint}/`,
-    ];
+    const imgMediaSrc = ["'self'", "blob:", "data:", `https://${Service("S3").Endpoint}/`];
 
     //Add cognito
     if (config.app.authProvider.useCognito.enabled) {
