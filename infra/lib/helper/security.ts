@@ -159,25 +159,18 @@ export function generateContentSecurityPolicy(
         "blob:",
         authenticationDomain,
         `https://${apiUrl}`,
-        `https://${Service("S3").PrincipalString}/`,
         `https://${Service("S3").Endpoint}/`,
     ];
 
     const scriptSrc = [
         "'self'",
-        "blob:",
         "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
-        authenticationDomain,
-        // `https://${apiUrl}`,
-        // `https://${Service("S3").PrincipalString}/`,
-        // `https://${Service("S3").Endpoint}/`,
     ];
 
     const imgMediaSrc = [
         "'self'",
         "blob:",
         "data:",
-        `https://${Service("S3").PrincipalString}/`,
         `https://${Service("S3").Endpoint}/`,
     ];
 
@@ -200,6 +193,7 @@ export function generateContentSecurityPolicy(
     }
 
     const csp =
+        `base-uri 'none'` +
         `default-src 'none'; style-src 'self' 'unsafe-inline'; upgrade-insecure-requests;` +
         `connect-src ${connectSrc.join(" ")}; ` +
         `script-src ${scriptSrc.join(" ")}; ` +
