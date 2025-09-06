@@ -7,8 +7,7 @@
 import { Construct } from "constructs";
 import { Names } from "aws-cdk-lib";
 import * as apigateway from "aws-cdk-lib/aws-apigatewayv2";
-import * as apigwv2 from "@aws-cdk/aws-apigatewayv2-alpha";
-import * as logs from "aws-cdk-lib/aws-logs";
+
 import { ApiGatewayV2LambdaConstruct } from "./constructs/apigatewayv2-lambda-construct";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
@@ -73,14 +72,13 @@ import { buildUserRolesService } from "../../lambdaBuilder/userRoleFunctions";
 import { buildSendEmailFunction } from "../../lambdaBuilder/sendEmailFunctions";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../config/config";
-import { generateUniqueNameHash } from "../../helper/security";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { authResources } from "../auth/authBuilder-nestedStack";
 
 interface apiGatewayLambdaConfiguration {
     routePath: string;
-    method: apigwv2.HttpMethod;
-    api: apigwv2.HttpApi;
+    method: apigateway.HttpMethod;
+    api: apigateway.HttpApi;
 }
 
 export class ApiBuilderNestedStack extends NestedStack {
@@ -88,7 +86,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         parent: Construct,
         name: string,
         config: Config.Config,
-        api: apigwv2.HttpApi,
+        api: apigateway.HttpApi,
         storageResources: storageResources,
         authResources: authResources,
         lambdaCommonBaseLayer: LayerVersion,
@@ -135,7 +133,7 @@ export function attachFunctionToApi(
 export function apiBuilder(
     scope: Construct,
     config: Config.Config,
-    api: apigwv2.HttpApi,
+    api: apigateway.HttpApi,
     storageResources: storageResources,
     authResources: authResources,
     lambdaCommonBaseLayer: LayerVersion,
@@ -156,7 +154,7 @@ export function apiBuilder(
 
     attachFunctionToApi(scope, createConfigFunction, {
         routePath: "/secure-config",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
 
@@ -171,7 +169,7 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, createDatabaseFunction, {
         routePath: "/database",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
 
@@ -185,23 +183,23 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, databaseService, {
         routePath: "/database",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
     attachFunctionToApi(scope, databaseService, {
         routePath: "/database/{databaseId}",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
     attachFunctionToApi(scope, databaseService, {
         routePath: "/database/{databaseId}",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigateway.HttpMethod.DELETE,
         api: api,
     });
 
     attachFunctionToApi(scope, databaseService, {
         routePath: "/buckets",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
 
@@ -238,14 +236,14 @@ export function apiBuilder(
     for (let i = 0; i < commentServiceRoutes.length; i++) {
         attachFunctionToApi(scope, commentService, {
             routePath: commentServiceRoutes[i],
-            method: apigwv2.HttpMethod.GET,
+            method: apigateway.HttpMethod.GET,
             api: api,
         });
     }
 
     attachFunctionToApi(scope, commentService, {
         routePath: "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigateway.HttpMethod.DELETE,
         api: api,
     });
 
@@ -264,7 +262,7 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, addCommentFunction, {
         routePath: "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
 
@@ -283,7 +281,7 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, editCommentFunction, {
         routePath: "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
-        method: apigwv2.HttpMethod.PUT,
+        method: apigateway.HttpMethod.PUT,
         api: api,
     });
 
@@ -301,12 +299,12 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, roleService, {
         routePath: "/roles",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
     attachFunctionToApi(scope, roleService, {
         routePath: "/roles/{roleId}",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigateway.HttpMethod.DELETE,
         api: api,
     });
 
@@ -323,12 +321,12 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, createRoleFunction, {
         routePath: "/roles",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
     attachFunctionToApi(scope, createRoleFunction, {
         routePath: "/roles",
-        method: apigwv2.HttpMethod.PUT,
+        method: apigateway.HttpMethod.PUT,
         api: api,
     });
 
@@ -346,22 +344,22 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, userRolesService, {
         routePath: "/user-roles",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
     attachFunctionToApi(scope, userRolesService, {
         routePath: "/user-roles",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
     attachFunctionToApi(scope, userRolesService, {
         routePath: "/user-roles",
-        method: apigwv2.HttpMethod.PUT,
+        method: apigateway.HttpMethod.PUT,
         api: api,
     });
     attachFunctionToApi(scope, userRolesService, {
         routePath: "/user-roles",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigateway.HttpMethod.DELETE,
         api: api,
     });
 
@@ -376,12 +374,12 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, tagService, {
         routePath: "/tags",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
     attachFunctionToApi(scope, tagService, {
         routePath: "/tags/{tagId}",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigateway.HttpMethod.DELETE,
         api: api,
     });
 
@@ -395,12 +393,12 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, createTagFunction, {
         routePath: "/tags",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
     attachFunctionToApi(scope, createTagFunction, {
         routePath: "/tags",
-        method: apigwv2.HttpMethod.PUT,
+        method: apigateway.HttpMethod.PUT,
         api: api,
     });
 
@@ -415,12 +413,12 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, tagTypeService, {
         routePath: "/tag-types",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
     attachFunctionToApi(scope, tagTypeService, {
         routePath: "/tag-types/{tagTypeId}",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigateway.HttpMethod.DELETE,
         api: api,
     });
 
@@ -434,12 +432,12 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, createTagTypeFunction, {
         routePath: "/tag-types",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
     attachFunctionToApi(scope, createTagTypeFunction, {
         routePath: "/tag-types",
-        method: apigwv2.HttpMethod.PUT,
+        method: apigateway.HttpMethod.PUT,
         api: api,
     });
 
@@ -460,22 +458,22 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, subscriptionService, {
         routePath: "/subscriptions",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
     attachFunctionToApi(scope, subscriptionService, {
         routePath: "/subscriptions",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
     attachFunctionToApi(scope, subscriptionService, {
         routePath: "/subscriptions",
-        method: apigwv2.HttpMethod.PUT,
+        method: apigateway.HttpMethod.PUT,
         api: api,
     });
     attachFunctionToApi(scope, subscriptionService, {
         routePath: "/subscriptions",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigateway.HttpMethod.DELETE,
         api: api,
     });
 
@@ -494,7 +492,7 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, unSubscribeService, {
         routePath: "/unsubscribe",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigateway.HttpMethod.DELETE,
         api: api,
     });
 
@@ -513,7 +511,7 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, checkSubscriptionService, {
         routePath: "/check-subscription",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
 
@@ -535,7 +533,7 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, createAssetLinkService, {
         routePath: "/asset-links",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
 
@@ -556,24 +554,24 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, assetLinksService, {
         routePath: "/database/{databaseId}/assets/{assetId}/asset-links",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
 
     attachFunctionToApi(scope, assetLinksService, {
         routePath: "/asset-links/single/{assetLinkId}",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
 
     attachFunctionToApi(scope, assetLinksService, {
         routePath: "/asset-links/{assetLinkId}",
-        method: apigwv2.HttpMethod.PUT,
+        method: apigateway.HttpMethod.PUT,
         api: api,
     });
     attachFunctionToApi(scope, assetLinksService, {
         routePath: "/asset-links/{relationId}",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigateway.HttpMethod.DELETE,
         api: api,
     });
 
@@ -594,22 +592,22 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, assetLinksMetadataService, {
         routePath: "/asset-links/{assetLinkId}/metadata",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
     attachFunctionToApi(scope, assetLinksMetadataService, {
         routePath: "/asset-links/{assetLinkId}/metadata",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
     attachFunctionToApi(scope, assetLinksMetadataService, {
         routePath: "/asset-links/{assetLinkId}/metadata/{metadataKey}",
-        method: apigwv2.HttpMethod.PUT,
+        method: apigateway.HttpMethod.PUT,
         api: api,
     });
     attachFunctionToApi(scope, assetLinksMetadataService, {
         routePath: "/asset-links/{assetLinkId}/metadata/{metadataKey}",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigateway.HttpMethod.DELETE,
         api: api,
     });
 
@@ -625,34 +623,34 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, assetService, {
         routePath: "/database/{databaseId}/assets",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
     attachFunctionToApi(scope, assetService, {
         routePath: "/database/{databaseId}/assets/{assetId}",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
 
     attachFunctionToApi(scope, assetService, {
         routePath: "/database/{databaseId}/assets/{assetId}/archiveAsset",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigateway.HttpMethod.DELETE,
         api: api,
     });
 
     attachFunctionToApi(scope, assetService, {
         routePath: "/database/{databaseId}/assets/{assetId}/deleteAsset",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigateway.HttpMethod.DELETE,
         api: api,
     });
     attachFunctionToApi(scope, assetService, {
         routePath: "/database/{databaseId}/assets/{assetId}",
-        method: apigwv2.HttpMethod.PUT,
+        method: apigateway.HttpMethod.PUT,
         api: api,
     });
     attachFunctionToApi(scope, assetService, {
         routePath: "/assets",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
 
@@ -668,74 +666,74 @@ export function apiBuilder(
 
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/listFiles",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
 
     // Add new file operation routes
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/fileInfo",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
 
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/moveFile",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
 
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/copyFile",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
 
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/archiveFile",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigateway.HttpMethod.DELETE,
         api: api,
     });
 
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/deleteAssetPreview",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigateway.HttpMethod.DELETE,
         api: api,
     });
 
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/deleteAuxiliaryPreviewAssetFiles",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigateway.HttpMethod.DELETE,
         api: api,
     });
 
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/deleteFile",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigateway.HttpMethod.DELETE,
         api: api,
     });
 
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
 
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/unarchiveFile",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
 
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/setPrimaryFile",
-        method: apigwv2.HttpMethod.PUT,
+        method: apigateway.HttpMethod.PUT,
         api: api,
     });
 
     attachFunctionToApi(scope, assetFilesFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/createFolder",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
 
@@ -749,7 +747,7 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, createAssetFunction, {
         routePath: "/assets",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
 
@@ -764,13 +762,13 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, uploadFileFunction, {
         routePath: "/uploads",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
 
     attachFunctionToApi(scope, uploadFileFunction, {
         routePath: "/uploads/{uploadId}/complete",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
 
@@ -784,7 +782,7 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, streamAuxiliaryPreviewAssetFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
 
@@ -798,7 +796,7 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, assetDownloadFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/download",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
 
@@ -815,25 +813,25 @@ export function apiBuilder(
     // Attach to createVersion endpoint
     attachFunctionToApi(scope, assetVersionsFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/createVersion",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
     // Attach to revertVersion endpoint
     attachFunctionToApi(scope, assetVersionsFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/revertAssetVersion/{assetVersionId}",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
     // Attach to getVersions endpoint
     attachFunctionToApi(scope, assetVersionsFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/getVersions",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
     // Attach to getVersion endpoint
     attachFunctionToApi(scope, assetVersionsFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
 
@@ -847,10 +845,10 @@ export function apiBuilder(
         subnets
     );
     const methods = [
-        apigwv2.HttpMethod.PUT,
-        apigwv2.HttpMethod.GET,
-        apigwv2.HttpMethod.POST,
-        apigwv2.HttpMethod.DELETE,
+        apigateway.HttpMethod.PUT,
+        apigateway.HttpMethod.GET,
+        apigateway.HttpMethod.POST,
+        apigateway.HttpMethod.DELETE,
     ];
     for (let i = 0; i < methods.length; i++) {
         attachFunctionToApi(scope, metadataCrudFunctions[i], {
@@ -870,9 +868,9 @@ export function apiBuilder(
     );
 
     const metadataSchemaMethods = [
-        apigwv2.HttpMethod.GET,
-        apigwv2.HttpMethod.POST,
-        apigwv2.HttpMethod.PUT,
+        apigateway.HttpMethod.GET,
+        apigateway.HttpMethod.POST,
+        apigateway.HttpMethod.PUT,
     ];
     for (let i = 0; i < metadataSchemaMethods.length; i++) {
         attachFunctionToApi(scope, metadataSchemaFunctions, {
@@ -883,7 +881,7 @@ export function apiBuilder(
     }
     attachFunctionToApi(scope, metadataSchemaFunctions, {
         routePath: "/metadataschema/{databaseId}/{field}",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigateway.HttpMethod.DELETE,
         api: api,
     });
 
@@ -908,7 +906,7 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, createPipelineFunction, {
         routePath: "/pipelines",
-        method: apigwv2.HttpMethod.PUT,
+        method: apigateway.HttpMethod.PUT,
         api: api,
     });
 
@@ -922,22 +920,22 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, pipelineService, {
         routePath: "/database/{databaseId}/pipelines",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
     attachFunctionToApi(scope, pipelineService, {
         routePath: "/database/{databaseId}/pipelines/{pipelineId}",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
     attachFunctionToApi(scope, pipelineService, {
         routePath: "/database/{databaseId}/pipelines/{pipelineId}",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigateway.HttpMethod.DELETE,
         api: api,
     });
     attachFunctionToApi(scope, pipelineService, {
         routePath: "/pipelines",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
 
@@ -952,22 +950,22 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, workflowService, {
         routePath: "/database/{databaseId}/workflows",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
     attachFunctionToApi(scope, workflowService, {
         routePath: "/database/{databaseId}/workflows/{workflowId}",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
     attachFunctionToApi(scope, workflowService, {
         routePath: "/database/{databaseId}/workflows/{workflowId}",
-        method: apigwv2.HttpMethod.DELETE,
+        method: apigateway.HttpMethod.DELETE,
         api: api,
     });
     attachFunctionToApi(scope, workflowService, {
         routePath: "/workflows",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
 
@@ -981,13 +979,13 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, listWorkflowExecutionsFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
 
     attachFunctionToApi(scope, listWorkflowExecutionsFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/workflows/executions",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
 
@@ -1015,7 +1013,7 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, createWorkflowFunction, {
         routePath: "/workflows",
-        method: apigwv2.HttpMethod.PUT,
+        method: apigateway.HttpMethod.PUT,
         api: api,
     });
 
@@ -1031,7 +1029,7 @@ export function apiBuilder(
 
     attachFunctionToApi(scope, runWorkflowFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/workflows/{workflowId}",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
 
@@ -1047,7 +1045,7 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, ingestAssetFunction, {
         routePath: "/ingest-asset",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
 
@@ -1063,7 +1061,7 @@ export function apiBuilder(
 
     attachFunctionToApi(scope, authFunctions.authConstraintsService, {
         routePath: "/auth/constraints",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
     for (let i = 0; i < methods.length; i++) {
@@ -1076,52 +1074,19 @@ export function apiBuilder(
 
     attachFunctionToApi(scope, authFunctions.routes, {
         routePath: "/auth/routes",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
 
     attachFunctionToApi(scope, authFunctions.authLoginProfile, {
         routePath: "/auth/loginProfile/{userId}",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
 
     attachFunctionToApi(scope, authFunctions.authLoginProfile, {
         routePath: "/auth/loginProfile/{userId}",
-        method: apigwv2.HttpMethod.POST,
+        method: apigateway.HttpMethod.POST,
         api: api,
     });
-
-    //Enabling API Gateway Access Logging: Currently the only way to do this is via V1 constructs
-    //https://github.com/aws/aws-cdk/issues/11100#issuecomment-904627081
-
-    const accessLogs = new logs.LogGroup(scope, "VAMS-API-AccessLogs", {
-        logGroupName:
-            "/aws/vendedlogs/VAMS-API-AccessLogs" +
-            generateUniqueNameHash(
-                config.env.coreStackName,
-                config.env.account,
-                "VAMS-API-AccessLogs",
-                10
-            ),
-        retention: logs.RetentionDays.TEN_YEARS,
-        removalPolicy: cdk.RemovalPolicy.DESTROY,
-    });
-    const stage = api.defaultStage?.node.defaultChild as apigateway.CfnStage;
-    stage.accessLogSettings = {
-        destinationArn: accessLogs.logGroupArn,
-        format: JSON.stringify({
-            requestId: "$context.requestId",
-            userAgent: "$context.identity.userAgent",
-            sourceIp: "$context.identity.sourceIp",
-            requestTime: "$context.requestTime",
-            requestTimeEpoch: "$context.requestTimeEpoch",
-            httpMethod: "$context.httpMethod",
-            path: "$context.path",
-            status: "$context.status",
-            protocol: "$context.protocol",
-            responseLength: "$context.responseLength",
-            domainName: "$context.domainName",
-        }),
-    };
 }

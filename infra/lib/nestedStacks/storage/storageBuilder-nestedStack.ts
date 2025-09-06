@@ -178,7 +178,9 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         // Note: contributor insights is disabled (by default) to avoid reaching rule limits
         // on tables (LimitExceededException) during regular deployments.
         //
-        contributorInsightsEnabled: false,
+        contributorInsightsSpecification: {
+            enabled: false,
+        },
         pointInTimeRecoverySpecification: {
             pointInTimeRecoveryEnabled: true,
         },

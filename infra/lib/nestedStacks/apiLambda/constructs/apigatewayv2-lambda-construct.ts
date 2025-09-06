@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as apigw from "@aws-cdk/aws-apigatewayv2-alpha";
-import * as apigwIntegrations from "@aws-cdk/aws-apigatewayv2-integrations-alpha";
+import * as apigw from "aws-cdk-lib/aws-apigatewayv2";
+import * as apigwIntegrations from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as lambdaPython from "@aws-cdk/aws-lambda-python-alpha";
 import * as lambdaNodejs from "aws-cdk-lib/aws-lambda-nodejs";

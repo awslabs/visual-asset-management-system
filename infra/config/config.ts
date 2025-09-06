@@ -168,6 +168,18 @@ export function getConfig(app: cdk.App): Config {
         config.app.webUi.allowUnsafeEvalFeatures = false;
     }
 
+    if (config.app.api == undefined) {
+        config.app.api = { globalRateLimit: 50, globalBurstLimit: 100 };
+    }
+
+    if (config.app.api.globalRateLimit == undefined) {
+        config.app.api.globalRateLimit = 50;
+    }
+
+    if (config.app.api.globalBurstLimit == undefined) {
+        config.app.api.globalBurstLimit = 100;
+    }
+
     //Load S3 Policy statements JSON
     const s3AdditionalBucketPolicyFile: string = readFileSync(
         join(__dirname, "policy", "s3AdditionalBucketPolicyConfig.json"),
@@ -482,6 +494,25 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
+    //API Configuration Error Checks
+    if (config.app.api.globalRateLimit <= 0) {
+        throw new Error(
+            "Configuration Error: API globalRateLimit must be a positive number greater than 0."
+        );
+    }
+
+    if (config.app.api.globalBurstLimit <= 0) {
+        throw new Error(
+            "Configuration Error: API globalBurstLimit must be a positive number greater than 0."
+        );
+    }
+
+    if (config.app.api.globalBurstLimit < config.app.api.globalRateLimit) {
+        throw new Error(
+            "Configuration Error: API globalBurstLimit must be greater than or equal to globalRateLimit."
+        );
+    }
+
     return config;
 }
 
@@ -599,6 +630,10 @@ export interface ConfigPublic {
         webUi: {
             optionalBannerHtmlMessage: string;
             allowUnsafeEvalFeatures: boolean;
+        };
+        api: {
+            globalRateLimit: number;
+            globalBurstLimit: number;
         };
     };
 }

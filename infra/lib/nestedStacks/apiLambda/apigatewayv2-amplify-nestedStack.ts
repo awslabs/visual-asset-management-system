@@ -3,11 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as apigw from "@aws-cdk/aws-apigatewayv2-alpha";
-import * as apigwAuthorizers from "@aws-cdk/aws-apigatewayv2-authorizers-alpha";
+import * as apigw from "aws-cdk-lib/aws-apigatewayv2";
+import * as apigwv1 from "aws-cdk-lib/aws-apigateway";
+import * as apigwAuthorizers from "aws-cdk-lib/aws-apigatewayv2-authorizers";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as cdk from "aws-cdk-lib";
 import * as Config from "../../../config/config";
 import { samlSettings } from "../../../config/saml-config";
+import { generateUniqueNameHash } from "../../helper/security";
 import {
     AmplifyConfigLambdaConstruct,
     AmplifyConfigLambdaConstructProps,
@@ -87,6 +90,19 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
             );
         }
 
+        const accessLogs = new logs.LogGroup(this, "VAMS-API-AccessLogs", {
+            logGroupName:
+                "/aws/vendedlogs/VAMS-API-AccessLogs" +
+                generateUniqueNameHash(
+                    props.config.env.coreStackName,
+                    props.config.env.account,
+                    "VAMS-API-AccessLogs",
+                    10
+                ),
+            retention: logs.RetentionDays.ONE_YEAR,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+
         // init api gateway
         const api = new apigw.HttpApi(this, "Api", {
             apiName: `${props.stackName}Api`,
@@ -118,7 +134,40 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
                 maxAge: cdk.Duration.hours(1),
             },
             defaultAuthorizer: apiGatewayAuthorizer,
+            createDefaultStage: false,
         });
+
+        const apiStage = new apigw.HttpStage(this, "DefaultStage", {
+            httpApi: api,
+            stageName: "$default", // Use $default to serve from the base API URL
+            autoDeploy: true,
+            throttle: {
+                rateLimit: props.config.app.api.globalRateLimit,
+                burstLimit: props.config.app.api.globalBurstLimit,
+            },
+            // accessLogSettings: {
+            //     destination: new apigw.LogGroupLogDestination(accessLogs),
+            //     format: apigwv1.AccessLogFormat.jsonWithStandardFields()
+            // }
+        });
+
+        const stage = apiStage.node.defaultChild as apigw.CfnStage;
+        stage.accessLogSettings = {
+            destinationArn: accessLogs.logGroupArn,
+            format: JSON.stringify({
+                requestId: "$context.requestId",
+                userAgent: "$context.identity.userAgent",
+                sourceIp: "$context.identity.sourceIp",
+                requestTime: "$context.requestTime",
+                requestTimeEpoch: "$context.requestTimeEpoch",
+                httpMethod: "$context.httpMethod",
+                path: "$context.path",
+                status: "$context.status",
+                protocol: "$context.protocol",
+                responseLength: "$context.responseLength",
+                domainName: "$context.domainName",
+            }),
+        };
 
         //Always use non-FIPS URL in non-GovCloud. All endpoints in GovCloud are FIPS-compliant already
         //https://docs.aws.amazon.com/govcloud-us/latest/UserGuide/govcloud-abp.html

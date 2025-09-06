@@ -101,6 +101,10 @@
         "webUi": {
             "optionalBannerHtmlMessage": "",
             "allowUnsafeEvalFeatures": false
+        },
+        "api": {
+            "globalRateLimit": 50,
+            "globalBurstLimit": 100
         }
     }
 }

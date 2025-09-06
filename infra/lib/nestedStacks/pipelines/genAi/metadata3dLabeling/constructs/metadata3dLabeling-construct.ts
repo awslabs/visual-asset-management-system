@@ -525,20 +525,20 @@ export class Metadata3dLabelingConstruct extends NestedStack {
             true
         );
 
-        NagSuppressions.addResourceSuppressionsByPath(
-            Stack.of(this),
-            `/${this.toString()}/BatchFargatePipeline_BlenderRenderer/PipelineBatchComputeEnvironment/Resource-Service-Instance-Role/Resource`,
-            [
-                {
-                    id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for AWS Batch Compute Environment uses AWSBatchServiceRole",
-                    appliesTo: [
-                        "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSBatchServiceRole",
-                    ],
-                },
-            ],
-            true
-        );
+        // NagSuppressions.addResourceSuppressionsByPath(
+        //     Stack.of(this),
+        //     `/${this.toString()}/BatchFargatePipeline_BlenderRenderer/PipelineBatchComputeEnvironment/Resource-Service-Instance-Role/Resource`,
+        //     [
+        //         {
+        //             id: "AwsSolutions-IAM4",
+        //             reason: "The IAM role for AWS Batch Compute Environment uses AWSBatchServiceRole",
+        //             appliesTo: [
+        //                 "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSBatchServiceRole",
+        //             ],
+        //         },
+        //     ],
+        //     true
+        // );
 
         NagSuppressions.addResourceSuppressionsByPath(
             Stack.of(this),
