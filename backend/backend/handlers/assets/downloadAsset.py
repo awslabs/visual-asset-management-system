@@ -219,7 +219,7 @@ def download_asset_file(databaseId, assetId, request_model):
     # Get asset details
     asset = get_asset_details(databaseId, assetId)
     if not asset:
-        raise VAMSGeneralErrorResponse(f"Asset {assetId} not found in database {databaseId}")
+        raise VAMSGeneralErrorResponse("Asset not found in database")
         
     # Check if asset is distributable
     if not asset.get('isDistributable', False):
@@ -305,7 +305,7 @@ def download_asset_preview(databaseId, assetId, request_model):
     # Get asset details
     asset = get_asset_details(databaseId, assetId)
     if not asset:
-        raise VAMSGeneralErrorResponse(f"Asset {assetId} not found in database {databaseId}")
+        raise VAMSGeneralErrorResponse("Asset not found in database")
         
     # Check if asset is distributable
     if not asset.get('isDistributable', False):
@@ -411,7 +411,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         # Check authorization
         asset = get_asset_details(database_id, asset_id)
         if not asset:
-            return validation_error(body={'message': f"Asset {asset_id} not found"})
+            return validation_error(body={'message': "Asset not found"})
         
         asset["object__type"] = "asset"
         

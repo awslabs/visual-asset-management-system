@@ -621,7 +621,7 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     # Verify asset exists
     asset = get_asset_details(databaseId, assetId)
     if not asset:
-        raise VAMSGeneralErrorResponse(f"Asset {assetId} not found in database {databaseId}")
+        raise VAMSGeneralErrorResponse("Asset not found")
         
     # Additional business logic validation
     if uploadType == "assetPreview" and asset.get('previewLocation'):
@@ -754,7 +754,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     # Verify asset exists
     asset = get_asset_details(databaseId, assetId)
     if not asset:
-        raise VAMSGeneralErrorResponse(f"Asset {assetId} not found in database {databaseId}")
+        raise VAMSGeneralErrorResponse("Asset not found")
     
     # Verify upload details match request
     if upload_details['assetId'] != assetId or upload_details['databaseId'] != databaseId:
@@ -1100,7 +1100,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
     # Verify asset exists
     asset = get_asset_details(databaseId, assetId)
     if not asset:
-        raise VAMSGeneralErrorResponse(f"Asset {assetId} not found in database {databaseId}")
+        raise VAMSGeneralErrorResponse("Asset not found")
     
     # Verify upload details match request
     if upload_details['assetId'] != assetId or upload_details['databaseId'] != databaseId:
@@ -1569,7 +1569,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Check authorization
             asset = get_asset_details(request_model.databaseId, request_model.assetId)
             if not asset:
-                return validation_error(body={'message': f"Asset {request_model.assetId} not found"})
+                return validation_error(body={'message': "Asset not found"})
             
             asset["object__type"] = "asset"
             
@@ -1595,7 +1595,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Check authorization
             asset = get_asset_details(request_model.databaseId, request_model.assetId)
             if not asset:
-                return validation_error(body={'message': f"Asset {request_model.assetId} not found"})
+                return validation_error(body={'message': "Asset not found"})
             
             asset["object__type"] = "asset"
             
@@ -1625,7 +1625,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # Check authorization
             asset = get_asset_details(request_model.databaseId, request_model.assetId)
             if not asset:
-                return validation_error(body={'message': f"Asset {request_model.assetId} not found"})
+                return validation_error(body={'message': "Asset not found"})
             
             asset["object__type"] = "asset"
             

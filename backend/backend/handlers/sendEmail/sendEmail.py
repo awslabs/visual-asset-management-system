@@ -71,7 +71,7 @@ def lambda_handler(event, context):
                 response['body'] = json.dumps({"message": 'Internal Server Error'})
         else:
             response['statusCode'] = 400
-            response['body'] = json.dumps({"message": f"Asset - {event['assetId']} with database ID - {event['databaseId']} doesn't exist."})
+            response['body'] = json.dumps({"message": "Asset doesn't exist."})
         return response
     except Exception as e:
         logger.exception(e)

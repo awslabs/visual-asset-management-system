@@ -370,7 +370,7 @@ def lambda_handler(event, context):
         if not asset:
             logger.error(f"Asset {event['assetId']} not found in database {event['databaseId']}")
             response['statusCode'] = 400
-            response['body'] = json.dumps({"message": f"Asset {event['assetId']} not found in database {event['databaseId']}"})
+            response['body'] = json.dumps({"message": "Asset not found in database"})
             return response
 
         #ABAC Checks for Asset

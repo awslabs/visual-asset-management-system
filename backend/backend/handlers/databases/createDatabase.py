@@ -167,7 +167,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except ClientError as e:
         if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
             logger.exception(f"Database already exists: {e}")
-            return validation_error(body={'message': f"Database {body['databaseId']} already exists."})
+            return validation_error(body={'message': "Database already exists."})
         logger.exception(f"AWS error: {e}")
         return internal_error()
     except VAMSGeneralErrorResponse as v:

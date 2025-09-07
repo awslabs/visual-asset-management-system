@@ -555,25 +555,25 @@ def lambda_handler(
         logger.exception(f"AWS Service Error: {str(e)}")
         return {
             'statusCode': 500,
-            'body': json.dumps({"message": f"AWS Service Error: {str(e)}"})
+            'body': json.dumps({"message": "AWS Service Error"})
         }
     except json.JSONDecodeError as e:
         logger.exception(f"JSON Decode Error: {str(e)}")
         return {
             'statusCode': 400,
-            'body': json.dumps({"message": f"Invalid JSON format: {str(e)}"})
+            'body': json.dumps({"message": "Invalid JSON format"})
         }
     except KeyError as e:
         logger.exception(f"Key Error: {str(e)}")
         return {
             'statusCode': 400,
-            'body': json.dumps({"message": f"Missing required field: {str(e)}"})
+            'body': json.dumps({"message": "Missing required field"})
         }
     except ValueError as e:
         logger.exception(f"Value Error: {str(e)}")
         return {
             'statusCode': 400,
-            'body': json.dumps({"message": f"Invalid value: {str(e)}"})
+            'body': json.dumps({"message": "Invalid value"})
         }
     except Exception as e:
         logger.exception(f"Unexpected error: {str(e)}")

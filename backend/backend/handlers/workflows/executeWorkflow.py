@@ -449,7 +449,7 @@ def lambda_handler(event, context):
                             if not status:
                                 logger.error("Not all pipelines are enabled/accessible")
                                 response['statusCode'] = 400
-                                response['body'] = json.dumps({'message': f'{pipelineName} is not enabled/accessible'})
+                                response['body'] = json.dumps({'message': 'Pipeline is not enabled/accessible'})
                             else:
                                 logger.info("All pipelines are enabled. Continuing to run workflow")
 

@@ -129,7 +129,7 @@ def lambda_handler(event, context):
         if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
             response['statusCode'] = 400
             response['body'] = json.dumps(
-                {"message": "Tag Type Name " + str(event['body']['tagTypeName'] + " already exists.")})
+                {"message": "Tag type already exists."})
         else:
             response['statusCode'] = 500
             response['body'] = json.dumps({"message": "Internal Server Error"})

@@ -347,7 +347,7 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         ).get('Item')
         
         if existing_asset:
-            raise VAMSGeneralErrorResponse(f"Asset with ID {assetId} already exists in database {databaseId}")
+            raise VAMSGeneralErrorResponse("Asset with specified ID already exists")
     
     # Verify database exists
     db_table = dynamodb.Table(db_database)
@@ -357,7 +357,7 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         }
     )
     if 'Item' not in db_response:
-        raise VAMSGeneralErrorResponse(f"Database with ID {databaseId} does not exist")
+        raise VAMSGeneralErrorResponse("VAMS General Error: Database does not exist")
     
     # Verify required tags (only if we aren't generating from S3 external where we don't know tags)
     if not s3ExternalGenerated:

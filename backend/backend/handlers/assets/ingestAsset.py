@@ -59,7 +59,7 @@ def verify_database_exists(database_id):
     try:
         response = table.get_item(Key={'databaseId': database_id})
         if 'Item' not in response:
-            raise VAMSGeneralErrorResponse(f"Database with ID {database_id} does not exist")
+            raise VAMSGeneralErrorResponse("Database does not exist")
         return True
     except Exception as e:
         if isinstance(e, VAMSGeneralErrorResponse):

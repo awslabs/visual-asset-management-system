@@ -137,7 +137,7 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         asset = response.get('Item', {})
         
         if not asset:
-            raise VAMSGeneralErrorResponse(f"Asset {assetId} not found in database {databaseId}")
+            raise VAMSGeneralErrorResponse("Asset not found in database")
         
         # Check permissions
         asset["object__type"] = "asset"
@@ -872,7 +872,7 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
     # First check if the version metadata exists
     version_metadata = get_asset_version_metadata(assetId, request_model.assetVersionId)
     if not version_metadata:
-        raise VAMSGeneralErrorResponse(f"Version {request_model.assetVersionId} not found")
+        raise VAMSGeneralErrorResponse("Version not found")
     
     # Get target version files - but don't error if no files exist
     target_version = get_asset_file_versions(assetId, request_model.assetVersionId)
@@ -1062,7 +1062,7 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
         }
     
     if not version_info:
-        raise VAMSGeneralErrorResponse(f"Version {request_model.assetVersionId} not found")
+        raise VAMSGeneralErrorResponse("Version not found")
     
     # Get file versions from DynamoDB
     file_versions = get_asset_file_versions(assetId, version_id)

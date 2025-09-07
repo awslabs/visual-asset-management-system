@@ -618,7 +618,7 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
     # Get the existing asset
     asset = get_asset_details(databaseId, assetId)
     if not asset:
-        raise VAMSGeneralErrorResponse(f"Asset {assetId} not found in database {databaseId}")
+        raise VAMSGeneralErrorResponse("Asset not found in database")
     
     # Check authorization
     asset.update({"object__type": "asset"})
@@ -679,7 +679,7 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
     # Get the existing asset
     asset = get_asset_details(databaseId, assetId)
     if not asset:
-        raise VAMSGeneralErrorResponse(f"Asset {assetId} not found in database {databaseId}")
+        raise VAMSGeneralErrorResponse("Asset not found in database")
     
     # Check if asset is already archived
     if databaseId.endswith('#deleted') or asset.get('status') == 'archived':
@@ -766,7 +766,7 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
     # Get the existing asset (including archived)
     asset = get_asset_details(databaseId, assetId, showArchived=True)
     if not asset:
-        raise VAMSGeneralErrorResponse(f"Asset {assetId} not found in database {databaseId}")
+        raise VAMSGeneralErrorResponse("Asset not found in database")
     
     # Check authorization
     asset.update({"object__type": "asset"})

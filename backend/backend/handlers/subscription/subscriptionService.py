@@ -271,7 +271,7 @@ def create_subscription(body):
         existing_subscribers = [item["S"] for item in items["subscribers"]['L']]
         if any(new_subscriber in existing_subscribers for new_subscriber in body["subscribers"]):
             response['statusCode'] = 400
-            response['body'] = json.dumps({"message": f'Subscription already exists for eventName-{body["eventName"]} for {body["entityName"]} - {body["entityId"]} for some of the subscribers.'})
+            response['body'] = json.dumps({"message": "Subscription already exists for some of the specified subscribers."})
             return response
         else:
             if body["entityName"] == "Asset":
@@ -362,7 +362,7 @@ def delete_subscription(body):
     except ClientError as e:
         if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
             response['statusCode'] = 400
-            response['body'] = json.dumps({"message": f'Subscription not found for Event: {body["eventName"]}, Entity: {body["entityName"]}, EntityId: {body["entityId"]}'})
+            response['body'] = json.dumps({"message": "Subscription not found for the specified event and entity"})
         else:
             response['statusCode'] = 500
             response['body'] = json.dumps({"message": "An unexpected error occurred while executing the request"})
@@ -475,4 +475,3 @@ def lambda_handler(event, context):
         response['statusCode'] = 500
         response['body'] = json.dumps({"message": "Internal Server Error"})
         return response
-

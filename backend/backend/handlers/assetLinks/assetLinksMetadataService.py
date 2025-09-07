@@ -142,7 +142,7 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
         )
         
         if 'Item' in existing_response:
-            raise ValueError(f"Metadata key '{request_model.metadataKey}' already exists for this asset link")
+            raise ValueError("Metadata key already exists for this asset link")
             
     except Exception as e:
         if "already exists" in str(e):
@@ -215,7 +215,7 @@ def update_asset_link_metadata(asset_link_id: str, metadata_key: str, request_mo
         )
         
         if 'Item' not in existing_response:
-            raise ValueError(f"Metadata key '{metadata_key}' not found for this asset link")
+            raise ValueError("Metadata key not found for this asset link")
         
         # Update the metadata
         asset_links_metadata_table.update_item(
@@ -257,7 +257,7 @@ def delete_asset_link_metadata(asset_link_id: str, metadata_key: str, claims_and
         )
         
         if 'Item' not in existing_response:
-            raise ValueError(f"Metadata key '{metadata_key}' not found for this asset link")
+            raise ValueError("Metadata key not found for this asset link")
         
         # Delete the metadata
         asset_links_metadata_table.delete_item(

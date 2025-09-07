@@ -104,7 +104,7 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         asset = response.get('Item', {})
         
         if not asset:
-            raise VAMSGeneralErrorResponse(f"Asset {assetId} not found in database {databaseId}. Note: Files cannot be moved cross-database.")
+            raise VAMSGeneralErrorResponse("Asset not found in database. Note: Files cannot be moved cross-database.")
         
         # Check permissions
         asset["object__type"] = "asset"
@@ -2053,7 +2053,7 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
                 break
         
         if not version_found:
-            raise VAMSGeneralErrorResponse(f"Version {version_id} not found for file: {file_path}")
+            raise VAMSGeneralErrorResponse("Version not found for file")
         
     except ClientError as e:
         if e.response['Error']['Code'] == 'NoSuchKey':

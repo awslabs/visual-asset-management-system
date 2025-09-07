@@ -274,7 +274,7 @@ def delete_handler(event, response, pathParameters, queryParameters):
     logger.info("Validating Parameters")
     for parameter in ['databaseId', 'pipelineId']:
         if parameter not in pathParameters:
-            message = f"No {parameter} in API Call"
+            message = "Missing required parameter in API Call"
             response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
             logger.error(response)

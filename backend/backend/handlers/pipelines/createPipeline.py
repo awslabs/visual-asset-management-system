@@ -345,7 +345,7 @@ def lambda_handler(event, context, create_pipeline_fn=CreatePipeline.from_env):
     except ValueError as v:
         logger.exception(v)
         response['statusCode'] = 400
-        response['body'] = json.dumps({"message": str(v)})
+        response['body'] = json.dumps({"message": "Invalid input provided"})
         return response
     except Exception as e:
         logger.exception(e)

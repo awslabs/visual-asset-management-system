@@ -48,7 +48,7 @@ def create_role(body):
         error_code = e.response['Error']['Code']
         if error_code == 'ConditionalCheckFailedException':
             response['statusCode'] = 400
-            response['body'] = json.dumps({"message": "Role with name '" + body["roleName"] + "' already exists."})
+            response['body'] = json.dumps({"message": "Role already exists."})
         elif error_code == 'ValidationException':
             response['statusCode'] = 400
             response['body'] = json.dumps({"message": "Invalid request parameters."})
@@ -89,7 +89,7 @@ def update_role(body):
         error_code = e.response['Error']['Code']
         if error_code == 'ConditionalCheckFailedException':
             response['statusCode'] = 400
-            response['body'] = json.dumps({"message": "RoleName " + body["roleName"] + " doesn't exist."})
+            response['body'] = json.dumps({"message": "Role doesn't exist."})
         elif error_code == 'ValidationException':
             response['statusCode'] = 400
             response['body'] = json.dumps({"message": "Invalid request parameters."})
