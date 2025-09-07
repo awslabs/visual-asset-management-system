@@ -103,17 +103,17 @@ class CreateAssetLinkMetadataRequestModel(BaseModel):
             try:
                 float(v)
             except ValueError:
-                raise ValueError(f"metadataValue must be a valid number for type 'number', got: {v}")
+                raise ValueError(f"metadataValue must be a valid number for type 'number'")
                 
         elif value_type == MetadataValueType.BOOLEAN:
             if v.lower() not in ['true', 'false']:
-                raise ValueError(f"metadataValue must be 'true' or 'false' for type 'boolean', got: {v}")
+                raise ValueError(f"metadataValue must be 'true' or 'false' for type 'boolean'")
                 
         elif value_type == MetadataValueType.DATE:
             try:
                 datetime.fromisoformat(v.replace('Z', '+00:00'))
             except ValueError:
-                raise ValueError(f"metadataValue must be a valid ISO date format for type 'date', got: {v}")
+                raise ValueError(f"metadataValue must be a valid ISO date format for type 'date'")
                 
         elif value_type == MetadataValueType.XYZ:
             try:
@@ -123,14 +123,14 @@ class CreateAssetLinkMetadataRequestModel(BaseModel):
                     
                 required_keys = {'x', 'y', 'z'}
                 if not required_keys.issubset(xyz_data.keys()):
-                    raise ValueError(f"XYZ data must contain 'x', 'y', and 'z' keys, got: {list(xyz_data.keys())}")
+                    raise ValueError(f"XYZ data must contain 'x', 'y', and 'z' keys")
                     
                 for key in required_keys:
                     if not isinstance(xyz_data[key], (int, float)):
-                        raise ValueError(f"XYZ coordinate '{key}' must be a number, got: {type(xyz_data[key]).__name__}")
+                        raise ValueError(f"XYZ coordinate must be a number")
                         
             except json.JSONDecodeError:
-                raise ValueError(f"metadataValue must be valid JSON for type 'XYZ', got: {v}")
+                raise ValueError(f"metadataValue must be valid JSON for type 'XYZ'")
                 
         return v
 
@@ -157,17 +157,17 @@ class UpdateAssetLinkMetadataRequestModel(BaseModel):
             try:
                 float(v)
             except ValueError:
-                raise ValueError(f"metadataValue must be a valid number for type 'number', got: {v}")
+                raise ValueError(f"metadataValue must be a valid number for type 'number'")
                 
         elif value_type == MetadataValueType.BOOLEAN:
             if v.lower() not in ['true', 'false']:
-                raise ValueError(f"metadataValue must be 'true' or 'false' for type 'boolean', got: {v}")
+                raise ValueError(f"metadataValue must be 'true' or 'false' for type 'boolean'")
                 
         elif value_type == MetadataValueType.DATE:
             try:
                 datetime.fromisoformat(v.replace('Z', '+00:00'))
             except ValueError:
-                raise ValueError(f"metadataValue must be a valid ISO date format for type 'date', got: {v}")
+                raise ValueError(f"metadataValue must be a valid ISO date format for type 'date'")
                 
         elif value_type == MetadataValueType.XYZ:
             try:
@@ -177,14 +177,14 @@ class UpdateAssetLinkMetadataRequestModel(BaseModel):
                     
                 required_keys = {'x', 'y', 'z'}
                 if not required_keys.issubset(xyz_data.keys()):
-                    raise ValueError(f"XYZ data must contain 'x', 'y', and 'z' keys, got: {list(xyz_data.keys())}")
+                    raise ValueError(f"XYZ data must contain 'x', 'y', and 'z' keys")
                     
                 for key in required_keys:
                     if not isinstance(xyz_data[key], (int, float)):
-                        raise ValueError(f"XYZ coordinate '{key}' must be a number, got: {type(xyz_data[key]).__name__}")
+                        raise ValueError(f"XYZ coordinate must be a number")
                         
             except json.JSONDecodeError:
-                raise ValueError(f"metadataValue must be valid JSON for type 'XYZ', got: {v}")
+                raise ValueError(f"metadataValue must be valid JSON for type 'XYZ'")
                 
         return v
 

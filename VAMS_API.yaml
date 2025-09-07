@@ -3837,6 +3837,18 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+                "429":
+                    description: Rate limit exceeded. Maximum 5 upload initializations per user per minute.
+                    headers:
+                        Retry-After:
+                            description: "Number of seconds to wait before retrying"
+                            schema:
+                                type: integer
+                                example: 60
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -4287,8 +4299,10 @@ components:
                     enum: [assetFile, assetPreview]
                 files:
                     type: array
+                    maxItems: 1000
                     items:
                         $ref: "#/components/schemas/uploadFile"
+                    description: "Array of files to upload. Maximum 1000 files per request. Total parts across all files cannot exceed 5000."
             required:
                 - assetId
                 - databaseId
@@ -4298,16 +4312,20 @@ components:
         uploadFile:
             type: object
             properties:
-                key:
+                relativeKey:
                     $ref: '#/components/schemas/filename_pattern'
                 file_size:
                     type: integer
-                    minimum: 1
+                    minimum: 0
+                    description: "File size in bytes. Use 0 for zero-byte files."
                 num_parts:
                     type: integer
-                    minimum: 1
+                    minimum: 0
+                    maximum: 10000
+                    description: "Number of parts for multipart upload. Use 0 for zero-byte files. Maximum 10,000 parts per file."
             required:
-                - key
+                - relativeKey
+            description: "Either file_size or num_parts must be provided. For zero-byte files, use file_size=0 and num_parts=0."
         
         uploadPart:
             type: object
@@ -4325,19 +4343,22 @@ components:
         uploadFileResponse:
             type: object
             properties:
-                key:
+                relativeKey:
                     $ref: '#/components/schemas/filename_pattern'
                 uploadIdS3:
                     type: string
+                    description: "Upload ID for S3 multipart upload, or 'zero-byte' for zero-byte files"
                 numParts:
                     type: integer
-                    minimum: 1
+                    minimum: 0
+                    description: "Number of parts for upload. 0 for zero-byte files."
                 partUploadUrls:
                     type: array
                     items:
                         $ref: "#/components/schemas/uploadPart"
+                    description: "Presigned URLs for uploading parts. Empty array for zero-byte files."
             required:
-                - key
+                - relativeKey
                 - uploadIdS3
                 - numParts
                 - partUploadUrls

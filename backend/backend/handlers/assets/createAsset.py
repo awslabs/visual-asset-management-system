@@ -110,7 +110,7 @@ def get_default_bucket_details(databaseId):
 
         #Check to make sure we have what we need
         if not bucket_name or not base_assets_prefix:
-            raise VAMSGeneralErrorResponse(f"Error getting database default bucket details: {str(e)}")
+            raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
         #Make sure we end in a slash for the path
         if not base_assets_prefix.endswith('/'):
@@ -127,7 +127,7 @@ def get_default_bucket_details(databaseId):
         }
     except Exception as e:
         logger.exception(f"Error getting database default bucket details: {e}")
-        raise VAMSGeneralErrorResponse(f"Error getting database default bucket details: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
     
 
 def save_asset_details(asset_data):
@@ -136,7 +136,7 @@ def save_asset_details(asset_data):
         asset_table.put_item(Item=asset_data)
     except Exception as e:
         logger.exception(f"Error saving asset details: {e}")
-        raise VAMSGeneralErrorResponse(f"Error saving asset: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error saving asset.")
 
 def create_sns_topic_for_asset(database_id, asset_id):
     """Create an SNS topic for an asset"""
@@ -145,7 +145,7 @@ def create_sns_topic_for_asset(database_id, asset_id):
         return topic_response['TopicArn']
     except Exception as e:
         logger.exception(f"Error creating SNS topic: {e}")
-        raise VAMSGeneralErrorResponse(f"Error creating SNS topic: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error creating SNS topic.")
 
 
 def get_set_tag_types(tags):
@@ -325,7 +325,7 @@ def create_initial_version_record(asset_id, version_id, description, created_by=
         
     except Exception as e:
         logger.exception(f"Error creating initial version record: {e}")
-        raise VAMSGeneralErrorResponse(f"Error creating initial version record: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error creating initial version record.")
 
 #######################
 # API Implementation

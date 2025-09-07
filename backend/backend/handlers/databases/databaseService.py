@@ -128,7 +128,7 @@ def get_database(database_id, show_deleted=False, claims_and_roles=None):
         return None
     except Exception as e:
         logger.exception(f"Error getting database: {e}")
-        raise VAMSGeneralErrorResponse(f"Error getting database: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error getting database.")
 
 def get_databases(query_params, show_deleted=False, claims_and_roles=None):
     """Get all databases with pagination"""
@@ -209,7 +209,7 @@ def get_databases(query_params, show_deleted=False, claims_and_roles=None):
         return response
     except Exception as e:
         logger.exception(f"Error getting databases: {e}")
-        raise VAMSGeneralErrorResponse(f"Error getting databases: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error getting databases.")
 
 def delete_database(database_id, claims_and_roles=None):
     """Delete a database by ID"""
@@ -283,7 +283,7 @@ def delete_database(database_id, claims_and_roles=None):
             )
     except Exception as e:
         logger.exception(f"Error deleting database: {e}")
-        raise VAMSGeneralErrorResponse(f"Error deleting database: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error deleting database.")
 
 
 #######################
@@ -365,7 +365,10 @@ def delete_database_handler(path_parameters, claims_and_roles):
         return APIGatewayProxyResponseV2(
             isBase64Encoded=False,
             statusCode=result.statusCode,
-            headers={'Content-Type': 'application/json'},
+            headers={
+                'Content-Type': 'application/json',
+                'Cache-Control': 'no-cache, no-store',
+                },
             body=json.dumps({'message': result.message})
         )
     except VAMSGeneralErrorResponse as v:
@@ -423,7 +426,7 @@ def get_buckets(query_params, claims_and_roles=None):
         return response
     except Exception as e:
         logger.exception(f"Error getting buckets: {e}")
-        raise VAMSGeneralErrorResponse(f"Error getting buckets: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error getting buckets.")
 
 def get_buckets_handler(query_parameters, claims_and_roles):
     """Handler for GET /buckets"""

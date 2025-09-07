@@ -52,7 +52,7 @@ def get_asset_details(databaseId, assetId):
         return response.get('Item')
     except Exception as e:
         logger.exception(f"Error getting asset details: {e}")
-        raise Exception(f"Error retrieving asset: {str(e)}")
+        raise Exception(f"Error retrieving asset.")
 
 def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
     """

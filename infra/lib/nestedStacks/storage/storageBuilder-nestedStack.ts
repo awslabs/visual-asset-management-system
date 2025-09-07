@@ -807,6 +807,18 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         },
     });
 
+    assetUploadsStorageTable.addGlobalSecondaryIndex({
+        indexName: "UserIdGSI",
+        partitionKey: {
+            name: "UserId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "createdAt",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
     ///DEPRECATED TABLES - KEPT FOR DATA MIGRATION PURPOSES
 
     const assetLinksStorageTableDeprecated = new dynamodb.Table(scope, "AssetLinksStorageTable", {

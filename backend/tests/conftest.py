@@ -52,6 +52,7 @@ sys.modules['common.constants'].STANDARD_JSON_RESPONSE = {
     "statusCode": 200,
     "headers": {
         "Content-Type": "application/json",
+        'Cache-Control': 'no-cache, no-store',
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type,Authorization"

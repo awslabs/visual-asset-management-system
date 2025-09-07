@@ -115,7 +115,7 @@ def get_default_bucket_details(bucketId):
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
-        raise Exception(f"Error getting bucket details: {str(e)}")
+        raise Exception(f"Error getting bucket details.")
 
 def verify_get_path_objects(bucketName: str, pathPrefix: str):
 

@@ -80,7 +80,7 @@ class MetadataSchema:
             if isinstance(e, VAMSGeneralErrorResponse):
                 raise e
             logger.exception(f"Error verifying database: {e}")
-            raise VAMSGeneralErrorResponse(f"Error verifying database: {str(e)}")
+            raise VAMSGeneralErrorResponse(f"Error verifying database.")
 
     @staticmethod
     def from_env():

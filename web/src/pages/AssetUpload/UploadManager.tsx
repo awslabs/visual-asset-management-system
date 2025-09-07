@@ -966,9 +966,21 @@ export default function UploadManager({
 
                 // Prepare file information for upload initialization with scaled part sizes
                 let hasLargeFiles = false;
+                let hasZeroByteFiles = false;
                 const files = await Promise.all(
                     fileUploadItems.map(async (item) => {
                         const file = await safeGetFile(item.handle);
+
+                        // Handle zero-byte files
+                        if (file.size === 0) {
+                            hasZeroByteFiles = true;
+                            console.log(`Zero-byte file detected: ${file.name}`);
+                            return {
+                                relativeKey: item.relativePath,
+                                file_size: 0,
+                                num_parts: 0,
+                            };
+                        }
 
                         // Calculate if this file would exceed MAX_NUM_PARTS_PER_FILE with standard part size
                         const standardNumParts = Math.ceil(file.size / MAX_PART_SIZE);
@@ -1011,8 +1023,28 @@ export default function UploadManager({
                 let totalPartsCount = 0;
 
                 response.files.forEach((file, fileIndex) => {
-                    // Calculate the actual part size for this file
                     const fileSize = fileUploadItems[fileIndex].size;
+                    
+                    // Handle zero-byte files - they have no parts to upload
+                    if (fileSize === 0 || file.partUploadUrls.length === 0) {
+                        console.log(`Zero-byte file ${fileUploadItems[fileIndex].name} - no parts to upload`);
+                        // Mark zero-byte files as completed immediately since they don't need part uploads
+                        setFileUploadItems((prev) =>
+                            prev.map((item, idx) =>
+                                idx === fileIndex
+                                    ? {
+                                          ...item,
+                                          status: "Completed",
+                                          progress: 100,
+                                          loaded: item.total,
+                                      }
+                                    : item
+                            )
+                        );
+                        return; // Skip creating parts for zero-byte files
+                    }
+
+                    // Calculate the actual part size for this file
                     const standardNumParts = Math.ceil(fileSize / MAX_PART_SIZE);
 
                     let actualPartSize = MAX_PART_SIZE;
@@ -1040,11 +1072,23 @@ export default function UploadManager({
 
                 setFileParts(allParts);
                 setTotalParts(totalPartsCount);
-                setUploadState((prev) => ({
-                    ...prev,
-                    uploadInitStatus: "completed",
-                    uploadId: response.uploadId,
-                }));
+
+                // If we have zero-byte files and no parts to upload, mark upload as completed
+                if (hasZeroByteFiles && totalPartsCount === 0) {
+                    console.log("All files are zero-byte files - skipping upload phase");
+                    setUploadState((prev) => ({
+                        ...prev,
+                        uploadInitStatus: "completed",
+                        uploadStatus: "completed",
+                        uploadId: response.uploadId,
+                    }));
+                } else {
+                    setUploadState((prev) => ({
+                        ...prev,
+                        uploadInitStatus: "completed",
+                        uploadId: response.uploadId,
+                    }));
+                }
 
                 return response;
             } catch (error: any) {
@@ -1386,13 +1430,15 @@ export default function UploadManager({
                 }
             });
 
-            // Prepare completion request
+            // Prepare completion request - include all files from the upload response
             console.log("Preparing completion request with filePartsMap size:", filePartsMap.size);
-            const completionFiles = Array.from(filePartsMap.entries()).map(([fileIndex, parts]) => {
-                const fileResponse = uploadResponse.files[fileIndex];
+            const completionFiles = uploadResponse.files.map((fileResponse, fileIndex) => {
+                const parts = filePartsMap.get(fileIndex) || [];
                 console.log(
                     `File ${fileIndex}: ${fileResponse.relativeKey}, parts: ${parts.length}, expected parts: ${fileResponse.numParts}`
                 );
+                
+                // For zero-byte files, numParts will be 0 and parts array will be empty - this is correct
                 return {
                     relativeKey: fileResponse.relativeKey,
                     uploadIdS3: fileResponse.uploadIdS3,
@@ -1400,17 +1446,28 @@ export default function UploadManager({
                 };
             });
 
-            // Only include files that have all parts completed
+            // Filter for valid completion files - include zero-byte files (which have 0 expected parts)
             const validCompletionFiles = completionFiles.filter((file) => {
                 const fileResponse = uploadResponse.files.find(
                     (f) => f.relativeKey === file.relativeKey
                 );
-                const isValid = fileResponse && file.parts.length === fileResponse.numParts;
+                
+                if (!fileResponse) {
+                    console.warn(`File response not found for ${file.relativeKey}`);
+                    return false;
+                }
+                
+                // For zero-byte files, both parts.length and numParts should be 0
+                const isValid = file.parts.length === fileResponse.numParts;
+                
                 if (!isValid) {
                     console.warn(
-                        `File ${file.relativeKey} has ${file.parts.length} parts but expected ${fileResponse?.numParts}`
+                        `File ${file.relativeKey} has ${file.parts.length} parts but expected ${fileResponse.numParts}`
                     );
+                } else if (fileResponse.numParts === 0) {
+                    console.log(`Zero-byte file ${file.relativeKey} ready for completion`);
                 }
+                
                 return isValid;
             });
 

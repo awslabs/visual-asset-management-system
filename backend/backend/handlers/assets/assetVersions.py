@@ -82,7 +82,7 @@ def get_default_bucket_details(bucketId):
 
         #Check to make sure we have what we need
         if not bucket_name or not base_assets_prefix:
-            raise VAMSGeneralErrorResponse(f"Error getting database default bucket details: {str(e)}")
+            raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
         #Make sure we end in a slash for the path
         if not base_assets_prefix.endswith('/'):
@@ -99,7 +99,7 @@ def get_default_bucket_details(bucketId):
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
-        raise VAMSGeneralErrorResponse(f"Error getting bucket details: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error getting bucket details.")
 
 def send_subscription_email(database_id, asset_id):
     """Send email notifications to subscribers when an asset is updated"""
@@ -152,7 +152,7 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         if isinstance(e, VAMSGeneralErrorResponse):
             raise e
         logger.exception(f"Error getting asset with permissions: {e}")
-        raise VAMSGeneralErrorResponse(f"Error retrieving asset: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
 
 def get_asset_s3_location(asset: Dict) -> Tuple[str, str]:
     """Extract bucket and key from asset location
@@ -353,7 +353,7 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
                     
     except Exception as e:
         logger.exception(f"Error listing S3 files: {e}")
-        raise VAMSGeneralErrorResponse(f"Error listing files: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error listing files.")
     
     return result
 

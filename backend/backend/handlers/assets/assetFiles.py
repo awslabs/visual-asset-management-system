@@ -119,7 +119,7 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         if isinstance(e, VAMSGeneralErrorResponse):
             raise e
         logger.exception(f"Error getting asset with permissions: {e}")
-        raise VAMSGeneralErrorResponse(f"Error retrieving asset: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
 
 def get_default_bucket_details(bucketId):
     """Get default S3 bucket details from database default bucket DynamoDB"""
@@ -137,7 +137,7 @@ def get_default_bucket_details(bucketId):
 
         #Check to make sure we have what we need
         if not bucket_name or not base_assets_prefix:
-            raise VAMSGeneralErrorResponse(f"Error getting database default bucket details: {str(e)}")
+            raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
         #Make sure we end in a slash for the path
         if not base_assets_prefix.endswith('/'):
@@ -154,7 +154,7 @@ def get_default_bucket_details(bucketId):
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
-        raise VAMSGeneralErrorResponse(f"Error getting bucket details: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error getting bucket details.")
 
 def get_asset_s3_location(asset: Dict) -> Tuple[str, str]:
     """Extract bucket from asset + s3 asset table, and key from asset location
@@ -298,7 +298,7 @@ def check_destination_file_exists(bucket: str, key: str, path_display: str) -> b
             return False
         # For any other error, log details and raise a user-friendly message
         logger.exception(f"Error checking destination file {key} in bucket {bucket}: {e}")
-        raise VAMSGeneralErrorResponse(f"Error accessing destination path: {path_display}. Please verify the folder exists.")
+        raise VAMSGeneralErrorResponse(f"Error accessing destination path. Please verify the folder exists.")
 
 def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str, source_asset_id: str = None, source_database_id: str = None, dest_asset_id: str = None, dest_database_id: str = None) -> bool:
     """Copy an S3 object from one location to another
@@ -919,13 +919,13 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
                     return result
                 else:
                     # File truly doesn't exist
-                    raise VAMSGeneralErrorResponse(f"File not found: {key}")
+                    raise VAMSGeneralErrorResponse(f"File not found.")
             except Exception as inner_e:
                 if isinstance(inner_e, VAMSGeneralErrorResponse):
                     raise inner_e
                 logger.exception(f"Error checking archive status: {inner_e}")
-                raise VAMSGeneralErrorResponse(f"Error retrieving file metadata: {str(e)}")
-        raise VAMSGeneralErrorResponse(f"Error retrieving file metadata: {str(e)}")
+                raise VAMSGeneralErrorResponse(f"Error retrieving file metadata.")
+        raise VAMSGeneralErrorResponse(f"Error retrieving file metadata.")
 
 def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: Dict, include_archived: bool = False) -> Dict:
     """List S3 objects with pagination and archive status
@@ -1106,7 +1106,7 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
         if e.response['Error']['Code'] == 'NoSuchKey':
             # If the prefix doesn't exist, return empty list
             return result
-        raise VAMSGeneralErrorResponse(f"Error listing files: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error listing files.")
     
     logger.info(f"Found {len(result['items'])} files in the path")
     return result
@@ -1421,7 +1421,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
             has_delete_markers = any(marker['Key'] == full_key for marker in versions_response.get('DeleteMarkers', []))
             
             if not (has_versions or has_delete_markers):
-                raise VAMSGeneralErrorResponse(f"File not found: {file_path}")
+                raise VAMSGeneralErrorResponse(f"File not found.")
         else:
             # For prefix, check if at least one object exists
             response = s3_client.list_objects_v2(
@@ -1441,10 +1441,10 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
                 has_delete_markers = any(marker['Key'].startswith(full_key) for marker in versions_response.get('DeleteMarkers', []))
                 
                 if not (has_versions or has_delete_markers):
-                    raise VAMSGeneralErrorResponse(f"No files found under prefix: {file_path}")
+                    raise VAMSGeneralErrorResponse(f"No files found under prefix.")
     except ClientError as e:
         logger.exception(f"Error checking file existence: {e}")
-        raise VAMSGeneralErrorResponse(f"Error checking file: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error checking file.")
     
     # Delete file(s)
     affected_files = []
@@ -1486,7 +1486,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         delete_assetAuxiliary_files(full_key)
         
         if not success:
-            raise VAMSGeneralErrorResponse(f"Failed to delete file: {file_path}")
+            raise VAMSGeneralErrorResponse(f"Failed to delete file.")
         
         affected_files.append(file_path)
 
@@ -1539,9 +1539,9 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
                 if e.response['Error']['Code'] == 'NoSuchKey':
                     # File doesn't exist, check if it's archived
                     if is_file_archived(bucket, full_key):
-                        raise VAMSGeneralErrorResponse(f"File is already archived: {file_path}")
+                        raise VAMSGeneralErrorResponse(f"File is already archived.")
                     else:
-                        raise VAMSGeneralErrorResponse(f"File not found: {file_path}")
+                        raise VAMSGeneralErrorResponse(f"File not found.")
                 raise e
         else:
             # For prefix, check if at least one object exists
@@ -1551,11 +1551,11 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
                 MaxKeys=1
             )
             if 'Contents' not in response or len(response['Contents']) == 0:
-                raise VAMSGeneralErrorResponse(f"No files found under prefix: {file_path}")
+                raise VAMSGeneralErrorResponse(f"No files found under prefix.")
     except ClientError as e:
         if e.response['Error']['Code'] == 'NoSuchKey':
-            raise VAMSGeneralErrorResponse(f"File not found: {file_path}")
-        raise VAMSGeneralErrorResponse(f"Error checking file: {str(e)}")
+            raise VAMSGeneralErrorResponse(f"File not found.")
+        raise VAMSGeneralErrorResponse(f"Error checking file.")
     
     # Archive file(s)
     affected_files = []
@@ -1589,7 +1589,7 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
         success = delete_s3_object(bucket, full_key)
         
         if not success:
-            raise VAMSGeneralErrorResponse(f"Failed to archive file: {file_path}")
+            raise VAMSGeneralErrorResponse(f"Failed to archive file.")
         
         affected_files.append(file_path)
 
@@ -1639,7 +1639,7 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
         has_delete_markers = any(marker['Key'] == full_key for marker in versions_response.get('DeleteMarkers', []))
         
         if not (has_versions or has_delete_markers):
-            raise VAMSGeneralErrorResponse(f"File not found: {file_path}")
+            raise VAMSGeneralErrorResponse(f"File not found.")
         
         # Check if the file is archived (latest version is a delete marker)
         is_archived = False
@@ -1649,10 +1649,10 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
                 break
         
         if not is_archived:
-            raise VAMSGeneralErrorResponse(f"File is not archived: {file_path}")
+            raise VAMSGeneralErrorResponse(f"File is not archived.")
     except ClientError as e:
         logger.exception(f"Error checking file archive status: {e}")
-        raise VAMSGeneralErrorResponse(f"Error checking file: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error checking file.")
     
     # Get version history to find the delete marker and the version before it
     try:
@@ -1670,7 +1670,7 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
                 break
         
         if not delete_marker:
-            raise VAMSGeneralErrorResponse(f"Could not find delete marker for file: {file_path}")
+            raise VAMSGeneralErrorResponse(f"Could not find delete marker for file.")
         
         # Find the latest version before the delete marker
         latest_version = None
@@ -1681,7 +1681,7 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
                     latest_version = version
         
         if not latest_version:
-            raise VAMSGeneralErrorResponse(f"Could not find a previous version for file: {file_path}")
+            raise VAMSGeneralErrorResponse(f"Could not find a previous version for file.")
         
         # Copy the latest version to create a new current version (effectively unarchiving)
         copy_response = s3_client.copy_object(
@@ -1779,7 +1779,7 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
         
     except ClientError as e:
         logger.exception(f"Error unarchiving file: {e}")
-        raise VAMSGeneralErrorResponse(f"Error unarchiving file: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error unarchiving file.")
 
 def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, dest_asset_id: Optional[str], claims_and_roles: Dict) -> FileOperationResponseModel:
     """Copy a file within an asset or between assets in the same database
@@ -1828,12 +1828,12 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
         s3_client.head_object(Bucket=source_bucket, Key=source_key)
     except ClientError as e:
         if e.response['Error']['Code'] == 'NoSuchKey':
-            raise VAMSGeneralErrorResponse(f"Source file not found: {source_path}")
-        raise VAMSGeneralErrorResponse(f"Error checking source file: {str(e)}")
+            raise VAMSGeneralErrorResponse(f"Source file not found.")
+        raise VAMSGeneralErrorResponse(f"Error checking source file.")
     
     # Check if destination already exists using the helper function
     if check_destination_file_exists(dest_bucket, dest_key, dest_path):
-        raise VAMSGeneralErrorResponse(f"Destination file already exists: {dest_path}")
+        raise VAMSGeneralErrorResponse(f"Destination file already exists.")
     
     # Copy the file
     success = copy_s3_object(
@@ -1848,7 +1848,7 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     )
     
     if not success:
-        raise VAMSGeneralErrorResponse(f"Failed to copy file from {source_path} to {dest_path}")
+        raise VAMSGeneralErrorResponse(f"Failed to copy file.")
     
     # Find and copy any preview files associated with this file
     logger.info(f"Looking for preview files for base file: {source_key}")
@@ -1941,18 +1941,18 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
         s3_client.head_object(Bucket=bucket, Key=source_key)
     except ClientError as e:
         if e.response['Error']['Code'] == 'NoSuchKey':
-            raise VAMSGeneralErrorResponse(f"Source file not found: {source_path}")
-        raise VAMSGeneralErrorResponse(f"Error checking source file: {str(e)}")
+            raise VAMSGeneralErrorResponse(f"Source file not found.")
+        raise VAMSGeneralErrorResponse(f"Error checking source file.")
     
     # Check if destination already exists using the helper function
     if check_destination_file_exists(bucket, dest_key, dest_path):
-        raise VAMSGeneralErrorResponse(f"Destination file already exists: {dest_path}")
+        raise VAMSGeneralErrorResponse(f"Destination file already exists")
     
     # Move the file
     success = move_s3_object(bucket, source_key, bucket, dest_key)
     
     if not success:
-        raise VAMSGeneralErrorResponse(f"Failed to move file from {source_path} to {dest_path}")
+        raise VAMSGeneralErrorResponse(f"Failed to move file ")
     
     # Find and move any preview files associated with this file
     logger.info(f"Looking for preview files for base file: {source_key}")
@@ -2038,7 +2038,7 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
         
         # Check if the specified version exists
         if not metadata.get('versions'):
-            raise VAMSGeneralErrorResponse(f"No version history found for file: {file_path}")
+            raise VAMSGeneralErrorResponse(f"No version history found for file.")
         
         version_found = False
         for version in metadata.get('versions', []):
@@ -2046,10 +2046,10 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
                 version_found = True
                 # Check if version is already the latest
                 if version['isLatest']:
-                    raise VAMSGeneralErrorResponse(f"Version {version_id} is already the current version")
+                    raise VAMSGeneralErrorResponse(f"Version is already the current version")
                 # Check if version is archived
                 if version['isArchived']:
-                    raise VAMSGeneralErrorResponse(f"Cannot revert to archived version: {version_id}")
+                    raise VAMSGeneralErrorResponse(f"Cannot revert to archived version.")
                 break
         
         if not version_found:
@@ -2057,8 +2057,8 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
         
     except ClientError as e:
         if e.response['Error']['Code'] == 'NoSuchKey':
-            raise VAMSGeneralErrorResponse(f"File not found: {file_path}")
-        raise VAMSGeneralErrorResponse(f"Error checking file: {str(e)}")
+            raise VAMSGeneralErrorResponse(f"File not found.")
+        raise VAMSGeneralErrorResponse(f"Error checking file.")
     
     # Get the current version ID for reference
     current_version_id = next((v['versionId'] for v in metadata.get('versions', []) if v['isLatest']), None)
@@ -2080,7 +2080,7 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
         
     except Exception as e:
         logger.exception(f"Error reverting file version: {e}")
-        raise VAMSGeneralErrorResponse(f"Failed to revert file version: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Failed to revert file version.")
 
     #Delete aux files for asset as they don't match anymore with the version. 
     delete_assetAuxiliary_files(full_key)
@@ -2211,7 +2211,7 @@ def create_folder(databaseId: str, assetId: str, request_model: CreateFolderRequ
         )
     except Exception as e:
         logger.exception(f"Error creating folder: {e}")
-        raise VAMSGeneralErrorResponse(f"Error creating folder: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error creating folder.")
 
 def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type: str, primary_type_other: Optional[str], claims_and_roles: Dict) -> SetPrimaryFileResponseModel:
     """Set or remove primary type metadata for a file in S3
@@ -2247,14 +2247,14 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
         if e.response['Error']['Code'] == 'NoSuchKey':
             # Check if file is archived
             if is_file_archived(bucket, full_key):
-                raise VAMSGeneralErrorResponse(f"Cannot set primary type on archived file: {file_path}")
+                raise VAMSGeneralErrorResponse(f"Cannot set primary type on archived file")
             else:
-                raise VAMSGeneralErrorResponse(f"File not found: {file_path}")
-        raise VAMSGeneralErrorResponse(f"Error checking file: {str(e)}")
+                raise VAMSGeneralErrorResponse(f"File not found")
+        raise VAMSGeneralErrorResponse(f"Error checking file")
     
     # Check if file is archived
     if is_file_archived(bucket, full_key):
-        raise VAMSGeneralErrorResponse(f"Cannot set primary type on archived file: {file_path}")
+        raise VAMSGeneralErrorResponse(f"Cannot set primary type on archived file.")
     
     try:
         # Get current metadata
@@ -2300,7 +2300,7 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
         
     except Exception as e:
         logger.exception(f"Error setting primary type metadata: {e}")
-        raise VAMSGeneralErrorResponse(f"Failed to set primary type metadata: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Failed to set primary type metadata.")
 
 def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_and_roles: Dict) -> ListAssetFilesResponseModel:
     """List files for an asset
@@ -3173,7 +3173,7 @@ def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_pat
                     deleted_files.append(item['Key'])
         
         if file_count == 0:
-            raise VAMSGeneralErrorResponse(f"No auxiliary files found under prefix: {file_path}")
+            raise VAMSGeneralErrorResponse(f"No auxiliary files found under prefix")
         
         # Delete the auxiliary files
         delete_assetAuxiliary_files(full_key)
@@ -3183,7 +3183,7 @@ def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_pat
         
         return DeleteAuxiliaryPreviewAssetFilesResponseModel(
             success=True,
-            message=f"Successfully deleted {file_count} auxiliary preview files under prefix: {file_path}",
+            message=f"Successfully deleted {file_count} auxiliary preview files under prefix",
             filePath=file_path,
             deletedCount=file_count
         )
@@ -3191,7 +3191,7 @@ def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_pat
         if isinstance(e, VAMSGeneralErrorResponse):
             raise e
         logger.exception(f"Error deleting auxiliary preview files: {e}")
-        raise VAMSGeneralErrorResponse(f"Failed to delete auxiliary preview files: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Failed to delete auxiliary preview files.")
 
 def delete_asset_preview(databaseId: str, assetId: str, claims_and_roles: Dict) -> DeleteAssetPreviewResponseModel:
     """Delete an asset preview file and clear the previewLocation from the asset record
@@ -3238,7 +3238,7 @@ def delete_asset_preview(databaseId: str, assetId: str, claims_and_roles: Dict) 
         )
     except Exception as e:
         logger.exception(f"Error deleting asset preview: {e}")
-        raise VAMSGeneralErrorResponse(f"Failed to delete asset preview: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Failed to delete asset preview.")
 
 def handle_delete_asset_preview(event, context) -> APIGatewayProxyResponseV2:
     """Handle DELETE /deleteAssetPreview requests

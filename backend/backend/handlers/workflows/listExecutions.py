@@ -45,7 +45,7 @@ def get_asset_details(databaseId, assetId):
         return response['Items'][0]
     except Exception as e:
         logger.exception(f"Error getting asset details: {e}")
-        raise Exception(f"Error retrieving asset: {str(e)}")
+        raise Exception(f"Error retrieving asset.")
 
 
 def get_executions(database_id, asset_id, workflow_database_id, workflow_id, query_params):

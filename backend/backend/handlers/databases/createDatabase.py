@@ -47,7 +47,7 @@ def create_database(request_model: CreateDatabaseRequestModel):
         )
         
         if not bucket_response.get('Items') or len(bucket_response['Items']) == 0:
-            raise VAMSGeneralErrorResponse(f"Bucket with ID {request_model.defaultBucketId} not found")
+            raise VAMSGeneralErrorResponse(f"Bucket ID not found")
         
 
         # First update the description and defaultBucketId
@@ -93,7 +93,7 @@ def create_database(request_model: CreateDatabaseRequestModel):
         )
     except Exception as e:
         logger.exception(f"Error creating database: {e}")
-        raise VAMSGeneralErrorResponse(f"Error creating database: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error creating database.")
 
 #######################
 # Lambda Handler

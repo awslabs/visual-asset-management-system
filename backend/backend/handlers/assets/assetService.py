@@ -101,7 +101,7 @@ def get_default_bucket_details(bucketId):
 
         #Check to make sure we have what we need
         if not bucket_name or not base_assets_prefix:
-            raise VAMSGeneralErrorResponse(f"Error getting database default bucket details: {str(e)}")
+            raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
         #Make sure we end in a slash for the path
         if not base_assets_prefix.endswith('/'):
@@ -118,7 +118,7 @@ def get_default_bucket_details(bucketId):
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
-        raise VAMSGeneralErrorResponse(f"Error getting bucket details: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error getting bucket details.")
 
 def send_subscription_email(database_id, asset_id):
     """Send email notifications to subscribers when an asset is updated"""
@@ -429,7 +429,7 @@ def delete_s3_objects(prefix, bucket):
                 logger.warning(f"Error checking/deleting prefix folder: {e}")
     except Exception as e:
         logger.exception(f"Error deleting S3 objects with prefix {prefix}: {e}")
-        raise VAMSGeneralErrorResponse(f"Error deleting S3 objects: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error deleting S3 objects.")
     
     return deleted_keys
 
@@ -468,7 +468,7 @@ def get_asset_details(databaseId, assetId, showArchived=False):
         return item
     except Exception as e:
         logger.exception(f"Error getting asset details: {e}")
-        raise VAMSGeneralErrorResponse(f"Error retrieving asset: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
 
 def get_assets(databaseId, query_params, showArchived=False):
     """Get assets for a database
@@ -526,7 +526,7 @@ def get_assets(databaseId, query_params, showArchived=False):
                 
         except Exception as e:
             logger.exception(f"Error querying assets for database {db_id}: {e}")
-            raise VAMSGeneralErrorResponse(f"Error retrieving assets: {str(e)}")
+            raise VAMSGeneralErrorResponse(f"Error retrieving assets.")
     
     # Return the combined results
     result = {"Items": all_items}
@@ -601,7 +601,7 @@ def get_all_assets(query_params, showArchived=False):
         
     except Exception as e:
         logger.exception(f"Error scanning all assets: {e}")
-        raise VAMSGeneralErrorResponse(f"Error retrieving all assets: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error retrieving all assets.")
 
 def update_asset(databaseId, assetId, update_data, claims_and_roles):
     """Update an existing asset with new data
@@ -662,7 +662,7 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
         )
     except Exception as e:
         logger.exception(f"Error updating asset: {e}")
-        raise VAMSGeneralErrorResponse(f"Error updating asset: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error updating asset.")
 
 def archive_asset(databaseId, assetId, request_model, claims_and_roles):
     """Archive an asset (soft delete)
@@ -745,7 +745,7 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
         )
     except Exception as e:
         logger.exception(f"Error archiving asset: {e}")
-        raise VAMSGeneralErrorResponse(f"Error archiving asset: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error archiving asset.")
 
 def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles):
     """Permanently delete an asset from all systems
@@ -981,7 +981,7 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         )
     except Exception as e:
         logger.exception(f"Error permanently deleting asset: {e}")
-        raise VAMSGeneralErrorResponse(f"Error permanently deleting asset: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error permanently deleting asset.")
 
 #######################
 # Request Handlers

@@ -55,6 +55,7 @@ TEMPORARY_UPLOAD_PREFIX = 'temp-uploads/'  # Prefix for temporary uploads
 PREVIEW_PREFIX = 'previews/'
 MAX_PART_SIZE = 150 * 1024 * 1024  # 150MB per part
 MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
+MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE = 10
 allowed_preview_extensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
 
 # Load environment variables
@@ -80,11 +81,53 @@ asset_upload_table = dynamodb.Table(asset_upload_table_name)
 def calculate_num_parts(file_size=None, num_parts=None, max_part_size=MAX_PART_SIZE):
     """Calculate the number of parts needed for a multipart upload"""
     if num_parts is not None:
+        # User specified parts directly - validate against S3 limits but allow large part sizes
+        if num_parts > 10000:
+            raise ValueError("Number of parts cannot exceed 10,000 (S3 limit)")
         return num_parts
     elif file_size is not None:
+        # Handle zero-byte files
+        if file_size == 0:
+            return 0
+        # Calculate parts using standard 150MB chunks
         return -(-file_size // max_part_size)  # Ceiling division
     else:
         raise ValueError("Either file_size or num_parts must be provided")
+
+
+def check_user_rate_limit(user_id: str) -> bool:
+    """
+    Check if user has exceeded rate limit of 5 upload initializations per minute.
+    Uses UserIdGSI with STRING type for both UserId and createdAt fields.
+    
+    Args:
+        user_id: The user ID to check
+        
+    Returns:
+        True if user is within rate limit, False if exceeded
+    """
+    try:
+        # Calculate timestamp for 1 minute ago as ISO string
+        one_minute_ago = datetime.utcnow() - timedelta(minutes=1)
+        one_minute_ago_iso = one_minute_ago.isoformat()  # STRING format for DynamoDB
+        
+        logger.info(f"Checking rate limit for user {user_id} since {one_minute_ago_iso}")
+        
+        # Query UserIdGSI: partition by UserId, filter by createdAt > one_minute_ago
+        response = asset_upload_table.query(
+            IndexName='UserIdGSI',
+            KeyConditionExpression=Key('UserId').eq(user_id) & Key('createdAt').gt(one_minute_ago_iso),
+            Select='COUNT'  # Only count, don't return items for efficiency
+        )
+        
+        upload_count = response.get('Count', 0)
+        logger.info(f"User {user_id} has {upload_count} uploads in the last minute")
+        
+        return upload_count < MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE  # Allow up to X uploads per minute
+        
+    except Exception as e:
+        logger.warning(f"Error checking rate limit for user {user_id}: {e}")
+        return True  # Fail open for availability
 
 def generate_presigned_url(key, upload_id, part_number, bucket, expiration=token_timeout):
     """Generate a presigned URL for a multipart upload part"""
@@ -116,7 +159,7 @@ def get_default_bucket_details(bucketId):
 
         #Check to make sure we have what we need
         if not bucket_name or not base_assets_prefix:
-            raise VAMSGeneralErrorResponse(f"Error getting database default bucket details: {str(e)}")
+            raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
         #Make sure we end in a slash for the path
         if not base_assets_prefix.endswith('/'):
@@ -133,7 +176,7 @@ def get_default_bucket_details(bucketId):
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
-        raise VAMSGeneralErrorResponse(f"Error getting bucket details: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error getting bucket details.")
 
 def get_asset_details(databaseId, assetId):
     """Get asset details from DynamoDB"""
@@ -147,7 +190,7 @@ def get_asset_details(databaseId, assetId):
         return response.get('Item')
     except Exception as e:
         logger.exception(f"Error getting asset details: {e}")
-        raise VAMSGeneralErrorResponse(f"Error retrieving asset: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
 
 def save_asset_details(asset_data):
     """Save asset details to DynamoDB"""
@@ -155,7 +198,7 @@ def save_asset_details(asset_data):
         asset_table.put_item(Item=asset_data)
     except Exception as e:
         logger.exception(f"Error saving asset details: {e}")
-        raise VAMSGeneralErrorResponse(f"Error saving asset: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error saving asset.")
 
 def save_upload_details(upload_data):
     """Save upload details to DynamoDB"""
@@ -163,7 +206,7 @@ def save_upload_details(upload_data):
         asset_upload_table.put_item(Item=upload_data.to_dict())
     except Exception as e:
         logger.exception(f"Error saving upload details: {e}")
-        raise VAMSGeneralErrorResponse(f"Error saving upload details: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error saving upload details.")
 
 def get_upload_details(uploadId, assetId):
     """Get upload details from DynamoDB
@@ -192,7 +235,7 @@ def get_upload_details(uploadId, assetId):
         if isinstance(e, VAMSGeneralErrorResponse):
             raise e
         logger.exception(f"Error getting upload details: {e}")
-        raise VAMSGeneralErrorResponse(f"Error retrieving upload details: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error retrieving upload details.")
 
 def delete_upload_details(uploadId, assetId):
     """Delete upload details from DynamoDB
@@ -489,7 +532,7 @@ def validate_preview_files_with_base_files(files_in_request, asset_base_key, buc
     
     # If any invalid files were found, return validation failure
     if invalid_files:
-        error_message = f"The following preview files are missing their base files: {', '.join(invalid_files)}"
+        error_message = f"Preview files are missing their base files."
         return False, error_message, invalid_files
     
     return True, None, []
@@ -512,13 +555,13 @@ def check_preview_file_size(bucket_name, key, file_path):
         file_size = head_response.get('ContentLength', 0)
         
         if file_size > MAX_PREVIEW_FILE_SIZE:
-            error_message = f"Preview file {file_path} exceeds maximum allowed size of 5MB"
+            error_message = f"Preview files exceeds maximum allowed size of 5MB"
             return False, error_message
         
         return True, None
     except Exception as e:
         logger.warning(f"Error checking size of preview file {key}: {e}")
-        return False, f"Error checking size of preview file {file_path}: {str(e)}"
+        return False, f"Error checking size of preview files"
 
 def validate_preview_file_extension(file_path: str) -> bool:
     """Validate preview file has allowed extension
@@ -608,6 +651,37 @@ def delete_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
     
     return deleted_files
 
+def create_zero_byte_file(bucket_name: str, key: str, upload_id: str, database_id: str, asset_id: str) -> bool:
+    """Create a zero-byte file in S3
+    
+    Args:
+        bucket_name: The S3 bucket name
+        key: The S3 object key
+        upload_id: The upload ID for metadata
+        database_id: The database ID for metadata
+        asset_id: The asset ID for metadata
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        s3.put_object(
+            Bucket=bucket_name,
+            Key=key,
+            Body=b'',  # Empty content for zero-byte file
+            ContentType='application/octet-stream',
+            Metadata={
+                "databaseid": database_id,
+                "assetid": asset_id,
+                "uploadid": upload_id,
+            }
+        )
+        logger.info(f"Created zero-byte file: {key}")
+        return True
+    except Exception as e:
+        logger.exception(f"Error creating zero-byte file {key}: {e}")
+        return False
+
 #######################
 # API Implementations
 #######################
@@ -617,6 +691,13 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     assetId = request_model.assetId
     databaseId = request_model.databaseId
     uploadType = request_model.uploadType
+    
+    # Extract user ID and check rate limit
+    user_id = claims_and_roles.get("tokens", ["system"])[0]
+    
+    if not check_user_rate_limit(user_id):
+        # Return 429 Too Many Requests
+        raise VAMSGeneralErrorResponse(f"Rate limit exceeded. Maximum {MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE} upload initializations per user per minute allowed.")
     
     # Verify asset exists
     asset = get_asset_details(databaseId, assetId)
@@ -630,19 +711,19 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         # Validate file extensions before proceeding
         for file in request_model.files:
             if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
-                raise VAMSGeneralErrorResponse(f"File {file.relativeKey} has an unsupported file extension")
+                raise VAMSGeneralErrorResponse(f"File provided has an unsupported file extension")
             
             # Additional validation for preview files
             if uploadType == "assetPreview":
                 # Validate preview file extension
                 if not validate_preview_file_extension(file.relativeKey):
-                    raise VAMSGeneralErrorResponse(f"Preview file {file.relativeKey} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
+                    raise VAMSGeneralErrorResponse(f"Preview files must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
             
             # Check if this is a preview file in an assetFile upload
             if uploadType == "assetFile" and is_preview_file(file.relativeKey):
                 # Validate preview file extension
                 if not validate_preview_file_extension(file.relativeKey):
-                    raise VAMSGeneralErrorResponse(f"Preview file {file.relativeKey} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
+                    raise VAMSGeneralErrorResponse(f"Preview files must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
     
     # Generate upload ID
     uploadId = f"y{str(uuid.uuid4())}"
@@ -663,11 +744,11 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     for file in request_model.files:
         # Validate file extension
         if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
-            raise VAMSGeneralErrorResponse(f"File {file.relativeKey} has an unsupported file extension")
+            raise VAMSGeneralErrorResponse(f"Files contain an unsupported file extension")
         
         # Validate file size for preview files
         if uploadType == "assetPreview" and file.file_size > MAX_PREVIEW_FILE_SIZE:
-            raise VAMSGeneralErrorResponse(f"Preview file {file.relativeKey} exceeds maximum allowed size of 5MB")
+            raise VAMSGeneralErrorResponse(f"Preview files exceeds maximum allowed size of 5MB per file")
         
         # Determine final S3 key based on upload type
         if uploadType == "assetFile":
@@ -686,40 +767,51 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         num_parts = calculate_num_parts(file.file_size, file.num_parts)
         total_parts += num_parts
         
-        # Create multipart upload in temporary location with uploadId in metadata
-        resp = s3.create_multipart_upload(
-            Bucket=bucket_name,
-            Key=temp_s3_key,
-            ContentType='application/octet-stream',
-            Metadata={
-                "databaseid": databaseId,
-                "assetid": assetId,
-                "uploadid": uploadId,  # Store the overall uploadId in S3 metadata
-            }
-        )
-        s3_upload_id = resp['UploadId']
-        
-        # Generate presigned URLs for parts
-        part_urls = []
-        for part_number in range(1, num_parts + 1):
-            url = generate_presigned_url(
-                temp_s3_key, 
-                s3_upload_id, 
-                part_number, 
-                bucket_name
-            )
-            part_urls.append(UploadPartModel(
-                PartNumber=part_number,
-                UploadUrl=url
+        # Handle zero-byte files differently - don't create them yet, just return special response
+        if num_parts == 0:
+            # Add to response with special uploadIdS3 to identify zero-byte files
+            # Zero-byte file will be created during completion
+            file_responses.append(UploadFileResponseModel(
+                relativeKey=file.relativeKey,
+                uploadIdS3="zero-byte",  # Special identifier for zero-byte files
+                numParts=0,
+                partUploadUrls=[]  # No presigned URLs needed
             ))
-        
-        # Add to response
-        file_responses.append(UploadFileResponseModel(
-            relativeKey=file.relativeKey,
-            uploadIdS3=s3_upload_id,
-            numParts=num_parts,
-            partUploadUrls=part_urls
-        ))
+        else:
+            # Create multipart upload in temporary location with uploadId in metadata
+            resp = s3.create_multipart_upload(
+                Bucket=bucket_name,
+                Key=temp_s3_key,
+                ContentType='application/octet-stream',
+                Metadata={
+                    "databaseid": databaseId,
+                    "assetid": assetId,
+                    "uploadid": uploadId,  # Store the overall uploadId in S3 metadata
+                }
+            )
+            s3_upload_id = resp['UploadId']
+            
+            # Generate presigned URLs for parts
+            part_urls = []
+            for part_number in range(1, num_parts + 1):
+                url = generate_presigned_url(
+                    temp_s3_key, 
+                    s3_upload_id, 
+                    part_number, 
+                    bucket_name
+                )
+                part_urls.append(UploadPartModel(
+                    PartNumber=part_number,
+                    UploadUrl=url
+                ))
+            
+            # Add to response
+            file_responses.append(UploadFileResponseModel(
+                relativeKey=file.relativeKey,
+                uploadIdS3=s3_upload_id,
+                numParts=num_parts,
+                partUploadUrls=part_urls
+            ))
     
     # Save summary upload details to DynamoDB
     upload_record = AssetUploadTableModel(
@@ -731,7 +823,8 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         expiresAt=expires_at,
         totalFiles=len(request_model.files),
         totalParts=total_parts,
-        status="initialized"
+        status="initialized",
+        UserId=user_id  # Include user ID for rate limiting
     )
     save_upload_details(upload_record)
     
@@ -762,7 +855,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
         
     # Verify upload type matches
     if upload_details['uploadType'] != uploadType:
-        raise VAMSGeneralErrorResponse(f"Upload type mismatch. Expected {upload_details['uploadType']}, got {uploadType}")
+        raise VAMSGeneralErrorResponse(f"Upload type mismatch.")
     
     # Verify this is an external upload
     if not upload_details.get('isExternalUpload', False):
@@ -843,7 +936,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                     relativeKey=file.relativeKey,
                     uploadIdS3="external",
                     success=False,
-                    error=f"File not found in S3: {str(e)}"
+                    error=f"File not found in S3."
                 ))
                 has_failures = True
                 continue
@@ -1108,7 +1201,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
         
     # Verify upload type matches
     if upload_details['uploadType'] != uploadType:
-        raise VAMSGeneralErrorResponse(f"Upload type mismatch. Expected {upload_details['uploadType']}, got {uploadType}")
+        raise VAMSGeneralErrorResponse(f"Upload type mismatch.")
     
     # Update upload status in DynamoDB
     try:
@@ -1150,7 +1243,78 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                 
             temp_s3_key = f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
             
-            # Get the number of parts from the request
+            # Handle zero-byte files (identified by uploadIdS3 = "zero-byte")
+            if file.uploadIdS3 == "zero-byte":
+                # Create zero-byte file now during completion
+                logger.info(f"Creating zero-byte file {file.relativeKey} during completion")
+                
+                if create_zero_byte_file(bucket_name, temp_s3_key, uploadId, databaseId, assetId):
+                    # Create file detail for zero-byte file
+                    file_detail = {
+                        'relativeKey': file.relativeKey,
+                        'temp_s3_key': temp_s3_key,
+                        'final_s3_key': final_s3_key,
+                        'uploadIdS3': file.uploadIdS3
+                    }
+                    
+                    successful_files.append(file_detail)
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3=file.uploadIdS3,
+                        success=True
+                    ))
+                    continue
+                else:
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3=file.uploadIdS3,
+                        success=False,
+                        error="Failed to create zero-byte file"
+                    ))
+                    has_failures = True
+                    continue
+            
+            # Handle abandoned uploads (no parts provided) - create empty file
+            if not file.parts or len(file.parts) == 0:
+                logger.info(f"No parts provided for file {file.relativeKey}, creating empty file")
+                
+                # Abort the existing multipart upload
+                try:
+                    s3.abort_multipart_upload(
+                        Bucket=bucket_name,
+                        Key=temp_s3_key,
+                        UploadId=file.uploadIdS3
+                    )
+                except Exception as abort_error:
+                    logger.warning(f"Error aborting multipart upload for abandoned file: {abort_error}")
+                
+                # Create empty file in temporary location
+                if create_zero_byte_file(bucket_name, temp_s3_key, uploadId, databaseId, assetId):
+                    file_detail = {
+                        'relativeKey': file.relativeKey,
+                        'temp_s3_key': temp_s3_key,
+                        'final_s3_key': final_s3_key,
+                        'uploadIdS3': file.uploadIdS3
+                    }
+                    
+                    successful_files.append(file_detail)
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3=file.uploadIdS3,
+                        success=True
+                    ))
+                    continue
+                else:
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3=file.uploadIdS3,
+                        success=False,
+                        error="Failed to create empty file for abandoned upload"
+                    ))
+                    has_failures = True
+                    continue
+            
+            # Regular multipart upload completion
             actual_parts = sorted([p.PartNumber for p in file.parts])
             
             # Check for duplicates in part numbers
@@ -1192,7 +1356,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                     relativeKey=file.relativeKey,
                     uploadIdS3=file.uploadIdS3,
                     success=False,
-                    error=f"Error completing multipart upload: {str(e)}"
+                    error=f"Error completing multipart upload."
                 ))
                 has_failures = True
                 continue
@@ -1217,7 +1381,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                         relativeKey=file.relativeKey,
                         uploadIdS3=file.uploadIdS3,
                         success=False,
-                        error=f"Upload ID mismatch. Expected {uploadId}, got {s3_upload_id}"
+                        error=f"Upload ID mismatch."
                     ))
                     has_failures = True
                     continue
@@ -1231,7 +1395,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                         relativeKey=file.relativeKey,
                         uploadIdS3=file.uploadIdS3,
                         success=False,
-                        error=f"Preview file {file.relativeKey} exceeds maximum allowed size of 5MB"
+                        error=f"Preview file exceeds maximum allowed size of 5MB"
                     ))
                     has_failures = True
                     continue
@@ -1245,7 +1409,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                     relativeKey=file.relativeKey,
                     uploadIdS3=file.uploadIdS3,
                     success=False,
-                    error=f"Error verifying file metadata: {str(e)}"
+                    error=f"Error verifying file metadata."
                 ))
                 has_failures = True
                 continue
@@ -1283,7 +1447,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                         relativeKey=file.relativeKey,
                         uploadIdS3=file.uploadIdS3,
                         success=False,
-                        error=f"Preview file {file.relativeKey} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
+                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
                     ))
                     has_failures = True
                     continue
@@ -1299,7 +1463,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                         relativeKey=file.relativeKey,
                         uploadIdS3=file.uploadIdS3,
                         success=False,
-                        error=f"Preview file {file.relativeKey} must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
+                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
                     ))
                     has_failures = True
                     continue
@@ -1329,7 +1493,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                                 relativeKey=file.relativeKey,
                                 uploadIdS3=file.uploadIdS3,
                                 success=False,
-                                error=f"Base file {base_file_path} does not exist for preview file {file.relativeKey}"
+                                error=f"Base files does not exist for all preview files"
                             ))
                             logger.warning(f"Preview file {file.relativeKey} is missing its base file {base_file_path}")
                             has_failures = True
@@ -1343,7 +1507,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                                 relativeKey=file.relativeKey,
                                 uploadIdS3=file.uploadIdS3,
                                 success=False,
-                                error=f"Error verifying base file for preview file {file.relativeKey}"
+                                error=f"Error verifying base file for preview file"
                             ))
                             has_failures = True
                             continue
@@ -1418,7 +1582,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
                         for result in file_results:
                             if result.relativeKey == file_detail['relativeKey'] and result.success:
                                 result.success = False
-                                result.error = f"Base file does not exist for preview file {file_detail['relativeKey']}"
+                                result.error = f"Base files does not exist for all preview files"
                                 has_failures = True
                         
                         # Remove from successful files
@@ -1653,7 +1817,20 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         return validation_error(body={'message': str(v)})
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)})
+        
+        # Check if this is a rate limit error
+        if "Rate limit exceeded" in str(v):
+            return {
+                'statusCode': 429,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Cache-Control': 'no-cache, no-store',
+                    'Retry-After': '60'  # Suggest retry after 60 seconds
+                },
+                'body': json.dumps({'message': str(v)})
+            }
+        else:
+            return general_error(body={'message': str(v)})
     except Exception as e:
         logger.exception(f"Internal error: {e}")
         return internal_error()

@@ -657,7 +657,7 @@ def verify_database_exists(database_id):
         return True
     except Exception as e:
         logger.exception(f"Error verifying database: {e}")
-        raise Exception(f"Error verifying database: {str(e)}")
+        raise Exception(f"Error verifying database.")
 
 def verify_asset_exists(database_id, asset_id):
     """Check if an asset exists in the database"""
@@ -670,7 +670,7 @@ def verify_asset_exists(database_id, asset_id):
         return 'Item' in response
     except Exception as e:
         logger.exception(f"Error verifying asset: {e}")
-        raise Exception(f"Error verifying asset: {str(e)}")
+        raise Exception(f"Error verifying asset.")
 
 def invoke_lambda(function_name, payload, invocation_type="RequestResponse"):
     """Invoke a lambda function with the given payload"""
@@ -690,7 +690,7 @@ def invoke_lambda(function_name, payload, invocation_type="RequestResponse"):
         return None
     except Exception as e:
         logger.exception(f"Error invoking lambda function {function_name}: {e}")
-        raise Exception(f"Error invoking lambda function {function_name}: {str(e)}")
+        raise Exception(f"Error invoking lambda function.")
 
 def runOpenSearchIndexingLambda(event):
     """
@@ -870,7 +870,7 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
         return True, f"Successfully processed {object_key}"
     except Exception as e:
         logger.exception(f"Error processing S3 record: {e}")
-        return False, f"Error processing S3 record: {str(e)}"
+        return False, f"Error processing S3 record.}"
 
 def on_storage_event_created(event):
     """
