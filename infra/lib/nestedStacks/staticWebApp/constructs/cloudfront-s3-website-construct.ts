@@ -97,7 +97,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
                         modeBlock: true,
                     },
                     frameOptions: {
-                        frameOption: cloudfront.HeadersFrameOption.SAMEORIGIN,
+                        frameOption: cloudfront.HeadersFrameOption.DENY,
                         override: true,
                     },
                     contentTypeOptions: {
@@ -216,6 +216,8 @@ export function addBehaviorToCloudFrontDistribution(
     cloudFrontDistribution: cloudfront.Distribution,
     apiUrl: string
 ) {
+
+    // Add general behavior for all other /api/* routes (excluding /api/amplify-config)
     cloudFrontDistribution.addBehavior(
         "/api/*",
         new cloudfrontOrigins.HttpOrigin(apiUrl, {
@@ -223,16 +225,20 @@ export function addBehaviorToCloudFrontDistribution(
             protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
         }),
         {
-            cachePolicy: new cloudfront.CachePolicy(scope, "CachePolicy", {
+            cachePolicy: new cloudfront.CachePolicy(scope, "ApiCachePolicy", {
                 // required or CloudFront will strip the Authorization token from the request.
                 // must be in the cache policy
                 headerBehavior: cloudfront.CacheHeaderBehavior.allowList("Authorization"),
                 enableAcceptEncodingGzip: true,
             }),
-            originRequestPolicy: new cloudfront.OriginRequestPolicy(scope, "OriginRequestPolicy", {
-                // required or CloudFront will strip all query strings off the request
-                queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.all(),
-            }),
+            originRequestPolicy: new cloudfront.OriginRequestPolicy(
+                scope,
+                "ApiOriginRequestPolicy",
+                {
+                    // required or CloudFront will strip all query strings off the request
+                    queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.all(),
+                }
+            ),
             allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
             viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         }

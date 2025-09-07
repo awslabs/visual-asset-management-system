@@ -23,6 +23,7 @@ import { PipelineBuilderNestedStack } from "./nestedStacks/pipelines/pipelineBui
 import { LambdaLayersBuilderNestedStack } from "./nestedStacks/apiLambda/lambdaLayersBuilder-nestedStack";
 import { VPCBuilderNestedStack } from "./nestedStacks/vpc/vpcBuilder-nestedStack";
 import { IamRoleTransform } from "./aspects/iam-role-transform.aspect";
+import { LogRetentionAspect } from "./aspects/log-retention.aspect";
 import * as s3AssetBuckets from "./helper/s3AssetBuckets";
 import { Aspects } from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
@@ -84,6 +85,9 @@ export class CoreVAMSStack extends cdk.Stack {
                 )
             );
         }
+
+        // Apply the aspect to set log retention for all Log Groups in this stack
+        Aspects.of(this).add(new LogRetentionAspect(logs.RetentionDays.ONE_YEAR));
 
         //Setup GovCloud Feature Enabled
         if (props.config.app.govCloud.enabled) {

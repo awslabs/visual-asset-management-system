@@ -1024,10 +1024,12 @@ export default function UploadManager({
 
                 response.files.forEach((file, fileIndex) => {
                     const fileSize = fileUploadItems[fileIndex].size;
-                    
+
                     // Handle zero-byte files - they have no parts to upload
                     if (fileSize === 0 || file.partUploadUrls.length === 0) {
-                        console.log(`Zero-byte file ${fileUploadItems[fileIndex].name} - no parts to upload`);
+                        console.log(
+                            `Zero-byte file ${fileUploadItems[fileIndex].name} - no parts to upload`
+                        );
                         // Mark zero-byte files as completed immediately since they don't need part uploads
                         setFileUploadItems((prev) =>
                             prev.map((item, idx) =>
@@ -1437,7 +1439,7 @@ export default function UploadManager({
                 console.log(
                     `File ${fileIndex}: ${fileResponse.relativeKey}, parts: ${parts.length}, expected parts: ${fileResponse.numParts}`
                 );
-                
+
                 // For zero-byte files, numParts will be 0 and parts array will be empty - this is correct
                 return {
                     relativeKey: fileResponse.relativeKey,
@@ -1451,15 +1453,15 @@ export default function UploadManager({
                 const fileResponse = uploadResponse.files.find(
                     (f) => f.relativeKey === file.relativeKey
                 );
-                
+
                 if (!fileResponse) {
                     console.warn(`File response not found for ${file.relativeKey}`);
                     return false;
                 }
-                
+
                 // For zero-byte files, both parts.length and numParts should be 0
                 const isValid = file.parts.length === fileResponse.numParts;
-                
+
                 if (!isValid) {
                     console.warn(
                         `File ${file.relativeKey} has ${file.parts.length} parts but expected ${fileResponse.numParts}`
@@ -1467,7 +1469,7 @@ export default function UploadManager({
                 } else if (fileResponse.numParts === 0) {
                     console.log(`Zero-byte file ${file.relativeKey} ready for completion`);
                 }
-                
+
                 return isValid;
             });
 
