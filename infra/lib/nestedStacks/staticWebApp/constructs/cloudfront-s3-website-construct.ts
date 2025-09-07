@@ -216,7 +216,6 @@ export function addBehaviorToCloudFrontDistribution(
     cloudFrontDistribution: cloudfront.Distribution,
     apiUrl: string
 ) {
-
     // Add general behavior for all other /api/* routes (excluding /api/amplify-config)
     cloudFrontDistribution.addBehavior(
         "/api/*",
