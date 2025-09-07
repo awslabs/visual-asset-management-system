@@ -19,6 +19,47 @@ from handlers.workflows import update_pipeline_workflows
 
 claims_and_roles = {}
 logger = safeLogger(service="CreatePipeline")
+
+dynamodb = boto3.resource('dynamodb')
+db_table = dynamodb.Table(os.environ["DATABASE_STORAGE_TABLE_NAME"])
+
+# Hard-coded allowed values for pipeline fields
+ALLOWED_PIPELINE_TYPES = [
+    'standardFile',
+    'previewFile',
+]
+
+ALLOWED_CALLBACK_VALUES = [
+    'Enabled',
+    'Disabled'
+]
+
+ALLOWED_EXECUTION_TYPES = [
+    'Lambda'
+]
+
+def validate_pipeline_fields(body):
+    """Validate pipeline fields against allowed values"""
+    
+    # Validate databaseId exists if body['databaseId'] (lowered) is not global
+    if body['databaseId'].lower().strip() != 'global':
+        db_response = db_table.get_item(Key={'databaseId': body['databaseId']})
+        if 'Item' not in db_response:
+            raise ValueError(f"Database provided does not exist")
+    
+    # Validate pipelineType
+    if body['pipelineType'] not in ALLOWED_PIPELINE_TYPES:
+        raise ValueError(f"Invalid pipelineType. Allowed values: {', '.join(ALLOWED_PIPELINE_TYPES)}")
+    
+    # Validate waitForCallback
+    if body['waitForCallback'] not in ALLOWED_CALLBACK_VALUES:
+        raise ValueError(f"Invalid waitForCallback. Allowed values: {', '.join(ALLOWED_CALLBACK_VALUES)}")
+    
+    # Validate pipelineExecutionType
+    if body['pipelineExecutionType'] not in ALLOWED_EXECUTION_TYPES:
+        raise ValueError(f"Invalid pipelineExecutionType. Allowed values: {', '.join(ALLOWED_EXECUTION_TYPES)}")
+    
+    return True
             
 def format_pipeline(item, body):
     item['pipelineId'] = body['pipelineId']
@@ -108,6 +149,15 @@ class CreatePipeline():
             return {
                 "statusCode": 403,
                 "body": json.dumps({"message": 'Not Authorized'})
+            }
+
+        # Validate pipeline fields against allowed values
+        try:
+            validate_pipeline_fields(body)
+        except ValueError as e:
+            return {
+                "statusCode": 400,
+                "body": json.dumps({"message": str(e)})
             }
 
         logger.info("Setting Time Stamp")

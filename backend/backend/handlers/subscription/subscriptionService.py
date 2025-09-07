@@ -25,6 +25,28 @@ sns_client = boto3.client('sns')
 
 main_rest_response = STANDARD_JSON_RESPONSE
 
+# Hard-coded allowed values for subscription fields
+ALLOWED_EVENT_NAMES = [
+    'Asset Version Change'
+]
+
+ALLOWED_ENTITY_NAMES = [
+    'Asset'
+]
+
+def validate_subscription_fields(body):
+    """Validate subscription fields against allowed values"""
+    
+    # Validate eventName
+    if body['eventName'] not in ALLOWED_EVENT_NAMES:
+        raise ValueError(f"Invalid eventName. Allowed values: {', '.join(ALLOWED_EVENT_NAMES)}")
+    
+    # Validate entityName
+    if body['entityName'] not in ALLOWED_ENTITY_NAMES:
+        raise ValueError(f"Invalid entityName. Allowed values: {', '.join(ALLOWED_ENTITY_NAMES)}")
+    
+    return True
+
 try:
     subscription_table_name = os.environ["SUBSCRIPTIONS_STORAGE_TABLE_NAME"]
     asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
@@ -241,6 +263,15 @@ def get_userProfile_Email(userId):
 def create_subscription(body):
     response = STANDARD_JSON_RESPONSE
     subscription_table = dynamodb.Table(subscription_table_name)
+    
+    # Validate subscription fields against allowed values
+    try:
+        validate_subscription_fields(body)
+    except ValueError as e:
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": str(e)})
+        return response
+    
     items = get_subscription_obj(body["eventName"], body["entityName"], body["entityId"])
 
     #Lookup users email
@@ -296,6 +327,15 @@ def create_subscription(body):
 def update_subscription(body):
     response = STANDARD_JSON_RESPONSE
     subscription_table = dynamodb.Table(subscription_table_name)
+    
+    # Validate subscription fields against allowed values
+    try:
+        validate_subscription_fields(body)
+    except ValueError as e:
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": str(e)})
+        return response
+    
     items = get_subscription_obj(body["eventName"], body["entityName"], body["entityId"])
 
     if not items:

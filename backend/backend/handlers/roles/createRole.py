@@ -18,6 +18,21 @@ logger = safeLogger(service="CreateRole")
 
 main_rest_response = STANDARD_JSON_RESPONSE
 
+# Hard-coded allowed values for role fields
+ALLOWED_SOURCES = [
+    'INTERNAL_SYSTEM'
+]
+
+def validate_role_fields(body):
+    """Validate role fields against allowed values"""
+    
+    # Validate source if provided
+    if 'source' in body and body['source']:
+        if body['source'] not in ALLOWED_SOURCES:
+            raise ValueError(f"Invalid source. Allowed values: {', '.join(ALLOWED_SOURCES)}")
+    
+    return True
+
 try:
     roles_db_table_name = os.environ["ROLES_TABLE_NAME"]
 except:
@@ -28,6 +43,14 @@ except:
 def create_role(body):
     response = STANDARD_JSON_RESPONSE
     role_table = dynamodb.Table(roles_db_table_name)
+
+    # Validate role fields against allowed values
+    try:
+        validate_role_fields(body)
+    except ValueError as e:
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": str(e)})
+        return response
 
     try:
         item = {
@@ -67,6 +90,14 @@ def create_role(body):
 def update_role(body):
     response = STANDARD_JSON_RESPONSE
     role_table = dynamodb.Table(roles_db_table_name)
+
+    # Validate role fields against allowed values
+    try:
+        validate_role_fields(body)
+    except ValueError as e:
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": str(e)})
+        return response
 
     try:
         role_table.update_item(
