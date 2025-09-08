@@ -559,7 +559,7 @@ def new_command(ctx: click.Context, required_param: str):
         # Focus on business logic only
         result = api_client.some_operation(required_param)
         click.echo("✓ Operation successful!")
-        
+
     except SomeBusinessLogicError as e:
         # Only handle command-specific business logic errors
         click.echo(f"✗ Business Logic Error: {e}")
@@ -1072,12 +1072,12 @@ def create(ctx: click.Context, ...):
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
-    
+
     try:
         # Focus on business logic only
         result = api_client.create_asset(data)
         click.echo("✓ Asset created!")
-        
+
     except AssetAlreadyExistsError as e:
         # Only handle command-specific business logic errors
         click.echo(f"✗ Asset Already Exists: {e}")
@@ -1091,16 +1091,16 @@ def create(ctx: click.Context, ...):
 def create(ctx: click.Context, ...):
     """Create an asset."""
     profile_manager = get_profile_manager_from_context(ctx)
-    
+
     # VIOLATION - Duplicated setup check (handled by decorator now)
     if not profile_manager.has_config():
         profile_name = profile_manager.profile_name
         raise click.ClickException(f"Configuration not found...")
-    
+
     try:
         # Business logic
         result = api_client.create_asset(data)
-        
+
     except AssetAlreadyExistsError as e:
         # Command-specific error handling (correct)
         click.echo(f"✗ Asset Already Exists: {e}")
@@ -1115,14 +1115,16 @@ def create(ctx: click.Context, ...):
 #### **Exception Classification Guidelines:**
 
 ##### **Global Infrastructure Exceptions (handled in main.py):**
-- `SetupRequiredError`, `AuthenticationError`, `APIUnavailableError`
-- `ProfileError`, `ConfigurationError`, `OverrideTokenError`
-- `RetryExhaustedError`, `RateLimitExceededError`, `VersionMismatchError`
+
+-   `SetupRequiredError`, `AuthenticationError`, `APIUnavailableError`
+-   `ProfileError`, `ConfigurationError`, `OverrideTokenError`
+-   `RetryExhaustedError`, `RateLimitExceededError`, `VersionMismatchError`
 
 ##### **Command-Specific Business Logic Exceptions (handled in commands):**
-- `AssetNotFoundError`, `AssetAlreadyExistsError`, `DatabaseNotFoundError`
-- `TagNotFoundError`, `FileUploadError`, `SearchQueryError`
-- Any domain-specific validation or operation errors
+
+-   `AssetNotFoundError`, `AssetAlreadyExistsError`, `DatabaseNotFoundError`
+-   `TagNotFoundError`, `FileUploadError`, `SearchQueryError`
+-   Any domain-specific validation or operation errors
 
 #### **Benefits of New Architecture:**
 
@@ -1444,12 +1446,12 @@ def my_command(ctx: click.Context, ...):
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
-    
+
     try:
         # Focus on business logic only
         result = api_client.api_method(parameters)
         click.echo(click.style("✓ Success message", fg='green', bold=True))
-        
+
     except SpecificBusinessLogicError as e:
         # Only handle command-specific business logic errors
         click.echo(click.style(f"✗ Specific Error: {e}", fg='red', bold=True), err=True)

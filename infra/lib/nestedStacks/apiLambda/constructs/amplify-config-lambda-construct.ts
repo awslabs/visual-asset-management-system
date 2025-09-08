@@ -220,7 +220,8 @@ export class AmplifyConfigLambdaConstruct extends Construct {
         );
 
         // Determine cache TTL based on IP restrictions
-        const hasIpRestrictions = props.config.app.authProvider.authorizerOptions?.allowedIpRanges?.length > 0;
+        const hasIpRestrictions =
+            props.config.app.authProvider.authorizerOptions?.allowedIpRanges?.length > 0;
         const cacheTtlSeconds = hasIpRestrictions ? 900 : 900;
 
         // Create custom authorizer for ignored path with routeKey identity source

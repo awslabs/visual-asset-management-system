@@ -266,31 +266,16 @@ export function generateContentSecurityPolicy(
     const additionalCSPConfig = loadCSPAdditionalConfig();
 
     // Base CSP sources
-    let connectSrc = [
-        "'self'",
-        "blob:",
-        `https://${apiUrl}`,
-        `https://${Service("S3").Endpoint}/`,
-    ];
+    let connectSrc = ["'self'", "blob:", `https://${apiUrl}`, `https://${Service("S3").Endpoint}/`];
 
     let scriptSrc = [
         "'self'",
         "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
     ];
 
-    let imgSrc = [
-        "'self'",
-        "blob:",
-        "data:",
-        `https://${Service("S3").Endpoint}/`,
-    ];
+    let imgSrc = ["'self'", "blob:", "data:", `https://${Service("S3").Endpoint}/`];
 
-    let mediaSrc = [
-        "'self'",
-        "blob:",
-        "data:",
-        `https://${Service("S3").Endpoint}/`,
-    ];
+    let mediaSrc = ["'self'", "blob:", "data:", `https://${Service("S3").Endpoint}/`];
 
     let fontSrc = ["'self'"];
     let styleSrc = ["'self'", "'unsafe-inline'"];

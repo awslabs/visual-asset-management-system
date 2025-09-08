@@ -89,7 +89,8 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
         }
 
         // Determine cache TTL based on IP restrictions
-        const hasIpRestrictions = props.config.app.authProvider.authorizerOptions?.allowedIpRanges?.length > 0;
+        const hasIpRestrictions =
+            props.config.app.authProvider.authorizerOptions?.allowedIpRanges?.length > 0;
         const cacheTtlSeconds = hasIpRestrictions ? 30 : 30;
 
         // Setup custom Lambda authorizer with payload format version 2.0
@@ -103,7 +104,7 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
                 responseTypes: [apigwAuthorizers.HttpLambdaResponseType.SIMPLE],
             }
         );
-        
+
         const accessLogs = new logs.LogGroup(this, "VAMS-API-AccessLogs", {
             logGroupName:
                 "/aws/vendedlogs/VAMS-API-AccessLogs" +

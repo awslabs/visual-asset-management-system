@@ -55,34 +55,36 @@ VamsCLI automatically handles API rate limiting (HTTP 429 errors) with exponenti
 
 1. **Wait and retry:** The simplest solution is to wait a few minutes and try the command again
 2. **Adjust retry settings:** Configure retry behavior using environment variables:
-   ```bash
-   # Increase maximum retry attempts (default: 5)
-   export VAMS_CLI_MAX_RETRY_ATTEMPTS=10
-   
-   # Adjust initial retry delay (default: 1.0 seconds)
-   export VAMS_CLI_INITIAL_RETRY_DELAY=2.0
-   
-   # Set maximum retry delay (default: 60.0 seconds)
-   export VAMS_CLI_MAX_RETRY_DELAY=120.0
-   
-   # Adjust backoff multiplier (default: 2.0)
-   export VAMS_CLI_RETRY_BACKOFF_MULTIPLIER=1.5
-   
-   # Adjust jitter percentage (default: 0.1 = 10%)
-   export VAMS_CLI_RETRY_JITTER=0.2
-   ```
+
+    ```bash
+    # Increase maximum retry attempts (default: 5)
+    export VAMS_CLI_MAX_RETRY_ATTEMPTS=10
+
+    # Adjust initial retry delay (default: 1.0 seconds)
+    export VAMS_CLI_INITIAL_RETRY_DELAY=2.0
+
+    # Set maximum retry delay (default: 60.0 seconds)
+    export VAMS_CLI_MAX_RETRY_DELAY=120.0
+
+    # Adjust backoff multiplier (default: 2.0)
+    export VAMS_CLI_RETRY_BACKOFF_MULTIPLIER=1.5
+
+    # Adjust jitter percentage (default: 0.1 = 10%)
+    export VAMS_CLI_RETRY_JITTER=0.2
+    ```
+
 3. **Reduce concurrent operations:** If running multiple VamsCLI instances, reduce parallelism
 4. **Contact administrator:** If throttling persists, contact your VAMS administrator about API limits
 
 **Environment Variables for Retry Configuration:**
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VAMS_CLI_MAX_RETRY_ATTEMPTS` | 5 | Maximum number of retry attempts for 429 errors |
-| `VAMS_CLI_INITIAL_RETRY_DELAY` | 1.0 | Initial delay in seconds before first retry |
-| `VAMS_CLI_MAX_RETRY_DELAY` | 60.0 | Maximum delay in seconds between retries |
-| `VAMS_CLI_RETRY_BACKOFF_MULTIPLIER` | 2.0 | Multiplier for exponential backoff (1.0-5.0) |
-| `VAMS_CLI_RETRY_JITTER` | 0.1 | Jitter percentage to prevent thundering herd (0.0-0.5) |
+| Variable                            | Default | Description                                            |
+| ----------------------------------- | ------- | ------------------------------------------------------ |
+| `VAMS_CLI_MAX_RETRY_ATTEMPTS`       | 5       | Maximum number of retry attempts for 429 errors        |
+| `VAMS_CLI_INITIAL_RETRY_DELAY`      | 1.0     | Initial delay in seconds before first retry            |
+| `VAMS_CLI_MAX_RETRY_DELAY`          | 60.0    | Maximum delay in seconds between retries               |
+| `VAMS_CLI_RETRY_BACKOFF_MULTIPLIER` | 2.0     | Multiplier for exponential backoff (1.0-5.0)           |
+| `VAMS_CLI_RETRY_JITTER`             | 0.1     | Jitter percentage to prevent thundering herd (0.0-0.5) |
 
 **Example Configuration:**
 

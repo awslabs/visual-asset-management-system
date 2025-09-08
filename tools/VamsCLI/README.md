@@ -240,13 +240,13 @@ VamsCLI supports several environment variables for customizing behavior:
 
 VamsCLI automatically handles API rate limiting (HTTP 429 errors) with exponential backoff. You can customize the retry behavior:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VAMS_CLI_MAX_RETRY_ATTEMPTS` | 5 | Maximum number of retry attempts for 429 errors |
-| `VAMS_CLI_INITIAL_RETRY_DELAY` | 1.0 | Initial delay in seconds before first retry |
-| `VAMS_CLI_MAX_RETRY_DELAY` | 60.0 | Maximum delay in seconds between retries |
-| `VAMS_CLI_RETRY_BACKOFF_MULTIPLIER` | 2.0 | Multiplier for exponential backoff (1.0-5.0) |
-| `VAMS_CLI_RETRY_JITTER` | 0.1 | Jitter percentage to prevent thundering herd (0.0-0.5) |
+| Variable                            | Default | Description                                            |
+| ----------------------------------- | ------- | ------------------------------------------------------ |
+| `VAMS_CLI_MAX_RETRY_ATTEMPTS`       | 5       | Maximum number of retry attempts for 429 errors        |
+| `VAMS_CLI_INITIAL_RETRY_DELAY`      | 1.0     | Initial delay in seconds before first retry            |
+| `VAMS_CLI_MAX_RETRY_DELAY`          | 60.0    | Maximum delay in seconds between retries               |
+| `VAMS_CLI_RETRY_BACKOFF_MULTIPLIER` | 2.0     | Multiplier for exponential backoff (1.0-5.0)           |
+| `VAMS_CLI_RETRY_JITTER`             | 0.1     | Jitter percentage to prevent thundering herd (0.0-0.5) |
 
 **Example Usage:**
 
@@ -267,11 +267,11 @@ vamscli assets list
 
 **Retry Behavior:**
 
-- **Automatic Handling**: All API calls automatically retry on 429 errors
-- **Exponential Backoff**: Delays increase exponentially with each retry
-- **Server Respect**: Honors server-provided `Retry-After` headers
-- **Progress Indication**: Shows retry progress for delays longer than 1 second
-- **Jitter**: Adds randomness to prevent multiple clients retrying simultaneously
+-   **Automatic Handling**: All API calls automatically retry on 429 errors
+-   **Exponential Backoff**: Delays increase exponentially with each retry
+-   **Server Respect**: Honors server-provided `Retry-After` headers
+-   **Progress Indication**: Shows retry progress for delays longer than 1 second
+-   **Jitter**: Adds randomness to prevent multiple clients retrying simultaneously
 
 ## Token Override Authentication
 

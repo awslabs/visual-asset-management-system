@@ -797,7 +797,7 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, streamAssetFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}",
-        method: apigwv2.HttpMethod.GET,
+        method: apigateway.HttpMethod.GET,
         api: api,
     });
 
