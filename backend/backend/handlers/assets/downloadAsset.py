@@ -20,6 +20,10 @@ from models.assetsV3 import (
     DownloadAssetRequestModel, DownloadAssetResponseModel
 )
 
+#Set environment variable for S3 client configuration
+#'regional' set to add region decriptor to presigned urls for us-east-1 (ignored for non us-east-1 regions)
+os.environ["AWS_S3_US_EAST_1_REGIONAL_ENDPOINT"] = "regional" 
+
 # Configure AWS clients
 region = os.environ['AWS_REGION']
 s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'})
@@ -63,7 +67,7 @@ def get_default_bucket_details(bucketId):
 
         #Check to make sure we have what we need
         if not bucket_name or not base_assets_prefix:
-            raise VAMSGeneralErrorResponse(f"Error getting database default bucket details: {str(e)}")
+            raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
         #Make sure we end in a slash for the path
         if not base_assets_prefix.endswith('/'):
@@ -80,7 +84,7 @@ def get_default_bucket_details(bucketId):
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
-        raise VAMSGeneralErrorResponse(f"Error getting bucket details: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error getting bucket details.")
 
 def get_asset_details(databaseId, assetId):
     """Get asset details from DynamoDB"""
@@ -97,7 +101,7 @@ def get_asset_details(databaseId, assetId):
         return response['Items'][0]
     except Exception as e:
         logger.exception(f"Error getting asset details: {e}")
-        raise VAMSGeneralErrorResponse(f"Error retrieving asset: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
 
 def is_file_archived(metadata):
     """Determine if file is archived based on S3 metadata
@@ -219,7 +223,7 @@ def download_asset_file(databaseId, assetId, request_model):
     # Get asset details
     asset = get_asset_details(databaseId, assetId)
     if not asset:
-        raise VAMSGeneralErrorResponse(f"Asset {assetId} not found in database {databaseId}")
+        raise VAMSGeneralErrorResponse("Asset not found in database")
         
     # Check if asset is distributable
     if not asset.get('isDistributable', False):
@@ -289,7 +293,7 @@ def download_asset_file(databaseId, assetId, request_model):
         )
     except Exception as e:
         logger.exception(f"Error generating presigned URL: {e}")
-        raise VAMSGeneralErrorResponse(f"Error generating download URL: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error generating download URL.")
 
 def download_asset_preview(databaseId, assetId, request_model):
     """Generate download URL for asset preview
@@ -305,7 +309,7 @@ def download_asset_preview(databaseId, assetId, request_model):
     # Get asset details
     asset = get_asset_details(databaseId, assetId)
     if not asset:
-        raise VAMSGeneralErrorResponse(f"Asset {assetId} not found in database {databaseId}")
+        raise VAMSGeneralErrorResponse("Asset not found in database")
         
     # Check if asset is distributable
     if not asset.get('isDistributable', False):
@@ -348,7 +352,7 @@ def download_asset_preview(databaseId, assetId, request_model):
         )
     except Exception as e:
         logger.exception(f"Error generating presigned URL: {e}")
-        raise VAMSGeneralErrorResponse(f"Error generating download URL: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error generating download URL.")
 
 #######################
 # Lambda Handler
@@ -411,7 +415,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         # Check authorization
         asset = get_asset_details(database_id, asset_id)
         if not asset:
-            return validation_error(body={'message': f"Asset {asset_id} not found"})
+            return validation_error(body={'message': "Asset not found"})
         
         asset["object__type"] = "asset"
         

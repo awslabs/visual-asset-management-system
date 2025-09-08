@@ -82,14 +82,39 @@ class CreateAssetResponseModel(BaseModel, extra=Extra.ignore):
 class UploadFileModel(BaseModel, extra=Extra.ignore):
     """Model for file to be uploaded"""
     relativeKey: str = Field(min_length=1, strip_whitespace=True, pattern=relative_file_path_pattern)
-    file_size: Optional[PositiveInt] = None
-    num_parts: Optional[PositiveInt] = None
+    file_size: Optional[int] = Field(None, ge=0)  # Allow zero-byte files, use int instead of PositiveInt
+    num_parts: Optional[int] = Field(None, ge=0, le=10000)  # Allow 0 parts for zero-byte files, max 10,000
     
     @root_validator
     def validate_size_or_parts(cls, values):
-        """Ensure either file_size or num_parts is provided"""
+        """Ensure either file_size or num_parts is provided and validate part sizes"""
         if values.get('file_size') is None and values.get('num_parts') is None:
             raise ValueError("Either file_size or num_parts must be provided")
+        
+        # Handle zero-byte files
+        file_size = values.get('file_size')
+        num_parts = values.get('num_parts')
+        
+        # If file_size is 0, num_parts must be 0 or None (will be calculated as 0)
+        if file_size == 0:
+            if num_parts is not None and num_parts != 0:
+                raise ValueError("Zero-byte files must have 0 parts")
+            return values
+        
+        # If num_parts is 0, file_size must be 0 or None
+        if num_parts == 0:
+            if file_size is not None and file_size != 0:
+                raise ValueError("Files with 0 parts must have 0 file size")
+            return values
+        
+        # Validate part sizes when both file_size and num_parts are provided (both > 0)
+        if file_size and num_parts and file_size > 0 and num_parts > 0:
+            min_part_size = file_size / num_parts
+            
+            # S3 limits: Only enforce maximum part size (5GB), allow small parts for small files
+            if min_part_size > 5 * 1024 * 1024 * 1024:  # 5GB
+                raise ValueError("Part size too large. Maximum part size is 5GB")
+        
         return values
 
 class InitializeUploadRequestModel(BaseModel, extra=Extra.ignore):
@@ -97,7 +122,7 @@ class InitializeUploadRequestModel(BaseModel, extra=Extra.ignore):
     assetId: str = Field(min_length=1, max_length=256, strip_whitespace=False, pattern=filename_pattern)
     databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
     uploadType: Literal["assetFile", "assetPreview"]
-    files: List[UploadFileModel]
+    files: List[UploadFileModel] = Field(..., max_items=1000)  # Max 1000 files per request
 
     @root_validator
     def validate_fields(cls, values):
@@ -123,9 +148,24 @@ class InitializeUploadRequestModel(BaseModel, extra=Extra.ignore):
         # Validate file extensions
         for file in values.get('files', []):
             if not file.relativeKey or '.' not in file.relativeKey:
-                message = f"File {file.relativeKey} must have a valid extension"
+                message = f"Files must have a valid extension"
                 logger.error(message)
                 raise ValueError(message)
+        
+        # Validate total parts across all files (5000 limit)
+        total_parts = 0
+        for file in values.get('files', []):
+            if file.num_parts:
+                total_parts += file.num_parts
+            elif file.file_size:
+                # Calculate using 150MB chunks (same logic as uploadFile.py)
+                calculated_parts = -(-file.file_size // (150 * 1024 * 1024))  # Ceiling division
+                total_parts += calculated_parts
+        
+        if total_parts > 5000:
+            message = f"Total parts across all files exceeds maximum allowed (5000)"
+            logger.error(message)
+            raise ValueError(message)
             
         return values
 
@@ -187,12 +227,19 @@ class CompleteUploadRequestModel(BaseModel, extra=Extra.ignore):
             logger.error(message)
             raise ValueError(message)
             
-        # Ensure each file has at least one part
+        # Allow zero parts for zero-byte files, but require at least one part for non-zero files
+        # Note: Zero-byte files are identified by uploadIdS3 = "zero-byte" (set during initialization)
         for file in values.get('files', []):
-            if not file.parts or len(file.parts) == 0:
-                message = f"File with uploadIdS3 {file.uploadIdS3} must have at least one part"
-                logger.error(message)
-                raise ValueError(message)
+            if file.uploadIdS3 == "zero-byte":
+                # Zero-byte files should have no parts
+                if file.parts and len(file.parts) > 0:
+                    message = f"Zero-byte files should not have any parts"
+                    logger.error(message)
+                    raise ValueError(message)
+            else:
+                # Regular files can have zero parts (abandoned upload - will create empty file)
+                # or normal parts for multipart upload
+                pass
                 
         return values
 
@@ -479,7 +526,7 @@ class IngestAssetInitializeRequestModel(BaseModel, extra=Extra.ignore):
         assetId = values.get('assetId')
         for file in values.get('files', []):
             if not file.relativeKey.startswith(f"{assetId}/"):
-                message = f"File relative key {file.relativeKey} must start with assetId/{assetId}/"
+                message = f"File relative keys must start with assetId"
                 logger.error(message)
                 raise ValueError(message)
             
@@ -533,7 +580,7 @@ class IngestAssetCompleteRequestModel(BaseModel, extra=Extra.ignore):
         # Ensure each file has at least one part
         for file in values.get('files', []):
             if not file.parts or len(file.parts) == 0:
-                message = f"File with uploadIdS3 {file.uploadIdS3} must have at least one part"
+                message = f"Files must have at least one part"
                 logger.error(message)
                 raise ValueError(message)
                 
@@ -758,6 +805,7 @@ class AssetUploadTableModel(BaseModel, extra=Extra.ignore):
     status: str = "initialized"  # Upload status (initialized, completed, failed)
     isExternalUpload: bool = False  # Flag for external uploads
     temporaryPrefix: Optional[str] = None  # Base temporary prefix for external uploads
+    UserId: Optional[str] = None  # User ID for rate limiting (matches DynamoDB GSI field name)
     
     def to_dict(self):
         """Convert model to dictionary for DynamoDB storage"""
@@ -774,8 +822,10 @@ class AssetUploadTableModel(BaseModel, extra=Extra.ignore):
             "isExternalUpload": self.isExternalUpload
         }
         
-        # Add temporaryPrefix only if it's provided
+        # Add optional fields only if they exist
         if self.temporaryPrefix:
             result["temporaryPrefix"] = self.temporaryPrefix
+        if self.UserId:
+            result["UserId"] = self.UserId
             
         return result

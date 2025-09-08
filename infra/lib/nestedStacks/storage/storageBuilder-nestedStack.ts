@@ -178,7 +178,9 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         // Note: contributor insights is disabled (by default) to avoid reaching rule limits
         // on tables (LimitExceededException) during regular deployments.
         //
-        contributorInsightsEnabled: false,
+        contributorInsightsSpecification: {
+            enabled: false,
+        },
         pointInTimeRecoverySpecification: {
             pointInTimeRecoveryEnabled: true,
         },
@@ -801,6 +803,18 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         },
         sortKey: {
             name: "uploadId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    assetUploadsStorageTable.addGlobalSecondaryIndex({
+        indexName: "UserIdGSI",
+        partitionKey: {
+            name: "UserId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "createdAt",
             type: dynamodb.AttributeType.STRING,
         },
     });

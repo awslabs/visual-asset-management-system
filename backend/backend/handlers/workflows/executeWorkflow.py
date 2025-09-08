@@ -56,7 +56,7 @@ def get_default_bucket_details(bucketId):
 
         #Check to make sure we have what we need
         if not bucket_name or not base_assets_prefix:
-            raise Exception(f"Error getting database default bucket details: {str(e)}")
+            raise Exception(f"Error getting database default bucket details.")
         
         #Make sure we end in a slash for the path
         if not base_assets_prefix.endswith('/'):
@@ -73,7 +73,7 @@ def get_default_bucket_details(bucketId):
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
-        raise Exception(f"Error getting bucket details: {str(e)}")
+        raise Exception(f"Error getting bucket details.")
 
 def get_pipelines(databaseId, pipelineId):
     table = dynamodb.Table(pipeline_Database)
@@ -449,7 +449,7 @@ def lambda_handler(event, context):
                             if not status:
                                 logger.error("Not all pipelines are enabled/accessible")
                                 response['statusCode'] = 400
-                                response['body'] = json.dumps({'message': f'{pipelineName} is not enabled/accessible'})
+                                response['body'] = json.dumps({'message': 'Pipeline is not enabled/accessible'})
                             else:
                                 logger.info("All pipelines are enabled. Continuing to run workflow")
 

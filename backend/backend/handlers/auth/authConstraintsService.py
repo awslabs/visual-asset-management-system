@@ -28,6 +28,87 @@ table = dynamodb.Table(constraintsTableName)
 attrs = "name,groupPermissions,constraintId,description,criteriaAnd,criteriaOr,userPermissions,objectType".split(",")
 keys_attrs = {"#{f}".format(f=f): f for f in attrs}
 
+# Hard-coded allowed values for constraint fields (matching frontend constants)
+ALLOWED_PERMISSIONS = [
+    'GET',
+    'PUT', 
+    'POST',
+    'DELETE'
+]
+
+ALLOWED_PERMISSION_TYPES = [
+    'allow',
+    'deny'
+]
+
+ALLOWED_OBJECT_TYPES = [
+    'database',
+    'asset',
+    'api',
+    'web',
+    'tag',
+    'tagType',
+    'role',
+    'userRole',
+    'pipeline',
+    'workflow',
+    'metadataSchema'
+]
+
+ALLOWED_OPERATORS = [
+    'equals',
+    'contains',
+    'does_not_contain',
+    'starts_with',
+    'ends_with',
+    'is_one_of',
+    'is_not_one_of'
+]
+
+def validate_constraint_fields(constraint):
+    """Validate constraint fields against allowed values"""
+    
+    # Validate objectType
+    if 'objectType' in constraint:
+        if constraint['objectType'] not in ALLOWED_OBJECT_TYPES:
+            raise ValueError(f"Invalid objectType. Allowed values: {', '.join(ALLOWED_OBJECT_TYPES)}")
+    
+    # Validate groupPermissions
+    if 'groupPermissions' in constraint:
+        for perm in constraint['groupPermissions']:
+            # Validate permission
+            if 'permission' in perm and perm['permission'] not in ALLOWED_PERMISSIONS:
+                raise ValueError(f"Invalid permission. Allowed values: {', '.join(ALLOWED_PERMISSIONS)}")
+            
+            # Validate permissionType
+            if 'permissionType' in perm and perm['permissionType'] not in ALLOWED_PERMISSION_TYPES:
+                raise ValueError(f"Invalid permissionType. Allowed values: {', '.join(ALLOWED_PERMISSION_TYPES)}")
+            
+            # Validate groupId exists (check roles table)
+            if 'groupId' in perm:
+                try:
+                    roles_table_name = os.environ.get("ROLES_TABLE_NAME")
+                    if roles_table_name:
+                        roles_table = dynamodb.Table(roles_table_name)
+                        role_response = roles_table.get_item(Key={'roleName': perm['groupId']})
+                        if 'Item' not in role_response:
+                            raise ValueError(f"Group/Role does not exist")
+                except Exception as e:
+                    logger.warning(f"Could not validate groupId '{perm['groupId']}': {e}")
+    
+    # Validate criteria operators
+    if 'criteriaAnd' in constraint:
+        for criteria in constraint['criteriaAnd']:
+            if 'operator' in criteria and criteria['operator'] not in ALLOWED_OPERATORS:
+                raise ValueError(f"Invalid operator. Allowed values: {', '.join(ALLOWED_OPERATORS)}")
+    
+    if 'criteriaOr' in constraint:
+        for criteria in constraint['criteriaOr']:
+            if 'operator' in criteria and criteria['operator'] not in ALLOWED_OPERATORS:
+                raise ValueError(f"Invalid operator. Allowed values: {', '.join(ALLOWED_OPERATORS)}")
+    
+    return True
+
 
 class ValidationError(Exception):
     def __init__(self, code: int, resp: object) -> None:
@@ -112,6 +193,13 @@ def get_constraint_from_event(event):
 
 def update_constraint(event, response):
     key, constraint = get_constraint_from_event(event)
+    
+    # Validate constraint fields against allowed values
+    try:
+        validate_constraint_fields(constraint)
+    except ValueError as e:
+        raise ValidationError(400, str(e))
+    
     keys_map, values_map, expr = to_update_expr(constraint)
 
     logger.info(msg={

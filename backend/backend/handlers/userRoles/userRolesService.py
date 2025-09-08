@@ -45,6 +45,15 @@ def get_role(roleName):
     return resp.get('Items', [])
 
 
+def validate_roles_exist_strict(role_names):
+    """Strictly validate that all role names exist"""
+    for role_name in role_names:
+        role_items = get_role(role_name)
+        if not role_items or len(role_items) == 0:
+            raise ValueError(f"Role does not exist in the system")
+    return True
+
+
 def update_user_roles(body):
     response = STANDARD_JSON_RESPONSE
     user_role_table = dynamodb.Table(user_roles_table_name)
@@ -170,6 +179,15 @@ def is_any_user_role_already_existing(items, body):
 def create_user_roles(body):
     response = STANDARD_JSON_RESPONSE
     user_role_table = dynamodb.Table(user_roles_table_name)
+    
+    # Validate that all roles exist before proceeding
+    try:
+        validate_roles_exist_strict(body["roleName"])
+    except ValueError as e:
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": str(e)})
+        return response
+    
     itemsUserRoles = get_all_roles_for_user(body["userId"])
     logger.info(itemsUserRoles)
     logger.info(is_any_user_role_already_existing(itemsUserRoles, body))

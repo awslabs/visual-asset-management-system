@@ -8,7 +8,7 @@ from customLogging.logger import safeLogger
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.data_classes import APIGatewayProxyEvent
 from urllib.parse import urlparse
-from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
+from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth, RequestError
 from common.validators import validate
 from common import get_ssm_parameter_value
 from handlers.authz import CasbinEnforcer
@@ -185,6 +185,42 @@ def token_to_criteria(token):
         }
 
 
+def sanitize_sort_fields(sort_config):
+    """
+    Sanitizes sort configuration to handle fields that may not have proper mappings.
+    Replaces problematic sort fields with safe alternatives.
+    """
+    if not sort_config or not isinstance(sort_config, list):
+        return ["_score"]
+    
+    sanitized_sort = []
+    
+    for sort_item in sort_config:
+        if isinstance(sort_item, dict):
+            # Check if this is a sort on list_tags field
+            if "list_tags" in sort_item:
+                # Replace list_tags sort with a safe alternative
+                # Use list_tags.keyword if available, otherwise fall back to _score
+                try:
+                    sanitized_sort.append({"list_tags.keyword": sort_item["list_tags"]})
+                except:
+                    # If there's any issue, fall back to score-based sorting
+                    logger.warning("Unable to sort by list_tags, falling back to _score")
+                    sanitized_sort.append("_score")
+            else:
+                # Keep other sort configurations as-is
+                sanitized_sort.append(sort_item)
+        else:
+            # Keep string-based sorts (like "_score") as-is
+            sanitized_sort.append(sort_item)
+    
+    # Ensure we always have at least one sort field
+    if not sanitized_sort:
+        sanitized_sort = ["_score"]
+    
+    return sanitized_sort
+
+
 def property_token_filter_to_opensearch_query(token_filter, uniqueMappingFieldsForGeneralQuery = [], start=0, size=2000):
     """
     Converts a property token filter to an OpenSearch query.
@@ -299,10 +335,13 @@ def property_token_filter_to_opensearch_query(token_filter, uniqueMappingFieldsF
     #Add the filters criteria
     filter_criteria.extend(token_filter.get("filters", []))
 
+    # Sanitize sort configuration to handle mapping issues
+    sanitized_sort = sanitize_sort_fields(token_filter.get("sort", ["_score"]))
+
     query = {
         "from": start,
         "size": size,
-        "sort": token_filter.get("sort", ["_score"]),
+        "sort": sanitized_sort,
         "query": {
             "bool": {
                 "must": must_criteria,
@@ -402,10 +441,26 @@ class SearchAOS():
     def search(self, query):
         logger.info("aos query")
         logger.info(query)
-        return self.client.search(
-            body=query,
-            index=self.indexName,
-        )
+        try:
+            return self.client.search(
+                body=query,
+                index=self.indexName,
+            )
+        except Exception as e:
+            # Handle specific OpenSearch mapping errors
+            if "No mapping found" in str(e) and "in order to sort on" in str(e):
+                logger.warning(f"Sort field mapping error: {str(e)}")
+                # Remove problematic sort and retry with default sort
+                if "sort" in query:
+                    logger.info("Retrying search with default sort configuration")
+                    query_copy = query.copy()
+                    query_copy["sort"] = ["_score"]
+                    return self.client.search(
+                        body=query_copy,
+                        index=self.indexName,
+                    )
+            # Re-raise the exception if it's not a mapping error we can handle
+            raise e
 
     def mapping(self):
         return self.client.indices.get_mapping(
@@ -551,29 +606,42 @@ def lambda_handler(
             'statusCode': ex.code,
             'body': json.dumps(ex.resp)
         }
+    except RequestError as e:
+        # Handle OpenSearch RequestError specifically
+        logger.exception(f"OpenSearch RequestError: {str(e)}")
+        if "No mapping found" in str(e) and "in order to sort on" in str(e):
+            return {
+                'statusCode': 400,
+                'body': json.dumps({"message": "Invalid sort field in search query. Please check field mappings."})
+            }
+        else:
+            return {
+                'statusCode': 400,
+                'body': json.dumps({"message": f"OpenSearch query error."})
+            }
     except boto3.exceptions.Boto3Error as e:
         logger.exception(f"AWS Service Error: {str(e)}")
         return {
             'statusCode': 500,
-            'body': json.dumps({"message": f"AWS Service Error: {str(e)}"})
+            'body': json.dumps({"message": "AWS Service Error"})
         }
     except json.JSONDecodeError as e:
         logger.exception(f"JSON Decode Error: {str(e)}")
         return {
             'statusCode': 400,
-            'body': json.dumps({"message": f"Invalid JSON format: {str(e)}"})
+            'body': json.dumps({"message": "Invalid JSON format"})
         }
     except KeyError as e:
         logger.exception(f"Key Error: {str(e)}")
         return {
             'statusCode': 400,
-            'body': json.dumps({"message": f"Missing required field: {str(e)}"})
+            'body': json.dumps({"message": "Missing required field"})
         }
     except ValueError as e:
         logger.exception(f"Value Error: {str(e)}")
         return {
             'statusCode': 400,
-            'body': json.dumps({"message": f"Invalid value: {str(e)}"})
+            'body': json.dumps({"message": "Invalid value"})
         }
     except Exception as e:
         logger.exception(f"Unexpected error: {str(e)}")

@@ -74,10 +74,12 @@ export function buildCreatePipelineFunction(
                 ? newPipelineLambdaSecurityGroup.securityGroupId
                 : "", //used if subnet IDs are passed in,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
         },
     });
     enablePipelineFunction.grantInvoke(createPipelineFunction);
     storageResources.s3.artefactsBucket.grantRead(createPipelineFunction);
+    storageResources.dynamo.databaseStorageTable.grantReadData(createPipelineFunction);
     storageResources.dynamo.pipelineStorageTable.grantReadWriteData(createPipelineFunction);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(createPipelineFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(createPipelineFunction);

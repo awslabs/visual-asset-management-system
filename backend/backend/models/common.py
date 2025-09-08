@@ -17,6 +17,7 @@ class APIGatewayProxyResponseV2(TypedDict):
 def commonHeaders() -> Dict[str, str]:
     return {
         'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store',
     }
 
 

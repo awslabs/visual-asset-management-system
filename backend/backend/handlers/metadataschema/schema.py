@@ -74,13 +74,13 @@ class MetadataSchema:
         try:
             response = table.get_item(Key={'databaseId': database_id})
             if 'Item' not in response:
-                raise VAMSGeneralErrorResponse(f"Database with ID {database_id} does not exist")
+                raise VAMSGeneralErrorResponse("Database does not exist")
             return True
         except Exception as e:
             if isinstance(e, VAMSGeneralErrorResponse):
                 raise e
             logger.exception(f"Error verifying database: {e}")
-            raise VAMSGeneralErrorResponse(f"Error verifying database: {str(e)}")
+            raise VAMSGeneralErrorResponse(f"Error verifying database.")
 
     @staticmethod
     def from_env():

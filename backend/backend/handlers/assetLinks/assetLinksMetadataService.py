@@ -142,7 +142,7 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
         )
         
         if 'Item' in existing_response:
-            raise ValueError(f"Metadata key '{request_model.metadataKey}' already exists for this asset link")
+            raise ValueError("Metadata key already exists for this asset link")
             
     except Exception as e:
         if "already exists" in str(e):
@@ -168,7 +168,7 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
         
     except Exception as e:
         logger.exception(f"Error creating asset link metadata: {e}")
-        raise RuntimeError(f"Failed to create metadata: {str(e)}")
+        raise RuntimeError(f"Failed to create metadata.")
 
 def get_asset_link_metadata(asset_link_id: str, claims_and_roles: dict) -> GetAssetLinkMetadataResponseModel:
     """Get all metadata for an asset link"""
@@ -196,7 +196,7 @@ def get_asset_link_metadata(asset_link_id: str, claims_and_roles: dict) -> GetAs
         
     except Exception as e:
         logger.exception(f"Error getting asset link metadata: {e}")
-        raise RuntimeError(f"Failed to get metadata: {str(e)}")
+        raise RuntimeError(f"Failed to get metadata.")
 
 def update_asset_link_metadata(asset_link_id: str, metadata_key: str, request_model: UpdateAssetLinkMetadataRequestModel, claims_and_roles: dict) -> UpdateAssetLinkMetadataResponseModel:
     """Update metadata for an asset link"""
@@ -215,7 +215,7 @@ def update_asset_link_metadata(asset_link_id: str, metadata_key: str, request_mo
         )
         
         if 'Item' not in existing_response:
-            raise ValueError(f"Metadata key '{metadata_key}' not found for this asset link")
+            raise ValueError("Metadata key not found for this asset link")
         
         # Update the metadata
         asset_links_metadata_table.update_item(
@@ -238,7 +238,7 @@ def update_asset_link_metadata(asset_link_id: str, metadata_key: str, request_mo
         
     except Exception as e:
         logger.exception(f"Error updating asset link metadata: {e}")
-        raise RuntimeError(f"Failed to update metadata: {str(e)}")
+        raise RuntimeError(f"Failed to update metadata.")
 
 def delete_asset_link_metadata(asset_link_id: str, metadata_key: str, claims_and_roles: dict) -> DeleteAssetLinkMetadataResponseModel:
     """Delete metadata for an asset link"""
@@ -257,7 +257,7 @@ def delete_asset_link_metadata(asset_link_id: str, metadata_key: str, claims_and
         )
         
         if 'Item' not in existing_response:
-            raise ValueError(f"Metadata key '{metadata_key}' not found for this asset link")
+            raise ValueError("Metadata key not found for this asset link")
         
         # Delete the metadata
         asset_links_metadata_table.delete_item(
@@ -275,7 +275,7 @@ def delete_asset_link_metadata(asset_link_id: str, metadata_key: str, claims_and
         
     except Exception as e:
         logger.exception(f"Error deleting asset link metadata: {e}")
-        raise RuntimeError(f"Failed to delete metadata: {str(e)}")
+        raise RuntimeError(f"Failed to delete metadata.")
 
 #######################
 # Request Handlers

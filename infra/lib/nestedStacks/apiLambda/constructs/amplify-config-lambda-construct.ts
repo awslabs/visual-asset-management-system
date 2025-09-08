@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as apigatewayv2 from "@aws-cdk/aws-apigatewayv2-alpha";
-import * as apigwIntegrations from "@aws-cdk/aws-apigatewayv2-integrations-alpha";
-import * as apigwAuthorizers from "@aws-cdk/aws-apigatewayv2-authorizers-alpha";
+import * as apigatewayv2 from "aws-cdk-lib/aws-apigatewayv2";
+import * as apigwIntegrations from "aws-cdk-lib/aws-apigatewayv2-integrations";
+import * as apigwAuthorizers from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as cdk from "aws-cdk-lib";
 import { LAMBDA_NODE_RUNTIME } from "../../../../config/config";

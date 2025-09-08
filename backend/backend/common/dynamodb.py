@@ -69,7 +69,7 @@ def get_asset_object_from_id(databaseId, assetId):
         
         except Exception as e:
             logger.exception(f"Error getting asset details: {e}")
-            raise VAMSGeneralErrorResponse(f"Error retrieving asset: {str(e)}")
+            raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
     else:
         #Kept right now for backwards capability until all tables can be updated to use datbaseId/Assetid (comments, subscriptions, asset links)
         filter_expression = f"assetId = :id"

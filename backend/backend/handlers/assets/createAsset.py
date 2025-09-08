@@ -110,7 +110,7 @@ def get_default_bucket_details(databaseId):
 
         #Check to make sure we have what we need
         if not bucket_name or not base_assets_prefix:
-            raise VAMSGeneralErrorResponse(f"Error getting database default bucket details: {str(e)}")
+            raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
         #Make sure we end in a slash for the path
         if not base_assets_prefix.endswith('/'):
@@ -127,7 +127,7 @@ def get_default_bucket_details(databaseId):
         }
     except Exception as e:
         logger.exception(f"Error getting database default bucket details: {e}")
-        raise VAMSGeneralErrorResponse(f"Error getting database default bucket details: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
     
 
 def save_asset_details(asset_data):
@@ -136,7 +136,7 @@ def save_asset_details(asset_data):
         asset_table.put_item(Item=asset_data)
     except Exception as e:
         logger.exception(f"Error saving asset details: {e}")
-        raise VAMSGeneralErrorResponse(f"Error saving asset: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error saving asset.")
 
 def create_sns_topic_for_asset(database_id, asset_id):
     """Create an SNS topic for an asset"""
@@ -145,7 +145,7 @@ def create_sns_topic_for_asset(database_id, asset_id):
         return topic_response['TopicArn']
     except Exception as e:
         logger.exception(f"Error creating SNS topic: {e}")
-        raise VAMSGeneralErrorResponse(f"Error creating SNS topic: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error creating SNS topic.")
 
 
 def get_set_tag_types(tags):
@@ -325,11 +325,48 @@ def create_initial_version_record(asset_id, version_id, description, created_by=
         
     except Exception as e:
         logger.exception(f"Error creating initial version record: {e}")
-        raise VAMSGeneralErrorResponse(f"Error creating initial version record: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error creating initial version record.")
 
 #######################
 # API Implementation
 #######################
+
+def validate_tags_exist(tags):
+    """Validate that all provided tags exist in the database"""
+    if not tags:
+        return True
+    
+    # Get all existing tags from database
+    rawTagItems = []
+    page_iterator = paginator.paginate(
+        TableName=tag_table_name,
+        PaginationConfig={'MaxItems': 1000, 'PageSize': 1000}
+    ).build_full_result()
+    
+    if len(page_iterator["Items"]) > 0:
+        rawTagItems.extend(page_iterator["Items"])
+        while "NextToken" in page_iterator:
+            page_iterator = paginator.paginate(
+                TableName=tag_table_name,
+                PaginationConfig={
+                    'MaxItems': 1000, 'PageSize': 1000,
+                    'StartingToken': page_iterator["NextToken"]
+                }
+            ).build_full_result()
+            if len(page_iterator["Items"]) > 0:
+                rawTagItems.extend(page_iterator["Items"])
+    
+    existing_tags = []
+    for tag in rawTagItems:
+        deserialized_document = {k: deserializer.deserialize(v) for k, v in tag.items()}
+        existing_tags.append(deserialized_document["tagName"])
+    
+    # Check for invalid tags
+    invalid_tags = [tag for tag in tags if tag not in existing_tags]
+    if invalid_tags:
+        raise ValueError(f"Invalid tags provided. Tags must exist in the system.")
+    
+    return True
 
 def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3ExternalGenerated = False):
     """Create a new asset (metadata only)"""
@@ -347,7 +384,7 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         ).get('Item')
         
         if existing_asset:
-            raise VAMSGeneralErrorResponse(f"Asset with ID {assetId} already exists in database {databaseId}")
+            raise VAMSGeneralErrorResponse("Asset with specified ID already exists")
     
     # Verify database exists
     db_table = dynamodb.Table(db_database)
@@ -357,10 +394,11 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         }
     )
     if 'Item' not in db_response:
-        raise VAMSGeneralErrorResponse(f"Database with ID {databaseId} does not exist")
+        raise VAMSGeneralErrorResponse("VAMS General Error: Database does not exist")
     
-    # Verify required tags (only if we aren't generating from S3 external where we don't know tags)
+    # Validate tags exist in the system (only if we aren't generating from S3 external where we don't know tags)
     if not s3ExternalGenerated:
+        validate_tags_exist(request_model.tags)
         verify_all_required_tags_satisfied(request_model.tags)
     
     # Create asset record

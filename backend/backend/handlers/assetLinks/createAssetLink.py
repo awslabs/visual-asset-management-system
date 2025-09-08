@@ -266,7 +266,7 @@ def create_asset_link(request_model: CreateAssetLinkRequestModel, claims_and_rol
         
     except Exception as e:
         logger.exception(f"Error saving asset link: {e}")
-        raise RuntimeError(f"Failed to create asset link: {str(e)}")
+        raise RuntimeError(f"Failed to create asset link.")
 
 #######################
 # Request Handlers

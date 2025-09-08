@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 import * as ec2 from "aws-cdk-lib/aws-ec2";
-import * as batch from "@aws-cdk/aws-batch-alpha";
+import * as batch from "aws-cdk-lib/aws-batch";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as cdk from "aws-cdk-lib";
@@ -28,7 +28,7 @@ const defaultProps: Partial<BatchFargatePipelineConstructProps> = {
 };
 
 export class BatchFargatePipelineConstruct extends Construct {
-    public readonly batchJobDefinition: batch.JobDefinition;
+    public readonly batchJobDefinition: batch.IJobDefinition;
     public readonly batchJobQueue: batch.JobQueue;
 
     constructor(parent: Construct, name: string, props: BatchFargatePipelineConstructProps) {
@@ -38,20 +38,15 @@ export class BatchFargatePipelineConstruct extends Construct {
         const region = cdk.Stack.of(this).region;
         const account = cdk.Stack.of(this).account;
 
-        const batchEnvironment = new batch.ComputeEnvironment(
+        const batchEnvironment = new batch.FargateComputeEnvironment(
             this,
             "PipelineBatchComputeEnvironment",
             {
-                managed: true,
-                enabled: true,
-                computeResources: {
-                    vpc: props.vpc,
-                    vpcSubnets: props.vpc.selectSubnets({
-                        subnets: props.subnets,
-                    }),
-                    securityGroups: props.securityGroups,
-                    type: batch.ComputeResourceType.FARGATE,
-                },
+                vpc: props.vpc,
+                vpcSubnets: props.vpc.selectSubnets({
+                    subnets: props.subnets,
+                }),
+                securityGroups: props.securityGroups,
             }
         );
 
@@ -64,15 +59,13 @@ export class BatchFargatePipelineConstruct extends Construct {
             }
         );
 
-        this.batchJobDefinition = new batch.JobDefinition(this, "PipelineBatchJobDefinition", {
+        this.batchJobDefinition = new batch.EcsJobDefinition(this, "PipelineBatchJobDefinition", {
             jobDefinitionName: props.batchJobDefinitionName,
-            platformCapabilities: [batch.PlatformCapabilities.FARGATE],
             retryAttempts: 1,
-            container: {
-                vcpus: 16,
-                memoryLimitMiB: 65536,
-                //ephemeralStorage: { sizeInGiB: 60 },
-                platformVersion: ecs.FargatePlatformVersion.LATEST,
+            container: new batch.EcsFargateContainerDefinition(this, "PipelineBatchContainer", {
+                cpu: 16,
+                memory: cdk.Size.mebibytes(65536),
+                ephemeralStorageSize: cdk.Size.gibibytes(60),
                 image: containerImage,
                 environment: {
                     AWS_REGION: region,
@@ -81,19 +74,8 @@ export class BatchFargatePipelineConstruct extends Construct {
                 jobRole: props.jobRole,
                 executionRole: props.executionRole,
                 user: "root",
-            },
+            }),
         });
-
-        // TODO: add to L2 batch.JobDefinition construct when PR is approved: https://github.com/aws/aws-cdk/pull/25399
-        const cfnJobDef = this.batchJobDefinition.node.defaultChild as CfnJobDefinition;
-        const containerProps =
-            cfnJobDef.containerProperties as CfnJobDefinition.ContainerPropertiesProperty;
-        cfnJobDef.containerProperties = {
-            ephemeralStorage: {
-                sizeInGiB: 60,
-            },
-            ...containerProps,
-        };
 
         this.batchJobQueue = new batch.JobQueue(this, "BatchJobQueue", {
             computeEnvironments: [

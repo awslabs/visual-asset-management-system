@@ -25,6 +25,28 @@ sns_client = boto3.client('sns')
 
 main_rest_response = STANDARD_JSON_RESPONSE
 
+# Hard-coded allowed values for subscription fields
+ALLOWED_EVENT_NAMES = [
+    'Asset Version Change'
+]
+
+ALLOWED_ENTITY_NAMES = [
+    'Asset'
+]
+
+def validate_subscription_fields(body):
+    """Validate subscription fields against allowed values"""
+    
+    # Validate eventName
+    if body['eventName'] not in ALLOWED_EVENT_NAMES:
+        raise ValueError(f"Invalid eventName. Allowed values: {', '.join(ALLOWED_EVENT_NAMES)}")
+    
+    # Validate entityName
+    if body['entityName'] not in ALLOWED_ENTITY_NAMES:
+        raise ValueError(f"Invalid entityName. Allowed values: {', '.join(ALLOWED_ENTITY_NAMES)}")
+    
+    return True
+
 try:
     subscription_table_name = os.environ["SUBSCRIPTIONS_STORAGE_TABLE_NAME"]
     asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
@@ -241,6 +263,15 @@ def get_userProfile_Email(userId):
 def create_subscription(body):
     response = STANDARD_JSON_RESPONSE
     subscription_table = dynamodb.Table(subscription_table_name)
+    
+    # Validate subscription fields against allowed values
+    try:
+        validate_subscription_fields(body)
+    except ValueError as e:
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": str(e)})
+        return response
+    
     items = get_subscription_obj(body["eventName"], body["entityName"], body["entityId"])
 
     #Lookup users email
@@ -271,7 +302,7 @@ def create_subscription(body):
         existing_subscribers = [item["S"] for item in items["subscribers"]['L']]
         if any(new_subscriber in existing_subscribers for new_subscriber in body["subscribers"]):
             response['statusCode'] = 400
-            response['body'] = json.dumps({"message": f'Subscription already exists for eventName-{body["eventName"]} for {body["entityName"]} - {body["entityId"]} for some of the subscribers.'})
+            response['body'] = json.dumps({"message": "Subscription already exists for some of the specified subscribers."})
             return response
         else:
             if body["entityName"] == "Asset":
@@ -296,6 +327,15 @@ def create_subscription(body):
 def update_subscription(body):
     response = STANDARD_JSON_RESPONSE
     subscription_table = dynamodb.Table(subscription_table_name)
+    
+    # Validate subscription fields against allowed values
+    try:
+        validate_subscription_fields(body)
+    except ValueError as e:
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": str(e)})
+        return response
+    
     items = get_subscription_obj(body["eventName"], body["entityName"], body["entityId"])
 
     if not items:
@@ -362,7 +402,7 @@ def delete_subscription(body):
     except ClientError as e:
         if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
             response['statusCode'] = 400
-            response['body'] = json.dumps({"message": f'Subscription not found for Event: {body["eventName"]}, Entity: {body["entityName"]}, EntityId: {body["entityId"]}'})
+            response['body'] = json.dumps({"message": "Subscription not found for the specified event and entity"})
         else:
             response['statusCode'] = 500
             response['body'] = json.dumps({"message": "An unexpected error occurred while executing the request"})
@@ -475,4 +515,3 @@ def lambda_handler(event, context):
         response['statusCode'] = 500
         response['body'] = json.dumps({"message": "Internal Server Error"})
         return response
-

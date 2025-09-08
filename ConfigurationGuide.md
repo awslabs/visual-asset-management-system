@@ -85,6 +85,9 @@ Some configuration options can be overriden at time of deployment with either en
 -   `app.webUi.optionalBannerHtmlMessage` | default: NULL | #Optional HTML message to display as a banner in the web UI. Can be used for system notifications or compliance messages.
 -   `app.webUi.allowUnsafeEvalFeatures` | default: false | #Allow for features and web CSP policy that allow 'unsafe-eval' policy for script execution. Confirm with your security teams before turning this on.
 
+-   `app.api.globalRateLimit` | default: 50 | #Sets the global rate limit (requests per second) for the API Gateway throttling. Must be a positive number greater than 0. Can be overridden with environment variable `GLOBAL_RATE_LIMIT` or CDK context parameter `globalRateLimit`.
+-   `app.api.globalBurstLimit` | default: 100 | #Sets the global burst limit for the API Gateway throttling. Must be a positive number greater than or equal to the rate limit. Can be overridden with environment variable `GLOBAL_BURST_LIMIT` or CDK context parameter `globalBurstLimit`.
+
 ### Additional configuration notes
 
 -   `Gov Cloud` - This will check for Use Global VPC, Use ALB, Use OpenSearch Provisioned, and Use Location Services. Additionally does some small implementation changes for components that are different in GovCloud partitions.

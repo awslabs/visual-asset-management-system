@@ -173,7 +173,7 @@ def get_single_asset_link(asset_link_id: str, claims_and_roles: Dict) -> GetSing
         )
         
         if 'Item' not in response:
-            raise ValueError(f"Asset link {asset_link_id} not found")
+            raise ValueError("Asset link not found")
             
         link_item = response['Item']
         
@@ -214,7 +214,7 @@ def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: 
         # Verify the target asset exists and user has permission
         target_asset = get_asset_details(asset_id, database_id)
         if not target_asset:
-            raise ValueError(f"Asset {asset_id} not found in database {database_id}")
+            raise ValueError("Asset not found in database")
             
         if not check_asset_permission(target_asset, claims_and_roles):
             raise PermissionError("Not authorized to view links for this asset")
@@ -407,7 +407,7 @@ def update_asset_link(asset_link_id: str, request_model: UpdateAssetLinkRequestM
         )
         
         if 'Item' not in response:
-            raise ValueError(f"Asset link {asset_link_id} not found")
+            raise ValueError("Asset link not found")
             
         link_item = response['Item']
         
@@ -455,7 +455,7 @@ def delete_asset_link(asset_link_id: str, claims_and_roles: dict) -> DeleteAsset
         )
         
         if 'Item' not in response:
-            raise ValueError(f"Asset link {asset_link_id} not found")
+            raise ValueError("Asset link not found")
             
         link_item = response['Item']
         

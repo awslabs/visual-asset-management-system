@@ -59,13 +59,13 @@ def verify_database_exists(database_id):
     try:
         response = table.get_item(Key={'databaseId': database_id})
         if 'Item' not in response:
-            raise VAMSGeneralErrorResponse(f"Database with ID {database_id} does not exist")
+            raise VAMSGeneralErrorResponse("Database does not exist")
         return True
     except Exception as e:
         if isinstance(e, VAMSGeneralErrorResponse):
             raise e
         logger.exception(f"Error verifying database: {e}")
-        raise VAMSGeneralErrorResponse(f"Error verifying database: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error verifying database.")
 
 def verify_asset_exists(database_id, asset_id):
     """Check if an asset exists in the database"""
@@ -78,7 +78,7 @@ def verify_asset_exists(database_id, asset_id):
         return 'Item' in response
     except Exception as e:
         logger.exception(f"Error verifying asset: {e}")
-        raise VAMSGeneralErrorResponse(f"Error verifying asset: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error verifying asset.")
 
 def invoke_lambda(function_name, payload, invocation_type="RequestResponse"):
     """Invoke a lambda function with the given payload"""
@@ -98,7 +98,7 @@ def invoke_lambda(function_name, payload, invocation_type="RequestResponse"):
         return None
     except Exception as e:
         logger.exception(f"Error invoking lambda function {function_name}: {e}")
-        raise VAMSGeneralErrorResponse(f"Error invoking lambda function {function_name}: {str(e)}")
+        raise VAMSGeneralErrorResponse(f"Error invoking lambda function.")
 
 def update_metadata(database_id, asset_id):
     """Update the metadata timestamp for an asset"""
@@ -126,7 +126,7 @@ def update_metadata(database_id, asset_id):
 # API Implementations
 #######################
 
-def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_and_roles):
+def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_and_roles, event):
     """Initialize an asset ingest operation"""
     database_id = request_model.databaseId
     asset_id = request_model.assetId
@@ -143,6 +143,10 @@ def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_a
             "files": [file.dict() for file in request_model.files]
         }
     }
+
+    initialize_upload_payload .update({
+            "requestContext": event['requestContext']
+        })
     
     # Invoke fileUpload lambda to initialize the upload
     file_upload_response = invoke_lambda(file_upload_lambda, initialize_upload_payload)
@@ -164,7 +168,7 @@ def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_a
         files=response_body.get("files", [])
     )
 
-def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_roles):
+def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_roles, event):
     """Complete an asset ingest operation"""
     database_id = request_model.databaseId
     asset_id = request_model.assetId
@@ -191,6 +195,11 @@ def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_r
                 "tags": request_model.tags
             }
         }
+
+        create_asset_payload.update({
+            "requestContext": event['requestContext']
+        })
+
         
         # Invoke createAsset lambda
         create_asset_response = invoke_lambda(create_asset_lambda, create_asset_payload)
@@ -216,6 +225,10 @@ def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_r
             "uploadId": upload_id
         }
     }
+
+    complete_upload_payload.update({
+            "requestContext": event['requestContext']
+        })
     
     # Invoke fileUpload lambda to complete the upload
     file_upload_response = invoke_lambda(file_upload_lambda, complete_upload_payload)
@@ -298,10 +311,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         # Process request based on stage
         if is_complete_stage:
             # Stage 2 - Complete upload
-            response = complete_ingest(request_model, claims_and_roles)
+            response = complete_ingest(request_model, claims_and_roles, event)
         else:
             # Stage 1 - Initialize upload
-            response = initialize_ingest(request_model, claims_and_roles)
+            response = initialize_ingest(request_model, claims_and_roles, event)
         
         return success(body=response.dict())
             

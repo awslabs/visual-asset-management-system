@@ -46,6 +46,7 @@ def customAuthProfileLoginWriteOverride(userProfile, lambdaRequestEvent):
     # access_token = lambdaRequestEvent["headers"]["authorization"].split()[1]
     # response = requests.get(f'{external_oath_idp_url}/idp/userinfo.openid', headers={
     #     'Content-Type': 'application/json',
+    #     'Cache-Control': 'no-cache, no-store',
     #     'Authorization': f'Bearer {access_token}'
     # })
 

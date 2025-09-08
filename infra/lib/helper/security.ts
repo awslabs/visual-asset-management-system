@@ -275,7 +275,6 @@ export function generateContentSecurityPolicy(
 
     let scriptSrc = [
         "'self'",
-        "blob:",
         "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
     ];
 
@@ -293,7 +292,6 @@ export function generateContentSecurityPolicy(
         `https://${Service("S3").Endpoint}/`,
     ];
 
-    // Initialize font and style sources with defaults
     let fontSrc = ["'self'"];
     let styleSrc = ["'self'", "'unsafe-inline'"];
 
@@ -329,6 +327,7 @@ export function generateContentSecurityPolicy(
     }
 
     const csp =
+        `base-uri 'none'` +
         `default-src 'none'; style-src ${styleSrc.join(" ")}; upgrade-insecure-requests;` +
         `connect-src ${connectSrc.join(" ")}; ` +
         `script-src ${scriptSrc.join(" ")}; ` +

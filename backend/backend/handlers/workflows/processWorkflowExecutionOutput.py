@@ -115,7 +115,7 @@ def get_default_bucket_details(bucketId):
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
-        raise Exception(f"Error getting bucket details: {str(e)}")
+        raise Exception(f"Error getting bucket details.")
 
 def verify_get_path_objects(bucketName: str, pathPrefix: str):
 
@@ -370,7 +370,7 @@ def lambda_handler(event, context):
         if not asset:
             logger.error(f"Asset {event['assetId']} not found in database {event['databaseId']}")
             response['statusCode'] = 400
-            response['body'] = json.dumps({"message": f"Asset {event['assetId']} not found in database {event['databaseId']}"})
+            response['body'] = json.dumps({"message": "Asset not found in database"})
             return response
 
         #ABAC Checks for Asset

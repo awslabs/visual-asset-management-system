@@ -147,6 +147,163 @@ infra/
 ## 🚨 **Mandatory Rules**
 
 ### **Rule 1: Follow Gold Standard Implementation (assetService.py)**
+## 🔐 **Security Guidelines for Exception Handling**
+
+### **Critical Security Rule: Secure Exception Handling**
+
+**ALL inner raises of custom exception types (not the final catch wrappers) MUST NOT contain:**
+- Input parameters that reveal system internals
+- `str(e)` exception information from caught exceptions  
+- Function names, file paths, or AWS resource details
+- Database schema, table names, or configuration details
+- Lambda function names or internal service identifiers
+- S3 bucket names, keys, or path structures
+- Any information that could aid in system reconnaissance
+
+### **Secure Exception Patterns**
+
+#### **✅ SECURE Pattern - Inner Business Logic:**
+```python
+# Inner business logic exceptions - Generic messages only
+if not bucket_name or not base_assets_prefix:
+    raise VAMSGeneralErrorResponse("Database configuration invalid")
+
+if not asset:
+    raise VAMSGeneralErrorResponse("Resource not found")
+
+if not casbin_enforcer.enforce(resource, "GET"):
+    raise VAMSGeneralErrorResponse("Access denied")
+
+# Validation failures - No input parameter details
+if len(asset_id) < 3:
+    raise VAMSGeneralErrorResponse("Invalid resource identifier")
+```
+
+#### **✅ SECURE Pattern - Final Catch Wrappers:**
+```python
+# Final catch wrappers - Log details internally, return generic messages
+try:
+    # Business logic here
+    result = process_asset(asset_data)
+    return result
+except VAMSGeneralErrorResponse as e:
+    # Re-raise VAMS exceptions as-is (already secure)
+    raise e
+except Exception as e:
+    # Log full details for debugging (internal only)
+    logger.exception(f"Error processing asset {asset_id}: {e}")
+    # Return generic message to user
+    raise VAMSGeneralErrorResponse("Error processing request")
+```
+
+#### **❌ INSECURE Patterns - DO NOT USE:**
+```python
+# ❌ NEVER expose internal exception details
+raise VAMSGeneralErrorResponse(f"Error getting bucket details: {e}")
+
+# ❌ NEVER expose input parameters in exceptions
+raise ValueError(f"Database {database_id} does not exist")
+
+# ❌ NEVER expose function or service names
+raise Exception(f"Error invoking lambda function {function_name}: {e}")
+
+# ❌ NEVER expose file paths or system details
+raise Exception(f"Error getting database default bucket details: missing bucket_name")
+
+# ❌ NEVER expose AWS resource details
+raise VAMSGeneralErrorResponse(f"S3 bucket {bucket_name} access denied: {str(e)}")
+```
+
+### **Validation and Model Guidelines**
+
+#### **Validator Integration**
+- **Validators Path**: `backend/backend/common/validators.py`
+- **Models Path**: `backend/backend/models/`
+- **Use existing validators** where a validation type exists (see available types below)
+- **Add new validator types** for repetitive validations instead of duplicating logic
+- **Request model verification** for complex business logic that cannot be handled by simple validators
+
+#### **Available Validator Types** (from `backend/backend/common/validators.py`):
+```python
+# Identity and Reference Validators
+'ID'                    # General IDs (3-63 chars, alphanumeric + hyphens/underscores)
+'ASSET_ID'              # Asset identifiers (up to 256 chars)
+'UUID'                  # Standard UUID format
+'EMAIL'                 # Email address format
+'USERID'                # User identifier format
+
+# String Length Validators  
+'STRING_30'             # Max 30 characters
+'STRING_256'            # Max 256 characters
+'STRING_256_ARRAY'      # Array of strings, each max 256 chars
+
+# File and Path Validators
+'FILE_NAME'             # Valid filename format
+'FILE_EXTENSION'        # File extension format (.ext)
+'RELATIVE_FILE_PATH'    # Relative file path format
+'ASSET_PATH'            # Asset path format (with isFolder option)
+'ASSET_PATH_PIPELINE'   # Pipeline-specific asset paths
+'ASSET_AUXILIARYPREVIEW_PATH'  # Auxiliary preview paths
+
+# Object and Content Validators
+'OBJECT_NAME'           # Object name format
+'OBJECT_NAME_ARRAY'     # Array of object names
+'STRING_JSON'           # Valid JSON string format
+'REGEX'                 # Valid regex pattern
+'NUMBER'                # Numeric value
+'BOOL'                  # Boolean value
+
+# Array Validators
+'ID_ARRAY'              # Array of IDs
+'UUID_ARRAY'            # Array of UUIDs  
+'EMAIL_ARRAY'           # Array of email addresses
+'USERID_ARRAY'          # Array of user IDs
+
+# Specialized Validators
+'SAGEMAKER_NOTEBOOK_ID' # SageMaker notebook naming
+```
+
+#### **Request/Response Model Strategy**:
+1. **Use validators first** where a validation type exists
+2. **Add custom `@root_validator`** for complex business logic validation
+3. **Create new validator types** for repetitive validation patterns
+4. **Keep validation logic in models**, not in business logic functions
+
+#### **Example: Secure Model with Validator Integration**
+```python
+class CreateAssetRequestModel(BaseModel, extra=Extra.ignore):
+    """Secure request model with proper validation"""
+    assetId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
+    assetName: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
+    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
+    
+    @root_validator
+    def validate_fields(cls, values):
+        # Use existing validators where possible
+        (valid, message) = validate({
+            'assetId': {
+                'value': values.get('assetId'),
+                'validator': 'ASSET_ID'
+            },
+            'databaseId': {
+                'value': values.get('databaseId'), 
+                'validator': 'ID'
+            },
+            'assetName': {
+                'value': values.get('assetName'),
+                'validator': 'OBJECT_NAME'
+            }
+        })
+        if not valid:
+            # Validator messages are safe to return - they explain restrictions without exposing input values
+            logger.error(message)
+            raise ValueError(message)
+        return values
+```
+
+## 🚨 **Mandatory Rules**
+
+### **Rule 1: Follow Gold Standard Implementation (assetService.py)**
 
 All backend handlers MUST follow the patterns established in `assetService.py`:
 
@@ -855,7 +1012,7 @@ def get_[domain]_details([domain]_id):
         return response.get('Item')
     except Exception as e:
         logger.exception(f"Error getting [domain] details: {e}")
-        raise VAMSGeneralErrorResponse(f"Error retrieving [domain]: {str(e)}")
+        raise VAMSGeneralErrorResponse("Error retrieving resource")
 
 def create_[domain]([domain]_data, claims_and_roles):
     """Create a new [domain]
@@ -897,7 +1054,7 @@ def create_[domain]([domain]_data, claims_and_roles):
         )
     except Exception as e:
         logger.exception(f"Error creating [domain]: {e}")
-        raise VAMSGeneralErrorResponse(f"Error creating [domain]: {str(e)}")
+        raise VAMSGeneralErrorResponse("Error creating resource")
 
 #######################
 # Request Handlers

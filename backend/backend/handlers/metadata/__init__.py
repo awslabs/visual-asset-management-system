@@ -77,7 +77,7 @@ def get_default_bucket_details(bucketId):
 
         #Check to make sure we have what we need
         if not bucket_name or not base_assets_prefix:
-            raise Exception(f"Error getting database default bucket details: {str(e)}")
+            raise Exception(f"Error getting database default bucket details.")
         
         #Make sure we end in a slash for the path
         if not base_assets_prefix.endswith('/'):
@@ -94,7 +94,7 @@ def get_default_bucket_details(bucketId):
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
-        raise Exception(f"Error getting bucket details: {str(e)}")
+        raise Exception(f"Error getting bucket details.")
 
 
 def to_update_expr(record):

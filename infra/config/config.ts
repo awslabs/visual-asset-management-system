@@ -183,29 +183,16 @@ export function getConfig(app: cdk.App): Config {
         config.app.authProvider.authorizerOptions.allowedIpRanges = [];
     }
 
-    // Validate IP ranges configuration
-    if (config.app.authProvider.authorizerOptions.allowedIpRanges) {
-        for (let i = 0; i < config.app.authProvider.authorizerOptions.allowedIpRanges.length; i++) {
-            const range = config.app.authProvider.authorizerOptions.allowedIpRanges[i];
-            if (!Array.isArray(range) || range.length !== 2) {
-                throw new Error(
-                    `Configuration Error: IP range at index ${i} must be an array of exactly 2 IP addresses [min, max]. Got: ${JSON.stringify(
-                        range
-                    )}`
-                );
-            }
+    if (config.app.api == undefined) {
+        config.app.api = { globalRateLimit: 50, globalBurstLimit: 100 };
+    }
 
-            // Basic IP format validation
-            const ipRegex =
-                /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-            if (!ipRegex.test(range[0]) || !ipRegex.test(range[1])) {
-                throw new Error(
-                    `Configuration Error: Invalid IP address format in range at index ${i}. Expected format: ["192.168.1.1", "192.168.1.255"]. Got: ${JSON.stringify(
-                        range
-                    )}`
-                );
-            }
-        }
+    if (config.app.api.globalRateLimit == undefined) {
+        config.app.api.globalRateLimit = 50;
+    }
+
+    if (config.app.api.globalBurstLimit == undefined) {
+        config.app.api.globalBurstLimit = 100;
     }
 
     //Load S3 Policy statements JSON
@@ -522,6 +509,50 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
+    //API Configuration Error Checks
+    if (config.app.api.globalRateLimit <= 0) {
+        throw new Error(
+            "Configuration Error: API globalRateLimit must be a positive number greater than 0."
+        );
+    }
+
+    if (config.app.api.globalBurstLimit <= 0) {
+        throw new Error(
+            "Configuration Error: API globalBurstLimit must be a positive number greater than 0."
+        );
+    }
+
+    if (config.app.api.globalBurstLimit < config.app.api.globalRateLimit) {
+        throw new Error(
+            "Configuration Error: API globalBurstLimit must be greater than or equal to globalRateLimit."
+        );
+    }
+
+    // Validate IP ranges configuration
+    if (config.app.authProvider.authorizerOptions.allowedIpRanges) {
+        for (let i = 0; i < config.app.authProvider.authorizerOptions.allowedIpRanges.length; i++) {
+            const range = config.app.authProvider.authorizerOptions.allowedIpRanges[i];
+            if (!Array.isArray(range) || range.length !== 2) {
+                throw new Error(
+                    `Configuration Error: IP range at index ${i} must be an array of exactly 2 IP addresses [min, max]. Got: ${JSON.stringify(
+                        range
+                    )}`
+                );
+            }
+
+            // Basic IP format validation
+            const ipRegex =
+                /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+            if (!ipRegex.test(range[0]) || !ipRegex.test(range[1])) {
+                throw new Error(
+                    `Configuration Error: Invalid IP address format in range at index ${i}. Expected format: ["192.168.1.1", "192.168.1.255"]. Got: ${JSON.stringify(
+                        range
+                    )}`
+                );
+            }
+        }
+    }
+
     return config;
 }
 
@@ -642,6 +673,10 @@ export interface ConfigPublic {
         webUi: {
             optionalBannerHtmlMessage: string;
             allowUnsafeEvalFeatures: boolean;
+        };
+        api: {
+            globalRateLimit: number;
+            globalBurstLimit: number;
         };
     };
 }

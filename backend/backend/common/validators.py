@@ -255,7 +255,7 @@ def validate_number(name, value):
     
 def validate_bool(name, value):
     try:
-        bool(value)
+        bool(str(value))
         return (True, '')
     except ValueError:
         return (False, name + " is invalid. Must be a boolean string of 'true'/'false'.")

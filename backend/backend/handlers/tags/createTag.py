@@ -49,7 +49,7 @@ def create_tag(body):
         )
     else:
         response['statusCode'] = 400
-        response['body'] = json.dumps({"message": "TagTypeName " + str(body["tagTypeName"]) + " doesn't exists."})
+        response['body'] = json.dumps({"message": "Invalid tag type specified."})
         return response
 
     return json.dumps({"message": 'Succeeded'})
@@ -167,9 +167,7 @@ def lambda_handler(event, context):
         if e.response['Error']['Code'] == 'ConditionalCheckFailedException' or e.response['Error'][
             'Code'] == 'TransactionCanceledException':
             response['statusCode'] = 400
-            response['body'] = json.dumps({"message": "TagName " + str(
-                event['body']['tagName'] + " already exists. or TagTypeName " + str(
-                    event['body']['tagTypeName']) + " don't exists.")})
+            response['body'] = json.dumps({"message": "Tag already exists or invalid tag type specified."})
         else:
             response['statusCode'] = 500
             response['body'] = json.dumps({"message": "Internal Server Error"})

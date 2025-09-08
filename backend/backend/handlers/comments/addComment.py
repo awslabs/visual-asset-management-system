@@ -189,7 +189,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
             response["statusCode"] = 400
             response["body"] = json.dumps(
-                {"message": "comment " + str(event["body"]["assetVersionId:commentId"] + " already exists.")}
+                {"message": "Comment already exists."}
             )
         else:
             response["statusCode"] = 500

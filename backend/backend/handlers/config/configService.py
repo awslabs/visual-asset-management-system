@@ -79,6 +79,7 @@ def lambda_handler(event, context):
             "body": json.dumps(response),
             "headers": {
                 "Content-Type": "application/json",
+                'Cache-Control': 'no-cache, no-store',
             },
         }
     except Exception as e:
