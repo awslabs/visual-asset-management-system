@@ -9,7 +9,7 @@ from click.testing import CliRunner
 from vamscli.main import cli
 from vamscli.utils.exceptions import (
     APIError, AuthenticationError, AssetNotFoundError, DatabaseNotFoundError,
-    InvalidAssetDataError
+    InvalidAssetDataError, SetupRequiredError
 )
 
 
@@ -207,7 +207,8 @@ class TestMetadataGetCommand:
             ])
             
             assert result.exit_code == 1
-            assert "Authentication failed" in result.output
+            # Check that the original exception is preserved
+            assert isinstance(result.exception, AuthenticationError)
     
     def test_get_api_error(self, cli_runner, metadata_command_mocks):
         """Test metadata get with API error."""
@@ -221,7 +222,8 @@ class TestMetadataGetCommand:
             ])
             
             assert result.exit_code == 1
-            assert "API request failed" in result.output
+            # Check that the original exception is preserved
+            assert isinstance(result.exception, APIError)
     
     def test_get_error_with_json_output(self, cli_runner, metadata_command_mocks):
         """Test metadata error with JSON output."""
@@ -237,9 +239,8 @@ class TestMetadataGetCommand:
             
             assert result.exit_code == 1
             
-            # Parse output as JSON
-            output_data = json.loads(result.output)
-            assert output_data == {"error": "API request failed"}
+            # Check that exception is raised instead of JSON output
+            assert isinstance(result.exception, APIError)
     
     def test_get_no_setup(self, cli_runner, metadata_no_setup_mocks):
         """Test metadata get without setup."""
@@ -251,8 +252,8 @@ class TestMetadataGetCommand:
             ])
             
             assert result.exit_code == 1
-            assert 'Configuration not found' in result.output
-            assert 'vamscli setup' in result.output
+            # Check that setup required exception is preserved
+            assert isinstance(result.exception, SetupRequiredError)
 
 
 class TestMetadataCreateCommand:
@@ -601,7 +602,8 @@ class TestMetadataCommandsIntegration:
             ])
             
             assert result.exit_code == 1
-            assert 'Authentication failed' in result.output
+            # Check that the original exception is preserved
+            assert isinstance(result.exception, AuthenticationError)
 
 
 class TestMetadataUtilityFunctions:
@@ -807,8 +809,9 @@ class TestMetadataJSONHandling:
                 ])
             
             assert result.exit_code == 1
-            # The error message includes the specific JSON error details
-            assert 'Invalid JSON' in result.output or 'Expecting value' in result.output
+            # Check exception for JSON validation errors
+            assert isinstance(result.exception, SystemExit)
+            assert result.exception.code == 1
     
     def test_nonexistent_json_input_file(self, cli_runner, metadata_command_mocks):
         """Test handling of nonexistent JSON input file."""

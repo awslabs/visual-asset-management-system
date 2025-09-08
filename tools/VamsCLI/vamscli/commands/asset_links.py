@@ -5,14 +5,13 @@ import click
 from typing import Dict, Any, Optional, List
 
 from ..utils.api_client import APIClient
-from ..utils.decorators import requires_api_access, get_profile_manager_from_context
+from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.exceptions import (
     AssetLinkError, AssetLinkNotFoundError, AssetLinkValidationError, 
     AssetLinkPermissionError, CycleDetectionError, AssetLinkAlreadyExistsError,
     InvalidRelationshipTypeError, AssetLinkOperationError, AssetNotFoundError,
-    DatabaseNotFoundError, AuthenticationError, APIUnavailableError
+    DatabaseNotFoundError
 )
-from ..version import get_version
 
 
 def parse_json_input(json_input: str) -> Dict[str, Any]:
@@ -186,7 +185,7 @@ def asset_links():
 @click.option('--json-input', help='JSON input file path or JSON string with all asset link data')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def create(ctx: click.Context, from_asset_id: str, from_database_id: str, 
           to_asset_id: str, to_database_id: str, relationship_type: str,
           tags: List[str], json_input: Optional[str], json_output: bool):
@@ -201,19 +200,12 @@ def create(ctx: click.Context, from_asset_id: str, from_database_id: str,
         vamscli asset-links create --from-asset-id parent --from-database-id db1 --to-asset-id child --to-database-id db1 --relationship-type parentChild --tags tag1 --tags tag2
         vamscli asset-links create --json-input '{"fromAssetId":"asset1","fromAssetDatabaseId":"db1","toAssetId":"asset2","toAssetDatabaseId":"db2","relationshipType":"related"}'
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
-    
-    # Check if setup has been completed
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
         
         # Build asset link data
         if json_input:
@@ -289,19 +281,13 @@ def create(ctx: click.Context, from_asset_id: str, from_database_id: str,
             err=True
         )
         raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
 
 
 @asset_links.command()
 @click.option('--asset-link-id', required=True, help='Asset link ID to retrieve')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def get(ctx: click.Context, asset_link_id: str, json_output: bool):
     """
     Get details for a specific asset link.
@@ -313,19 +299,12 @@ def get(ctx: click.Context, asset_link_id: str, json_output: bool):
         vamscli asset-links get --asset-link-id 12345678-1234-1234-1234-123456789012
         vamscli asset-links get --asset-link-id 12345678-1234-1234-1234-123456789012 --json-output
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
-    
-    # Check if setup has been completed
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
         
         if not json_output:
             click.echo(f"Retrieving asset link '{asset_link_id}'...")
@@ -352,12 +331,6 @@ def get(ctx: click.Context, asset_link_id: str, json_output: bool):
         )
         click.echo("You need permissions on the linked assets to view this asset link.")
         raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
 
 
 @asset_links.command()
@@ -366,7 +339,7 @@ def get(ctx: click.Context, asset_link_id: str, json_output: bool):
 @click.option('--json-input', help='JSON input file path or JSON string with update data')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def update(ctx: click.Context, asset_link_id: str, tags: List[str], 
           json_input: Optional[str], json_output: bool):
     """
@@ -379,19 +352,12 @@ def update(ctx: click.Context, asset_link_id: str, tags: List[str],
         vamscli asset-links update --asset-link-id 12345678-1234-1234-1234-123456789012 --tags tag1 --tags tag2
         vamscli asset-links update --asset-link-id 12345678-1234-1234-1234-123456789012 --json-input '{"tags":["new-tag1","new-tag2"]}'
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
-    
-    # Check if setup has been completed
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
         
         # Build update data
         if json_input:
@@ -446,19 +412,13 @@ def update(ctx: click.Context, asset_link_id: str, tags: List[str],
             err=True
         )
         raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
 
 
 @asset_links.command()
 @click.option('--asset-link-id', required=True, help='Asset link ID to delete')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def delete(ctx: click.Context, asset_link_id: str, json_output: bool):
     """
     Delete an asset link.
@@ -470,19 +430,12 @@ def delete(ctx: click.Context, asset_link_id: str, json_output: bool):
         vamscli asset-links delete --asset-link-id 12345678-1234-1234-1234-123456789012
         vamscli asset-links delete --asset-link-id 12345678-1234-1234-1234-123456789012 --json-output
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
-    
-    # Check if setup has been completed
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
         
         # Confirmation prompt for safety
         click.echo(
@@ -522,12 +475,6 @@ def delete(ctx: click.Context, asset_link_id: str, json_output: bool):
         )
         click.echo("You need permissions on both linked assets to delete this asset link.")
         raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
 
 
 @asset_links.command(name='list')
@@ -536,7 +483,7 @@ def delete(ctx: click.Context, asset_link_id: str, json_output: bool):
 @click.option('--tree-view', is_flag=True, help='Display children as a tree structure')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def list_links(ctx: click.Context, database_id: str, asset_id: str, tree_view: bool, json_output: bool):
     """
     List all asset links for a specific asset.
@@ -549,19 +496,12 @@ def list_links(ctx: click.Context, database_id: str, asset_id: str, tree_view: b
         vamscli asset-links list -d my-database --asset-id my-asset --tree-view
         vamscli asset-links list -d my-database --asset-id my-asset --json-output
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
-    
-    # Check if setup has been completed
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
         
         click.echo(f"Retrieving asset links for '{asset_id}' in database '{database_id}'...")
         
@@ -595,10 +535,4 @@ def list_links(ctx: click.Context, database_id: str, asset_id: str, tree_view: b
             err=True
         )
         click.echo("You need permissions on the asset to view its links.")
-        raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
         raise click.ClickException(str(e))

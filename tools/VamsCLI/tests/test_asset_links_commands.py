@@ -7,11 +7,12 @@ from unittest.mock import Mock, patch, mock_open
 from click.testing import CliRunner
 
 from vamscli.commands.asset_links import asset_links
+from vamscli.main import cli
 from vamscli.utils.exceptions import (
     AssetLinkNotFoundError, AssetLinkAlreadyExistsError, CycleDetectionError,
     AssetLinkPermissionError, AssetLinkValidationError, InvalidRelationshipTypeError,
     AssetLinkOperationError, AssetNotFoundError, DatabaseNotFoundError, 
-    AuthenticationError, APIError
+    AuthenticationError, APIError, SetupRequiredError
 )
 
 
@@ -221,8 +222,8 @@ class TestAssetLinksCreateCommand:
     def test_create_no_setup(self, cli_runner, asset_links_no_setup_mocks):
         """Test create command without setup."""
         with asset_links_no_setup_mocks as mocks:
-            result = cli_runner.invoke(asset_links, [
-                'create',
+            result = cli_runner.invoke(cli, [
+                'asset-links', 'create',
                 '--from-asset-id', 'asset1',
                 '--from-database-id', 'db1',
                 '--to-asset-id', 'asset2',
@@ -230,9 +231,10 @@ class TestAssetLinksCreateCommand:
                 '--relationship-type', 'related'
             ])
             
+            # Global exception handling - no output, just exception propagation
             assert result.exit_code == 1
-            assert 'Configuration not found' in result.output
-            assert 'vamscli setup' in result.output
+            assert result.exception
+            assert isinstance(result.exception, SetupRequiredError)
 
 
 class TestAssetLinksGetCommand:
@@ -367,7 +369,7 @@ class TestAssetLinksUpdateCommand:
                 '--asset-link-id', '12345678-1234-1234-1234-123456789012'
             ])
             
-            assert result.exit_code == 1  # Our custom error handling
+            assert result.exit_code == 2  # Click parameter error
             assert 'At least one field must be provided' in result.output
 
 
@@ -597,8 +599,8 @@ class TestAssetLinksCommandsIntegration:
         with asset_links_command_mocks as mocks:
             mocks['api_client'].create_asset_link.side_effect = AuthenticationError("Authentication failed")
             
-            result = cli_runner.invoke(asset_links, [
-                'create',
+            result = cli_runner.invoke(cli, [
+                'asset-links', 'create',
                 '--from-asset-id', 'asset1',
                 '--from-database-id', 'db1',
                 '--to-asset-id', 'asset2',
@@ -606,9 +608,10 @@ class TestAssetLinksCommandsIntegration:
                 '--relationship-type', 'related'
             ])
             
+            # Global exception handling - no output, just exception propagation
             assert result.exit_code == 1
-            assert '✗ Unexpected error' in result.output
-            assert 'Authentication failed' in result.output
+            assert result.exception
+            assert isinstance(result.exception, AuthenticationError)
     
     def test_permission_error_handling(self, cli_runner, asset_links_command_mocks):
         """Test permission error handling."""
@@ -645,7 +648,7 @@ class TestAssetLinksCommandsJSONHandling:
                 '--json-input', 'invalid json'
             ])
             
-            assert result.exit_code == 1  # Click parameter error
+            assert result.exit_code == 2  # Click parameter error
             assert 'Invalid JSON input' in result.output
     
     def test_nonexistent_json_input_file(self, cli_runner, asset_links_command_mocks):
@@ -661,7 +664,7 @@ class TestAssetLinksCommandsJSONHandling:
                 '--json-input', 'nonexistent.json'
             ])
             
-            assert result.exit_code == 1  # Click parameter error
+            assert result.exit_code == 2  # Click parameter error
             assert 'Invalid JSON input' in result.output
 
 
@@ -724,8 +727,8 @@ class TestAssetLinksCommandsEdgeCases:
         with asset_links_command_mocks as mocks:
             mocks['api_client'].create_asset_link.side_effect = APIError("API request failed")
             
-            result = cli_runner.invoke(asset_links, [
-                'create',
+            result = cli_runner.invoke(cli, [
+                'asset-links', 'create',
                 '--from-asset-id', 'asset1',
                 '--from-database-id', 'db1',
                 '--to-asset-id', 'asset2',
@@ -733,9 +736,10 @@ class TestAssetLinksCommandsEdgeCases:
                 '--relationship-type', 'related'
             ])
             
+            # Global exception handling - no output, just exception propagation
             assert result.exit_code == 1
-            assert '✗ Unexpected error' in result.output
-            assert 'API request failed' in result.output
+            assert result.exception
+            assert isinstance(result.exception, APIError)
     
     def test_list_empty_results(self, cli_runner, asset_links_command_mocks):
         """Test list command with no asset links."""

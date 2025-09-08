@@ -6,212 +6,293 @@ class VamsCLIError(Exception):
     pass
 
 
-class ConfigurationError(VamsCLIError):
-    """Raised when there's a configuration issue."""
+# =============================================================================
+# GLOBAL INFRASTRUCTURE EXCEPTIONS
+# These are handled by the global exception handler in main.py
+# =============================================================================
+
+class GlobalInfrastructureError(VamsCLIError):
+    """Base exception for global infrastructure errors handled in main.py."""
     pass
 
 
-class AuthenticationError(VamsCLIError):
-    """Raised when authentication fails."""
-    pass
-
-
-class APIError(VamsCLIError):
-    """Raised when API calls fail."""
-    pass
-
-
-class VersionMismatchError(VamsCLIError):
-    """Raised when CLI and API versions don't match."""
-    pass
-
-
-class SetupRequiredError(VamsCLIError):
+class SetupRequiredError(GlobalInfrastructureError):
     """Raised when setup is required before running commands."""
     pass
 
 
-class ProfileNotFoundError(VamsCLIError):
-    """Raised when required profile is not found."""
+class AuthenticationError(GlobalInfrastructureError):
+    """Raised when authentication fails."""
     pass
 
 
-class OverrideTokenError(VamsCLIError):
-    """Raised when there's an issue with override tokens."""
-    pass
-
-
-class APIUnavailableError(VamsCLIError):
+class APIUnavailableError(GlobalInfrastructureError):
     """Raised when the VAMS API is unavailable or incompatible."""
     pass
 
 
-class AssetNotFoundError(VamsCLIError):
+class ProfileError(GlobalInfrastructureError):
+    """Raised when profile operations fail."""
+    pass
+
+
+class InvalidProfileNameError(GlobalInfrastructureError):
+    """Raised when profile name is invalid."""
+    pass
+
+
+class ConfigurationError(GlobalInfrastructureError):
+    """Raised when there's a configuration issue."""
+    pass
+
+
+class OverrideTokenError(GlobalInfrastructureError):
+    """Raised when there's an issue with override tokens."""
+    pass
+
+
+class VersionMismatchError(GlobalInfrastructureError):
+    """Raised when CLI and API versions don't match."""
+    pass
+
+
+class RetryExhaustedError(GlobalInfrastructureError):
+    """Raised when all retry attempts have been exhausted."""
+    pass
+
+
+class RateLimitExceededError(GlobalInfrastructureError):
+    """Raised when API rate limit is exceeded (HTTP 429)."""
+    pass
+
+
+# =============================================================================
+# COMMAND-SPECIFIC BUSINESS LOGIC EXCEPTIONS
+# These are handled by individual commands
+# =============================================================================
+
+class BusinessLogicError(VamsCLIError):
+    """Base exception for command-specific business logic errors."""
+    pass
+
+
+# General API and validation errors
+class APIError(BusinessLogicError):
+    """Raised when API calls fail."""
+    pass
+
+
+class ProfileNotFoundError(BusinessLogicError):
+    """Raised when required profile is not found."""
+    pass
+
+
+# Asset-related business logic exceptions
+class AssetError(BusinessLogicError):
+    """Base class for asset-related errors."""
+    pass
+
+
+class AssetNotFoundError(AssetError):
     """Raised when an asset is not found."""
     pass
 
 
-class AssetAlreadyExistsError(VamsCLIError):
+class AssetAlreadyExistsError(AssetError):
     """Raised when trying to create an asset that already exists"""
     pass
 
 
-class AssetAlreadyArchivedError(VamsCLIError):
+class AssetAlreadyArchivedError(AssetError):
     """Raised when trying to archive an asset that is already archived"""
     pass
 
 
-class AssetDeletionError(VamsCLIError):
+class AssetDeletionError(AssetError):
     """Raised when asset deletion operations fail"""
     pass
 
 
-class DatabaseNotFoundError(VamsCLIError):
-    """Raised when a database is not found"""
-    pass
-
-
-class DatabaseAlreadyExistsError(VamsCLIError):
-    """Raised when trying to create a database that already exists"""
-    pass
-
-
-class DatabaseDeletionError(VamsCLIError):
-    """Raised when database deletion fails due to dependencies"""
-    pass
-
-
-class BucketNotFoundError(VamsCLIError):
-    """Raised when a bucket is not found"""
-    pass
-
-
-class InvalidDatabaseDataError(VamsCLIError):
-    """Raised when database data is invalid"""
-    pass
-
-
-class InvalidAssetDataError(VamsCLIError):
+class InvalidAssetDataError(AssetError):
     """Raised when asset data is invalid"""
     pass
 
 
-class FileUploadError(VamsCLIError):
+# Database-related business logic exceptions
+class DatabaseError(BusinessLogicError):
+    """Base class for database-related errors."""
+    pass
+
+
+class DatabaseNotFoundError(DatabaseError):
+    """Raised when a database is not found"""
+    pass
+
+
+class DatabaseAlreadyExistsError(DatabaseError):
+    """Raised when trying to create a database that already exists"""
+    pass
+
+
+class DatabaseDeletionError(DatabaseError):
+    """Raised when database deletion fails due to dependencies"""
+    pass
+
+
+class InvalidDatabaseDataError(DatabaseError):
+    """Raised when database data is invalid"""
+    pass
+
+
+class BucketNotFoundError(DatabaseError):
+    """Raised when a bucket is not found"""
+    pass
+
+
+# File-related business logic exceptions
+class FileError(BusinessLogicError):
+    """Base class for file-related errors."""
+    pass
+
+
+class FileUploadError(FileError):
     """Raised when file upload operations fail"""
     pass
 
 
-class InvalidFileError(VamsCLIError):
+class InvalidFileError(FileError):
     """Raised when a file is invalid for upload"""
     pass
 
 
-class FileTooLargeError(VamsCLIError):
+class FileTooLargeError(FileError):
     """Raised when a file exceeds size limits"""
     pass
 
 
-class PreviewFileError(VamsCLIError):
+class PreviewFileError(FileError):
     """Raised when preview file validation fails"""
     pass
 
 
-class UploadSequenceError(VamsCLIError):
+class UploadSequenceError(FileError):
     """Raised when upload sequence processing fails"""
     pass
 
 
-class PartUploadError(VamsCLIError):
+class PartUploadError(FileError):
     """Raised when individual part upload fails"""
     pass
 
 
-class ProfileError(VamsCLIError):
-    """Raised when profile operations fail"""
-    pass
-
-
-class InvalidProfileNameError(VamsCLIError):
-    """Raised when profile name is invalid"""
-    pass
-
-
-class ProfileAlreadyExistsError(VamsCLIError):
-    """Raised when trying to create a profile that already exists"""
-    pass
-
-
-class FileNotFoundError(VamsCLIError):
+class FileNotFoundError(FileError):
     """Raised when a file is not found"""
     pass
 
 
-class FileOperationError(VamsCLIError):
+class FileOperationError(FileError):
     """Raised when file operations fail"""
     pass
 
 
-class InvalidPathError(VamsCLIError):
+class InvalidPathError(FileError):
     """Raised when file paths are invalid"""
     pass
 
 
-class FilePermissionError(VamsCLIError):
+class FilePermissionError(FileError):
     """Raised when user lacks permissions for file operations"""
     pass
 
 
-class FileAlreadyExistsError(VamsCLIError):
+class FileAlreadyExistsError(FileError):
     """Raised when trying to create a file that already exists"""
     pass
 
 
-class FileArchivedError(VamsCLIError):
+class FileArchivedError(FileError):
     """Raised when trying to operate on archived files"""
     pass
 
 
-class InvalidVersionError(VamsCLIError):
+class InvalidVersionError(FileError):
     """Raised when file version is invalid"""
     pass
 
 
-class TagNotFoundError(VamsCLIError):
+class FileDownloadError(FileError):
+    """Raised when file download operations fail."""
+    pass
+
+
+class DownloadError(FileError):
+    """Raised when individual download operations fail."""
+    pass
+
+
+class AssetDownloadError(FileError):
+    """Raised when asset download operations fail."""
+    pass
+
+
+class PreviewNotFoundError(FileError):
+    """Raised when asset preview is not found."""
+    pass
+
+
+class AssetNotDistributableError(FileError):
+    """Raised when trying to download from non-distributable asset."""
+    pass
+
+
+class DownloadTreeError(FileError):
+    """Raised when asset tree traversal fails."""
+    pass
+
+
+# Tag-related business logic exceptions
+class TagError(BusinessLogicError):
+    """Base class for tag-related errors."""
+    pass
+
+
+class TagNotFoundError(TagError):
     """Raised when a tag is not found."""
     pass
 
 
-class TagAlreadyExistsError(VamsCLIError):
+class TagAlreadyExistsError(TagError):
     """Raised when trying to create a tag that already exists."""
     pass
 
 
-class TagTypeNotFoundError(VamsCLIError):
-    """Raised when a tag type is not found."""
-    pass
-
-
-class TagTypeAlreadyExistsError(VamsCLIError):
-    """Raised when trying to create a tag type that already exists."""
-    pass
-
-
-class TagTypeInUseError(VamsCLIError):
-    """Raised when trying to delete a tag type that is currently in use by tags."""
-    pass
-
-
-class InvalidTagDataError(VamsCLIError):
+class InvalidTagDataError(TagError):
     """Raised when tag data is invalid."""
     pass
 
 
-class InvalidTagTypeDataError(VamsCLIError):
+class TagTypeNotFoundError(TagError):
+    """Raised when a tag type is not found."""
+    pass
+
+
+class TagTypeAlreadyExistsError(TagError):
+    """Raised when trying to create a tag type that already exists."""
+    pass
+
+
+class TagTypeInUseError(TagError):
+    """Raised when trying to delete a tag type that is currently in use by tags."""
+    pass
+
+
+class InvalidTagTypeDataError(TagError):
     """Raised when tag type data is invalid."""
     pass
 
 
-class AssetVersionError(VamsCLIError):
+# Asset version-related business logic exceptions
+class AssetVersionError(BusinessLogicError):
     """Base class for asset version errors."""
     pass
 
@@ -236,7 +317,8 @@ class AssetVersionRevertError(AssetVersionError):
     pass
 
 
-class AssetLinkError(VamsCLIError):
+# Asset link-related business logic exceptions
+class AssetLinkError(BusinessLogicError):
     """Base class for asset link errors."""
     pass
 
@@ -276,37 +358,8 @@ class AssetLinkOperationError(AssetLinkError):
     pass
 
 
-class FileDownloadError(VamsCLIError):
-    """Raised when file download operations fail."""
-    pass
-
-
-class DownloadError(VamsCLIError):
-    """Raised when individual download operations fail."""
-    pass
-
-
-class AssetDownloadError(VamsCLIError):
-    """Raised when asset download operations fail."""
-    pass
-
-
-class PreviewNotFoundError(VamsCLIError):
-    """Raised when asset preview is not found."""
-    pass
-
-
-class AssetNotDistributableError(VamsCLIError):
-    """Raised when trying to download from non-distributable asset."""
-    pass
-
-
-class DownloadTreeError(VamsCLIError):
-    """Raised when asset tree traversal fails."""
-    pass
-
-
-class SearchError(VamsCLIError):
+# Search-related business logic exceptions
+class SearchError(BusinessLogicError):
     """Base class for search errors."""
     pass
 
@@ -333,4 +386,10 @@ class SearchQueryError(SearchError):
 
 class SearchMappingError(SearchError):
     """Raised when search mapping retrieval fails."""
+    pass
+
+
+# Profile-related business logic exceptions (for command-specific profile operations)
+class ProfileAlreadyExistsError(BusinessLogicError):
+    """Raised when trying to create a profile that already exists"""
     pass

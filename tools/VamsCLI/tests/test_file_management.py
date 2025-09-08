@@ -122,13 +122,10 @@ class TestFileUploadCommand:
                 ])
                 
                 assert result.exit_code == 1
-                # The upload command processes files before checking config, so we expect an error during processing
-                # The actual error is "'Mock' object is not subscriptable" when trying to access config
-                assert ('Configuration not found' in result.output or 
-                        'Setup required' in result.output or
-                        'vamscli setup' in result.output or
-                        'Unexpected error' in result.output or
-                        'Mock' in result.output)
+                # With new global exception handling, SetupRequiredError is raised
+                # The exception message contains the setup requirement
+                assert isinstance(result.exception, Exception)
+                assert 'Setup required' in str(result.exception)
     
     def test_upload_missing_required_args(self, cli_runner, file_command_mocks):
         """Test upload command with missing required arguments."""
@@ -266,8 +263,9 @@ class TestFileCreateFolderCommand:
             ])
             
             assert result.exit_code == 1
-            assert 'Configuration not found' in result.output
-            assert 'vamscli setup' in result.output
+            # With new global exception handling, SetupRequiredError is raised
+            assert isinstance(result.exception, Exception)
+            assert 'Setup required' in str(result.exception)
     
     def test_create_folder_json_input(self, cli_runner, file_command_mocks):
         """Test folder creation with JSON input."""
@@ -383,8 +381,9 @@ class TestFileListCommand:
             ])
             
             assert result.exit_code == 1
-            assert 'Configuration not found' in result.output
-            assert 'vamscli setup' in result.output
+            # With new global exception handling, SetupRequiredError is raised
+            assert isinstance(result.exception, Exception)
+            assert 'Setup required' in str(result.exception)
     
     def test_list_with_filters(self, cli_runner, file_command_mocks):
         """Test file listing with filters."""
@@ -513,8 +512,9 @@ class TestFileInfoCommand:
             ])
             
             assert result.exit_code == 1
-            assert 'Configuration not found' in result.output
-            assert 'vamscli setup' in result.output
+            # With new global exception handling, SetupRequiredError is raised
+            assert isinstance(result.exception, Exception)
+            assert 'Setup required' in str(result.exception)
     
     def test_info_with_versions(self, cli_runner, file_command_mocks):
         """Test file info with version history."""
@@ -736,8 +736,9 @@ class TestFileVersionCommands:
             ])
             
             assert result.exit_code == 1
-            assert 'Configuration not found' in result.output
-            assert 'vamscli setup' in result.output
+            # With new global exception handling, SetupRequiredError is raised
+            assert isinstance(result.exception, Exception)
+            assert 'Setup required' in str(result.exception)
 
 
 class TestFilePrimaryTypeCommands:
@@ -822,8 +823,9 @@ class TestFilePrimaryTypeCommands:
             ])
             
             assert result.exit_code == 1
-            assert 'Configuration not found' in result.output
-            assert 'vamscli setup' in result.output
+            # With new global exception handling, SetupRequiredError is raised
+            assert isinstance(result.exception, Exception)
+            assert 'Setup required' in str(result.exception)
 
 
 class TestFilePreviewCommands:
@@ -866,8 +868,9 @@ class TestFilePreviewCommands:
             ])
             
             assert result.exit_code == 1
-            assert 'Configuration not found' in result.output
-            assert 'vamscli setup' in result.output
+            # With new global exception handling, SetupRequiredError is raised
+            assert isinstance(result.exception, Exception)
+            assert 'Setup required' in str(result.exception)
     
     def test_delete_auxiliary_help(self, cli_runner):
         """Test delete-auxiliary command help."""
@@ -913,7 +916,9 @@ class TestFileCommandsIntegration:
             ])
             
             assert result.exit_code == 1
-            assert 'Authentication failed' in result.output
+            # With new global exception handling, AuthenticationError is raised
+            assert isinstance(result.exception, Exception)
+            assert 'Authentication failed' in str(result.exception)
     
     def test_api_error_handling(self, cli_runner, file_command_mocks):
         """Test general API error handling."""
@@ -927,7 +932,9 @@ class TestFileCommandsIntegration:
             ])
             
             assert result.exit_code == 1
-            assert 'API request failed' in result.output
+            # With new global exception handling, APIError is raised
+            assert isinstance(result.exception, Exception)
+            assert 'API request failed' in str(result.exception)
     
     def test_asset_not_found_error_handling(self, cli_runner, file_command_mocks):
         """Test asset not found error handling."""
@@ -1004,34 +1011,42 @@ class TestFileJSONInputHandling:
                 assert result.exit_code == 0
                 assert '✓ Folder created successfully!' in result.output
     
-    def test_invalid_json_input(self, cli_runner):
+    def test_invalid_json_input(self, cli_runner, file_command_mocks):
         """Test error with invalid JSON input."""
-        # JSON input still requires CLI parameters due to Click's required validation
-        result = cli_runner.invoke(cli, [
-            'file', 'create-folder',
-            '-d', 'test-db',  # Required by Click
-            '-a', 'test-asset',  # Required by Click
-            '-p', '/models/',  # Required by Click
-            '--json-input', '{"invalid": json}'
-        ])
-        
-        assert result.exit_code == 1
-        assert 'Invalid JSON input' in result.output
-    
-    def test_json_file_not_found(self, cli_runner):
-        """Test error when JSON input file doesn't exist."""
-        with patch('pathlib.Path.exists', return_value=False):
+        with file_command_mocks as mocks:
             # JSON input still requires CLI parameters due to Click's required validation
             result = cli_runner.invoke(cli, [
                 'file', 'create-folder',
                 '-d', 'test-db',  # Required by Click
                 '-a', 'test-asset',  # Required by Click
                 '-p', '/models/',  # Required by Click
-                '--json-input', '@nonexistent.json'
+                '--json-input', '{"invalid": json}'
             ])
             
             assert result.exit_code == 1
-            assert 'JSON input file not found' in result.output
+            # JSON parsing errors cause SystemExit via ClickException
+            assert isinstance(result.exception, SystemExit)
+            # Check the output for the error message
+            assert 'Invalid JSON input' in result.output
+    
+    def test_json_file_not_found(self, cli_runner, file_command_mocks):
+        """Test error when JSON input file doesn't exist."""
+        with file_command_mocks as mocks:
+            with patch('pathlib.Path.exists', return_value=False):
+                # JSON input still requires CLI parameters due to Click's required validation
+                result = cli_runner.invoke(cli, [
+                    'file', 'create-folder',
+                    '-d', 'test-db',  # Required by Click
+                    '-a', 'test-asset',  # Required by Click
+                    '-p', '/models/',  # Required by Click
+                    '--json-input', '@nonexistent.json'
+                ])
+                
+                assert result.exit_code == 1
+                # File not found errors cause SystemExit via ClickException
+                assert isinstance(result.exception, SystemExit)
+                # Check the output for the error message
+                assert 'JSON input file not found' in result.output
 
 
 class TestFileCommandsEdgeCases:
@@ -1067,6 +1082,7 @@ class TestFileCommandsEdgeCases:
             ])
             
             assert result.exit_code == 1
+            # InvalidPathError is a business logic exception, handled by command
             assert 'Invalid file path' in result.output
     
     def test_file_already_exists_error(self, cli_runner, file_command_mocks):
@@ -1083,6 +1099,7 @@ class TestFileCommandsEdgeCases:
             ])
             
             assert result.exit_code == 1
+            # FileAlreadyExistsError is a business logic exception, handled by command
             assert 'File already exists' in result.output
 
 

@@ -3,7 +3,6 @@ Constants for VamsCLI
 """
 
 # CLI Configuration
-CLI_VERSION = "2.2.0"
 CLI_NAME = "vamscli"
 
 # API Endpoints
@@ -82,6 +81,13 @@ MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 DEFAULT_PARALLEL_UPLOADS = 10
 DEFAULT_RETRY_ATTEMPTS = 3
 
+# New Backend Upload Limits (v2.2+)
+MAX_FILES_PER_REQUEST = 1000  # Maximum files per upload request
+MAX_TOTAL_PARTS_PER_REQUEST = 5000  # Maximum total parts across all files
+MAX_PARTS_PER_FILE = 10000  # Maximum parts per individual file (S3 limit)
+MAX_PART_SIZE = 5 * 1024 * 1024 * 1024  # 5GB maximum part size (S3 limit)
+MAX_UPLOADS_PER_USER_PER_MINUTE = 10  # Rate limit for upload initialization
+
 # Download Configuration
 DEFAULT_PARALLEL_DOWNLOADS = 5
 DEFAULT_DOWNLOAD_RETRY_ATTEMPTS = 3
@@ -110,6 +116,13 @@ MAX_AUTH_RETRIES = 3
 MINIMUM_API_VERSION = "2.2"
 API_LOGIN_PROFILE = "/auth/loginProfile"
 API_SECURE_CONFIG = "/secure-config"
+
+# Retry Configuration for 429 Throttling
+DEFAULT_MAX_RETRY_ATTEMPTS = 5
+DEFAULT_INITIAL_RETRY_DELAY = 1.0
+DEFAULT_MAX_RETRY_DELAY = 60.0
+DEFAULT_RETRY_BACKOFF_MULTIPLIER = 2.0
+DEFAULT_RETRY_JITTER = 0.1
 
 # Feature Switch Constants
 FEATURE_GOVCLOUD = "GOVCLOUD"

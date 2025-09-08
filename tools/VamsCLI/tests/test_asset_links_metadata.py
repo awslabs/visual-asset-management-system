@@ -9,7 +9,7 @@ from click.testing import CliRunner
 from vamscli.main import cli
 from vamscli.utils.exceptions import (
     AssetLinkNotFoundError, AssetLinkValidationError, AssetLinkPermissionError,
-    APIUnavailableError, AuthenticationError, APIError
+    APIUnavailableError, AuthenticationError, APIError, SetupRequiredError
 )
 
 
@@ -121,9 +121,10 @@ class TestAssetLinksMetadataListCommand:
         with asset_links_metadata_no_setup_mocks as mocks:
             result = cli_runner.invoke(cli, ['asset-links-metadata', 'list', 'abc123-def456-ghi789-012345'])
             
+            # Global exception handling - no output, just exception propagation
             assert result.exit_code == 1
-            assert 'Configuration not found' in result.output
-            assert 'vamscli setup' in result.output
+            assert result.exception
+            assert isinstance(result.exception, SetupRequiredError)
     
     def test_list_asset_link_not_found(self, cli_runner, asset_links_metadata_command_mocks):
         """Test list command with non-existent asset link."""
@@ -666,9 +667,10 @@ class TestAssetLinksMetadataIntegration:
             
             result = cli_runner.invoke(cli, ['asset-links-metadata', 'list', 'abc123-def456-ghi789-012345'])
             
+            # Global exception handling - no output, just exception propagation
             assert result.exit_code == 1
-            assert '✗ Unexpected error' in result.output
-            assert 'Authentication failed' in result.output
+            assert result.exception
+            assert isinstance(result.exception, AuthenticationError)
 
 
 class TestAssetLinksMetadataJSONHandling:
@@ -823,9 +825,10 @@ class TestAssetLinksMetadataEdgeCases:
                 '--value', 'test_value'
             ])
             
+            # Global exception handling - no output, just exception propagation
             assert result.exit_code == 1
-            assert '✗ Unexpected error' in result.output
-            assert 'API request failed' in result.output
+            assert result.exception
+            assert isinstance(result.exception, APIError)
     
     def test_list_api_unavailable_error(self, cli_runner, asset_links_metadata_command_mocks):
         """Test list command with API unavailable error."""
@@ -834,9 +837,10 @@ class TestAssetLinksMetadataEdgeCases:
             
             result = cli_runner.invoke(cli, ['asset-links-metadata', 'list', 'abc123-def456-ghi789-012345'])
             
+            # Global exception handling - no output, just exception propagation
             assert result.exit_code == 1
-            assert '✗ Unexpected error' in result.output
-            assert 'API service unavailable' in result.output
+            assert result.exception
+            assert isinstance(result.exception, APIUnavailableError)
     
     def test_update_permission_error(self, cli_runner, asset_links_metadata_command_mocks):
         """Test update command with permission error."""

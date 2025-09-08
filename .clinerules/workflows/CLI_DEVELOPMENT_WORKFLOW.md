@@ -51,9 +51,11 @@ tools/VamsCLI/
 
 #### **Step 2: Exception Handling**
 
--   [ ] **Add Custom Exceptions**: Create specific exceptions in `utils/exceptions.py`
+-   [ ] **Classify Exception Type**: Determine if exception is global infrastructure or command-specific business logic
+-   [ ] **Add Custom Exceptions**: Create specific exceptions in `utils/exceptions.py` under appropriate category
 -   [ ] **Update Exception Imports**: Add new exceptions to `utils/__init__.py`
 -   [ ] **Plan Error Messages**: Design user-friendly error messages
+-   [ ] **Follow Exception Hierarchy**: Use `GlobalInfrastructureError` or `BusinessLogicError` base classes
 
 #### **Step 3: API Client Enhancement**
 
@@ -65,8 +67,9 @@ tools/VamsCLI/
 #### **Step 4: Command Implementation**
 
 -   [ ] **Create/Update Command File**: Add commands to appropriate file in `commands/`
--   [ ] **Apply Decorators**: Use `@requires_api_access` for API-dependent commands
--   [ ] **Add Authentication Checks**: Ensure proper authentication validation
+-   [ ] **Apply Decorators**: Use `@requires_setup_and_auth` for new API-dependent commands (or `@requires_api_access` for backward compatibility)
+-   [ ] **Remove Duplicated Setup Checks**: Don't duplicate setup/config validation (handled by decorators)
+-   [ ] **Handle Only Business Logic Exceptions**: Focus on domain-specific error handling
 -   [ ] **Include Help Text**: Comprehensive help with examples
 -   [ ] **Handle User Input**: Validate and sanitize user inputs
 
@@ -142,7 +145,7 @@ def assets():
     pass
 
 @assets.command()
-@requires_api_access
+@requires_setup_and_auth
 def list_assets():
     """List user assets."""
     pass
@@ -152,13 +155,13 @@ def list_assets():
 
 ```python
 # ✅ CORRECT - Always import decorators from utils.decorators
-from ..utils.decorators import requires_api_access, get_profile_manager_from_context
+from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 
-# ✅ CORRECT - Always use @requires_api_access for API commands
+# ✅ CORRECT - Always use @requires_setup_and_auth for API commands
 @auth.command()
 @click.option('-u', '--username', required=True)
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def login(ctx: click.Context, username: str):
     """Authenticate with VAMS."""
     # Use the imported helper function
@@ -166,7 +169,7 @@ def login(ctx: click.Context, username: str):
     pass
 
 # ❌ INCORRECT - Don't create new decorator functions in command files
-def requires_api_access(func):  # VIOLATION - use existing decorator
+def requires_setup_and_auth(func):  # VIOLATION - use existing decorator
     pass
 
 # ❌ INCORRECT - Don't create new helper functions in command files
@@ -250,11 +253,9 @@ class TestAssetCommands:
 
 import click
 
-from ..utils.profile import ProfileManager
 from ..utils.api_client import APIClient
-from ..utils.decorators import requires_api_access, get_profile_manager_from_context
-from ..utils.exceptions import [SpecificError], APIUnavailableError
-from ..version import get_version
+from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
+from ..utils.exceptions import [SpecificBusinessLogicError]
 
 
 @click.group()
@@ -267,7 +268,7 @@ def [command_group]():
 @click.option('-u', '--user-id', help='User ID if required')
 @click.option('--option-name', help='Option description')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def [command_name](ctx: click.Context, user_id: str, option_name: str):
     """
     Brief command description.
@@ -278,38 +279,26 @@ def [command_name](ctx: click.Context, user_id: str, option_name: str):
         vamscli [command_group] [command_name] --option-name value
         vamscli [command_group] [command_name] --help
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
-
-    # Check setup
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
 
     try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
-
-        # Implement command logic
+        # Focus on business logic only
         result = api_client.[api_method]()
 
         click.echo(
             click.style("✓ Operation successful!", fg='green', bold=True)
         )
 
-    except [SpecificError] as e:
+    except [SpecificBusinessLogicError] as e:
+        # Only handle command-specific business logic errors
         click.echo(
             click.style(f"✗ [Error Type]: {e}", fg='red', bold=True),
             err=True
         )
-        raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
+        click.echo("Use 'vamscli [related-command]' for more information.")
         raise click.ClickException(str(e))
 ```
 
@@ -476,19 +465,19 @@ def get_assets(self):
     return self.get("/api/user/assets")  # VIOLATION
 ```
 
-### **Rule 2: Commands MUST Use @requires_api_access**
+### **Rule 2: Commands MUST Use @requires_setup_and_auth**
 
 ```python
 # ✅ CORRECT - API commands must have decorator
 @assets.command()
-@requires_api_access
+@requires_setup_and_auth
 def list_assets():
     """List user assets."""
     pass
 
 # ❌ INCORRECT - Missing decorator for API command
 @assets.command()
-def list_assets():  # VIOLATION - needs @requires_api_access
+def list_assets():  # VIOLATION - needs @requires_setup_and_auth
     pass
 ```
 
@@ -553,30 +542,28 @@ All new commands that require API access or configuration MUST support the profi
 #### **Profile-Aware Command Pattern:**
 
 ```python
-from ..utils.decorators import requires_api_access, get_profile_manager_from_context
+from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 
 @command_group.command()
 @click.option('--required-param', required=True, help='Required parameter')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def new_command(ctx: click.Context, required_param: str):
     """Command description with profile support."""
-    # Get profile-aware ProfileManager
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
-
-    # Check setup for this profile
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
-
-    # Use profile-specific configuration
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
 
-    # Command implementation...
+    try:
+        # Focus on business logic only
+        result = api_client.some_operation(required_param)
+        click.echo("✓ Operation successful!")
+        
+    except SomeBusinessLogicError as e:
+        # Only handle command-specific business logic errors
+        click.echo(f"✗ Business Logic Error: {e}")
+        raise click.ClickException(str(e))
 ```
 
 #### **Profile System Architecture:**
@@ -706,18 +693,18 @@ All command files MUST use existing decorators and helper functions from the uti
 
 ```python
 # ✅ CORRECT - Import existing decorators
-from ..utils.decorators import requires_api_access, get_profile_manager_from_context
+from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 
 @command_group.command()
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def my_command(ctx: click.Context):
     """Command with proper decorator usage."""
     profile_manager = get_profile_manager_from_context(ctx)
     # Command implementation...
 
 # ❌ INCORRECT - Don't create new decorators in command files
-def requires_api_access(func):  # VIOLATION
+def requires_setup_and_auth(func):  # VIOLATION
     """Don't do this - use existing decorator."""
     pass
 
@@ -935,7 +922,7 @@ from ..constants import FEATURE_GOVCLOUD
 
 @command_group.command()
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 @requires_feature(FEATURE_GOVCLOUD, "GovCloud features are not enabled for this environment.")
 def govcloud_command(ctx: click.Context):
     """Command that requires GovCloud feature."""
@@ -947,7 +934,7 @@ from ..constants import FEATURE_LOCATIONSERVICES
 
 @command_group.command()
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def location_aware_command(ctx: click.Context):
     """Command with location-aware functionality."""
     profile_manager = get_profile_manager_from_context(ctx)
@@ -1060,7 +1047,92 @@ def create_command():
 -   **Error Handling**: Uses the main CLI's error handling and exception management
 -   **Integration Testing**: Tests the actual user experience through the main entry point
 
-### **Rule 14: Tests MUST Use Pytest Fixtures for Common Patterns**
+### **Rule 14: Exception Handling MUST Follow New Architecture**
+
+All VamsCLI commands MUST follow the new exception handling architecture that separates global infrastructure concerns from command-specific business logic:
+
+#### **Exception Handling Requirements:**
+
+-   [ ] **Use Proper Decorator**: Use `@requires_setup_and_auth` for new commands (or `@requires_api_access` for backward compatibility)
+-   [ ] **Remove Duplicated Setup Checks**: Don't duplicate setup/config validation in commands
+-   [ ] **Handle Only Business Logic Exceptions**: Commands should only catch domain-specific errors
+-   [ ] **Let Global Exceptions Bubble Up**: Allow infrastructure exceptions to be handled by main.py
+-   [ ] **Follow Exception Hierarchy**: Use appropriate base classes (GlobalInfrastructureError vs BusinessLogicError)
+
+#### **New Exception Handling Pattern:**
+
+```python
+# ✅ CORRECT - New streamlined pattern
+@assets.command()
+@click.pass_context
+@requires_setup_and_auth  # Handles all global validations
+def create(ctx: click.Context, ...):
+    """Create an asset."""
+    # Setup/auth already validated by decorator
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+    
+    try:
+        # Focus on business logic only
+        result = api_client.create_asset(data)
+        click.echo("✓ Asset created!")
+        
+    except AssetAlreadyExistsError as e:
+        # Only handle command-specific business logic errors
+        click.echo(f"✗ Asset Already Exists: {e}")
+        click.echo("Use 'vamscli assets get' to view the existing asset.")
+        raise click.ClickException(str(e))
+
+# ❌ INCORRECT - Old duplicated pattern
+@assets.command()
+@click.pass_context
+@requires_api_access
+def create(ctx: click.Context, ...):
+    """Create an asset."""
+    profile_manager = get_profile_manager_from_context(ctx)
+    
+    # VIOLATION - Duplicated setup check (handled by decorator now)
+    if not profile_manager.has_config():
+        profile_name = profile_manager.profile_name
+        raise click.ClickException(f"Configuration not found...")
+    
+    try:
+        # Business logic
+        result = api_client.create_asset(data)
+        
+    except AssetAlreadyExistsError as e:
+        # Command-specific error handling (correct)
+        click.echo(f"✗ Asset Already Exists: {e}")
+        raise click.ClickException(str(e))
+    except AuthenticationError as e:
+        # VIOLATION - Global error handling in command (should be in main.py)
+        click.echo(f"✗ Authentication Error: {e}")
+        click.echo("Please run 'vamscli auth login' to re-authenticate.")
+        raise click.ClickException(str(e))
+```
+
+#### **Exception Classification Guidelines:**
+
+##### **Global Infrastructure Exceptions (handled in main.py):**
+- `SetupRequiredError`, `AuthenticationError`, `APIUnavailableError`
+- `ProfileError`, `ConfigurationError`, `OverrideTokenError`
+- `RetryExhaustedError`, `RateLimitExceededError`, `VersionMismatchError`
+
+##### **Command-Specific Business Logic Exceptions (handled in commands):**
+- `AssetNotFoundError`, `AssetAlreadyExistsError`, `DatabaseNotFoundError`
+- `TagNotFoundError`, `FileUploadError`, `SearchQueryError`
+- Any domain-specific validation or operation errors
+
+#### **Benefits of New Architecture:**
+
+-   **90% Reduction in Code Duplication**: Common patterns handled once in decorators/main.py
+-   **Clear Separation of Concerns**: Global vs. command-specific error handling
+-   **Consistent User Experience**: Standardized error messages and handling
+-   **Maintainability**: Changes to global patterns require updates in one place
+-   **Testability**: Easier to test exception handling in isolation
+
+### **Rule 15: Tests MUST Use Pytest Fixtures for Common Patterns**
 
 All VamsCLI tests MUST use pytest fixtures to reduce code duplication for ProfileManager and APIClient mocking:
 
@@ -1234,8 +1306,9 @@ def new_group():
 @new_group.command()
 @click.option('-u', '--user-id', help='User ID if required')
 @click.option('--param', required=True, help='Required parameter')
-@requires_api_access
-def new_command(user_id: str, param: str):
+@click.pass_context
+@requires_setup_and_auth
+def new_command(ctx: click.Context, user_id: str, param: str):
     """
     Brief command description.
 
@@ -1245,36 +1318,26 @@ def new_command(user_id: str, param: str):
         vamscli new-group new-command --param value
         vamscli new-group new-command -u user@example.com --param value
     """
-    profile_manager = ProfileManager()
-
-    # Always check setup
-    if not profile_manager.has_config():
-        raise click.ClickException(
-            "Configuration not found. Please run 'vamscli setup <api-gateway-url>' first."
-        )
+    # Setup/auth already validated by decorator
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
 
     try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
-
-        # Command implementation
+        # Focus on business logic only
         result = api_client.call_new_endpoint(param)
 
         click.echo(
             click.style("✓ Operation successful!", fg='green', bold=True)
         )
 
-    except SpecificError as e:
+    except SpecificBusinessLogicError as e:
+        # Only handle command-specific business logic errors
         click.echo(
             click.style(f"✗ Specific Error: {e}", fg='red', bold=True),
             err=True
         )
-        raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
+        click.echo("Use 'vamscli [related-command]' for more information.")
         raise click.ClickException(str(e))
 ```
 
@@ -1368,9 +1431,36 @@ except NewSpecificError as e:
 
 ## 🎯 **Common Patterns**
 
-### **Authentication Validation Pattern**
+### **New Streamlined Command Pattern**
 
 ```python
+# ✅ NEW PATTERN - Using @requires_setup_and_auth decorator
+@command_group.command()
+@click.pass_context
+@requires_setup_and_auth  # Handles all global validations automatically
+def my_command(ctx: click.Context, ...):
+    """Command with streamlined exception handling."""
+    # Setup/auth already validated by decorator
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+    
+    try:
+        # Focus on business logic only
+        result = api_client.api_method(parameters)
+        click.echo(click.style("✓ Success message", fg='green', bold=True))
+        
+    except SpecificBusinessLogicError as e:
+        # Only handle command-specific business logic errors
+        click.echo(click.style(f"✗ Specific Error: {e}", fg='red', bold=True), err=True)
+        click.echo("Use 'vamscli [related-command]' for more information.")
+        raise click.ClickException(str(e))
+```
+
+### **Legacy Authentication Validation Pattern (Deprecated)**
+
+```python
+# ❌ OLD PATTERN - Don't use this approach anymore
 # For commands requiring authentication
 profile_manager = ProfileManager()
 
@@ -1379,24 +1469,6 @@ if not profile_manager.has_config():
 
 if not profile_manager.has_auth_profile():
     raise click.ClickException("Not authenticated. Please run 'vamscli auth login' first.")
-```
-
-### **API Client Usage Pattern**
-
-```python
-# Standard API client usage
-try:
-    config = profile_manager.load_config()
-    api_client = APIClient(config['api_gateway_url'], profile_manager)
-    result = api_client.api_method(parameters)
-
-    # Success handling
-    click.echo(click.style("✓ Success message", fg='green', bold=True))
-
-except SpecificError as e:
-    # Specific error handling
-    click.echo(click.style(f"✗ Specific Error: {e}", fg='red', bold=True), err=True)
-    raise click.ClickException(str(e))
 ```
 
 ### **User Input Validation Pattern**
@@ -1476,15 +1548,17 @@ if not required_param:
 ## 📖 **Best Practices Summary**
 
 1. **Always** add API endpoints to `constants.py`
-2. **Always** use `@requires_api_access` for API commands
-3. **Always** check setup and authentication
-4. **Always** handle errors comprehensively
+2. **Always** use `@requires_setup_and_auth` for new API commands (or `@requires_api_access` for backward compatibility)
+3. **Always** let decorators handle setup and authentication validation
+4. **Always** handle only business logic exceptions in commands
 5. **Always** write tests for new functionality
 6. **Always** update documentation
 7. **Always** use type hints
 8. **Always** include comprehensive help text
 9. **Always** validate user inputs
 10. **Always** provide clear error messages
+11. **Always** follow the new exception handling architecture
+12. **Always** let global exceptions bubble up to main.py
 
 ## 🛠️ **Development Commands**
 

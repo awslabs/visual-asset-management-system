@@ -5,12 +5,10 @@ import click
 from typing import Dict, Any, Optional
 
 from ..utils.api_client import APIClient
-from ..utils.decorators import requires_api_access, get_profile_manager_from_context
+from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.exceptions import (
-    AssetLinkNotFoundError, AssetLinkValidationError, AssetLinkPermissionError,
-    APIUnavailableError, AuthenticationError
+    AssetLinkNotFoundError, AssetLinkValidationError, AssetLinkPermissionError
 )
-from ..version import get_version
 
 
 def validate_metadata_type(metadata_type: str) -> str:
@@ -116,7 +114,7 @@ def asset_links_metadata():
 @click.argument('asset_link_id', required=True)
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def list(ctx: click.Context, asset_link_id: str, json_output: bool):
     """
     List all metadata for an asset link.
@@ -127,19 +125,12 @@ def list(ctx: click.Context, asset_link_id: str, json_output: bool):
         vamscli asset-links-metadata list abc123-def456-ghi789
         vamscli asset-links-metadata list abc123-def456-ghi789 --json-output
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
-    
-    # Check setup
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
         
         # Get metadata
         result = api_client.get_asset_link_metadata(asset_link_id)
@@ -162,12 +153,6 @@ def list(ctx: click.Context, asset_link_id: str, json_output: bool):
             err=True
         )
         raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
 
 
 @asset_links_metadata.command()
@@ -180,7 +165,7 @@ def list(ctx: click.Context, asset_link_id: str, json_output: bool):
               help='JSON file containing metadata fields')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def create(ctx: click.Context, asset_link_id: str, key: Optional[str], 
            value: Optional[str], metadata_type: str, json_input: Optional[str], 
            json_output: bool):
@@ -203,15 +188,8 @@ def create(ctx: click.Context, asset_link_id: str, key: Optional[str],
         vamscli asset-links-metadata create abc123-def456-ghi789 --key "offset" --value '{"x": 1.5, "y": 2.0, "z": 0.5}' --type xyz
         vamscli asset-links-metadata create abc123-def456-ghi789 --json-input metadata.json
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
-    
-    # Check setup
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
     
     # Validate input method
     if json_input:
@@ -250,9 +228,10 @@ def create(ctx: click.Context, asset_link_id: str, key: Optional[str],
             'metadataValueType': normalized_type
         }
     
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+    
     try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
         
         # Create metadata
         result = api_client.create_asset_link_metadata(asset_link_id, metadata_data)
@@ -285,12 +264,6 @@ def create(ctx: click.Context, asset_link_id: str, key: Optional[str],
             err=True
         )
         raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
 
 
 @asset_links_metadata.command()
@@ -303,7 +276,7 @@ def create(ctx: click.Context, asset_link_id: str, key: Optional[str],
               help='JSON file containing metadata fields')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def update(ctx: click.Context, asset_link_id: str, metadata_key: str, 
            value: Optional[str], metadata_type: str, json_input: Optional[str], 
            json_output: bool):
@@ -318,15 +291,8 @@ def update(ctx: click.Context, asset_link_id: str, metadata_key: str,
         vamscli asset-links-metadata update abc123-def456-ghi789 distance --value "20.0" --type number
         vamscli asset-links-metadata update abc123-def456-ghi789 offset --json-input updated_metadata.json
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
-    
-    # Check setup
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
     
     # Validate input method
     if json_input:
@@ -359,9 +325,10 @@ def update(ctx: click.Context, asset_link_id: str, metadata_key: str,
             'metadataValueType': normalized_type
         }
     
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+    
     try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
         
         # Update metadata
         result = api_client.update_asset_link_metadata(asset_link_id, metadata_key, metadata_data)
@@ -394,12 +361,6 @@ def update(ctx: click.Context, asset_link_id: str, metadata_key: str,
             err=True
         )
         raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
 
 
 @asset_links_metadata.command()
@@ -407,7 +368,7 @@ def update(ctx: click.Context, asset_link_id: str, metadata_key: str,
 @click.argument('metadata_key', required=True)
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def delete(ctx: click.Context, asset_link_id: str, metadata_key: str, json_output: bool):
     """
     Delete metadata for an asset link.
@@ -418,19 +379,12 @@ def delete(ctx: click.Context, asset_link_id: str, metadata_key: str, json_outpu
         vamscli asset-links-metadata delete abc123-def456-ghi789 description
         vamscli asset-links-metadata delete abc123-def456-ghi789 offset --json-output
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
-    
-    # Check setup
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
         
         # Delete metadata
         result = api_client.delete_asset_link_metadata(asset_link_id, metadata_key)
@@ -458,12 +412,6 @@ def delete(ctx: click.Context, asset_link_id: str, metadata_key: str, json_outpu
     except AssetLinkPermissionError as e:
         click.echo(
             click.style(f"✗ Permission Error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
             err=True
         )
         raise click.ClickException(str(e))

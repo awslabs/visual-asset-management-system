@@ -6,9 +6,10 @@ import os
 # Read the version from the version file
 def get_version():
     version_file = os.path.join(os.path.dirname(__file__), 'vamscli', 'version.py')
+    version_dict = {}
     with open(version_file, 'r') as f:
-        exec(f.read())
-    return locals()['__version__']
+        exec(f.read(), version_dict)
+    return version_dict['__version__']
 
 # Read the README file
 def get_long_description():

@@ -9,7 +9,7 @@ from click.testing import CliRunner
 from vamscli.main import cli
 from vamscli.utils.exceptions import (
     TagNotFoundError, TagAlreadyExistsError, TagTypeNotFoundError,
-    InvalidTagDataError, AuthenticationError, APIError
+    InvalidTagDataError, AuthenticationError, APIError, SetupRequiredError
 )
 
 
@@ -211,7 +211,7 @@ class TestTagCreateCommand:
                 # Missing description and tag-type-name
             ])
             
-            assert result.exit_code == 1
+            assert result.exit_code == 2  # Click parameter validation error
             assert 'required when not using --json-input' in result.output
     
     def test_create_tag_already_exists(self, cli_runner, tag_command_mocks):
@@ -274,9 +274,10 @@ class TestTagCreateCommand:
                 '--tag-type-name', 'priority'
             ])
             
+            # Global exception handling - no output, just exception propagation
             assert result.exit_code == 1
-            assert '✗ Authentication Error' in result.output
-            assert 'vamscli auth login' in result.output
+            assert result.exception
+            assert isinstance(result.exception, AuthenticationError)
     
     def test_create_no_setup(self, cli_runner, tag_no_setup_mocks):
         """Test tag creation without setup."""
@@ -288,9 +289,10 @@ class TestTagCreateCommand:
                 '--tag-type-name', 'priority'
             ])
             
+            # Global exception handling - no output, just exception propagation
             assert result.exit_code == 1
-            assert 'Configuration not found' in result.output
-            assert 'vamscli setup' in result.output
+            assert result.exception
+            assert isinstance(result.exception, SetupRequiredError)
 
 
 class TestTagUpdateCommand:
@@ -426,7 +428,7 @@ class TestTagUpdateCommand:
                 '--tag-name', 'urgent'
             ])
             
-            assert result.exit_code == 1
+            assert result.exit_code == 2  # Click parameter validation error
             assert 'At least one field must be provided' in result.output
     
     def test_update_tag_type_not_found(self, cli_runner, tag_command_mocks):
@@ -537,9 +539,10 @@ class TestTagDeleteCommand:
                 'tag', 'delete', 'urgent', '--confirm'
             ])
             
+            # Global exception handling - no output, just exception propagation
             assert result.exit_code == 1
-            assert '✗ Authentication Error' in result.output
-            assert 'vamscli auth login' in result.output
+            assert result.exception
+            assert isinstance(result.exception, AuthenticationError)
 
 
 class TestTagListCommand:
@@ -695,9 +698,10 @@ class TestTagListCommand:
             
             result = cli_runner.invoke(cli, ['tag', 'list'])
             
+            # Global exception handling - no output, just exception propagation
             assert result.exit_code == 1
-            assert '✗ Authentication Error' in result.output
-            assert 'vamscli auth login' in result.output
+            assert result.exception
+            assert isinstance(result.exception, AuthenticationError)
 
 
 class TestTagCommandsIntegration:
@@ -708,12 +712,12 @@ class TestTagCommandsIntegration:
         with tag_command_mocks as mocks:
             # Test create without tag name (should trigger our custom validation)
             result = cli_runner.invoke(cli, ['tag', 'create'])
-            assert result.exit_code == 1  # Our custom error handling
+            assert result.exit_code == 2  # Click parameter validation error
             assert 'required when not using --json-input' in result.output
             
             # Test update without tag name (should trigger our custom validation)
             result = cli_runner.invoke(cli, ['tag', 'update'])
-            assert result.exit_code == 1  # Our custom error handling
+            assert result.exit_code == 2  # Click parameter validation error
             assert 'required when not using --json-input' in result.output
             
             # Test delete without tag name (Click argument validation)
@@ -780,7 +784,7 @@ class TestTagCommandsJSONHandling:
                 '--json-input', 'invalid json string'
             ])
             
-            assert result.exit_code == 1  # Our custom error handling
+            assert result.exit_code == 2  # Click parameter validation error
             assert 'Invalid JSON input' in result.output
     
     def test_invalid_json_input_file(self, cli_runner, tag_command_mocks):
@@ -792,9 +796,11 @@ class TestTagCommandsJSONHandling:
                     '--json-input', 'invalid.json'
                 ])
             
-            assert result.exit_code == 1  # Our custom error handling
+            # Global exception handling - no output, just exception propagation
+            assert result.exit_code == 1
+            assert result.exception
             # The error message will be a JSON decode error since the file contains invalid JSON
-            assert 'Unexpected error' in result.output and 'Expecting value' in result.output
+            assert 'Expecting value' in str(result.exception)
     
     def test_nonexistent_json_input_file(self, cli_runner, tag_command_mocks):
         """Test handling of nonexistent JSON input file."""
@@ -805,7 +811,7 @@ class TestTagCommandsJSONHandling:
                     '--json-input', 'nonexistent.json'
                 ])
             
-            assert result.exit_code == 1  # Our custom error handling
+            assert result.exit_code == 2  # Click parameter validation error
             assert 'Invalid JSON input' in result.output
 
 
@@ -824,9 +830,10 @@ class TestTagCommandsEdgeCases:
                 '--tag-type-name', 'priority'
             ])
             
+            # Global exception handling - no output, just exception propagation
             assert result.exit_code == 1
-            assert '✗ Unexpected error' in result.output
-            assert 'API request failed' in result.output
+            assert result.exception
+            assert isinstance(result.exception, APIError)
     
     def test_update_api_error(self, cli_runner, tag_command_mocks):
         """Test update command with general API error."""
@@ -850,9 +857,10 @@ class TestTagCommandsEdgeCases:
                 '--description', 'Updated description'
             ])
             
+            # Global exception handling - no output, just exception propagation
             assert result.exit_code == 1
-            assert '✗ Unexpected error' in result.output
-            assert 'API request failed' in result.output
+            assert result.exception
+            assert isinstance(result.exception, APIError)
     
     def test_delete_api_error(self, cli_runner, tag_command_mocks):
         """Test delete command with general API error."""
@@ -863,9 +871,10 @@ class TestTagCommandsEdgeCases:
                 'tag', 'delete', 'urgent', '--confirm'
             ])
             
+            # Global exception handling - no output, just exception propagation
             assert result.exit_code == 1
-            assert '✗ Unexpected error' in result.output
-            assert 'API request failed' in result.output
+            assert result.exception
+            assert isinstance(result.exception, APIError)
     
     def test_list_api_error(self, cli_runner, tag_command_mocks):
         """Test list command with general API error."""
@@ -874,9 +883,10 @@ class TestTagCommandsEdgeCases:
             
             result = cli_runner.invoke(cli, ['tag', 'list'])
             
+            # Global exception handling - no output, just exception propagation
             assert result.exit_code == 1
-            assert '✗ Unexpected error' in result.output
-            assert 'API request failed' in result.output
+            assert result.exception
+            assert isinstance(result.exception, APIError)
 
 
 class TestTagUtilityFunctions:

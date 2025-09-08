@@ -21,19 +21,8 @@ from .commands.metadata_schema import metadata_schema
 from .commands.features import features
 from .commands.search import search
 from .utils.profile import ProfileManager
-from .utils.exceptions import (
-    VamsCLIError, SetupRequiredError, OverrideTokenError, APIUnavailableError,
-    ProfileError, InvalidProfileNameError, AssetAlreadyArchivedError, AssetDeletionError,
-    DatabaseNotFoundError, DatabaseAlreadyExistsError, DatabaseDeletionError,
-    BucketNotFoundError, InvalidDatabaseDataError, TagNotFoundError, TagAlreadyExistsError,
-    TagTypeNotFoundError, TagTypeAlreadyExistsError, TagTypeInUseError,
-    InvalidTagDataError, InvalidTagTypeDataError, AssetVersionError, AssetVersionNotFoundError,
-    AssetVersionOperationError, InvalidAssetVersionDataError, AssetVersionRevertError,
-    AssetLinkError, AssetLinkNotFoundError, AssetLinkValidationError, AssetLinkPermissionError,
-    CycleDetectionError, AssetLinkAlreadyExistsError, InvalidRelationshipTypeError, AssetLinkOperationError,
-    SearchError, SearchDisabledError, SearchUnavailableError, InvalidSearchParametersError,
-    SearchQueryError, SearchMappingError
-)
+from .utils.exceptions import SetupRequiredError
+from .utils.global_exceptions import handle_global_exceptions
 from .constants import DEFAULT_PROFILE_NAME
 from .version import get_version
 
@@ -78,8 +67,6 @@ def check_setup_required(ctx: click.Context, param: click.Parameter, value: Opti
     return value
 
 
-
-
 def handle_profile_option(ctx: click.Context, param: click.Parameter, value: Optional[str]) -> Optional[str]:
     """Handle global profile option."""
     if value is None:
@@ -110,6 +97,7 @@ def handle_profile_option(ctx: click.Context, param: click.Parameter, value: Opt
               help=f'Profile name to use (default: {DEFAULT_PROFILE_NAME})')
 @click.option('--setup-check', is_flag=True, hidden=True, callback=check_setup_required, expose_value=False, is_eager=False)
 @click.pass_context
+@handle_global_exceptions()
 def cli(ctx: click.Context, version: bool):
     """
     VamsCLI - Command Line Interface for Visual Asset Management System (VAMS).
@@ -160,255 +148,7 @@ def version():
     click.echo(f"VamsCLI version {get_version()}")
 
 
-def handle_exceptions():
-    """Global exception handler for the CLI."""
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            try:
-                return func(*args, **kwargs)
-            except SetupRequiredError as e:
-                click.echo(
-                    click.style(f"✗ Setup Required: {e}", fg='red', bold=True),
-                    err=True
-                )
-                click.echo("Run 'vamscli setup <api-gateway-url>' to get started.")
-                sys.exit(1)
-            except OverrideTokenError as e:
-                click.echo(
-                    click.style(f"✗ Override Token Error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except APIUnavailableError as e:
-                click.echo(
-                    click.style(f"✗ API Unavailable: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except AssetAlreadyArchivedError as e:
-                click.echo(
-                    click.style(f"✗ Asset Already Archived: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except AssetDeletionError as e:
-                click.echo(
-                    click.style(f"✗ Asset Deletion Error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except DatabaseNotFoundError as e:
-                click.echo(
-                    click.style(f"✗ Database Not Found: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except DatabaseAlreadyExistsError as e:
-                click.echo(
-                    click.style(f"✗ Database Already Exists: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except DatabaseDeletionError as e:
-                click.echo(
-                    click.style(f"✗ Database Deletion Error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except BucketNotFoundError as e:
-                click.echo(
-                    click.style(f"✗ Bucket Not Found: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except InvalidDatabaseDataError as e:
-                click.echo(
-                    click.style(f"✗ Invalid Database Data: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except TagNotFoundError as e:
-                click.echo(
-                    click.style(f"✗ Tag Not Found: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except TagAlreadyExistsError as e:
-                click.echo(
-                    click.style(f"✗ Tag Already Exists: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except TagTypeNotFoundError as e:
-                click.echo(
-                    click.style(f"✗ Tag Type Not Found: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except TagTypeAlreadyExistsError as e:
-                click.echo(
-                    click.style(f"✗ Tag Type Already Exists: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except TagTypeInUseError as e:
-                click.echo(
-                    click.style(f"✗ Tag Type In Use: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except InvalidTagDataError as e:
-                click.echo(
-                    click.style(f"✗ Invalid Tag Data: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except InvalidTagTypeDataError as e:
-                click.echo(
-                    click.style(f"✗ Invalid Tag Type Data: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except AssetVersionNotFoundError as e:
-                click.echo(
-                    click.style(f"✗ Asset Version Not Found: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except AssetVersionOperationError as e:
-                click.echo(
-                    click.style(f"✗ Asset Version Operation Error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except InvalidAssetVersionDataError as e:
-                click.echo(
-                    click.style(f"✗ Invalid Asset Version Data: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except AssetVersionRevertError as e:
-                click.echo(
-                    click.style(f"✗ Asset Version Revert Error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except AssetVersionError as e:
-                click.echo(
-                    click.style(f"✗ Asset Version Error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except AssetLinkNotFoundError as e:
-                click.echo(
-                    click.style(f"✗ Asset Link Not Found: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except AssetLinkAlreadyExistsError as e:
-                click.echo(
-                    click.style(f"✗ Asset Link Already Exists: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except CycleDetectionError as e:
-                click.echo(
-                    click.style(f"✗ Cycle Detection Error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except AssetLinkPermissionError as e:
-                click.echo(
-                    click.style(f"✗ Asset Link Permission Error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except AssetLinkValidationError as e:
-                click.echo(
-                    click.style(f"✗ Asset Link Validation Error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except InvalidRelationshipTypeError as e:
-                click.echo(
-                    click.style(f"✗ Invalid Relationship Type: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except AssetLinkOperationError as e:
-                click.echo(
-                    click.style(f"✗ Asset Link Operation Error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except AssetLinkError as e:
-                click.echo(
-                    click.style(f"✗ Asset Link Error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except SearchDisabledError as e:
-                click.echo(
-                    click.style(f"✗ Search Disabled: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except SearchUnavailableError as e:
-                click.echo(
-                    click.style(f"✗ Search Unavailable: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except InvalidSearchParametersError as e:
-                click.echo(
-                    click.style(f"✗ Invalid Search Parameters: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except SearchQueryError as e:
-                click.echo(
-                    click.style(f"✗ Search Query Error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except SearchMappingError as e:
-                click.echo(
-                    click.style(f"✗ Search Mapping Error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except SearchError as e:
-                click.echo(
-                    click.style(f"✗ Search Error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except VamsCLIError as e:
-                click.echo(
-                    click.style(f"✗ Error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                sys.exit(1)
-            except click.ClickException:
-                # Let Click handle its own exceptions
-                raise
-            except KeyboardInterrupt:
-                click.echo("\nOperation cancelled by user.")
-                sys.exit(1)
-            except Exception as e:
-                click.echo(
-                    click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                if '--debug' in sys.argv:
-                    import traceback
-                    traceback.print_exc()
-                sys.exit(1)
-        return wrapper
-    return decorator
-
-
-@handle_exceptions()
+@handle_global_exceptions()
 def main():
     """Main entry point for the CLI."""
     cli()

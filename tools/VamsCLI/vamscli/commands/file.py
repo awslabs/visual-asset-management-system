@@ -9,13 +9,12 @@ from typing import List, Optional
 
 import click
 
-from ..utils.decorators import requires_api_access, get_profile_manager_from_context
+from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.exceptions import (
     VamsCLIError, InvalidFileError, FileTooLargeError, PreviewFileError,
     UploadSequenceError, FileUploadError, FileNotFoundError, FileOperationError,
     InvalidPathError, FilePermissionError, FileAlreadyExistsError, 
-    FileArchivedError, InvalidVersionError, APIError, AuthenticationError,
-    AssetNotFoundError, InvalidAssetDataError
+    FileArchivedError, InvalidVersionError, AssetNotFoundError, InvalidAssetDataError
 )
 from ..utils.file_processor import (
     FileInfo, collect_files_from_directory, collect_files_from_list,
@@ -185,31 +184,11 @@ def file():
 @click.option('--hide-progress', is_flag=True,
               help='Hide upload progress display')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def upload(ctx: click.Context, files_or_directory, database_id, asset_id, directory, asset_preview,
            asset_location, recursive, parallel_uploads, retry_attempts, force_skip,
            json_input, json_output, hide_progress):
-    """Upload files to an asset.
-    
-    Examples:
-        # Upload single file
-        vamscli file upload -d my-db -a my-asset /path/to/file.gltf
-        
-        # Upload directory
-        vamscli file upload -d my-db -a my-asset --directory /path/to/models --recursive
-        
-        # Upload multiple files
-        vamscli file upload -d my-db -a my-asset file1.jpg file2.png file3.obj
-        
-        # Upload asset preview
-        vamscli file upload -d my-db -a my-asset --asset-preview preview.jpg
-        
-        # Upload with custom asset location
-        vamscli file upload -d my-db -a my-asset --asset-location /models/ file.gltf
-        
-        # Upload with JSON input
-        vamscli file upload --json-input '{"database_id": "my-db", "asset_id": "my-asset", "files": ["/path/to/file.gltf"]}'
-    """
+    """Upload files to an asset."""
     try:
         # Parse JSON input if provided
         json_data = parse_json_input(json_input) if json_input else {}
@@ -266,9 +245,32 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
                     f"Preview files missing base files: {', '.join(missing_files)}"
                 )
         
-        # Create upload sequences
-        sequences = create_upload_sequences(files)
-        summary = get_upload_summary(sequences)
+        # Create upload sequences with enhanced validation
+        try:
+            sequences = create_upload_sequences(files)
+            summary = get_upload_summary(sequences)
+        except UploadSequenceError as e:
+            # Provide helpful guidance for constraint violations
+            error_msg = str(e)
+            if "Too many files" in error_msg:
+                from ..constants import MAX_FILES_PER_REQUEST
+                click.echo(f"❌ {error_msg}")
+                click.echo(f"\n💡 Tip: You can split your upload by using multiple commands:")
+                click.echo(f"   vamscli file upload -d {database_id} -a {asset_id} file1.ext file2.ext ... (up to {MAX_FILES_PER_REQUEST} files)")
+                click.echo(f"   vamscli file upload -d {database_id} -a {asset_id} file{MAX_FILES_PER_REQUEST + 1}.ext ...")
+            elif "Total parts across all files" in error_msg:
+                from ..constants import MAX_TOTAL_PARTS_PER_REQUEST
+                click.echo(f"❌ {error_msg}")
+                click.echo(f"\n💡 Tip: Reduce the number of large files or split into smaller uploads.")
+                click.echo(f"   Each upload can have at most {MAX_TOTAL_PARTS_PER_REQUEST} parts total.")
+            elif "requires" in error_msg and "parts" in error_msg:
+                from ..constants import MAX_PARTS_PER_FILE
+                click.echo(f"❌ {error_msg}")
+                click.echo(f"\n💡 Tip: Individual files cannot exceed {MAX_PARTS_PER_FILE} parts.")
+                click.echo(f"   Consider compressing very large files before upload.")
+            else:
+                click.echo(f"❌ Upload validation failed: {error_msg}")
+            sys.exit(1)
         
         if not hide_progress:
             click.echo(f"\nUpload Summary:")
@@ -277,9 +279,21 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
             click.echo(f"  Sequences: {summary['total_sequences']}")
             click.echo(f"  Parts: {summary['total_parts']}")
             click.echo(f"  Upload Type: {upload_type}")
+            
+            # Show helpful info for multi-sequence uploads
+            if summary['total_sequences'] > 1:
+                click.echo(f"\n📋 Multi-sequence upload: Your files will be uploaded in {summary['total_sequences']} separate requests")
+                click.echo(f"   to comply with backend limits. This is handled automatically.")
+            
+            # Show zero-byte file info if any
+            zero_byte_files = [f for f in files if f.size == 0]
+            if zero_byte_files:
+                click.echo(f"\n📄 Zero-byte files detected: {len(zero_byte_files)} files")
+                click.echo(f"   These will be created during upload completion.")
+            
             click.echo()
         
-        # Initialize API client with profile-aware manager
+        # Setup/auth already validated by decorator
         profile_manager = get_profile_manager_from_context(ctx)
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
@@ -346,22 +360,11 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
             
     except (InvalidFileError, FileTooLargeError, PreviewFileError, 
             UploadSequenceError, FileUploadError) as e:
+        # Only handle file-specific business logic errors
         if json_output:
             click.echo(json.dumps({"error": str(e)}, indent=2))
         else:
             click.echo(f"❌ {e}", err=True)
-        sys.exit(1)
-    except VamsCLIError as e:
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-    except Exception as e:
-        if json_output:
-            click.echo(json.dumps({"error": f"Unexpected error: {e}"}, indent=2))
-        else:
-            click.echo(f"Unexpected error: {e}", err=True)
         sys.exit(1)
 
 
@@ -372,17 +375,9 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def create_folder(ctx: click.Context, database_id: str, asset_id: str, folder_path: str, json_input: str, json_output: bool):
-    """Create a folder in an asset.
-    
-    Examples:
-        # Create a folder
-        vamscli file create-folder -d my-db -a my-asset -p "/models/subfolder/"
-        
-        # Create with JSON input
-        vamscli file create-folder --json-input '{"database_id": "my-db", "asset_id": "my-asset", "folder_path": "/models/"}'
-    """
+    """Create a folder in an asset."""
     try:
         # Parse JSON input if provided
         json_data = parse_json_input(json_input) if json_input else {}
@@ -404,16 +399,8 @@ def create_folder(ctx: click.Context, database_id: str, asset_id: str, folder_pa
         if not folder_path.endswith('/'):
             folder_path += '/'
         
-        # Get profile manager and API client
+        # Setup/auth already validated by decorator
         profile_manager = get_profile_manager_from_context(ctx)
-        
-        if not profile_manager.has_config():
-            profile_name = profile_manager.profile_name
-            raise click.ClickException(
-                f"Configuration not found for profile '{profile_name}'. "
-                f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-            )
-        
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
@@ -427,17 +414,95 @@ def create_folder(ctx: click.Context, database_id: str, asset_id: str, folder_pa
             click.echo(click.style("✓ Folder created successfully!", fg='green', bold=True))
             click.echo(f"Path: {folder_path}")
         
-    except (APIError, AuthenticationError, AssetNotFoundError, InvalidAssetDataError) as e:
+    except (AssetNotFoundError, InvalidAssetDataError, InvalidPathError, FileAlreadyExistsError) as e:
+        # Only handle command-specific business logic errors
         if json_output:
             click.echo(json.dumps({"error": str(e)}, indent=2))
         else:
             click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
         sys.exit(1)
-    except Exception as e:
+
+
+@file.command('list')
+@click.option('-d', '--database', 'database_id', required=True, help='Database ID')
+@click.option('-a', '--asset', 'asset_id', required=True, help='Asset ID')
+@click.option('--prefix', help='Filter files by prefix')
+@click.option('--include-archived', is_flag=True, help='Include archived files')
+@click.option('--max-items', type=int, default=1000, help='Maximum number of items to return')
+@click.option('--page-size', type=int, default=100, help='Number of items per page')
+@click.option('--starting-token', help='Token for pagination')
+@click.option('--json-input', help='JSON input with all parameters')
+@click.option('--json-output', is_flag=True, help='Output API response as JSON')
+@click.pass_context
+@requires_setup_and_auth
+def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str, include_archived: bool,
+               max_items: int, page_size: int, starting_token: str, json_input: str, json_output: bool):
+    """List files in an asset."""
+    try:
+        # Parse JSON input if provided
+        json_data = parse_json_input(json_input) if json_input else {}
+        
+        # Override arguments with JSON data
+        database_id = json_data.get('database_id', database_id)
+        asset_id = json_data.get('asset_id', asset_id)
+        prefix = json_data.get('prefix', prefix)
+        include_archived = json_data.get('include_archived', include_archived)
+        max_items = json_data.get('max_items', max_items)
+        page_size = json_data.get('page_size', page_size)
+        starting_token = json_data.get('starting_token', starting_token)
+        
+        # Validate required arguments
+        if not database_id:
+            raise click.ClickException("Database ID is required (-d/--database)")
+        if not asset_id:
+            raise click.ClickException("Asset ID is required (-a/--asset)")
+        
+        # Setup/auth already validated by decorator
+        profile_manager = get_profile_manager_from_context(ctx)
+        config = profile_manager.load_config()
+        api_client = APIClient(config['api_gateway_url'], profile_manager)
+        
+        # Prepare query parameters
+        params = {
+            'maxItems': max_items,
+            'pageSize': page_size
+        }
+        if prefix:
+            params['prefix'] = prefix
+        if include_archived:
+            params['includeArchived'] = 'true'
+        if starting_token:
+            params['startingToken'] = starting_token
+        
+        # Call API
+        result = api_client.list_asset_files(database_id, asset_id, params)
+        
+        # Output results
         if json_output:
-            click.echo(json.dumps({"error": f"Unexpected error: {e}"}, indent=2))
+            click.echo(json.dumps(result, indent=2))
         else:
-            click.echo(click.style(f"✗ Unexpected error: {e}", fg='red', bold=True), err=True)
+            items = result.get('items', [])
+            click.echo(click.style(f"✓ Found {len(items)} files", fg='green', bold=True))
+            
+            if items:
+                click.echo("\nFiles:")
+                for item in items:
+                    file_type = "📁" if item.get('isFolder') else "📄"
+                    archived = " (archived)" if item.get('isArchived') else ""
+                    size_info = f" ({item.get('size', 0)} bytes)" if not item.get('isFolder') else ""
+                    primary_type = f" [{item.get('primaryType')}]" if item.get('primaryType') else ""
+                    
+                    click.echo(f"  {file_type} {item.get('relativePath', '')}{size_info}{primary_type}{archived}")
+            
+            if result.get('nextToken'):
+                click.echo(f"\nNext token: {result['nextToken']}")
+        
+    except AssetNotFoundError as e:
+        # Only handle command-specific business logic errors
+        if json_output:
+            click.echo(json.dumps({"error": str(e)}, indent=2))
+        else:
+            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
         sys.exit(1)
 
 
@@ -449,7 +514,7 @@ def create_folder(ctx: click.Context, database_id: str, asset_id: str, folder_pa
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def revert_file(ctx: click.Context, database_id: str, asset_id: str, file_path: str, version_id: str, json_input: str, json_output: bool):
     """Revert a file to a previous version.
     
@@ -480,16 +545,8 @@ def revert_file(ctx: click.Context, database_id: str, asset_id: str, file_path: 
         if not version_id:
             raise click.ClickException("Version ID is required (-v/--version)")
         
-        # Get profile manager and API client
+        # Setup/auth already validated by decorator
         profile_manager = get_profile_manager_from_context(ctx)
-        
-        if not profile_manager.has_config():
-            profile_name = profile_manager.profile_name
-            raise click.ClickException(
-                f"Configuration not found for profile '{profile_name}'. "
-                f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-            )
-        
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
@@ -508,17 +565,12 @@ def revert_file(ctx: click.Context, database_id: str, asset_id: str, file_path: 
             if result.get('newVersionId'):
                 click.echo(f"New version ID: {result.get('newVersionId')}")
         
-    except (APIError, AuthenticationError, AssetNotFoundError, InvalidAssetDataError) as e:
+    except (AssetNotFoundError, InvalidAssetDataError, InvalidVersionError) as e:
+        # Only handle command-specific business logic errors
         if json_output:
             click.echo(json.dumps({"error": str(e)}, indent=2))
         else:
             click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
-    except Exception as e:
-        if json_output:
-            click.echo(json.dumps({"error": f"Unexpected error: {e}"}, indent=2))
-        else:
-            click.echo(click.style(f"✗ Unexpected error: {e}", fg='red', bold=True), err=True)
         sys.exit(1)
 
 
@@ -533,7 +585,7 @@ def revert_file(ctx: click.Context, database_id: str, asset_id: str, file_path: 
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def set_primary_file(ctx: click.Context, database_id: str, asset_id: str, file_path: str, primary_type: str, type_other: str, json_input: str, json_output: bool):
     """Set or remove primary type metadata for a file.
     
@@ -575,16 +627,8 @@ def set_primary_file(ctx: click.Context, database_id: str, asset_id: str, file_p
         if primary_type == 'other' and not type_other:
             raise click.ClickException("Custom type is required when using --type other (--type-other)")
         
-        # Get profile manager and API client
+        # Setup/auth already validated by decorator
         profile_manager = get_profile_manager_from_context(ctx)
-        
-        if not profile_manager.has_config():
-            profile_name = profile_manager.profile_name
-            raise click.ClickException(
-                f"Configuration not found for profile '{profile_name}'. "
-                f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-            )
-        
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
@@ -611,17 +655,12 @@ def set_primary_file(ctx: click.Context, database_id: str, asset_id: str, file_p
                 click.echo(f"Type: {final_type}")
             click.echo(f"File: {file_path}")
         
-    except (APIError, AuthenticationError, AssetNotFoundError, InvalidAssetDataError) as e:
+    except (AssetNotFoundError, InvalidAssetDataError) as e:
+        # Only handle command-specific business logic errors
         if json_output:
             click.echo(json.dumps({"error": str(e)}, indent=2))
         else:
             click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
-    except Exception as e:
-        if json_output:
-            click.echo(json.dumps({"error": f"Unexpected error: {e}"}, indent=2))
-        else:
-            click.echo(click.style(f"✗ Unexpected error: {e}", fg='red', bold=True), err=True)
         sys.exit(1)
 
 
@@ -631,7 +670,7 @@ def set_primary_file(ctx: click.Context, database_id: str, asset_id: str, file_p
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def delete_asset_preview(ctx: click.Context, database_id: str, asset_id: str, json_input: str, json_output: bool):
     """Delete the asset preview file.
     
@@ -656,16 +695,8 @@ def delete_asset_preview(ctx: click.Context, database_id: str, asset_id: str, js
         if not asset_id:
             raise click.ClickException("Asset ID is required (-a/--asset)")
         
-        # Get profile manager and API client
+        # Setup/auth already validated by decorator
         profile_manager = get_profile_manager_from_context(ctx)
-        
-        if not profile_manager.has_config():
-            profile_name = profile_manager.profile_name
-            raise click.ClickException(
-                f"Configuration not found for profile '{profile_name}'. "
-                f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-            )
-        
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
@@ -679,17 +710,12 @@ def delete_asset_preview(ctx: click.Context, database_id: str, asset_id: str, js
             click.echo(click.style("✓ Asset preview deleted successfully!", fg='green', bold=True))
             click.echo(f"Asset: {asset_id}")
         
-    except (APIError, AuthenticationError, AssetNotFoundError) as e:
+    except AssetNotFoundError as e:
+        # Only handle command-specific business logic errors
         if json_output:
             click.echo(json.dumps({"error": str(e)}, indent=2))
         else:
             click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
-    except Exception as e:
-        if json_output:
-            click.echo(json.dumps({"error": f"Unexpected error: {e}"}, indent=2))
-        else:
-            click.echo(click.style(f"✗ Unexpected error: {e}", fg='red', bold=True), err=True)
         sys.exit(1)
 
 
@@ -700,7 +726,7 @@ def delete_asset_preview(ctx: click.Context, database_id: str, asset_id: str, js
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def delete_auxiliary_files(ctx: click.Context, database_id: str, asset_id: str, file_path: str, json_input: str, json_output: bool):
     """Delete auxiliary preview asset files.
     
@@ -728,16 +754,8 @@ def delete_auxiliary_files(ctx: click.Context, database_id: str, asset_id: str, 
         if not file_path:
             raise click.ClickException("File path is required (-p/--path)")
         
-        # Get profile manager and API client
+        # Setup/auth already validated by decorator
         profile_manager = get_profile_manager_from_context(ctx)
-        
-        if not profile_manager.has_config():
-            profile_name = profile_manager.profile_name
-            raise click.ClickException(
-                f"Configuration not found for profile '{profile_name}'. "
-                f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-            )
-        
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
@@ -755,17 +773,12 @@ def delete_auxiliary_files(ctx: click.Context, database_id: str, asset_id: str, 
             if result.get('deletedCount'):
                 click.echo(f"Files deleted: {result.get('deletedCount')}")
         
-    except (APIError, AuthenticationError, AssetNotFoundError, InvalidAssetDataError) as e:
+    except (AssetNotFoundError, InvalidAssetDataError) as e:
+        # Only handle command-specific business logic errors
         if json_output:
             click.echo(json.dumps({"error": str(e)}, indent=2))
         else:
             click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
-    except Exception as e:
-        if json_output:
-            click.echo(json.dumps({"error": f"Unexpected error: {e}"}, indent=2))
-        else:
-            click.echo(click.style(f"✗ Unexpected error: {e}", fg='red', bold=True), err=True)
         sys.exit(1)
 
 
@@ -777,7 +790,7 @@ def delete_auxiliary_files(ctx: click.Context, database_id: str, asset_id: str, 
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: str, include_versions: bool, json_input: str, json_output: bool):
     """Get detailed information about a specific file.
     
@@ -809,16 +822,8 @@ def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: st
         if not file_path:
             raise click.ClickException("File path is required (-p/--path)")
         
-        # Get profile manager and API client
+        # Setup/auth already validated by decorator
         profile_manager = get_profile_manager_from_context(ctx)
-        
-        if not profile_manager.has_config():
-            profile_name = profile_manager.profile_name
-            raise click.ClickException(
-                f"Configuration not found for profile '{profile_name}'. "
-                f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-            )
-        
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
@@ -863,17 +868,12 @@ def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: st
                     if not result.get('isFolder'):
                         click.echo(f"    Size: {version.get('size', 0)} bytes")
         
-    except (APIError, AuthenticationError, AssetNotFoundError) as e:
+    except AssetNotFoundError as e:
+        # Only handle command-specific business logic errors
         if json_output:
             click.echo(json.dumps({"error": str(e)}, indent=2))
         else:
             click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
-    except Exception as e:
-        if json_output:
-            click.echo(json.dumps({"error": f"Unexpected error: {e}"}, indent=2))
-        else:
-            click.echo(click.style(f"✗ Unexpected error: {e}", fg='red', bold=True), err=True)
         sys.exit(1)
 
 
@@ -885,7 +885,7 @@ def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: st
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def move_file(ctx: click.Context, database_id: str, asset_id: str, source: str, dest: str, json_input: str, json_output: bool):
     """Move a file within an asset.
     
@@ -916,16 +916,8 @@ def move_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
         if not dest:
             raise click.ClickException("Destination path is required (--dest)")
         
-        # Get profile manager and API client
+        # Setup/auth already validated by decorator
         profile_manager = get_profile_manager_from_context(ctx)
-        
-        if not profile_manager.has_config():
-            profile_name = profile_manager.profile_name
-            raise click.ClickException(
-                f"Configuration not found for profile '{profile_name}'. "
-                f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-            )
-        
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
@@ -948,17 +940,12 @@ def move_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
                 if affected_count > 2:  # More than just source and dest
                     click.echo(f"Additional files affected: {affected_count - 2}")
         
-    except (APIError, AuthenticationError, AssetNotFoundError, InvalidAssetDataError) as e:
+    except (AssetNotFoundError, InvalidAssetDataError, InvalidPathError, FileAlreadyExistsError) as e:
+        # Only handle command-specific business logic errors
         if json_output:
             click.echo(json.dumps({"error": str(e)}, indent=2))
         else:
             click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
-    except Exception as e:
-        if json_output:
-            click.echo(json.dumps({"error": f"Unexpected error: {e}"}, indent=2))
-        else:
-            click.echo(click.style(f"✗ Unexpected error: {e}", fg='red', bold=True), err=True)
         sys.exit(1)
 
 
@@ -971,7 +958,7 @@ def move_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def copy_file(ctx: click.Context, database_id: str, asset_id: str, source: str, dest: str, dest_asset: str, json_input: str, json_output: bool):
     """Copy a file within an asset or to another asset.
     
@@ -1006,16 +993,8 @@ def copy_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
         if not dest:
             raise click.ClickException("Destination path is required (--dest)")
         
-        # Get profile manager and API client
+        # Setup/auth already validated by decorator
         profile_manager = get_profile_manager_from_context(ctx)
-        
-        if not profile_manager.has_config():
-            profile_name = profile_manager.profile_name
-            raise click.ClickException(
-                f"Configuration not found for profile '{profile_name}'. "
-                f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-            )
-        
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
@@ -1045,17 +1024,12 @@ def copy_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
                 if affected_count > 1:  # More than just the main file
                     click.echo(f"Additional files copied: {affected_count - 1}")
         
-    except (APIError, AuthenticationError, AssetNotFoundError, InvalidAssetDataError) as e:
+    except (AssetNotFoundError, InvalidAssetDataError, InvalidPathError, FileAlreadyExistsError) as e:
+        # Only handle command-specific business logic errors
         if json_output:
             click.echo(json.dumps({"error": str(e)}, indent=2))
         else:
             click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
-    except Exception as e:
-        if json_output:
-            click.echo(json.dumps({"error": f"Unexpected error: {e}"}, indent=2))
-        else:
-            click.echo(click.style(f"✗ Unexpected error: {e}", fg='red', bold=True), err=True)
         sys.exit(1)
 
 
@@ -1067,7 +1041,7 @@ def copy_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def archive_file(ctx: click.Context, database_id: str, asset_id: str, file_path: str, prefix: bool, json_input: str, json_output: bool):
     """Archive a file or files under a prefix (soft delete).
     
@@ -1099,16 +1073,8 @@ def archive_file(ctx: click.Context, database_id: str, asset_id: str, file_path:
         if not file_path:
             raise click.ClickException("File path is required (-p/--path)")
         
-        # Get profile manager and API client
+        # Setup/auth already validated by decorator
         profile_manager = get_profile_manager_from_context(ctx)
-        
-        if not profile_manager.has_config():
-            profile_name = profile_manager.profile_name
-            raise click.ClickException(
-                f"Configuration not found for profile '{profile_name}'. "
-                f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-            )
-        
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
@@ -1131,17 +1097,12 @@ def archive_file(ctx: click.Context, database_id: str, asset_id: str, file_path:
                 affected_count = len(result['affectedFiles'])
                 click.echo(f"Files archived: {affected_count}")
         
-    except (APIError, AuthenticationError, AssetNotFoundError, InvalidAssetDataError) as e:
+    except (AssetNotFoundError, InvalidAssetDataError) as e:
+        # Only handle command-specific business logic errors
         if json_output:
             click.echo(json.dumps({"error": str(e)}, indent=2))
         else:
             click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
-    except Exception as e:
-        if json_output:
-            click.echo(json.dumps({"error": f"Unexpected error: {e}"}, indent=2))
-        else:
-            click.echo(click.style(f"✗ Unexpected error: {e}", fg='red', bold=True), err=True)
         sys.exit(1)
 
 
@@ -1152,7 +1113,7 @@ def archive_file(ctx: click.Context, database_id: str, asset_id: str, file_path:
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def unarchive_file(ctx: click.Context, database_id: str, asset_id: str, file_path: str, json_input: str, json_output: bool):
     """Unarchive a previously archived file.
     
@@ -1180,16 +1141,8 @@ def unarchive_file(ctx: click.Context, database_id: str, asset_id: str, file_pat
         if not file_path:
             raise click.ClickException("File path is required (-p/--path)")
         
-        # Get profile manager and API client
+        # Setup/auth already validated by decorator
         profile_manager = get_profile_manager_from_context(ctx)
-        
-        if not profile_manager.has_config():
-            profile_name = profile_manager.profile_name
-            raise click.ClickException(
-                f"Configuration not found for profile '{profile_name}'. "
-                f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-            )
-        
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
@@ -1210,17 +1163,12 @@ def unarchive_file(ctx: click.Context, database_id: str, asset_id: str, file_pat
                 if affected_count > 1:
                     click.echo(f"Additional files unarchived: {affected_count - 1}")
         
-    except (APIError, AuthenticationError, AssetNotFoundError, InvalidAssetDataError) as e:
+    except (AssetNotFoundError, InvalidAssetDataError) as e:
+        # Only handle command-specific business logic errors
         if json_output:
             click.echo(json.dumps({"error": str(e)}, indent=2))
         else:
             click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
-    except Exception as e:
-        if json_output:
-            click.echo(json.dumps({"error": f"Unexpected error: {e}"}, indent=2))
-        else:
-            click.echo(click.style(f"✗ Unexpected error: {e}", fg='red', bold=True), err=True)
         sys.exit(1)
 
 
@@ -1233,7 +1181,7 @@ def unarchive_file(ctx: click.Context, database_id: str, asset_id: str, file_pat
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def delete_file(ctx: click.Context, database_id: str, asset_id: str, file_path: str, prefix: bool, confirm: bool, json_input: str, json_output: bool):
     """Permanently delete a file or files under a prefix.
     
@@ -1268,16 +1216,8 @@ def delete_file(ctx: click.Context, database_id: str, asset_id: str, file_path: 
         if not confirm:
             raise click.ClickException("Permanent deletion requires confirmation (--confirm)")
         
-        # Get profile manager and API client
+        # Setup/auth already validated by decorator
         profile_manager = get_profile_manager_from_context(ctx)
-        
-        if not profile_manager.has_config():
-            profile_name = profile_manager.profile_name
-            raise click.ClickException(
-                f"Configuration not found for profile '{profile_name}'. "
-                f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-            )
-        
         config = profile_manager.load_config()
         api_client = APIClient(config['api_gateway_url'], profile_manager)
         
@@ -1301,125 +1241,10 @@ def delete_file(ctx: click.Context, database_id: str, asset_id: str, file_path: 
                 affected_count = len(result['affectedFiles'])
                 click.echo(f"Files deleted: {affected_count}")
         
-    except (APIError, AuthenticationError, AssetNotFoundError, InvalidAssetDataError) as e:
+    except (AssetNotFoundError, InvalidAssetDataError) as e:
+        # Only handle command-specific business logic errors
         if json_output:
             click.echo(json.dumps({"error": str(e)}, indent=2))
         else:
             click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
-    except Exception as e:
-        if json_output:
-            click.echo(json.dumps({"error": f"Unexpected error: {e}"}, indent=2))
-        else:
-            click.echo(click.style(f"✗ Unexpected error: {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
-
-
-@file.command('list')
-@click.option('-d', '--database', 'database_id', required=True, help='Database ID')
-@click.option('-a', '--asset', 'asset_id', required=True, help='Asset ID')
-@click.option('--prefix', help='Filter files by prefix')
-@click.option('--include-archived', is_flag=True, help='Include archived files')
-@click.option('--max-items', type=int, default=1000, help='Maximum number of items to return')
-@click.option('--page-size', type=int, default=100, help='Number of items per page')
-@click.option('--starting-token', help='Token for pagination')
-@click.option('--json-input', help='JSON input with all parameters')
-@click.option('--json-output', is_flag=True, help='Output API response as JSON')
-@click.pass_context
-@requires_api_access
-def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str, include_archived: bool,
-               max_items: int, page_size: int, starting_token: str, json_input: str, json_output: bool):
-    """List files in an asset.
-    
-    Examples:
-        # List all files
-        vamscli file list -d my-db -a my-asset
-        
-        # List files with prefix filter
-        vamscli file list -d my-db -a my-asset --prefix "models/"
-        
-        # Include archived files
-        vamscli file list -d my-db -a my-asset --include-archived
-        
-        # List with JSON input
-        vamscli file list --json-input '{"database_id": "my-db", "asset_id": "my-asset", "prefix": "models/"}'
-    """
-    try:
-        # Parse JSON input if provided
-        json_data = parse_json_input(json_input) if json_input else {}
-        
-        # Override arguments with JSON data
-        database_id = json_data.get('database_id', database_id)
-        asset_id = json_data.get('asset_id', asset_id)
-        prefix = json_data.get('prefix', prefix)
-        include_archived = json_data.get('include_archived', include_archived)
-        max_items = json_data.get('max_items', max_items)
-        page_size = json_data.get('page_size', page_size)
-        starting_token = json_data.get('starting_token', starting_token)
-        
-        # Validate required arguments
-        if not database_id:
-            raise click.ClickException("Database ID is required (-d/--database)")
-        if not asset_id:
-            raise click.ClickException("Asset ID is required (-a/--asset)")
-        
-        # Get profile manager and API client
-        profile_manager = get_profile_manager_from_context(ctx)
-        
-        if not profile_manager.has_config():
-            profile_name = profile_manager.profile_name
-            raise click.ClickException(
-                f"Configuration not found for profile '{profile_name}'. "
-                f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-            )
-        
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
-        
-        # Prepare query parameters
-        params = {
-            'maxItems': max_items,
-            'pageSize': page_size
-        }
-        if prefix:
-            params['prefix'] = prefix
-        if include_archived:
-            params['includeArchived'] = 'true'
-        if starting_token:
-            params['startingToken'] = starting_token
-        
-        # Call API
-        result = api_client.list_asset_files(database_id, asset_id, params)
-        
-        # Output results
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            items = result.get('items', [])
-            click.echo(click.style(f"✓ Found {len(items)} files", fg='green', bold=True))
-            
-            if items:
-                click.echo("\nFiles:")
-                for item in items:
-                    file_type = "📁" if item.get('isFolder') else "📄"
-                    archived = " (archived)" if item.get('isArchived') else ""
-                    size_info = f" ({item.get('size', 0)} bytes)" if not item.get('isFolder') else ""
-                    primary_type = f" [{item.get('primaryType')}]" if item.get('primaryType') else ""
-                    
-                    click.echo(f"  {file_type} {item.get('relativePath', '')}{size_info}{primary_type}{archived}")
-            
-            if result.get('nextToken'):
-                click.echo(f"\nNext token: {result['nextToken']}")
-        
-    except (APIError, AuthenticationError, AssetNotFoundError) as e:
-        if json_output:
-            click.echo(json.dumps({"error": str(e)}, indent=2))
-        else:
-            click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
-    except Exception as e:
-        if json_output:
-            click.echo(json.dumps({"error": f"Unexpected error: {e}"}, indent=2))
-        else:
-            click.echo(click.style(f"✗ Unexpected error: {e}", fg='red', bold=True), err=True)
         sys.exit(1)

@@ -5,12 +5,11 @@ import click
 from typing import Dict, Any, Optional, List
 
 from ..utils.api_client import APIClient
-from ..utils.decorators import get_profile_manager_from_context, requires_api_access
+from ..utils.decorators import get_profile_manager_from_context, requires_setup_and_auth
 from ..utils.exceptions import (
     TagTypeNotFoundError, TagTypeAlreadyExistsError, TagTypeInUseError,
-    InvalidTagTypeDataError, APIUnavailableError, AuthenticationError
+    InvalidTagTypeDataError
 )
-from ..version import get_version
 
 
 def parse_json_input(json_input: str) -> Dict[str, Any]:
@@ -93,7 +92,7 @@ def tag_type():
 @click.option('--json-input', help='JSON input file path or JSON string with tag type data')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def create(ctx: click.Context, tag_type_name: Optional[str], description: Optional[str], 
           required: bool, json_input: Optional[str], json_output: bool):
     """
@@ -109,20 +108,12 @@ def create(ctx: click.Context, tag_type_name: Optional[str], description: Option
         vamscli tag-type create --json-input '{"tagTypes":[{"tagTypeName":"priority","description":"Priority levels","required":"True"}]}'
         vamscli tag-type create --json-input tag-types.json --json-output
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
-    
-    # Check if setup has been completed
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
-        
         # Build tag type data
         if json_input:
             # Use JSON input
@@ -168,19 +159,6 @@ def create(ctx: click.Context, tag_type_name: Optional[str], description: Option
             err=True
         )
         raise click.ClickException(str(e))
-    except AuthenticationError as e:
-        click.echo(
-            click.style(f"✗ Authentication Error: {e}", fg='red', bold=True),
-            err=True
-        )
-        click.echo("Please run 'vamscli auth login' to re-authenticate.")
-        raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
 
 
 @tag_type.command()
@@ -190,7 +168,7 @@ def create(ctx: click.Context, tag_type_name: Optional[str], description: Option
 @click.option('--json-input', help='JSON input file path or JSON string with tag type data')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def update(ctx: click.Context, tag_type_name: str, description: Optional[str], 
           required: Optional[bool], json_input: Optional[str], json_output: bool):
     """
@@ -204,20 +182,12 @@ def update(ctx: click.Context, tag_type_name: str, description: Optional[str],
         vamscli tag-type update --tag-type-name "priority" --required
         vamscli tag-type update --json-input '{"tagTypes":[{"tagTypeName":"priority","description":"Updated","required":"True"}]}'
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
-    
-    # Check if setup has been completed
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
-        
         # Build update data
         if json_input:
             # Use JSON input
@@ -279,19 +249,6 @@ def update(ctx: click.Context, tag_type_name: str, description: Optional[str],
             err=True
         )
         raise click.ClickException(str(e))
-    except AuthenticationError as e:
-        click.echo(
-            click.style(f"✗ Authentication Error: {e}", fg='red', bold=True),
-            err=True
-        )
-        click.echo("Please run 'vamscli auth login' to re-authenticate.")
-        raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
 
 
 @tag_type.command()
@@ -299,7 +256,7 @@ def update(ctx: click.Context, tag_type_name: str, description: Optional[str],
 @click.option('--confirm', is_flag=True, help='Confirm tag type deletion')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def delete(ctx: click.Context, tag_type_name: str, confirm: bool, json_output: bool):
     """
     Delete a tag type from VAMS.
@@ -312,20 +269,12 @@ def delete(ctx: click.Context, tag_type_name: str, confirm: bool, json_output: b
         vamscli tag-type delete priority --confirm
         vamscli tag-type delete priority --confirm --json-output
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
-    
-    # Check if setup has been completed
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
-        
         # Require confirmation for deletion
         if not confirm:
             click.echo(
@@ -363,26 +312,13 @@ def delete(ctx: click.Context, tag_type_name: str, confirm: bool, json_output: b
         click.echo("Delete all tags using this tag type before deleting the tag type.")
         click.echo("Use 'vamscli tag list --tag-type <name>' to see tags using this type.")
         raise click.ClickException(str(e))
-    except AuthenticationError as e:
-        click.echo(
-            click.style(f"✗ Authentication Error: {e}", fg='red', bold=True),
-            err=True
-        )
-        click.echo("Please run 'vamscli auth login' to re-authenticate.")
-        raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
 
 
 @tag_type.command()
 @click.option('--show-tags', is_flag=True, help='Include associated tags in output')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def list(ctx: click.Context, show_tags: bool, json_output: bool):
     """
     List all tag types in VAMS.
@@ -395,60 +331,37 @@ def list(ctx: click.Context, show_tags: bool, json_output: bool):
         vamscli tag-type list --show-tags
         vamscli tag-type list --json-output
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
-    # Check if setup has been completed
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
+    click.echo("Retrieving tag types...")
     
-    try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
+    # Get the tag types
+    result = api_client.get_tag_types()
+    
+    if json_output:
+        click.echo(json.dumps(result, indent=2))
+    else:
+        # Extract tag types from the response
+        tag_types_list = result.get('message', {}).get('Items', [])
         
-        click.echo("Retrieving tag types...")
-        
-        # Get the tag types
-        result = api_client.get_tag_types()
-        
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
+        # Format for CLI display
+        if show_tags:
+            # Show detailed view with tags
+            if not tag_types_list:
+                click.echo("No tag types found.")
+                return
+            
+            for i, tag_type in enumerate(tag_types_list):
+                if i > 0:
+                    click.echo()  # Add spacing between tag types
+                click.echo(format_tag_type_output(tag_type, json_output))
         else:
-            # Extract tag types from the response
-            tag_types_list = result.get('message', {}).get('Items', [])
-            
-            # Format for CLI display
-            if show_tags:
-                # Show detailed view with tags
-                if not tag_types_list:
-                    click.echo("No tag types found.")
-                    return
-                
-                for i, tag_type in enumerate(tag_types_list):
-                    if i > 0:
-                        click.echo()  # Add spacing between tag types
-                    click.echo(format_tag_type_output(tag_type, json_output))
-            else:
-                # Show table view
-                click.echo(format_tag_types_list_output(tag_types_list, json_output))
-            
-            # Show pagination info if available
-            if result.get('message', {}).get('NextToken'):
-                click.echo(f"\nMore results available. Use pagination to see additional tag types.")
+            # Show table view
+            click.echo(format_tag_types_list_output(tag_types_list, json_output))
         
-    except AuthenticationError as e:
-        click.echo(
-            click.style(f"✗ Authentication Error: {e}", fg='red', bold=True),
-            err=True
-        )
-        click.echo("Please run 'vamscli auth login' to re-authenticate.")
-        raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
+        # Show pagination info if available
+        if result.get('message', {}).get('NextToken'):
+            click.echo(f"\nMore results available. Use pagination to see additional tag types.")

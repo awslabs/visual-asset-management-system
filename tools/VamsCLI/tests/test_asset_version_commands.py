@@ -6,11 +6,12 @@ import click
 from unittest.mock import Mock, patch, mock_open
 from click.testing import CliRunner
 
+from vamscli.main import cli
 from vamscli.commands.asset_version import asset_version
 from vamscli.utils.exceptions import (
     AssetVersionError, AssetVersionNotFoundError, AssetVersionOperationError,
     InvalidAssetVersionDataError, AssetVersionRevertError, AssetNotFoundError,
-    DatabaseNotFoundError, AuthenticationError, APIError
+    DatabaseNotFoundError, AuthenticationError, APIError, SetupRequiredError
 )
 
 
@@ -242,16 +243,16 @@ class TestAssetVersionCreateCommand:
     def test_create_no_setup(self, cli_runner, asset_version_no_setup_mocks):
         """Test create command without setup."""
         with asset_version_no_setup_mocks as mocks:
-            result = cli_runner.invoke(asset_version, [
-                'create',
+            result = cli_runner.invoke(cli, [
+                'asset-version', 'create',
                 '-d', 'test-db',
                 '-a', 'test-asset',
                 '--comment', 'Test version'
             ])
             
             assert result.exit_code == 1
-            assert 'Configuration not found' in result.output
-            assert 'vamscli setup' in result.output
+            assert result.exception
+            assert isinstance(result.exception, SetupRequiredError)
     
     def test_create_invalid_version_data_error(self, cli_runner, asset_version_command_mocks):
         """Test create command with invalid version data error."""
@@ -771,16 +772,16 @@ class TestAssetVersionCommandsIntegration:
                 "Authentication failed: Invalid or expired token"
             )
             
-            result = cli_runner.invoke(asset_version, [
-                'create',
+            result = cli_runner.invoke(cli, [
+                'asset-version', 'create',
                 '-d', 'test-db',
                 '-a', 'test-asset',
                 '--comment', 'Test version'
             ])
             
             assert result.exit_code == 1
-            assert '✗ Authentication Error' in result.output
-            assert 'vamscli auth login' in result.output
+            assert result.exception
+            assert isinstance(result.exception, AuthenticationError)
 
 
 class TestAssetVersionCommandsJSONHandling:
@@ -797,7 +798,7 @@ class TestAssetVersionCommandsJSONHandling:
                 '--json-input', 'invalid json'
             ])
             
-            assert result.exit_code == 1
+            assert result.exit_code == 2  # Click parameter error
             assert 'Invalid JSON input' in result.output
     
     def test_nonexistent_json_input_file(self, cli_runner, asset_version_command_mocks):
@@ -811,7 +812,7 @@ class TestAssetVersionCommandsJSONHandling:
                 '--json-input', 'nonexistent-file.json'
             ])
             
-            assert result.exit_code == 1
+            assert result.exit_code == 2  # Click parameter error
             assert 'Invalid JSON input' in result.output
             assert 'neither valid JSON nor a readable file path' in result.output
     
@@ -853,16 +854,16 @@ class TestAssetVersionCommandsEdgeCases:
         with asset_version_command_mocks as mocks:
             mocks['api_client'].create_asset_version.side_effect = APIError("API request failed")
             
-            result = cli_runner.invoke(asset_version, [
-                'create',
+            result = cli_runner.invoke(cli, [
+                'asset-version', 'create',
                 '-d', 'test-db',
                 '-a', 'test-asset',
                 '--comment', 'Test version'
             ])
             
             assert result.exit_code == 1
-            assert '✗ Unexpected error' in result.output
-            assert 'API request failed' in result.output
+            assert result.exception
+            assert isinstance(result.exception, APIError)
     
     def test_files_json_validation(self, cli_runner, asset_version_command_mocks):
         """Test files JSON validation."""
@@ -877,10 +878,10 @@ class TestAssetVersionCommandsEdgeCases:
                 '--files', '{"not": "array"}'
             ])
             
-            assert result.exit_code == 1
+            assert result.exit_code == 2  # Click parameter error
             # The error should indicate validation failure
             assert ('Files input must be a JSON array' in result.output or 
-                    'Unexpected error' in result.output)
+                    'Invalid parameter value' in result.output)
             
             # Test missing required fields
             result = cli_runner.invoke(asset_version, [
@@ -892,10 +893,10 @@ class TestAssetVersionCommandsEdgeCases:
                 '--files', '[{"relativeKey": "file.obj"}]'  # Missing versionId
             ])
             
-            assert result.exit_code == 1
+            assert result.exit_code == 2  # Click parameter error
             # The error should indicate missing field or validation failure
             assert ('File entry missing required field: versionId' in result.output or 
-                    'Unexpected error' in result.output)
+                    'Invalid parameter value' in result.output)
     
     def test_invalid_files_json(self, cli_runner, asset_version_command_mocks):
         """Test version creation with invalid files JSON."""
@@ -909,7 +910,7 @@ class TestAssetVersionCommandsEdgeCases:
                 '--files', 'invalid-json'
             ])
             
-            assert result.exit_code == 1
+            assert result.exit_code == 2  # Click parameter error
             # The error message comes from parse_json_input, not parse_files_input
             assert 'Invalid JSON input' in result.output
     
@@ -925,11 +926,11 @@ class TestAssetVersionCommandsEdgeCases:
                 '--files', '[{"relativeKey":"file.obj","versionId":"abc123","isArchived":false}]'
             ])
             
-            assert result.exit_code == 1
+            assert result.exit_code == 2  # Click parameter error
             # The command should fail with either the expected error or an unexpected error
             # Both indicate the conflict is properly detected
             assert ('Cannot specify --files when --use-latest-files is true' in result.output or 
-                    'Unexpected error' in result.output)
+                    'Invalid parameter value' in result.output)
 
 
 class TestAssetVersionHelpCommands:

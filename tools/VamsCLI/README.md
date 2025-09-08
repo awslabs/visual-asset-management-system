@@ -232,6 +232,47 @@ VamsCLI supports global options for enhanced functionality:
 -   **`--version`** - Show version information
 -   **`--profile`** - Profile name to use for the command
 
+## Environment Variables
+
+VamsCLI supports several environment variables for customizing behavior:
+
+### Retry Configuration for Rate Limiting
+
+VamsCLI automatically handles API rate limiting (HTTP 429 errors) with exponential backoff. You can customize the retry behavior:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VAMS_CLI_MAX_RETRY_ATTEMPTS` | 5 | Maximum number of retry attempts for 429 errors |
+| `VAMS_CLI_INITIAL_RETRY_DELAY` | 1.0 | Initial delay in seconds before first retry |
+| `VAMS_CLI_MAX_RETRY_DELAY` | 60.0 | Maximum delay in seconds between retries |
+| `VAMS_CLI_RETRY_BACKOFF_MULTIPLIER` | 2.0 | Multiplier for exponential backoff (1.0-5.0) |
+| `VAMS_CLI_RETRY_JITTER` | 0.1 | Jitter percentage to prevent thundering herd (0.0-0.5) |
+
+**Example Usage:**
+
+```bash
+# For high-traffic environments, be more patient with retries
+export VAMS_CLI_MAX_RETRY_ATTEMPTS=8
+export VAMS_CLI_INITIAL_RETRY_DELAY=2.0
+export VAMS_CLI_MAX_RETRY_DELAY=180.0
+
+# For development environments, fail faster
+export VAMS_CLI_MAX_RETRY_ATTEMPTS=3
+export VAMS_CLI_INITIAL_RETRY_DELAY=0.5
+export VAMS_CLI_MAX_RETRY_DELAY=30.0
+
+# Run commands with custom retry settings
+vamscli assets list
+```
+
+**Retry Behavior:**
+
+- **Automatic Handling**: All API calls automatically retry on 429 errors
+- **Exponential Backoff**: Delays increase exponentially with each retry
+- **Server Respect**: Honors server-provided `Retry-After` headers
+- **Progress Indication**: Shows retry progress for delays longer than 1 second
+- **Jitter**: Adds randomness to prevent multiple clients retrying simultaneously
+
 ## Token Override Authentication
 
 For external authentication systems, use the token override options with the `auth login` command:

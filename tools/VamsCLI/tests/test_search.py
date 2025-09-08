@@ -9,7 +9,7 @@ from click.testing import CliRunner
 from vamscli.main import cli
 from vamscli.utils.exceptions import (
     SearchDisabledError, SearchUnavailableError, InvalidSearchParametersError,
-    SearchQueryError, SearchMappingError, AuthenticationError, APIError
+    SearchQueryError, SearchMappingError, AuthenticationError, APIError, SetupRequiredError
 )
 
 
@@ -392,8 +392,8 @@ class TestSearchAssetsCommand:
             result = cli_runner.invoke(cli, ['search', 'assets', '-q', 'test'])
             
             assert result.exit_code == 1
-            assert 'Configuration not found' in result.output
-            assert 'vamscli setup' in result.output
+            # Global exception handler catches SetupRequiredError
+            assert isinstance(result.exception, SetupRequiredError)
     
     @patch('vamscli.commands.search.is_feature_enabled')
     def test_assets_sort_validation(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
@@ -427,7 +427,7 @@ class TestSearchAssetsCommand:
             ])
             
             assert result.exit_code == 1
-            assert 'Property Filter Error' in result.output
+            assert 'Invalid Parameters' in result.output
     
     @patch('vamscli.commands.search.is_feature_enabled')
     def test_assets_api_error(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
@@ -442,8 +442,8 @@ class TestSearchAssetsCommand:
             result = cli_runner.invoke(cli, ['search', 'assets', '-q', 'test'])
             
             assert result.exit_code == 1
-            assert 'API Error' in result.output
-            assert 'Search service unavailable' in result.output
+            # Global exception handler catches APIError
+            assert isinstance(result.exception, APIError)
     
     @patch('vamscli.commands.search.is_feature_enabled')
     def test_assets_json_input_file_not_found(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
@@ -456,7 +456,7 @@ class TestSearchAssetsCommand:
                 result = cli_runner.invoke(cli, ['search', 'assets', '--jsonInput', 'missing.json'])
             
             assert result.exit_code == 1
-            assert 'JSON Input Error' in result.output
+            assert 'Invalid Parameters' in result.output
             assert 'not found' in result.output
     
     @patch('vamscli.commands.search.is_feature_enabled')
@@ -470,7 +470,7 @@ class TestSearchAssetsCommand:
                 result = cli_runner.invoke(cli, ['search', 'assets', '--jsonInput', 'invalid.json'])
             
             assert result.exit_code == 1
-            assert 'JSON Input Error' in result.output
+            assert 'Invalid Parameters' in result.output
             assert 'Invalid JSON' in result.output
 
 
@@ -602,8 +602,8 @@ class TestSearchFilesCommand:
             result = cli_runner.invoke(cli, ['search', 'files', '--file-ext', 'gltf'])
             
             assert result.exit_code == 1
-            assert 'Configuration not found' in result.output
-            assert 'vamscli setup' in result.output
+            # Global exception handler catches SetupRequiredError
+            assert isinstance(result.exception, SetupRequiredError)
 
 
 class TestSearchMappingCommand:
@@ -702,8 +702,8 @@ class TestSearchMappingCommand:
             result = cli_runner.invoke(cli, ['search', 'mapping'])
             
             assert result.exit_code == 1
-            assert 'Configuration not found' in result.output
-            assert 'vamscli setup' in result.output
+            # Global exception handler catches SetupRequiredError
+            assert isinstance(result.exception, SetupRequiredError)
 
 
 class TestSearchCommandsIntegration:
@@ -728,7 +728,8 @@ class TestSearchCommandsIntegration:
             result = cli_runner.invoke(cli, ['search', 'assets', '-q', 'test'])
             
             assert result.exit_code == 1
-            assert 'Authentication Error' in result.output
+            # Global exception handler catches AuthenticationError
+            assert isinstance(result.exception, AuthenticationError)
     
     @patch('vamscli.commands.search.is_feature_enabled')
     def test_search_query_error_handling(self, mock_is_feature_enabled, cli_runner, search_command_mocks):

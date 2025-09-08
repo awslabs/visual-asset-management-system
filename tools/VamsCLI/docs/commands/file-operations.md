@@ -106,12 +106,39 @@ vamscli file upload -d my-db -a my-asset --hide-progress --json-output file.gltf
 -   **Retry Logic**: Configurable retry attempts with exponential backoff
 -   **Parallel Uploads**: Concurrent part uploads with configurable limits
 -   **Error Handling**: Comprehensive error handling with detailed failure reporting
+-   **Zero-byte File Support**: Properly handles empty files (created during upload completion)
+-   **Rate Limit Handling**: Automatic retry with exponential backoff for 429 throttling
 
-### File Size Limits
+### Upload Limits (Backend v2.2+)
 
--   Regular files: No limit (automatically chunked)
--   Preview files: 5MB maximum
--   Sequence limit: 3GB per upload sequence (automatically managed)
+-   **Files per request**: Maximum 1000 files per upload request
+-   **Total parts per request**: Maximum 5000 parts across all files per request
+-   **Parts per file**: Maximum 10000 parts per individual file
+-   **Preview file size**: Maximum 5MB per preview file
+-   **Rate limiting**: 10 upload initializations per user per minute
+-   **Part size**: Maximum 5GB per part (S3 limit)
+-   **Zero-byte files**: Supported and handled automatically
+-   **Sequence limit**: 3GB per upload sequence (automatically managed)
+
+### Large Upload Handling
+
+When your upload exceeds the backend limits, VamsCLI automatically:
+
+1. **Validates constraints** before starting the upload
+2. **Provides helpful error messages** with guidance on how to split uploads
+3. **Splits uploads into multiple sequences** when possible
+4. **Shows progress** for multi-sequence uploads
+5. **Handles rate limiting** with automatic retries and backoff
+
+**Example constraint violation messages:**
+
+```bash
+❌ Too many files: 1500 files provided, but maximum is 1000 files per upload.
+
+💡 Tip: You can split your upload by using multiple commands:
+   vamscli file upload -d my-db -a my-asset file1.ext file2.ext ... (up to 1000 files)
+   vamscli file upload -d my-db -a my-asset file1001.ext ...
+```
 
 ### Supported Upload Types
 

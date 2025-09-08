@@ -5,8 +5,7 @@ import click
 from ..auth.cognito import CognitoAuthenticator
 from ..utils.decorators import requires_api_access, get_profile_manager_from_context
 from ..utils.api_client import APIClient
-from ..utils.exceptions import AuthenticationError, ProfileNotFoundError, ConfigurationError, OverrideTokenError, APIUnavailableError
-from ..version import get_version
+from ..utils.exceptions import AuthenticationError, ConfigurationError, OverrideTokenError
 
 
 def get_authenticator(config: dict) -> CognitoAuthenticator:

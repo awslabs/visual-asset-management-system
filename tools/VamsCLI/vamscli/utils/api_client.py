@@ -29,9 +29,11 @@ from .exceptions import (
     InvalidTagDataError, InvalidTagTypeDataError, AssetVersionError, AssetVersionNotFoundError,
     AssetVersionOperationError, InvalidAssetVersionDataError, AssetVersionRevertError,
     AssetLinkError, AssetLinkNotFoundError, AssetLinkValidationError, AssetLinkPermissionError,
-    CycleDetectionError, AssetLinkAlreadyExistsError, InvalidRelationshipTypeError, AssetLinkOperationError
+    CycleDetectionError, AssetLinkAlreadyExistsError, InvalidRelationshipTypeError, AssetLinkOperationError,
+    RateLimitExceededError, RetryExhaustedError
 )
 from .profile import ProfileManager
+from .retry_config import get_retry_config
 
 
 class APIClient:
@@ -73,16 +75,53 @@ class APIClient:
                 )
     
     def _make_request(self, method: str, endpoint: str, include_auth: bool = True, 
-                     retry_count: int = 0, **kwargs) -> requests.Response:
-        """Make HTTP request with error handling and retries."""
+                     retry_count: int = 0, throttle_retry_count: int = 0, **kwargs) -> requests.Response:
+        """Make HTTP request with error handling and retries for both auth and throttling."""
         # Pre-flight validation for override tokens
         self._validate_token_before_request(include_auth)
         
         url = urljoin(self.base_url + '/', endpoint.lstrip('/'))
         headers = self._get_headers(include_auth)
+        retry_config = get_retry_config()
         
         try:
             response = self.session.request(method, url, headers=headers, **kwargs)
+            
+            # Handle 429 rate limiting with exponential backoff
+            if response.status_code == 429:
+                if retry_config.should_retry(throttle_retry_count):
+                    # Parse Retry-After header if present
+                    retry_after = None
+                    retry_after_header = response.headers.get('Retry-After')
+                    if retry_after_header:
+                        try:
+                            retry_after = int(retry_after_header)
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    # Calculate delay with exponential backoff
+                    delay = retry_config.calculate_delay(throttle_retry_count, retry_after)
+                    
+                    # Show progress and sleep
+                    retry_config.sleep_with_progress(
+                        delay, 
+                        throttle_retry_count + 1, 
+                        retry_config.max_retry_attempts + 1,
+                        show_progress=True
+                    )
+                    
+                    # Retry the request
+                    return self._make_request(
+                        method, endpoint, include_auth, retry_count, 
+                        throttle_retry_count + 1, **kwargs
+                    )
+                else:
+                    # All retry attempts exhausted
+                    error_msg = (
+                        f"Rate limit exceeded. All {retry_config.max_retry_attempts} retry attempts exhausted. "
+                        f"The API is currently throttling requests. Please try again later."
+                    )
+                    raise RetryExhaustedError(error_msg)
             
             # Handle 401 errors with retry logic
             if response.status_code == 401 and include_auth and retry_count < MAX_AUTH_RETRIES:
@@ -96,13 +135,26 @@ class APIClient:
                 
                 # Try to refresh token or re-authenticate (for Cognito tokens only)
                 if self._try_refresh_token():
-                    return self._make_request(method, endpoint, include_auth, retry_count + 1, **kwargs)
+                    return self._make_request(
+                        method, endpoint, include_auth, retry_count + 1, 
+                        throttle_retry_count, **kwargs
+                    )
                 else:
                     raise AuthenticationError("Authentication failed. Please run 'vamscli auth login' to re-authenticate.")
             
             response.raise_for_status()
             return response
             
+        except (RateLimitExceededError, RetryExhaustedError):
+            # Re-raise throttling errors without wrapping
+            raise
+        except requests.exceptions.HTTPError as e:
+            # Handle other HTTP errors that might be retryable
+            if e.response.status_code == 429:
+                # This shouldn't happen due to the check above, but just in case
+                raise RateLimitExceededError(f"Rate limit exceeded: {e}")
+            else:
+                raise APIError(f"API request failed: {e}")
         except requests.exceptions.RequestException as e:
             raise APIError(f"API request failed: {e}")
             

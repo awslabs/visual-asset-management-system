@@ -7,7 +7,8 @@ from pathlib import Path
 
 from ..constants import (
     DEFAULT_CHUNK_SIZE_SMALL, DEFAULT_CHUNK_SIZE_LARGE, MAX_FILE_SIZE_SMALL_CHUNKS,
-    MAX_SEQUENCE_SIZE, MAX_PREVIEW_FILE_SIZE, ALLOWED_PREVIEW_EXTENSIONS
+    MAX_SEQUENCE_SIZE, MAX_PREVIEW_FILE_SIZE, ALLOWED_PREVIEW_EXTENSIONS,
+    MAX_FILES_PER_REQUEST, MAX_TOTAL_PARTS_PER_REQUEST, MAX_PARTS_PER_FILE, MAX_PART_SIZE
 )
 from .exceptions import (
     InvalidFileError, FileTooLargeError, PreviewFileError, UploadSequenceError
@@ -20,7 +21,10 @@ class FileInfo:
     def __init__(self, local_path: str, relative_key: str, size: int = None):
         self.local_path = Path(local_path)
         self.relative_key = relative_key
-        self.size = size or self.local_path.stat().st_size
+        if size is not None:
+            self.size = size
+        else:
+            self.size = self.local_path.stat().st_size
         self.is_preview_file = '.previewFile.' in relative_key
         
     def __repr__(self):
@@ -186,10 +190,46 @@ def collect_files_from_list(file_paths: List[str], asset_location: str = "/") ->
     return files
 
 
+def validate_upload_constraints(files: List[FileInfo]) -> None:
+    """Validate files against backend upload constraints."""
+    # Check file count limit
+    if len(files) > MAX_FILES_PER_REQUEST:
+        raise UploadSequenceError(
+            f"Too many files: {len(files)} files provided, but maximum is {MAX_FILES_PER_REQUEST} files per upload. "
+            f"Please split your upload into smaller batches."
+        )
+    
+    # Calculate total parts across all files
+    total_parts = 0
+    for file_info in files:
+        file_parts = calculate_file_parts(file_info.size)
+        num_parts = len(file_parts)
+        
+        # Check individual file part limit
+        if num_parts > MAX_PARTS_PER_FILE:
+            raise UploadSequenceError(
+                f"File '{file_info.relative_key}' requires {num_parts} parts, "
+                f"but maximum is {MAX_PARTS_PER_FILE} parts per file. "
+                f"File size: {format_file_size(file_info.size)}"
+            )
+        
+        total_parts += num_parts
+    
+    # Check total parts limit
+    if total_parts > MAX_TOTAL_PARTS_PER_REQUEST:
+        raise UploadSequenceError(
+            f"Total parts across all files: {total_parts}, but maximum is {MAX_TOTAL_PARTS_PER_REQUEST} parts per upload. "
+            f"Please reduce file sizes or split your upload into smaller batches."
+        )
+
+
 def create_upload_sequences(files: List[FileInfo]) -> List[UploadSequence]:
-    """Create upload sequences from a list of files."""
+    """Create upload sequences from a list of files with backend constraint validation."""
     if not files:
         raise UploadSequenceError("No files provided for sequencing")
+    
+    # Validate against backend constraints first
+    validate_upload_constraints(files)
     
     sequences = []
     regular_files = []
@@ -206,10 +246,21 @@ def create_upload_sequences(files: List[FileInfo]) -> List[UploadSequence]:
     sequence_id = 1
     current_sequence = []
     current_size = 0
+    current_parts = 0
     
     for file_info in regular_files:
-        # If file is >= 3GB or adding it would exceed 3GB, start new sequence
-        if file_info.size >= MAX_SEQUENCE_SIZE or (current_size + file_info.size > MAX_SEQUENCE_SIZE):
+        file_parts = calculate_file_parts(file_info.size)
+        file_part_count = len(file_parts)
+        
+        # Check if adding this file would exceed limits
+        would_exceed_size = current_size + file_info.size > MAX_SEQUENCE_SIZE
+        would_exceed_files = len(current_sequence) + 1 > MAX_FILES_PER_REQUEST
+        would_exceed_parts = current_parts + file_part_count > MAX_TOTAL_PARTS_PER_REQUEST
+        
+        # If file is >= 3GB or adding it would exceed any limit, start new sequence
+        if (file_info.size >= MAX_SEQUENCE_SIZE or would_exceed_size or 
+            would_exceed_files or would_exceed_parts):
+            
             # Save current sequence if it has files
             if current_sequence:
                 sequence = UploadSequence(current_sequence, sequence_id)
@@ -218,6 +269,7 @@ def create_upload_sequences(files: List[FileInfo]) -> List[UploadSequence]:
                 sequence_id += 1
                 current_sequence = []
                 current_size = 0
+                current_parts = 0
             
             # Large file gets its own sequence
             sequence = UploadSequence([file_info], sequence_id)
@@ -228,6 +280,7 @@ def create_upload_sequences(files: List[FileInfo]) -> List[UploadSequence]:
             # Add to current sequence
             current_sequence.append(file_info)
             current_size += file_info.size
+            current_parts += file_part_count
     
     # Add remaining regular files
     if current_sequence:
@@ -240,10 +293,18 @@ def create_upload_sequences(files: List[FileInfo]) -> List[UploadSequence]:
     if preview_files:
         current_sequence = []
         current_size = 0
+        current_parts = 0
         
         for file_info in preview_files:
-            # Preview files are small, but still follow grouping rules
-            if current_size + file_info.size > MAX_SEQUENCE_SIZE:
+            file_parts = calculate_file_parts(file_info.size)
+            file_part_count = len(file_parts)
+            
+            # Check if adding this file would exceed limits
+            would_exceed_size = current_size + file_info.size > MAX_SEQUENCE_SIZE
+            would_exceed_files = len(current_sequence) + 1 > MAX_FILES_PER_REQUEST
+            would_exceed_parts = current_parts + file_part_count > MAX_TOTAL_PARTS_PER_REQUEST
+            
+            if would_exceed_size or would_exceed_files or would_exceed_parts:
                 if current_sequence:
                     sequence = UploadSequence(current_sequence, sequence_id)
                     sequence.calculate_parts()
@@ -251,9 +312,11 @@ def create_upload_sequences(files: List[FileInfo]) -> List[UploadSequence]:
                     sequence_id += 1
                     current_sequence = []
                     current_size = 0
+                    current_parts = 0
             
             current_sequence.append(file_info)
             current_size += file_info.size
+            current_parts += file_part_count
         
         # Add remaining preview files
         if current_sequence:

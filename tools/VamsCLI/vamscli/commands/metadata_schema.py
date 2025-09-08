@@ -5,11 +5,8 @@ import click
 from typing import Dict, Any, Optional
 
 from ..utils.api_client import APIClient
-from ..utils.decorators import requires_api_access, get_profile_manager_from_context
-from ..utils.exceptions import (
-    DatabaseNotFoundError, APIUnavailableError, AuthenticationError, APIError
-)
-from ..version import get_version
+from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
+from ..utils.exceptions import DatabaseNotFoundError
 
 
 def parse_json_input(json_input: str) -> Dict[str, Any]:
@@ -93,7 +90,7 @@ def metadata_schema():
 @click.option('--json-input', help='JSON input file path or JSON string with pagination parameters')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def get(ctx: click.Context, database: str, max_items: int, page_size: int, 
         starting_token: Optional[str], json_input: Optional[str], json_output: bool):
     """
@@ -113,68 +110,39 @@ def get(ctx: click.Context, database: str, max_items: int, page_size: int,
         vamscli metadata-schema get -d my-database --json-input '{"maxItems":100,"pageSize":50}'
     """
     profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
-    # Check setup
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
+    # Handle JSON input for pagination parameters
+    if json_input:
+        json_data = parse_json_input(json_input)
+        
+        # Override pagination parameters from JSON input
+        max_items = json_data.get('maxItems', max_items)
+        page_size = json_data.get('pageSize', page_size)
+        starting_token = json_data.get('startingToken', starting_token)
     
+    if not json_output:
+        click.echo(f"Retrieving metadata schema for database '{database}'...")
+    
+    # Get metadata schema
     try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
-        
-        # Handle JSON input for pagination parameters
-        if json_input:
-            json_data = parse_json_input(json_input)
-            
-            # Override pagination parameters from JSON input
-            max_items = json_data.get('maxItems', max_items)
-            page_size = json_data.get('pageSize', page_size)
-            starting_token = json_data.get('startingToken', starting_token)
-        
-        if not json_output:
-            click.echo(f"Retrieving metadata schema for database '{database}'...")
-        
-        # Get metadata schema
         result = api_client.get_metadata_schema(
             database_id=database,
             max_items=max_items,
             page_size=page_size,
             starting_token=starting_token
         )
-        
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            formatted_output = format_metadata_schema_output(result)
-            click.echo(formatted_output)
-        
     except DatabaseNotFoundError as e:
-        click.echo(
-            click.style(f"✗ Database Not Found: {e}", fg='red', bold=True),
-            err=True
-        )
-        click.echo("Use 'vamscli database list' to see available databases.")
+        if json_output:
+            click.echo(json.dumps({"error": str(e)}, indent=2))
+        else:
+            click.echo(click.style(f"✗ Database Not Found: {e}", fg='red', bold=True), err=True)
+            click.echo("Use 'vamscli database list' to see available databases.")
         raise click.ClickException(str(e))
-    except AuthenticationError as e:
-        click.echo(
-            click.style(f"✗ Authentication Error: {e}", fg='red', bold=True),
-            err=True
-        )
-        click.echo("Please run 'vamscli auth login' to re-authenticate.")
-        raise click.ClickException(str(e))
-    except APIError as e:
-        click.echo(
-            click.style(f"✗ API Error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
+    
+    if json_output:
+        click.echo(json.dumps(result, indent=2))
+    else:
+        formatted_output = format_metadata_schema_output(result)
+        click.echo(formatted_output)

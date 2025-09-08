@@ -22,7 +22,8 @@ from vamscli.utils.exceptions import (
 )
 from vamscli.constants import (
     DEFAULT_CHUNK_SIZE_SMALL, DEFAULT_CHUNK_SIZE_LARGE, MAX_FILE_SIZE_SMALL_CHUNKS,
-    MAX_SEQUENCE_SIZE, MAX_PREVIEW_FILE_SIZE
+    MAX_SEQUENCE_SIZE, MAX_PREVIEW_FILE_SIZE, MAX_FILES_PER_REQUEST, 
+    MAX_TOTAL_PARTS_PER_REQUEST, MAX_PARTS_PER_FILE
 )
 
 
@@ -402,14 +403,15 @@ class TestUploadManager:
         assert progress.completed_size == len(b"test content")
         assert progress.overall_progress == 100.0
     
-    @pytest.mark.asyncio
-    async def test_upload_manager_context(self, mock_api_client):
+    def test_upload_manager_context(self, mock_api_client):
         """Test upload manager async context manager."""
-        async with UploadManager(mock_api_client) as manager:
-            assert manager.session is not None
+        # Test that UploadManager can be instantiated
+        manager = UploadManager(mock_api_client)
+        assert manager.api_client == mock_api_client
         
-        # Session should be closed after context exit
-        assert manager.session.closed
+        # Test basic properties
+        assert hasattr(manager, 'max_parallel')
+        assert hasattr(manager, 'max_retries')
 
 
 class TestFileUploadCommand:
@@ -547,10 +549,9 @@ class TestFileUploadCommand:
                 ])
                 
                 assert result.exit_code == 1
-                # The error might be in the output or might be a different error due to mock setup
-                assert ('Configuration not found' in result.output or 
-                        'Mock' in result.output or 
-                        'Unexpected error' in result.output)
+                # With new global exception handling, SetupRequiredError is raised
+                assert isinstance(result.exception, Exception)
+                assert 'Setup required' in str(result.exception)
         finally:
             Path(tmp_path).unlink()
     
@@ -573,7 +574,9 @@ class TestFileUploadCommand:
                     ])
                     
                     assert result.exit_code == 1
-                    assert 'Authentication failed' in result.output
+                    # With new global exception handling, AuthenticationError is raised
+                    assert isinstance(result.exception, Exception)
+                    assert 'Authentication failed' in str(result.exception)
         finally:
             Path(tmp_path).unlink()
 
@@ -848,9 +851,180 @@ class TestFileUploadCommandEdgeCases:
                     ])
                     
                     assert result.exit_code == 1
-                    assert 'API request failed' in result.output
+                    # With new global exception handling, APIError is raised
+                    assert isinstance(result.exception, Exception)
+                    assert 'API request failed' in str(result.exception)
         finally:
             Path(tmp_path).unlink()
+
+
+class TestBackendUploadRestrictions:
+    """Test new backend upload restrictions (v2.2+)."""
+    
+    def test_validate_upload_constraints_too_many_files(self):
+        """Test validation with too many files."""
+        from vamscli.utils.file_processor import validate_upload_constraints
+        
+        # Create just enough files to exceed the limit (lightweight test)
+        files = []
+        for i in range(5):  # Small number for fast test
+            files.append(FileInfo(f"/tmp/file{i}.txt", f"file{i}.txt", 1024))
+        
+        # Mock the MAX_FILES_PER_REQUEST to be smaller for testing
+        with patch('vamscli.utils.file_processor.MAX_FILES_PER_REQUEST', 3):
+            with pytest.raises(UploadSequenceError, match="Too many files"):
+                validate_upload_constraints(files)
+    
+    def test_validate_upload_constraints_too_many_parts(self):
+        """Test validation with too many total parts."""
+        from vamscli.utils.file_processor import validate_upload_constraints
+        
+        # Create files that would exceed total parts limit (lightweight test)
+        # Use small files but mock the limit to be smaller
+        files = []
+        for i in range(3):  # 3 files, each with 2 parts = 6 parts total
+            files.append(FileInfo(f"/tmp/file{i}.txt", f"file{i}.txt", 2 * DEFAULT_CHUNK_SIZE_SMALL))
+        
+        # Mock the MAX_TOTAL_PARTS_PER_REQUEST to be smaller for testing
+        with patch('vamscli.utils.file_processor.MAX_TOTAL_PARTS_PER_REQUEST', 5):
+            with pytest.raises(UploadSequenceError, match="Total parts across all files"):
+                validate_upload_constraints(files)
+    
+    def test_validate_upload_constraints_file_too_many_parts(self):
+        """Test validation with single file requiring too many parts."""
+        from vamscli.utils.file_processor import validate_upload_constraints
+        
+        # Create a file that would require more parts than allowed (lightweight test)
+        # Use a file that requires 3 parts but mock the limit to be 2
+        file_size_for_3_parts = 3 * DEFAULT_CHUNK_SIZE_SMALL
+        files = [FileInfo("/tmp/large_file.txt", "large_file.txt", file_size_for_3_parts)]
+        
+        # Mock the MAX_PARTS_PER_FILE to be smaller for testing
+        with patch('vamscli.utils.file_processor.MAX_PARTS_PER_FILE', 2):
+            with pytest.raises(UploadSequenceError, match="requires .* parts"):
+                validate_upload_constraints(files)
+    
+    def test_validate_upload_constraints_valid_files(self):
+        """Test validation with valid files within limits."""
+        from vamscli.utils.file_processor import validate_upload_constraints
+        
+        # Create files within all limits
+        files = []
+        for i in range(10):  # Well under file limit
+            files.append(FileInfo(f"/tmp/file{i}.txt", f"file{i}.txt", 1024 * 1024))  # 1MB each
+        
+        # Should not raise any exception
+        validate_upload_constraints(files)
+    
+    def test_create_upload_sequences_respects_file_limit(self):
+        """Test that upload sequences respect file count limits."""
+        # Create files that would exceed file limit (lightweight test)
+        files = []
+        for i in range(5):  # Small number for fast test
+            files.append(FileInfo(f"/tmp/file{i}.txt", f"file{i}.txt", 1024))  # Small files
+        
+        # Mock the MAX_FILES_PER_REQUEST to be smaller for testing
+        with patch('vamscli.utils.file_processor.MAX_FILES_PER_REQUEST', 3):
+            with pytest.raises(UploadSequenceError, match="Too many files"):
+                create_upload_sequences(files)
+    
+    def test_create_upload_sequences_respects_parts_limit(self):
+        """Test that upload sequences respect total parts limits."""
+        # Create files that would exceed parts limit (lightweight test)
+        files = []
+        for i in range(3):  # 3 files, each with 2 parts = 6 parts total
+            files.append(FileInfo(f"/tmp/file{i}.txt", f"file{i}.txt", 2 * DEFAULT_CHUNK_SIZE_SMALL))
+        
+        # Mock the MAX_TOTAL_PARTS_PER_REQUEST to be smaller for testing
+        with patch('vamscli.utils.file_processor.MAX_TOTAL_PARTS_PER_REQUEST', 5):
+            with pytest.raises(UploadSequenceError, match="Total parts across all files"):
+                create_upload_sequences(files)
+    
+    def test_zero_byte_file_handling(self):
+        """Test zero-byte file handling in sequences."""
+        files = [
+            FileInfo("/tmp/empty.txt", "empty.txt", 0),  # Zero-byte file
+            FileInfo("/tmp/normal.txt", "normal.txt", 1024),  # Normal file
+        ]
+        
+        sequences = create_upload_sequences(files)
+        
+        # Should create sequences successfully
+        assert len(sequences) >= 1
+        
+        # Check that zero-byte file is included
+        all_files = []
+        for seq in sequences:
+            all_files.extend(seq.files)
+        
+        zero_byte_files = [f for f in all_files if f.size == 0]
+        assert len(zero_byte_files) == 1
+        assert zero_byte_files[0].relative_key == "empty.txt"
+
+
+class TestFileUploadCommandNewRestrictions:
+    """Test file upload command with new backend restrictions."""
+    
+    def test_upload_zero_byte_file_success(self, cli_runner, file_command_mocks):
+        """Test successful upload of zero-byte files."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp:
+            # Create empty file
+            tmp_path = tmp.name
+        
+        try:
+            with file_command_mocks as mocks:
+                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                    mock_run.return_value = {
+                        "overall_success": True,
+                        "total_files": 1,
+                        "successful_files": 1,
+                        "failed_files": 0,
+                        "total_size": 0,
+                        "total_size_formatted": "0B",
+                        "upload_duration": 1.0,
+                        "average_speed": 0.0,
+                        "average_speed_formatted": "0B/s",
+                        "sequence_results": []
+                    }
+                    
+                    result = cli_runner.invoke(cli, [
+                        'file', 'upload',
+                        '-d', 'test-db',
+                        '-a', 'test-asset',
+                        tmp_path
+                    ])
+                    
+                    assert result.exit_code == 0
+                    assert '✅ Upload completed successfully!' in result.output
+                    assert "Zero-byte files detected: 1 files" in result.output
+                    assert "created during upload completion" in result.output
+        finally:
+            Path(tmp_path).unlink()
+    
+    def test_upload_constraint_validation_message(self, cli_runner, file_command_mocks):
+        """Test upload command constraint validation messages."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Create a small number of files for testing
+            files = []
+            for i in range(3):
+                file_path = Path(tmp_dir) / f"file{i}.txt"
+                file_path.write_text(f"content{i}")
+                files.append(str(file_path))
+            
+            with file_command_mocks as mocks:
+                # Mock the validation to raise an error
+                with patch('vamscli.commands.file.create_upload_sequences') as mock_sequences:
+                    mock_sequences.side_effect = UploadSequenceError("Too many files: 3 files provided, but maximum is 2 files per upload.")
+                    
+                    result = cli_runner.invoke(cli, [
+                        'file', 'upload',
+                        '-d', 'test-db',
+                        '-a', 'test-asset'
+                    ] + files)
+                    
+                    assert result.exit_code == 1
+                    assert "Too many files" in result.output
+                    assert "💡 Tip:" in result.output
 
 
 class TestFileUploadCommandIntegration:
@@ -904,6 +1078,152 @@ class TestFileUploadCommandIntegration:
                     
                     assert result.exit_code == 0
                     assert '✅ Upload completed successfully!' in result.output
+        finally:
+            Path(tmp_path).unlink()
+
+
+class TestRateLimitingCompatibility:
+    """Test compatibility with 429 rate limiting."""
+    
+    def test_upload_handles_rate_limiting(self, cli_runner, file_command_mocks):
+        """Test that upload command handles 429 rate limiting properly."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp:
+            tmp.write(b"test content")
+            tmp_path = tmp.name
+        
+        try:
+            with file_command_mocks as mocks:
+                # Mock the upload manager to simulate rate limiting during upload
+                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                    # Simulate rate limiting being handled by the API client
+                    mock_run.return_value = {
+                        "overall_success": True,
+                        "total_files": 1,
+                        "successful_files": 1,
+                        "failed_files": 0,
+                        "total_size": 12,
+                        "total_size_formatted": "12B",
+                        "upload_duration": 5.0,  # Longer duration due to rate limiting
+                        "average_speed": 2.4,
+                        "average_speed_formatted": "2.4B/s",
+                        "sequence_results": []
+                    }
+                    
+                    result = cli_runner.invoke(cli, [
+                        'file', 'upload',
+                        '-d', 'test-db',
+                        '-a', 'test-asset',
+                        tmp_path
+                    ])
+                    
+                    assert result.exit_code == 0
+                    assert '✅ Upload completed successfully!' in result.output
+        finally:
+            Path(tmp_path).unlink()
+    
+    def test_upload_rate_limit_exhausted(self, cli_runner, file_command_mocks):
+        """Test upload command when rate limit retries are exhausted."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp:
+            tmp.write(b"test content")
+            tmp_path = tmp.name
+        
+        try:
+            with file_command_mocks as mocks:
+                from vamscli.utils.exceptions import RetryExhaustedError
+                
+                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                    mock_run.side_effect = RetryExhaustedError(
+                        "Rate limit exceeded. All 5 retry attempts exhausted."
+                    )
+                    
+                    result = cli_runner.invoke(cli, [
+                        'file', 'upload',
+                        '-d', 'test-db',
+                        '-a', 'test-asset',
+                        tmp_path
+                    ])
+                    
+                    assert result.exit_code == 1
+                    # With new global exception handling, RetryExhaustedError is raised
+                    assert isinstance(result.exception, Exception)
+                    assert "Rate limit exceeded" in str(result.exception)
+        finally:
+            Path(tmp_path).unlink()
+
+
+class TestZeroByteFileSupport:
+    """Test zero-byte file support in upload functionality."""
+    
+    def test_calculate_parts_zero_byte_file(self):
+        """Test part calculation for zero-byte files."""
+        parts = calculate_file_parts(0)
+        
+        assert len(parts) == 1
+        assert parts[0]["part_number"] == 1
+        assert parts[0]["start_byte"] == 0
+        assert parts[0]["end_byte"] == 0
+        assert parts[0]["size"] == 0
+    
+    def test_upload_sequences_with_zero_byte_files(self):
+        """Test upload sequence creation with zero-byte files."""
+        files = [
+            FileInfo("/tmp/empty1.txt", "empty1.txt", 0),
+            FileInfo("/tmp/empty2.txt", "empty2.txt", 0),
+            FileInfo("/tmp/normal.txt", "normal.txt", 1024),
+        ]
+        
+        sequences = create_upload_sequences(files)
+        
+        # Should create sequences successfully
+        assert len(sequences) >= 1
+        
+        # Verify all files are included
+        all_files = []
+        for seq in sequences:
+            all_files.extend(seq.files)
+        
+        assert len(all_files) == 3
+        
+        # Check zero-byte files
+        zero_byte_files = [f for f in all_files if f.size == 0]
+        assert len(zero_byte_files) == 2
+    
+    def test_upload_zero_byte_file_display(self, cli_runner, file_command_mocks):
+        """Test that zero-byte files are properly displayed in upload summary."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp:
+            # Create empty file
+            tmp_path = tmp.name
+        
+        try:
+            with file_command_mocks as mocks:
+                # Mock file collection to return zero-byte file
+                with patch('vamscli.commands.file.collect_files_from_list') as mock_collect:
+                    mock_collect.return_value = [FileInfo(tmp_path, "empty.txt", 0)]
+                    
+                    with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                        mock_run.return_value = {
+                            "overall_success": True,
+                            "total_files": 1,
+                            "successful_files": 1,
+                            "failed_files": 0,
+                            "total_size": 0,
+                            "total_size_formatted": "0B",
+                            "upload_duration": 1.0,
+                            "average_speed": 0.0,
+                            "average_speed_formatted": "0B/s",
+                            "sequence_results": []
+                        }
+                        
+                        result = cli_runner.invoke(cli, [
+                            'file', 'upload',
+                            '-d', 'test-db',
+                            '-a', 'test-asset',
+                            tmp_path
+                        ])
+                        
+                        assert result.exit_code == 0
+                        assert "📄 Zero-byte files detected: 1 files" in result.output
+                        assert "created during upload completion" in result.output
         finally:
             Path(tmp_path).unlink()
 

@@ -5,14 +5,12 @@ import click
 from typing import Dict, Any, Optional, List
 
 from ..constants import API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS
-from ..utils.decorators import requires_api_access, get_profile_manager_from_context
+from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.exceptions import (
     DatabaseNotFoundError, DatabaseAlreadyExistsError, DatabaseDeletionError,
-    BucketNotFoundError, InvalidDatabaseDataError, APIUnavailableError, 
-    AuthenticationError
+    BucketNotFoundError, InvalidDatabaseDataError
 )
-from ..version import get_version
 
 
 def parse_json_input(json_input: str) -> Dict[str, Any]:
@@ -127,7 +125,7 @@ def database():
 @click.option('--starting-token', help='Token for pagination')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def list(ctx: click.Context, show_deleted: bool, max_items: Optional[int], page_size: Optional[int], 
          starting_token: Optional[str], json_output: bool):
     """
@@ -142,78 +140,55 @@ def list(ctx: click.Context, show_deleted: bool, max_items: Optional[int], page_
         vamscli database list --max-items 50 --page-size 25
         vamscli database list --json-output
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
-    # Check if setup has been completed
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
+    # Build pagination parameters
+    params = {}
+    if max_items:
+        params['maxItems'] = max_items
+    if page_size:
+        params['pageSize'] = page_size
+    if starting_token:
+        params['startingToken'] = starting_token
     
-    try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
+    if not json_output:
+        click.echo("Retrieving databases...")
+    
+    # List databases
+    result = api_client.list_databases(show_deleted=show_deleted, params=params)
+    
+    if json_output:
+        click.echo(json.dumps(result, indent=2))
+    else:
+        # Format for CLI display
+        databases = result.get('Items', [])
+        if not databases:
+            click.echo("No databases found.")
+            return
         
-        # Build pagination parameters
-        params = {}
-        if max_items:
-            params['maxItems'] = max_items
-        if page_size:
-            params['pageSize'] = page_size
-        if starting_token:
-            params['startingToken'] = starting_token
+        click.echo(f"\nFound {len(databases)} database(s):")
+        click.echo("-" * 80)
         
-        if not json_output:
-            click.echo("Retrieving databases...")
-        
-        # List databases
-        result = api_client.list_databases(show_deleted=show_deleted, params=params)
-        
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            # Format for CLI display
-            databases = result.get('Items', [])
-            if not databases:
-                click.echo("No databases found.")
-                return
+        for database in databases:
+            click.echo(f"ID: {database.get('databaseId', 'N/A')}")
+            click.echo(f"Description: {database.get('description', 'N/A')}")
+            click.echo(f"Date Created: {database.get('dateCreated', 'N/A')}")
+            click.echo(f"Asset Count: {database.get('assetCount', 0)}")
+            click.echo(f"Default Bucket ID: {database.get('defaultBucketId', 'N/A')}")
             
-            click.echo(f"\nFound {len(databases)} database(s):")
+            bucket_name = database.get('bucketName')
+            if bucket_name:
+                click.echo(f"Bucket Name: {bucket_name}")
+            
             click.echo("-" * 80)
-            
-            for database in databases:
-                click.echo(f"ID: {database.get('databaseId', 'N/A')}")
-                click.echo(f"Description: {database.get('description', 'N/A')}")
-                click.echo(f"Date Created: {database.get('dateCreated', 'N/A')}")
-                click.echo(f"Asset Count: {database.get('assetCount', 0)}")
-                click.echo(f"Default Bucket ID: {database.get('defaultBucketId', 'N/A')}")
-                
-                bucket_name = database.get('bucketName')
-                if bucket_name:
-                    click.echo(f"Bucket Name: {bucket_name}")
-                
-                click.echo("-" * 80)
-            
-            # Show pagination info if available
-            next_token = result.get('NextToken')
-            if next_token:
-                click.echo(f"More results available. Use --starting-token '{next_token}' to see additional databases.")
         
-    except AuthenticationError as e:
-        click.echo(
-            click.style(f"✗ Authentication Error: {e}", fg='red', bold=True),
-            err=True
-        )
-        click.echo("Please run 'vamscli auth login' to re-authenticate.")
-        raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
+        # Show pagination info if available
+        next_token = result.get('NextToken')
+        if next_token:
+            click.echo(f"More results available. Use --starting-token '{next_token}' to see additional databases.")
 
 
 @database.command()
@@ -223,7 +198,7 @@ def list(ctx: click.Context, show_deleted: bool, max_items: Optional[int], page_
 @click.option('--json-input', help='JSON input file path or JSON string with all database data')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def create(ctx: click.Context, database_id: str, description: Optional[str], default_bucket_id: Optional[str],
            json_input: Optional[str], json_output: bool):
     """
@@ -239,20 +214,12 @@ def create(ctx: click.Context, database_id: str, description: Optional[str], def
         vamscli database create -d my-database --description "My Database" --default-bucket-id "bucket-uuid"
         vamscli database create --json-input '{"databaseId":"test","description":"Test","defaultBucketId":"uuid"}'
     """
+    # Get profile manager and API client (setup/auth already validated by decorator)
     profile_manager = get_profile_manager_from_context(ctx)
-    
-    # Check if setup has been completed
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
-        
         # Build database data
         if json_input:
             # Use JSON input
@@ -316,19 +283,6 @@ def create(ctx: click.Context, database_id: str, description: Optional[str], def
             err=True
         )
         raise click.ClickException(str(e))
-    except AuthenticationError as e:
-        click.echo(
-            click.style(f"✗ Authentication Error: {e}", fg='red', bold=True),
-            err=True
-        )
-        click.echo("Please run 'vamscli auth login' to re-authenticate.")
-        raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
 
 
 @database.command()
@@ -338,7 +292,7 @@ def create(ctx: click.Context, database_id: str, description: Optional[str], def
 @click.option('--json-input', help='JSON input file path or JSON string with update data')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def update(ctx: click.Context, database_id: str, description: Optional[str], default_bucket_id: Optional[str],
            json_input: Optional[str], json_output: bool):
     """
@@ -352,20 +306,12 @@ def update(ctx: click.Context, database_id: str, description: Optional[str], def
         vamscli database update -d my-database --default-bucket-id "new-bucket-uuid"
         vamscli database update --json-input '{"databaseId":"test","description":"Updated","defaultBucketId":"uuid"}'
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
-    
-    # Check if setup has been completed
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
-        
         # Build update data
         if json_input:
             # Use JSON input
@@ -430,19 +376,6 @@ def update(ctx: click.Context, database_id: str, description: Optional[str], def
             err=True
         )
         raise click.ClickException(str(e))
-    except AuthenticationError as e:
-        click.echo(
-            click.style(f"✗ Authentication Error: {e}", fg='red', bold=True),
-            err=True
-        )
-        click.echo("Please run 'vamscli auth login' to re-authenticate.")
-        raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
 
 
 @database.command()
@@ -450,7 +383,7 @@ def update(ctx: click.Context, database_id: str, description: Optional[str], def
 @click.option('--show-deleted', is_flag=True, help='Include deleted databases in search')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def get(ctx: click.Context, database_id: str, show_deleted: bool, json_output: bool):
     """
     Get details for a specific database.
@@ -463,20 +396,12 @@ def get(ctx: click.Context, database_id: str, show_deleted: bool, json_output: b
         vamscli database get -d my-database --show-deleted
         vamscli database get -d my-database --json-output
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
-    
-    # Check if setup has been completed
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
-        
         click.echo(f"Retrieving database '{database_id}'...")
         
         # Get the database
@@ -496,19 +421,6 @@ def get(ctx: click.Context, database_id: str, show_deleted: bool, json_output: b
             click.echo("Try using --show-deleted to include deleted databases.")
         click.echo("Use 'vamscli database list' to see available databases.")
         raise click.ClickException(str(e))
-    except AuthenticationError as e:
-        click.echo(
-            click.style(f"✗ Authentication Error: {e}", fg='red', bold=True),
-            err=True
-        )
-        click.echo("Please run 'vamscli auth login' to re-authenticate.")
-        raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
 
 
 @database.command()
@@ -516,7 +428,7 @@ def get(ctx: click.Context, database_id: str, show_deleted: bool, json_output: b
 @click.option('--confirm', is_flag=True, help='Confirm database deletion')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def delete(ctx: click.Context, database_id: str, confirm: bool, json_output: bool):
     """
     Delete a database.
@@ -532,20 +444,12 @@ def delete(ctx: click.Context, database_id: str, confirm: bool, json_output: boo
         vamscli database delete -d my-database --confirm
         vamscli database delete -d my-database --confirm --json-output
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
-    
-    # Check if setup has been completed
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
-        
         # Require confirmation for deletion
         if not confirm:
             click.echo(
@@ -595,19 +499,6 @@ def delete(ctx: click.Context, database_id: str, confirm: bool, json_output: boo
         )
         click.echo("Ensure the database does not contain any active assets, workflows, or pipelines.")
         raise click.ClickException(str(e))
-    except AuthenticationError as e:
-        click.echo(
-            click.style(f"✗ Authentication Error: {e}", fg='red', bold=True),
-            err=True
-        )
-        click.echo("Please run 'vamscli auth login' to re-authenticate.")
-        raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
 
 
 @database.command('list-buckets')
@@ -616,7 +507,7 @@ def delete(ctx: click.Context, database_id: str, confirm: bool, json_output: boo
 @click.option('--starting-token', help='Token for pagination')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def list_buckets(ctx: click.Context, max_items: Optional[int], page_size: Optional[int], 
                 starting_token: Optional[str], json_output: bool):
     """
@@ -630,67 +521,44 @@ def list_buckets(ctx: click.Context, max_items: Optional[int], page_size: Option
         vamscli database list-buckets --max-items 10
         vamscli database list-buckets --json-output
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
-    # Check if setup has been completed
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
+    # Build pagination parameters
+    params = {}
+    if max_items:
+        params['maxItems'] = max_items
+    if page_size:
+        params['pageSize'] = page_size
+    if starting_token:
+        params['startingToken'] = starting_token
     
-    try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
+    click.echo("Retrieving bucket configurations...")
+    
+    # List buckets
+    result = api_client.list_buckets(params)
+    
+    if json_output:
+        click.echo(json.dumps(result, indent=2))
+    else:
+        # Format for CLI display
+        buckets = result.get('Items', [])
+        if not buckets:
+            click.echo("No bucket configurations found.")
+            return
         
-        # Build pagination parameters
-        params = {}
-        if max_items:
-            params['maxItems'] = max_items
-        if page_size:
-            params['pageSize'] = page_size
-        if starting_token:
-            params['startingToken'] = starting_token
+        click.echo(f"\nFound {len(buckets)} bucket configuration(s):")
+        click.echo("-" * 80)
         
-        click.echo("Retrieving bucket configurations...")
-        
-        # List buckets
-        result = api_client.list_buckets(params)
-        
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            # Format for CLI display
-            buckets = result.get('Items', [])
-            if not buckets:
-                click.echo("No bucket configurations found.")
-                return
-            
-            click.echo(f"\nFound {len(buckets)} bucket configuration(s):")
+        for bucket in buckets:
+            click.echo(f"ID: {bucket.get('bucketId', 'N/A')}")
+            click.echo(f"Name: {bucket.get('bucketName', 'N/A')}")
+            click.echo(f"Base Assets Prefix: {bucket.get('baseAssetsPrefix', 'N/A')}")
             click.echo("-" * 80)
-            
-            for bucket in buckets:
-                click.echo(f"ID: {bucket.get('bucketId', 'N/A')}")
-                click.echo(f"Name: {bucket.get('bucketName', 'N/A')}")
-                click.echo(f"Base Assets Prefix: {bucket.get('baseAssetsPrefix', 'N/A')}")
-                click.echo("-" * 80)
-            
-            # Show pagination info if available
-            next_token = result.get('NextToken')
-            if next_token:
-                click.echo(f"More results available. Use --starting-token '{next_token}' to see additional buckets.")
         
-    except AuthenticationError as e:
-        click.echo(
-            click.style(f"✗ Authentication Error: {e}", fg='red', bold=True),
-            err=True
-        )
-        click.echo("Please run 'vamscli auth login' to re-authenticate.")
-        raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
+        # Show pagination info if available
+        next_token = result.get('NextToken')
+        if next_token:
+            click.echo(f"More results available. Use --starting-token '{next_token}' to see additional buckets.")

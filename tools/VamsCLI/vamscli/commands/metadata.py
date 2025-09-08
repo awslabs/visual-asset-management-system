@@ -7,10 +7,9 @@ from typing import Dict, Any
 
 import click
 
-from ..utils.decorators import requires_api_access, get_profile_manager_from_context
+from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.exceptions import (
-    APIError, AuthenticationError, AssetNotFoundError, DatabaseNotFoundError,
-    InvalidAssetDataError
+    AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError
 )
 from ..utils.api_client import APIClient
 
@@ -121,7 +120,7 @@ def metadata():
 @click.option('--json-input', help='JSON input with all parameters (file path with @ prefix or JSON string)')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def get(ctx: click.Context, database_id: str, asset_id: str, file_path: str, json_input: str, json_output: bool):
     """Get metadata for an asset or file.
     
@@ -138,65 +137,50 @@ def get(ctx: click.Context, database_id: str, asset_id: str, file_path: str, jso
         # Get with JSON output
         vamscli metadata get -d my-db -a my-asset --json-output
     """
+    # Parse JSON input if provided
+    json_data = parse_json_input(json_input) if json_input else {}
+    
+    # Override arguments with JSON data
+    database_id = json_data.get('database_id', database_id)
+    asset_id = json_data.get('asset_id', asset_id)
+    file_path = json_data.get('file_path', file_path)
+    
+    # Validate required arguments
+    if not database_id:
+        raise click.ClickException("Database ID is required (-d/--database)")
+    if not asset_id:
+        raise click.ClickException("Asset ID is required (-a/--asset)")
+    
+    # Get profile manager and API client
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+    
+    # Call API
     try:
-        # Parse JSON input if provided
-        json_data = parse_json_input(json_input) if json_input else {}
-        
-        # Override arguments with JSON data
-        database_id = json_data.get('database_id', database_id)
-        asset_id = json_data.get('asset_id', asset_id)
-        file_path = json_data.get('file_path', file_path)
-        
-        # Validate required arguments
-        if not database_id:
-            raise click.ClickException("Database ID is required (-d/--database)")
-        if not asset_id:
-            raise click.ClickException("Asset ID is required (-a/--asset)")
-        
-        # Get profile manager and API client
-        profile_manager = get_profile_manager_from_context(ctx)
-        
-        if not profile_manager.has_config():
-            profile_name = profile_manager.profile_name
-            raise click.ClickException(
-                f"Configuration not found for profile '{profile_name}'. "
-                f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-            )
-        
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
-        
-        # Call API
         result = api_client.get_metadata(database_id, asset_id, file_path)
-        
-        # Output results
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(click.style("✓ Metadata retrieved successfully", fg='green', bold=True))
-            
-            target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
-            click.echo(f"Target: {target} in database '{database_id}'")
-            
-            metadata = result.get('metadata', {})
-            if metadata:
-                click.echo(f"\nMetadata:")
-                click.echo(format_metadata_output(metadata, indent=1))
-            else:
-                click.echo("\nNo metadata found.")
-        
-    except (APIError, AuthenticationError, AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError) as e:
+    except (AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError) as e:
         if json_output:
             click.echo(json.dumps({"error": str(e)}, indent=2))
         else:
             click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
-    except Exception as e:
-        if json_output:
-            click.echo(json.dumps({"error": f"Unexpected error: {e}"}, indent=2))
+        raise click.ClickException(str(e))
+    
+    # Output results
+    if json_output:
+        click.echo(json.dumps(result, indent=2))
+    else:
+        click.echo(click.style("✓ Metadata retrieved successfully", fg='green', bold=True))
+        
+        target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
+        click.echo(f"Target: {target} in database '{database_id}'")
+        
+        metadata = result.get('metadata', {})
+        if metadata:
+            click.echo(f"\nMetadata:")
+            click.echo(format_metadata_output(metadata, indent=1))
         else:
-            click.echo(click.style(f"✗ Unexpected error: {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
+            click.echo("\nNo metadata found.")
 
 
 @metadata.command()
@@ -206,7 +190,7 @@ def get(ctx: click.Context, database_id: str, asset_id: str, file_path: str, jso
 @click.option('--json-input', help='JSON input with all parameters (file path with @ prefix or JSON string)')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def create(ctx: click.Context, database_id: str, asset_id: str, file_path: str, json_input: str, json_output: bool):
     """Create metadata for an asset or file.
     
@@ -223,75 +207,60 @@ def create(ctx: click.Context, database_id: str, asset_id: str, file_path: str, 
         # Create from JSON file
         vamscli metadata create -d my-db -a my-asset --json-input @metadata.json
     """
+    # Parse JSON input if provided
+    json_data = parse_json_input(json_input) if json_input else {}
+    
+    # Override arguments with JSON data
+    database_id = json_data.get('database_id', database_id)
+    asset_id = json_data.get('asset_id', asset_id)
+    file_path = json_data.get('file_path', file_path)
+    
+    # Validate required arguments
+    if not database_id:
+        raise click.ClickException("Database ID is required (-d/--database)")
+    if not asset_id:
+        raise click.ClickException("Asset ID is required (-a/--asset)")
+    
+    # Get metadata from JSON input or collect interactively
+    if json_input and 'metadata' in json_data:
+        metadata = json_data['metadata']
+    elif json_input:
+        # If JSON input provided but no 'metadata' key, treat entire input as metadata
+        metadata = {k: v for k, v in json_data.items() 
+                   if k not in ['database_id', 'asset_id', 'file_path']}
+    else:
+        # Collect metadata interactively
+        metadata = collect_metadata_interactively()
+    
+    if not metadata:
+        raise click.ClickException("No metadata provided")
+    
+    # Get profile manager and API client
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+    
+    # Call API
     try:
-        # Parse JSON input if provided
-        json_data = parse_json_input(json_input) if json_input else {}
-        
-        # Override arguments with JSON data
-        database_id = json_data.get('database_id', database_id)
-        asset_id = json_data.get('asset_id', asset_id)
-        file_path = json_data.get('file_path', file_path)
-        
-        # Validate required arguments
-        if not database_id:
-            raise click.ClickException("Database ID is required (-d/--database)")
-        if not asset_id:
-            raise click.ClickException("Asset ID is required (-a/--asset)")
-        
-        # Get metadata from JSON input or collect interactively
-        if json_input and 'metadata' in json_data:
-            metadata = json_data['metadata']
-        elif json_input:
-            # If JSON input provided but no 'metadata' key, treat entire input as metadata
-            metadata = {k: v for k, v in json_data.items() 
-                       if k not in ['database_id', 'asset_id', 'file_path']}
-        else:
-            # Collect metadata interactively
-            metadata = collect_metadata_interactively()
-        
-        if not metadata:
-            raise click.ClickException("No metadata provided")
-        
-        # Get profile manager and API client
-        profile_manager = get_profile_manager_from_context(ctx)
-        
-        if not profile_manager.has_config():
-            profile_name = profile_manager.profile_name
-            raise click.ClickException(
-                f"Configuration not found for profile '{profile_name}'. "
-                f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-            )
-        
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
-        
-        # Call API
         result = api_client.create_metadata(database_id, asset_id, metadata, file_path)
-        
-        # Output results
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(click.style("✓ Metadata created successfully!", fg='green', bold=True))
-            
-            target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
-            click.echo(f"Target: {target} in database '{database_id}'")
-            
-            click.echo(f"\nCreated metadata:")
-            click.echo(format_metadata_output(metadata, indent=1))
-        
-    except (APIError, AuthenticationError, AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError) as e:
+    except (AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError) as e:
         if json_output:
             click.echo(json.dumps({"error": str(e)}, indent=2))
         else:
             click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
-    except Exception as e:
-        if json_output:
-            click.echo(json.dumps({"error": f"Unexpected error: {e}"}, indent=2))
-        else:
-            click.echo(click.style(f"✗ Unexpected error: {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
+        raise click.ClickException(str(e))
+    
+    # Output results
+    if json_output:
+        click.echo(json.dumps(result, indent=2))
+    else:
+        click.echo(click.style("✓ Metadata created successfully!", fg='green', bold=True))
+        
+        target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
+        click.echo(f"Target: {target} in database '{database_id}'")
+        
+        click.echo(f"\nCreated metadata:")
+        click.echo(format_metadata_output(metadata, indent=1))
 
 
 @metadata.command()
@@ -301,7 +270,7 @@ def create(ctx: click.Context, database_id: str, asset_id: str, file_path: str, 
 @click.option('--json-input', help='JSON input with all parameters (file path with @ prefix or JSON string)')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def update(ctx: click.Context, database_id: str, asset_id: str, file_path: str, json_input: str, json_output: bool):
     """Update metadata for an asset or file.
     
@@ -318,75 +287,60 @@ def update(ctx: click.Context, database_id: str, asset_id: str, file_path: str, 
         # Update from JSON file
         vamscli metadata update -d my-db -a my-asset --json-input @updated_metadata.json
     """
+    # Parse JSON input if provided
+    json_data = parse_json_input(json_input) if json_input else {}
+    
+    # Override arguments with JSON data
+    database_id = json_data.get('database_id', database_id)
+    asset_id = json_data.get('asset_id', asset_id)
+    file_path = json_data.get('file_path', file_path)
+    
+    # Validate required arguments
+    if not database_id:
+        raise click.ClickException("Database ID is required (-d/--database)")
+    if not asset_id:
+        raise click.ClickException("Asset ID is required (-a/--asset)")
+    
+    # Get metadata from JSON input or collect interactively
+    if json_input and 'metadata' in json_data:
+        metadata = json_data['metadata']
+    elif json_input:
+        # If JSON input provided but no 'metadata' key, treat entire input as metadata
+        metadata = {k: v for k, v in json_data.items() 
+                   if k not in ['database_id', 'asset_id', 'file_path']}
+    else:
+        # Collect metadata interactively
+        metadata = collect_metadata_interactively()
+    
+    if not metadata:
+        raise click.ClickException("No metadata provided")
+    
+    # Get profile manager and API client
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+    
+    # Call API
     try:
-        # Parse JSON input if provided
-        json_data = parse_json_input(json_input) if json_input else {}
-        
-        # Override arguments with JSON data
-        database_id = json_data.get('database_id', database_id)
-        asset_id = json_data.get('asset_id', asset_id)
-        file_path = json_data.get('file_path', file_path)
-        
-        # Validate required arguments
-        if not database_id:
-            raise click.ClickException("Database ID is required (-d/--database)")
-        if not asset_id:
-            raise click.ClickException("Asset ID is required (-a/--asset)")
-        
-        # Get metadata from JSON input or collect interactively
-        if json_input and 'metadata' in json_data:
-            metadata = json_data['metadata']
-        elif json_input:
-            # If JSON input provided but no 'metadata' key, treat entire input as metadata
-            metadata = {k: v for k, v in json_data.items() 
-                       if k not in ['database_id', 'asset_id', 'file_path']}
-        else:
-            # Collect metadata interactively
-            metadata = collect_metadata_interactively()
-        
-        if not metadata:
-            raise click.ClickException("No metadata provided")
-        
-        # Get profile manager and API client
-        profile_manager = get_profile_manager_from_context(ctx)
-        
-        if not profile_manager.has_config():
-            profile_name = profile_manager.profile_name
-            raise click.ClickException(
-                f"Configuration not found for profile '{profile_name}'. "
-                f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-            )
-        
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
-        
-        # Call API
         result = api_client.update_metadata(database_id, asset_id, metadata, file_path)
-        
-        # Output results
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(click.style("✓ Metadata updated successfully!", fg='green', bold=True))
-            
-            target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
-            click.echo(f"Target: {target} in database '{database_id}'")
-            
-            click.echo(f"\nUpdated metadata:")
-            click.echo(format_metadata_output(metadata, indent=1))
-        
-    except (APIError, AuthenticationError, AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError) as e:
+    except (AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError) as e:
         if json_output:
             click.echo(json.dumps({"error": str(e)}, indent=2))
         else:
             click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
-    except Exception as e:
-        if json_output:
-            click.echo(json.dumps({"error": f"Unexpected error: {e}"}, indent=2))
-        else:
-            click.echo(click.style(f"✗ Unexpected error: {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
+        raise click.ClickException(str(e))
+    
+    # Output results
+    if json_output:
+        click.echo(json.dumps(result, indent=2))
+    else:
+        click.echo(click.style("✓ Metadata updated successfully!", fg='green', bold=True))
+        
+        target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
+        click.echo(f"Target: {target} in database '{database_id}'")
+        
+        click.echo(f"\nUpdated metadata:")
+        click.echo(format_metadata_output(metadata, indent=1))
 
 
 @metadata.command()
@@ -396,7 +350,7 @@ def update(ctx: click.Context, database_id: str, asset_id: str, file_path: str, 
 @click.option('--json-input', help='JSON input with all parameters (file path with @ prefix or JSON string)')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def delete(ctx: click.Context, database_id: str, asset_id: str, file_path: str, json_input: str, json_output: bool):
     """Delete metadata for an asset or file.
     
@@ -410,59 +364,44 @@ def delete(ctx: click.Context, database_id: str, asset_id: str, file_path: str, 
         # Delete with JSON input
         vamscli metadata delete --json-input '{"database_id": "my-db", "asset_id": "my-asset"}'
     """
+    # Parse JSON input if provided
+    json_data = parse_json_input(json_input) if json_input else {}
+    
+    # Override arguments with JSON data
+    database_id = json_data.get('database_id', database_id)
+    asset_id = json_data.get('asset_id', asset_id)
+    file_path = json_data.get('file_path', file_path)
+    
+    # Validate required arguments
+    if not database_id:
+        raise click.ClickException("Database ID is required (-d/--database)")
+    if not asset_id:
+        raise click.ClickException("Asset ID is required (-a/--asset)")
+    
+    # Confirm deletion
+    target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
+    if not click.confirm(f"Are you sure you want to delete all metadata for {target} in database '{database_id}'?"):
+        click.echo("Operation cancelled.")
+        return
+    
+    # Get profile manager and API client
+    profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
+    
+    # Call API
     try:
-        # Parse JSON input if provided
-        json_data = parse_json_input(json_input) if json_input else {}
-        
-        # Override arguments with JSON data
-        database_id = json_data.get('database_id', database_id)
-        asset_id = json_data.get('asset_id', asset_id)
-        file_path = json_data.get('file_path', file_path)
-        
-        # Validate required arguments
-        if not database_id:
-            raise click.ClickException("Database ID is required (-d/--database)")
-        if not asset_id:
-            raise click.ClickException("Asset ID is required (-a/--asset)")
-        
-        # Confirm deletion
-        target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
-        if not click.confirm(f"Are you sure you want to delete all metadata for {target} in database '{database_id}'?"):
-            click.echo("Operation cancelled.")
-            return
-        
-        # Get profile manager and API client
-        profile_manager = get_profile_manager_from_context(ctx)
-        
-        if not profile_manager.has_config():
-            profile_name = profile_manager.profile_name
-            raise click.ClickException(
-                f"Configuration not found for profile '{profile_name}'. "
-                f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-            )
-        
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
-        
-        # Call API
         result = api_client.delete_metadata(database_id, asset_id, file_path)
-        
-        # Output results
-        if json_output:
-            click.echo(json.dumps(result, indent=2))
-        else:
-            click.echo(click.style("✓ Metadata deleted successfully!", fg='green', bold=True))
-            click.echo(f"Target: {target} in database '{database_id}'")
-        
-    except (APIError, AuthenticationError, AssetNotFoundError, DatabaseNotFoundError) as e:
+    except (AssetNotFoundError, DatabaseNotFoundError) as e:
         if json_output:
             click.echo(json.dumps({"error": str(e)}, indent=2))
         else:
             click.echo(click.style(f"✗ {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
-    except Exception as e:
-        if json_output:
-            click.echo(json.dumps({"error": f"Unexpected error: {e}"}, indent=2))
-        else:
-            click.echo(click.style(f"✗ Unexpected error: {e}", fg='red', bold=True), err=True)
-        sys.exit(1)
+        raise click.ClickException(str(e))
+    
+    # Output results
+    if json_output:
+        click.echo(json.dumps(result, indent=2))
+    else:
+        click.echo(click.style("✓ Metadata deleted successfully!", fg='green', bold=True))
+        click.echo(f"Target: {target} in database '{database_id}'")

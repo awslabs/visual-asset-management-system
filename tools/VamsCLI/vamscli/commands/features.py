@@ -2,7 +2,7 @@
 
 import click
 
-from ..utils.decorators import requires_api_access, get_profile_manager_from_context, requires_feature
+from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context, requires_feature
 from ..utils.features import get_enabled_features, is_feature_enabled
 from ..constants import FEATURE_GOVCLOUD, FEATURE_LOCATIONSERVICES
 
@@ -91,7 +91,7 @@ def check_feature(ctx: click.Context, feature_name: str):
 
 @features.command('example-govcloud')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 @requires_feature(FEATURE_GOVCLOUD, "GovCloud features are not enabled for this environment.")
 def example_govcloud_command(ctx: click.Context):
     """
@@ -111,7 +111,7 @@ def example_govcloud_command(ctx: click.Context):
 
 @features.command('example-location')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 @requires_feature(FEATURE_LOCATIONSERVICES, "Location services are not enabled for this environment.")
 def example_location_command(ctx: click.Context):
     """

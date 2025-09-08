@@ -8,7 +8,7 @@ from click.testing import CliRunner
 
 from vamscli.main import cli
 from vamscli.utils.exceptions import (
-    DatabaseNotFoundError, AuthenticationError, APIError
+    DatabaseNotFoundError, AuthenticationError, APIError, SetupRequiredError
 )
 
 
@@ -267,8 +267,8 @@ class TestMetadataSchemaGetCommand:
             ])
             
             assert result.exit_code == 1
-            assert '✗ Authentication Error' in result.output
-            assert 'vamscli auth login' in result.output
+            # Check that the original exception is preserved
+            assert isinstance(result.exception, AuthenticationError)
     
     def test_get_api_error(self, cli_runner, metadata_schema_command_mocks):
         """Test get command with general API error."""
@@ -281,8 +281,8 @@ class TestMetadataSchemaGetCommand:
             ])
             
             assert result.exit_code == 1
-            assert '✗ API Error' in result.output
-            assert 'API request failed' in result.output
+            # Check that the original exception is preserved
+            assert isinstance(result.exception, APIError)
     
     def test_get_no_setup(self, cli_runner, metadata_schema_no_setup_mocks):
         """Test get command without setup."""
@@ -293,8 +293,8 @@ class TestMetadataSchemaGetCommand:
             ])
             
             assert result.exit_code == 1
-            assert 'Configuration not found for profile' in result.output
-            assert 'vamscli setup' in result.output
+            # Check that setup required exception is preserved
+            assert isinstance(result.exception, SetupRequiredError)
     
     def test_get_with_profile(self, cli_runner, metadata_schema_command_mocks):
         """Test get command with specific profile."""
@@ -341,8 +341,8 @@ class TestMetadataSchemaCommandsIntegration:
             result = cli_runner.invoke(cli, ['metadata-schema', 'get', '-d', 'test-database'])
             
             assert result.exit_code == 1
-            assert '✗ Authentication Error' in result.output
-            assert 'vamscli auth login' in result.output
+            # Check that the original exception is preserved
+            assert isinstance(result.exception, AuthenticationError)
 
 
 class TestMetadataSchemaJSONHandling:
@@ -357,7 +357,7 @@ class TestMetadataSchemaJSONHandling:
                 '--json-input', 'invalid json string'
             ])
             
-            assert result.exit_code == 1  # Our custom error handling
+            assert result.exit_code == 2  # Click parameter error
             assert 'Invalid JSON input' in result.output
     
     def test_invalid_json_input_file(self, cli_runner, metadata_schema_command_mocks):
@@ -370,8 +370,8 @@ class TestMetadataSchemaJSONHandling:
                     '--json-input', 'invalid.json'
                 ])
             
-            assert result.exit_code == 1  # Our custom error handling
-            assert 'Invalid JSON in file' in result.output
+            assert result.exit_code == 2  # Click parameter error
+            assert 'Invalid JSON' in result.output
     
     def test_nonexistent_json_input_file(self, cli_runner, metadata_schema_command_mocks):
         """Test handling of nonexistent JSON input file."""
@@ -383,7 +383,7 @@ class TestMetadataSchemaJSONHandling:
                     '--json-input', 'nonexistent.json'
                 ])
             
-            assert result.exit_code == 1  # Our custom error handling
+            assert result.exit_code == 2  # Click parameter error
             assert 'Invalid JSON input' in result.output
 
 

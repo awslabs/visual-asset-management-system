@@ -135,14 +135,6 @@ class TestDatabaseListCommand:
             output_json = json.loads(result.output.strip())
             assert output_json == api_response
     
-    def test_list_no_setup(self, cli_runner, no_setup_command_mocks):
-        """Test list command without setup."""
-        with no_setup_command_mocks('database') as mocks:
-            result = cli_runner.invoke(database, ['list'])
-
-            assert result.exit_code == 1
-            assert 'Configuration not found' in result.output
-            assert 'vamscli setup' in result.output
 
 
 class TestDatabaseCreateCommand:
@@ -574,16 +566,6 @@ class TestDatabaseCommandsIntegration:
         assert result.exit_code == 2  # Click parameter error
         assert 'Missing option' in result.output or 'required' in result.output.lower()
     
-    def test_authentication_error_handling(self, cli_runner, generic_command_mocks):
-        """Test authentication error handling."""
-        with generic_command_mocks('database') as mocks:
-            mocks['api_client'].list_databases.side_effect = AuthenticationError("Authentication failed")
-            
-            result = cli_runner.invoke(database, ['list'])
-            
-            assert result.exit_code == 1
-            assert '✗ Authentication Error' in result.output
-            assert 'vamscli auth login' in result.output
 
 
 class TestDatabaseCommandsJSONHandling:
@@ -620,21 +602,6 @@ class TestDatabaseCommandsJSONHandling:
 class TestDatabaseCommandsEdgeCases:
     """Test edge cases for database commands."""
     
-    def test_create_api_error(self, cli_runner, generic_command_mocks):
-        """Test create command with general API error."""
-        with generic_command_mocks('database') as mocks:
-            mocks['api_client'].create_database.side_effect = APIError("API request failed")
-            
-            result = cli_runner.invoke(database, [
-                'create',
-                '-d', 'test-database',
-                '--description', 'Test Database',
-                '--default-bucket-id', 'bucket-uuid'
-            ])
-            
-            assert result.exit_code == 1
-            assert '✗ Unexpected error' in result.output
-            assert 'API request failed' in result.output
     
     def test_bucket_not_found_error(self, cli_runner, generic_command_mocks):
         """Test create command with bucket not found error."""

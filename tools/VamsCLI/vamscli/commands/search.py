@@ -7,16 +7,14 @@ from io import StringIO
 from typing import Dict, Any, List, Optional
 import click
 
-from ..utils.decorators import requires_api_access, get_profile_manager_from_context, requires_feature
+from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context, requires_feature
 from ..utils.api_client import APIClient
 from ..utils.exceptions import (
     SearchError, SearchDisabledError, SearchUnavailableError, 
-    InvalidSearchParametersError, SearchQueryError, SearchMappingError,
-    AuthenticationError, APIError
+    InvalidSearchParametersError, SearchQueryError, SearchMappingError
 )
 from ..utils.features import is_feature_enabled
 from ..constants import FEATURE_NOOPENSEARCH
-from ..version import get_version
 
 
 def _load_json_input(json_input_path: str) -> Dict[str, Any]:
@@ -458,7 +456,7 @@ def search():
 @click.option('--jsonOutput', is_flag=True, help='Output raw API response as JSON (legacy)')
 @click.option('--show-progress/--no-progress', default=True, help='Show pagination progress')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def assets(ctx: click.Context, database: Optional[str], query: Optional[str], operation: str,
            sort_field: Optional[str], sort_desc: bool, sort_asc: bool, from_offset: int, size: int,
            max_results: Optional[int], asset_type: Optional[str], tags: Optional[str],
@@ -477,55 +475,32 @@ def assets(ctx: click.Context, database: Optional[str], query: Optional[str], op
         vamscli search assets -q "model" --output-format csv > results.csv
         vamscli search assets --jsonInput search_params.json
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
-    # Check setup
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
-    
-    # Check if search is available
     try:
+        # Check if search is available
         _check_search_availability(profile_manager)
-    except SearchDisabledError as e:
-        click.echo(
-            click.style(f"✗ Search Disabled: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
-    
-    try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
         
         # Handle JSON input
         if jsoninput:
-            try:
-                json_data = _load_json_input(jsoninput)
-                
-                # Override command line parameters with JSON data
-                database = json_data.get('database', database)
-                query = json_data.get('query', query)
-                operation = json_data.get('operation', operation)
-                sort_field = json_data.get('sort_field', sort_field)
-                sort_desc = json_data.get('sort_desc', sort_desc)
-                from_offset = json_data.get('from', from_offset)
-                size = json_data.get('size', size)
-                max_results = json_data.get('max_results', max_results)
-                asset_type = json_data.get('asset_type', asset_type)
-                tags = json_data.get('tags', tags)
-                property_filters = json.dumps(json_data.get('tokens', [])) if json_data.get('tokens') else property_filters
-                output_format = json_data.get('output_format', output_format)
-                
-            except InvalidSearchParametersError as e:
-                click.echo(
-                    click.style(f"✗ JSON Input Error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                raise click.ClickException(str(e))
+            json_data = _load_json_input(jsoninput)
+            
+            # Override command line parameters with JSON data
+            database = json_data.get('database', database)
+            query = json_data.get('query', query)
+            operation = json_data.get('operation', operation)
+            sort_field = json_data.get('sort_field', sort_field)
+            sort_desc = json_data.get('sort_desc', sort_desc)
+            from_offset = json_data.get('from', from_offset)
+            size = json_data.get('size', size)
+            max_results = json_data.get('max_results', max_results)
+            asset_type = json_data.get('asset_type', asset_type)
+            tags = json_data.get('tags', tags)
+            property_filters = json.dumps(json_data.get('tokens', [])) if json_data.get('tokens') else property_filters
+            output_format = json_data.get('output_format', output_format)
         
         # Validate sort options
         if sort_desc and sort_asc:
@@ -534,14 +509,7 @@ def assets(ctx: click.Context, database: Optional[str], query: Optional[str], op
         # Parse property filters
         parsed_property_filters = None
         if property_filters:
-            try:
-                parsed_property_filters = _parse_property_filters(property_filters)
-            except InvalidSearchParametersError as e:
-                click.echo(
-                    click.style(f"✗ Property Filter Error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                raise click.ClickException(str(e))
+            parsed_property_filters = _parse_property_filters(property_filters)
         
         # Parse tags
         parsed_tags = _parse_tags_list(tags) if tags else None
@@ -602,42 +570,30 @@ def assets(ctx: click.Context, database: Optional[str], query: Optional[str], op
             click.echo(
                 click.style(f"✓ Search completed. Found {total} assets.", fg='green', bold=True)
             )
-        
+    
     except SearchDisabledError as e:
+        # Command-specific business logic error
         click.echo(
             click.style(f"✗ Search Disabled: {e}", fg='red', bold=True),
             err=True
         )
+        click.echo("Use 'vamscli assets list' or 'vamscli database list-assets' instead.")
         raise click.ClickException(str(e))
     except InvalidSearchParametersError as e:
+        # Command-specific business logic error
         click.echo(
             click.style(f"✗ Invalid Parameters: {e}", fg='red', bold=True),
             err=True
         )
+        click.echo("Check your search parameters and try again.")
         raise click.ClickException(str(e))
     except SearchQueryError as e:
+        # Command-specific business logic error
         click.echo(
             click.style(f"✗ Search Query Error: {e}", fg='red', bold=True),
             err=True
         )
-        raise click.ClickException(str(e))
-    except AuthenticationError as e:
-        click.echo(
-            click.style(f"✗ Authentication Error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
-    except APIError as e:
-        click.echo(
-            click.style(f"✗ API Error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
+        click.echo("Use 'vamscli search mapping' to see available search fields.")
         raise click.ClickException(str(e))
 
 
@@ -662,7 +618,7 @@ def assets(ctx: click.Context, database: Optional[str], query: Optional[str], op
 @click.option('--jsonOutput', is_flag=True, help='Output raw API response as JSON (legacy)')
 @click.option('--show-progress/--no-progress', default=True, help='Show pagination progress')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def files(ctx: click.Context, database: Optional[str], query: Optional[str], operation: str,
           sort_field: Optional[str], sort_desc: bool, sort_asc: bool, from_offset: int, size: int,
           max_results: Optional[int], file_ext: Optional[str], asset_type: Optional[str], 
@@ -681,56 +637,33 @@ def files(ctx: click.Context, database: Optional[str], query: Optional[str], ope
         vamscli search files -q "texture" --output-format csv > files.csv
         vamscli search files --jsonInput search_params.json
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
-    # Check setup
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
-    
-    # Check if search is available
     try:
+        # Check if search is available
         _check_search_availability(profile_manager)
-    except SearchDisabledError as e:
-        click.echo(
-            click.style(f"✗ Search Disabled: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
-    
-    try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
         
         # Handle JSON input
         if jsoninput:
-            try:
-                json_data = _load_json_input(jsoninput)
-                
-                # Override command line parameters with JSON data
-                database = json_data.get('database', database)
-                query = json_data.get('query', query)
-                operation = json_data.get('operation', operation)
-                sort_field = json_data.get('sort_field', sort_field)
-                sort_desc = json_data.get('sort_desc', sort_desc)
-                from_offset = json_data.get('from', from_offset)
-                size = json_data.get('size', size)
-                max_results = json_data.get('max_results', max_results)
-                file_ext = json_data.get('file_ext', file_ext)
-                asset_type = json_data.get('asset_type', asset_type)
-                tags = json_data.get('tags', tags)
-                property_filters = json.dumps(json_data.get('tokens', [])) if json_data.get('tokens') else property_filters
-                output_format = json_data.get('output_format', output_format)
-                
-            except InvalidSearchParametersError as e:
-                click.echo(
-                    click.style(f"✗ JSON Input Error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                raise click.ClickException(str(e))
+            json_data = _load_json_input(jsoninput)
+            
+            # Override command line parameters with JSON data
+            database = json_data.get('database', database)
+            query = json_data.get('query', query)
+            operation = json_data.get('operation', operation)
+            sort_field = json_data.get('sort_field', sort_field)
+            sort_desc = json_data.get('sort_desc', sort_desc)
+            from_offset = json_data.get('from', from_offset)
+            size = json_data.get('size', size)
+            max_results = json_data.get('max_results', max_results)
+            file_ext = json_data.get('file_ext', file_ext)
+            asset_type = json_data.get('asset_type', asset_type)
+            tags = json_data.get('tags', tags)
+            property_filters = json.dumps(json_data.get('tokens', [])) if json_data.get('tokens') else property_filters
+            output_format = json_data.get('output_format', output_format)
         
         # Validate sort options
         if sort_desc and sort_asc:
@@ -739,14 +672,7 @@ def files(ctx: click.Context, database: Optional[str], query: Optional[str], ope
         # Parse property filters
         parsed_property_filters = None
         if property_filters:
-            try:
-                parsed_property_filters = _parse_property_filters(property_filters)
-            except InvalidSearchParametersError as e:
-                click.echo(
-                    click.style(f"✗ Property Filter Error: {e}", fg='red', bold=True),
-                    err=True
-                )
-                raise click.ClickException(str(e))
+            parsed_property_filters = _parse_property_filters(property_filters)
         
         # Parse tags
         parsed_tags = _parse_tags_list(tags) if tags else None
@@ -808,42 +734,30 @@ def files(ctx: click.Context, database: Optional[str], query: Optional[str], ope
             click.echo(
                 click.style(f"✓ Search completed. Found {total} files.", fg='green', bold=True)
             )
-        
+    
     except SearchDisabledError as e:
+        # Command-specific business logic error
         click.echo(
             click.style(f"✗ Search Disabled: {e}", fg='red', bold=True),
             err=True
         )
+        click.echo("Use 'vamscli assets list' or 'vamscli database list-assets' instead.")
         raise click.ClickException(str(e))
     except InvalidSearchParametersError as e:
+        # Command-specific business logic error
         click.echo(
             click.style(f"✗ Invalid Parameters: {e}", fg='red', bold=True),
             err=True
         )
+        click.echo("Check your search parameters and try again.")
         raise click.ClickException(str(e))
     except SearchQueryError as e:
+        # Command-specific business logic error
         click.echo(
             click.style(f"✗ Search Query Error: {e}", fg='red', bold=True),
             err=True
         )
-        raise click.ClickException(str(e))
-    except AuthenticationError as e:
-        click.echo(
-            click.style(f"✗ Authentication Error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
-    except APIError as e:
-        click.echo(
-            click.style(f"✗ API Error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
+        click.echo("Use 'vamscli search mapping' to see available search fields.")
         raise click.ClickException(str(e))
 
 
@@ -852,7 +766,7 @@ def files(ctx: click.Context, database: Optional[str], query: Optional[str], ope
               help='Output format (default: table)')
 @click.option('--jsonOutput', is_flag=True, help='Output raw mapping as JSON (legacy)')
 @click.pass_context
-@requires_api_access
+@requires_setup_and_auth
 def mapping(ctx: click.Context, output_format: str, jsonoutput: bool):
     """
     Get search index mapping (available fields and types).
@@ -865,29 +779,14 @@ def mapping(ctx: click.Context, output_format: str, jsonoutput: bool):
         vamscli search mapping --output-format csv
         vamscli search mapping --jsonOutput
     """
+    # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
+    config = profile_manager.load_config()
+    api_client = APIClient(config['api_gateway_url'], profile_manager)
     
-    # Check setup
-    if not profile_manager.has_config():
-        profile_name = profile_manager.profile_name
-        raise click.ClickException(
-            f"Configuration not found for profile '{profile_name}'. "
-            f"Please run 'vamscli setup <api-gateway-url> --profile {profile_name}' first."
-        )
-    
-    # Check if search is available
     try:
+        # Check if search is available
         _check_search_availability(profile_manager)
-    except SearchDisabledError as e:
-        click.echo(
-            click.style(f"✗ Search Disabled: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
-    
-    try:
-        config = profile_manager.load_config()
-        api_client = APIClient(config['api_gateway_url'], profile_manager)
         
         # Get search mapping
         mapping = api_client.get_search_mapping()
@@ -914,34 +813,20 @@ def mapping(ctx: click.Context, output_format: str, jsonoutput: bool):
             click.echo(
                 click.style(f"✓ Retrieved mapping for {properties_count} search fields.", fg='green', bold=True)
             )
-        
+    
     except SearchDisabledError as e:
+        # Command-specific business logic error
         click.echo(
             click.style(f"✗ Search Disabled: {e}", fg='red', bold=True),
             err=True
         )
+        click.echo("Use 'vamscli assets list' or 'vamscli database list-assets' instead.")
         raise click.ClickException(str(e))
     except SearchMappingError as e:
+        # Command-specific business logic error
         click.echo(
             click.style(f"✗ Search Mapping Error: {e}", fg='red', bold=True),
             err=True
         )
-        raise click.ClickException(str(e))
-    except AuthenticationError as e:
-        click.echo(
-            click.style(f"✗ Authentication Error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
-    except APIError as e:
-        click.echo(
-            click.style(f"✗ API Error: {e}", fg='red', bold=True),
-            err=True
-        )
-        raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Unexpected error: {e}", fg='red', bold=True),
-            err=True
-        )
+        click.echo("Check if search is properly configured.")
         raise click.ClickException(str(e))

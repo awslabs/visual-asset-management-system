@@ -345,8 +345,8 @@ class TestSetupCommand:
             ])
             
             assert result.exit_code == 1
-            assert '✗ API Error' in result.output
-            assert 'API request failed' in result.output
+            # Check that the original exception is preserved
+            assert isinstance(result.exception, APIError)
 
 
 class TestAuthCommands:
@@ -969,8 +969,8 @@ class TestCLIErrorHandling:
             ])
             
             assert result.exit_code == 1
-            assert '✗ API Error' in result.output
-            assert 'Connection failed' in result.output
+            # Check that the original exception is preserved
+            assert isinstance(result.exception, APIError)
     
     def test_configuration_error_handling(self, cli_runner, auth_command_mocks):
         """Test configuration error handling."""

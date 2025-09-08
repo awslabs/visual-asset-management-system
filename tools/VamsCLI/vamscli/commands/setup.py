@@ -7,7 +7,7 @@ import click
 
 from ..utils.api_client import APIClient
 from ..utils.decorators import get_profile_manager_from_context
-from ..utils.exceptions import APIError, ConfigurationError
+from ..utils.exceptions import ConfigurationError
 from ..version import get_version
 
 
@@ -137,15 +137,10 @@ def setup(ctx: click.Context, api_gateway_url: str, force: bool, skip_version_ch
             click.echo("1. Run 'vamscli auth login -u <username>' to authenticate")
             click.echo("2. Use 'vamscli --help' to see available commands")
         
-    except APIError as e:
+    except ConfigurationError as e:
+        # Only handle setup-specific business logic errors
         click.echo(
-            click.style(f"✗ API Error: {e}", fg='red', bold=True), 
-            err=True
-        )
-        raise click.ClickException(str(e))
-    except Exception as e:
-        click.echo(
-            click.style(f"✗ Setup failed: {e}", fg='red', bold=True), 
+            click.style(f"✗ Configuration Error: {e}", fg='red', bold=True), 
             err=True
         )
         raise click.ClickException(str(e))

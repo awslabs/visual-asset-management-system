@@ -34,6 +34,88 @@ This document covers network connectivity, SSL certificate, proxy configuration,
 3. Verify the VAMS service is running
 4. Contact your administrator
 
+### Rate Limiting and Throttling Issues
+
+**Error:**
+
+```
+✗ Rate Limit Exceeded: Rate limit exceeded. All 5 retry attempts exhausted. The API is currently throttling requests. Please try again later.
+```
+
+**Description:**
+
+VamsCLI automatically handles API rate limiting (HTTP 429 errors) with exponential backoff retry logic. When the API is throttling requests, VamsCLI will:
+
+1. Automatically retry the request with increasing delays
+2. Show progress during retry attempts
+3. Respect server-provided `Retry-After` headers
+4. Apply jitter to prevent thundering herd effects
+
+**Solutions:**
+
+1. **Wait and retry:** The simplest solution is to wait a few minutes and try the command again
+2. **Adjust retry settings:** Configure retry behavior using environment variables:
+   ```bash
+   # Increase maximum retry attempts (default: 5)
+   export VAMS_CLI_MAX_RETRY_ATTEMPTS=10
+   
+   # Adjust initial retry delay (default: 1.0 seconds)
+   export VAMS_CLI_INITIAL_RETRY_DELAY=2.0
+   
+   # Set maximum retry delay (default: 60.0 seconds)
+   export VAMS_CLI_MAX_RETRY_DELAY=120.0
+   
+   # Adjust backoff multiplier (default: 2.0)
+   export VAMS_CLI_RETRY_BACKOFF_MULTIPLIER=1.5
+   
+   # Adjust jitter percentage (default: 0.1 = 10%)
+   export VAMS_CLI_RETRY_JITTER=0.2
+   ```
+3. **Reduce concurrent operations:** If running multiple VamsCLI instances, reduce parallelism
+4. **Contact administrator:** If throttling persists, contact your VAMS administrator about API limits
+
+**Environment Variables for Retry Configuration:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VAMS_CLI_MAX_RETRY_ATTEMPTS` | 5 | Maximum number of retry attempts for 429 errors |
+| `VAMS_CLI_INITIAL_RETRY_DELAY` | 1.0 | Initial delay in seconds before first retry |
+| `VAMS_CLI_MAX_RETRY_DELAY` | 60.0 | Maximum delay in seconds between retries |
+| `VAMS_CLI_RETRY_BACKOFF_MULTIPLIER` | 2.0 | Multiplier for exponential backoff (1.0-5.0) |
+| `VAMS_CLI_RETRY_JITTER` | 0.1 | Jitter percentage to prevent thundering herd (0.0-0.5) |
+
+**Example Configuration:**
+
+```bash
+# For high-traffic environments, be more patient
+export VAMS_CLI_MAX_RETRY_ATTEMPTS=8
+export VAMS_CLI_INITIAL_RETRY_DELAY=2.0
+export VAMS_CLI_MAX_RETRY_DELAY=180.0
+
+# For development environments, fail faster
+export VAMS_CLI_MAX_RETRY_ATTEMPTS=3
+export VAMS_CLI_INITIAL_RETRY_DELAY=0.5
+export VAMS_CLI_MAX_RETRY_DELAY=30.0
+```
+
+**Understanding Retry Behavior:**
+
+VamsCLI uses an intelligent retry strategy:
+
+1. **Exponential Backoff:** Each retry waits longer than the previous attempt
+2. **Jitter:** Random variation prevents multiple clients from retrying simultaneously
+3. **Server Respect:** Honors server-provided `Retry-After` headers when available
+4. **Progress Indication:** Shows retry progress for delays longer than 1 second
+5. **Configurable Limits:** All retry parameters can be customized via environment variables
+
+**Retry Progress Example:**
+
+```
+Rate limited. Retrying in 2.3s (attempt 2/6)... retrying now.
+Rate limited. Retrying in 4.7s (attempt 3/6)... retrying now.
+Rate limited. Retrying in 9.1s (attempt 4/6)... retrying now.
+```
+
 ### Connection Refused
 
 **Error:**
