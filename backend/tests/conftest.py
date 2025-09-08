@@ -104,6 +104,7 @@ os.environ["METADATA_STORAGE_TABLE_NAME"] = "metadataStorageTable"
 os.environ["ASSET_STORAGE_TABLE_NAME"] = "assetStorageTable"
 os.environ["ASSET_BUCKET_NAME"] = "test-asset-bucket"
 os.environ["REGION"] = "us-east-1"
+os.environ["AWS_REGION"] = "us-east-1"
 
 # Add new environment variables required by updated handlers
 os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"] = "s3AssetBucketsStorageTable"
@@ -123,6 +124,13 @@ os.environ["FILE_UPLOAD_LAMBDA_FUNCTION_NAME"] = "fileUploadLambdaFunction"
 # Add environment variables for databaseService.py
 os.environ["WORKFLOW_STORAGE_TABLE_NAME"] = "workflowStorageTable"
 os.environ["PIPELINE_STORAGE_TABLE_NAME"] = "pipelineStorageTable"
+
+# Add environment variables for assetLinksService.py
+os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"] = "assetLinksStorageTableV2"
+os.environ["ASSET_LINKS_METADATA_STORAGE_TABLE_NAME"] = "assetLinksMetadataStorageTable"
+os.environ["AUTH_TABLE_NAME"] = "authTable"
+os.environ["USER_ROLES_TABLE_NAME"] = "userRolesTable"
+os.environ["ROLES_TABLE_NAME"] = "rolesTable"
 
 
 @pytest.fixture(scope="function")

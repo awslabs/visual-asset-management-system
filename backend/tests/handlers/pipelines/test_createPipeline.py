@@ -110,8 +110,17 @@ def test_create_lambda_pipeline():
     )
 
 @patch('backend.backend.handlers.pipelines.createPipeline.to_update_expr')
-def test_upload_pipeline(mock_to_update_expr):
-    # Setup mocks
+@patch('backend.backend.handlers.pipelines.createPipeline.db_table')
+def test_upload_pipeline(mock_db_table, mock_to_update_expr):
+    # Setup mocks for DynamoDB validation
+    mock_db_table.get_item.return_value = {
+        'Item': {
+            'databaseId': 'default',
+            'databaseName': 'Test Database'
+        }
+    }
+    
+    # Setup mocks for pipeline operations
     dynamodb = Mock()
     table = Mock()
     dynamodb.Table = Mock(return_value=table)

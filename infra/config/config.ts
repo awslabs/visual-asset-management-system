@@ -110,9 +110,9 @@ export function getConfig(app: cdk.App): Config {
     //OpenSearch Variables
     config.openSearchIndexName = "assets1236";
     config.openSearchIndexNameSSMParam =
-        "/" + ["vams-" + config.app.baseStackName, "aos", "indexName"].join("/");
+        "/" + [config.name + "-" + config.app.baseStackName, "aos", "indexName"].join("/");
     config.openSearchDomainEndpointSSMParam =
-        "/" + ["vams-" + config.app.baseStackName, "aos", "endPoint"].join("/");
+        "/" + [config.name + "-" + config.app.baseStackName, "aos", "endPoint"].join("/");
 
     //Fill in some basic values to false if blank
     //Note: usually added for backwards compatabibility of an old config file that hasn't had the newest elements added

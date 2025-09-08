@@ -365,27 +365,119 @@ def property_token_filter_to_opensearch_query(token_filter, uniqueMappingFieldsF
         },
         "aggs": {
             "str_assettype": {
-                "terms": {
-                    "field": "str_assettype.raw",
-                    "size": 1000
+                "filter": {
+                    "bool": {
+                        "must_not": [
+                            {
+                                "regexp": {
+                                    "str_databaseid": ".*#deleted.*"
+                                }
+                            },
+                            {
+                                "wildcard": {
+                                    "str_key": {
+                                        "value": "*.previewFile.*",
+                                        "case_insensitive": True
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                },
+                "aggs": {
+                    "filtered_assettype": {
+                        "terms": {
+                            "field": "str_assettype.raw",
+                            "size": 1000
+                        }
+                    }
                 }
             },
             "str_fileext": {
-                "terms": {
-                    "field": "str_fileext.raw",
-                    "size": 1000
+                "filter": {
+                    "bool": {
+                        "must_not": [
+                            {
+                                "regexp": {
+                                    "str_databaseid": ".*#deleted.*"
+                                }
+                            },
+                            {
+                                "wildcard": {
+                                    "str_key": {
+                                        "value": "*.previewFile.*",
+                                        "case_insensitive": True
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                },
+                "aggs": {
+                    "filtered_fileext": {
+                        "terms": {
+                            "field": "str_fileext.raw",
+                            "size": 1000
+                        }
+                    }
                 }
             },
             "str_databaseid": {
-                "terms": {
-                    "field": "str_databaseid.raw",
-                    "size": 1000
+                "filter": {
+                    "bool": {
+                        "must_not": [
+                            {
+                                "regexp": {
+                                    "str_databaseid": ".*#deleted.*"
+                                }
+                            },
+                            {
+                                "wildcard": {
+                                    "str_key": {
+                                        "value": "*.previewFile.*",
+                                        "case_insensitive": True
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                },
+                "aggs": {
+                    "filtered_databaseid": {
+                        "terms": {
+                            "field": "str_databaseid.raw",
+                            "size": 1000
+                        }
+                    }
                 }
             },
             "list_tags": {
-                "terms": {
-                    "field": "list_tags.keyword",
-                    "size": 1000
+                "filter": {
+                    "bool": {
+                        "must_not": [
+                            {
+                                "regexp": {
+                                    "str_databaseid": ".*#deleted.*"
+                                }
+                            },
+                            {
+                                "wildcard": {
+                                    "str_key": {
+                                        "value": "*.previewFile.*",
+                                        "case_insensitive": True
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                },
+                "aggs": {
+                    "filtered_tags": {
+                        "terms": {
+                            "field": "list_tags.keyword",
+                            "size": 1000
+                        }
+                    }
                 }
             }
         }
@@ -585,6 +677,26 @@ def lambda_handler(
                     result["hits"]["hits"] = filtered_hits
 
                 result["hits"]["total"]["value"] = len(filtered_hits)
+
+                # Fix aggregation structure to match expected format
+                # The aggregations are now nested under filter aggregations, so we need to extract them
+                if "aggregations" in result:
+                    fixed_aggregations = {}
+                    
+                    # Extract nested aggregations and restore original structure
+                    if "str_assettype" in result["aggregations"] and "filtered_assettype" in result["aggregations"]["str_assettype"]:
+                        fixed_aggregations["str_assettype"] = result["aggregations"]["str_assettype"]["filtered_assettype"]
+                    
+                    if "str_fileext" in result["aggregations"] and "filtered_fileext" in result["aggregations"]["str_fileext"]:
+                        fixed_aggregations["str_fileext"] = result["aggregations"]["str_fileext"]["filtered_fileext"]
+                    
+                    if "str_databaseid" in result["aggregations"] and "filtered_databaseid" in result["aggregations"]["str_databaseid"]:
+                        fixed_aggregations["str_databaseid"] = result["aggregations"]["str_databaseid"]["filtered_databaseid"]
+                    
+                    if "list_tags" in result["aggregations"] and "filtered_tags" in result["aggregations"]["list_tags"]:
+                        fixed_aggregations["list_tags"] = result["aggregations"]["list_tags"]["filtered_tags"]
+                    
+                    result["aggregations"] = fixed_aggregations
 
                 return {
                     'statusCode': 200,

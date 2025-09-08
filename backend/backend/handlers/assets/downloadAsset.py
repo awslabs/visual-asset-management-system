@@ -20,6 +20,10 @@ from models.assetsV3 import (
     DownloadAssetRequestModel, DownloadAssetResponseModel
 )
 
+#Set environment variable for S3 client configuration
+#'regional' set to add region decriptor to presigned urls for us-east-1 (ignored for non us-east-1 regions)
+os.environ["AWS_S3_US_EAST_1_REGIONAL_ENDPOINT"] = "regional" 
+
 # Configure AWS clients
 region = os.environ['AWS_REGION']
 s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'})
