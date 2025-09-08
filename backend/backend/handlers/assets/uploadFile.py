@@ -29,6 +29,10 @@ from models.assetsV3 import (
     AssetUploadTableModel
 )
 
+#Set environment variable for S3 client configuration
+#'regional' set to add region decriptor to presigned urls for us-east-1 (ignored for non us-east-1 regions)
+os.environ["AWS_S3_US_EAST_1_REGIONAL_ENDPOINT"] = "regional" 
+
 # Configure AWS clients with retry configuration
 region = os.environ['AWS_REGION']
 

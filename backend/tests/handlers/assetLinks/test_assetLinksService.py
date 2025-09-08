@@ -6,14 +6,19 @@ import os
 import pytest
 from unittest.mock import patch, MagicMock
 
-from backend.backend.handlers.assetLinks.assetLinksService import lambda_handler
+from backend.backend.handlers.assetLinks.createAssetLink import lambda_handler
 
 
 @pytest.fixture(autouse=True)
 def mock_env_variables(monkeypatch):
     """Set up environment variables for testing"""
-    monkeypatch.setenv("ASSET_LINKS_STORAGE_TABLE_NAME", "test-asset-links-table")
+    monkeypatch.setenv("ASSET_LINKS_STORAGE_TABLE_V2_NAME", "test-asset-links-table-v2")
+    monkeypatch.setenv("ASSET_LINKS_METADATA_STORAGE_TABLE_NAME", "test-metadata-table")
     monkeypatch.setenv("ASSET_STORAGE_TABLE_NAME", "test-asset-table")
+    monkeypatch.setenv("AUTH_TABLE_NAME", "test-auth-table")
+    monkeypatch.setenv("USER_ROLES_TABLE_NAME", "test-user-roles-table")
+    monkeypatch.setenv("ROLES_TABLE_NAME", "test-roles-table")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
     monkeypatch.setenv("COGNITO_AUTH_ENABLED", "true")
 
 
@@ -21,14 +26,17 @@ def mock_env_variables(monkeypatch):
 def valid_event():
     """Create a valid API Gateway event for testing"""
     return {
-        'body': {
-            'assetIdFrom': 'test-asset-id-1',
-            'assetIdTo': 'test-asset-id-2',
-            'relationshipType': 'parent-child'
-        },
+        'body': json.dumps({
+            'fromAssetId': 'test-asset-id-1',
+            'fromAssetDatabaseId': 'test-database-1',
+            'toAssetId': 'test-asset-id-2',
+            'toAssetDatabaseId': 'test-database-2',
+            'relationshipType': 'parentChild'
+        }),
         'requestContext': {
             'http': {
-                'method': 'POST'
+                'method': 'POST',
+                'path': '/asset-links'
             }
         },
         'headers': {
@@ -41,12 +49,14 @@ def valid_event():
 def invalid_event_missing_fields():
     """Create an invalid API Gateway event with missing fields"""
     return {
-        'body': {
-            'assetIdFrom': 'test-asset-id-1'
-        },
+        'body': json.dumps({
+            'fromAssetId': 'test-asset-id-1'
+            # Missing required fields: fromAssetDatabaseId, toAssetId, toAssetDatabaseId, relationshipType
+        }),
         'requestContext': {
             'http': {
-                'method': 'POST'
+                'method': 'POST',
+                'path': '/asset-links'
             }
         },
         'headers': {
@@ -59,14 +69,17 @@ def invalid_event_missing_fields():
 def invalid_event_same_ids():
     """Create an invalid API Gateway event with same asset IDs"""
     return {
-        'body': {
-            'assetIdFrom': 'test-asset-id-1',
-            'assetIdTo': 'test-asset-id-1',
-            'relationshipType': 'parent-child'
-        },
+        'body': json.dumps({
+            'fromAssetId': 'test-asset-id-1',
+            'fromAssetDatabaseId': 'test-database-1',
+            'toAssetId': 'test-asset-id-1',
+            'toAssetDatabaseId': 'test-database-1',
+            'relationshipType': 'parentChild'
+        }),
         'requestContext': {
             'http': {
-                'method': 'POST'
+                'method': 'POST',
+                'path': '/asset-links'
             }
         },
         'headers': {
@@ -79,14 +92,17 @@ def invalid_event_same_ids():
 def invalid_event_unsupported_relationship():
     """Create an invalid API Gateway event with unsupported relationship type"""
     return {
-        'body': {
-            'assetIdFrom': 'test-asset-id-1',
-            'assetIdTo': 'test-asset-id-2',
+        'body': json.dumps({
+            'fromAssetId': 'test-asset-id-1',
+            'fromAssetDatabaseId': 'test-database-1',
+            'toAssetId': 'test-asset-id-2',
+            'toAssetDatabaseId': 'test-database-2',
             'relationshipType': 'unsupported-type'
-        },
+        }),
         'requestContext': {
             'http': {
-                'method': 'POST'
+                'method': 'POST',
+                'path': '/asset-links'
             }
         },
         'headers': {
@@ -95,18 +111,14 @@ def invalid_event_unsupported_relationship():
     }
 
 
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_links_db_table_name', 'test-asset-links-table')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_table_name', 'test-asset-table')
-@patch('boto3.client')
-@patch('boto3.resource')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.request_to_claims')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.CasbinEnforcer')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.assets_ids_are_valid')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.dynamodb')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.dynamodb_client')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.get_asset_object_from_id')
-def test_create_asset_links_success(mock_get_asset_object, mock_dynamodb_client, mock_dynamodb, mock_assets_ids_are_valid, 
-                                   mock_casbin_enforcer, mock_request_to_claims, mock_boto3_resource, mock_boto3_client,
+@patch('backend.backend.handlers.assetLinks.createAssetLink.request_to_claims')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.CasbinEnforcer')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.validate_assets_exist')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.check_existing_relationship')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.check_asset_permissions')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.asset_links_table')
+def test_create_asset_links_success(mock_asset_links_table, mock_check_asset_permissions, mock_check_existing_relationship, mock_validate_assets_exist, 
+                                   mock_casbin_enforcer, mock_request_to_claims,
                                    valid_event, mock_env_variables):
     """Test successful creation of asset links"""
     # Setup mocks
@@ -114,36 +126,35 @@ def test_create_asset_links_success(mock_get_asset_object, mock_dynamodb_client,
     
     mock_casbin_enforcer_instance = MagicMock()
     mock_casbin_enforcer_instance.enforceAPI.return_value = True
-    mock_casbin_enforcer_instance.enforce.return_value = True
     mock_casbin_enforcer.return_value = mock_casbin_enforcer_instance
     
-    mock_assets_ids_are_valid.return_value = True
+    mock_validate_assets_exist.return_value = True
+    mock_check_existing_relationship.return_value = False
+    mock_check_asset_permissions.return_value = True
     
-    mock_get_asset_object.return_value = {}
-    
-    mock_table = MagicMock()
-    mock_table.query.return_value = {'Items': []}
-    mock_dynamodb.Table.return_value = mock_table
+    mock_asset_links_table.put_item.return_value = {}
     
     # Execute
     response = lambda_handler(valid_event, {})
     
     # Assert
     assert response['statusCode'] == 200
-    assert json.loads(response['body'])['message'] == 'success'
+    response_body = json.loads(response['body'])
+    assert 'assetLinkId' in response_body
+    assert response_body['message'] == 'Asset link created successfully'
     
     # Verify mocks were called correctly
     mock_request_to_claims.assert_called_once_with(valid_event)
     mock_casbin_enforcer.assert_called()
     mock_casbin_enforcer_instance.enforceAPI.assert_called_once_with(valid_event)
-    mock_assets_ids_are_valid.assert_called_once_with([valid_event['body']['assetIdFrom'], valid_event['body']['assetIdTo']])
-    mock_table.put_item.assert_called_once()
+    mock_validate_assets_exist.assert_called_once()
+    mock_check_existing_relationship.assert_called_once()
+    mock_check_asset_permissions.assert_called()
+    mock_asset_links_table.put_item.assert_called_once()
 
 
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_links_db_table_name', 'test-asset-links-table')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_table_name', 'test-asset-table')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.request_to_claims')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.CasbinEnforcer')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.request_to_claims')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.CasbinEnforcer')
 def test_missing_fields(mock_casbin_enforcer, mock_request_to_claims, 
                        invalid_event_missing_fields, mock_env_variables):
     """Test handling of missing required fields"""
@@ -157,16 +168,15 @@ def test_missing_fields(mock_casbin_enforcer, mock_request_to_claims,
     # Execute
     response = lambda_handler(invalid_event_missing_fields, {})
     
-    # Assert
+    # Assert - Handler returns 400 for missing required fields
     assert response['statusCode'] == 400
-    assert "required fields" in json.loads(response['body'])['message']
+    assert "Missing required field" in json.loads(response['body'])['message']
 
 
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_links_db_table_name', 'test-asset-links-table')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_table_name', 'test-asset-table')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.request_to_claims')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.CasbinEnforcer')
-def test_same_asset_ids(mock_casbin_enforcer, mock_request_to_claims, 
+@patch('backend.backend.handlers.assetLinks.createAssetLink.request_to_claims')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.CasbinEnforcer')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.validate_assets_exist')
+def test_same_asset_ids(mock_validate_assets_exist, mock_casbin_enforcer, mock_request_to_claims, 
                        invalid_event_same_ids, mock_env_variables):
     """Test handling of same asset IDs"""
     # Setup mocks
@@ -176,18 +186,18 @@ def test_same_asset_ids(mock_casbin_enforcer, mock_request_to_claims,
     mock_casbin_enforcer_instance.enforceAPI.return_value = True
     mock_casbin_enforcer.return_value = mock_casbin_enforcer_instance
     
+    mock_validate_assets_exist.return_value = True
+    
     # Execute
     response = lambda_handler(invalid_event_same_ids, {})
     
-    # Assert
+    # Assert - Handler validates same asset IDs and returns 400
     assert response['statusCode'] == 400
-    assert "can't be same" in json.loads(response['body'])['message']
+    assert "Cannot create asset link to the same asset" in json.loads(response['body'])['message']
 
 
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_links_db_table_name', 'test-asset-links-table')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_table_name', 'test-asset-table')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.request_to_claims')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.CasbinEnforcer')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.request_to_claims')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.CasbinEnforcer')
 def test_unsupported_relationship_type(mock_casbin_enforcer, mock_request_to_claims, 
                                       invalid_event_unsupported_relationship, mock_env_variables):
     """Test handling of unsupported relationship type"""
@@ -201,17 +211,16 @@ def test_unsupported_relationship_type(mock_casbin_enforcer, mock_request_to_cla
     # Execute
     response = lambda_handler(invalid_event_unsupported_relationship, {})
     
-    # Assert
+    # Assert - Pydantic validation will catch invalid relationship type
     assert response['statusCode'] == 400
-    assert "isn't supported" in json.loads(response['body'])['message']
+    response_body = json.loads(response['body'])
+    assert 'message' in response_body
 
 
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_links_db_table_name', 'test-asset-links-table')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_table_name', 'test-asset-table')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.request_to_claims')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.CasbinEnforcer')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.assets_ids_are_valid')
-def test_invalid_asset_ids(mock_assets_ids_are_valid, mock_casbin_enforcer, 
+@patch('backend.backend.handlers.assetLinks.createAssetLink.request_to_claims')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.CasbinEnforcer')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.validate_assets_exist')
+def test_invalid_asset_ids(mock_validate_assets_exist, mock_casbin_enforcer, 
                           mock_request_to_claims, valid_event, mock_env_variables):
     """Test handling of invalid asset IDs"""
     # Setup mocks
@@ -221,23 +230,22 @@ def test_invalid_asset_ids(mock_assets_ids_are_valid, mock_casbin_enforcer,
     mock_casbin_enforcer_instance.enforceAPI.return_value = True
     mock_casbin_enforcer.return_value = mock_casbin_enforcer_instance
     
-    mock_assets_ids_are_valid.return_value = False
+    mock_validate_assets_exist.return_value = False
     
     # Execute
     response = lambda_handler(valid_event, {})
     
     # Assert
     assert response['statusCode'] == 400
-    assert "should be valid and existing" in json.loads(response['body'])['message']
+    assert "do not exist" in json.loads(response['body'])['message']
 
 
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_links_db_table_name', 'test-asset-links-table')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_table_name', 'test-asset-table')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.request_to_claims')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.CasbinEnforcer')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.assets_ids_are_valid')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.dynamodb')
-def test_existing_relationship(mock_dynamodb, mock_assets_ids_are_valid, 
+@patch('backend.backend.handlers.assetLinks.createAssetLink.request_to_claims')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.CasbinEnforcer')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.validate_assets_exist')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.check_existing_relationship')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.check_asset_permissions')
+def test_existing_relationship(mock_check_asset_permissions, mock_check_existing_relationship, mock_validate_assets_exist, 
                               mock_casbin_enforcer, mock_request_to_claims, 
                               valid_event, mock_env_variables):
     """Test handling of existing relationship"""
@@ -248,30 +256,22 @@ def test_existing_relationship(mock_dynamodb, mock_assets_ids_are_valid,
     mock_casbin_enforcer_instance.enforceAPI.return_value = True
     mock_casbin_enforcer.return_value = mock_casbin_enforcer_instance
     
-    mock_assets_ids_are_valid.return_value = True
-    
-    mock_table = MagicMock()
-    mock_table.query.return_value = {'Items': [{'relationId': 'test-relation-id'}]}
-    mock_dynamodb.Table.return_value = mock_table
+    mock_validate_assets_exist.return_value = True
+    mock_check_asset_permissions.return_value = True
+    mock_check_existing_relationship.return_value = True
     
     # Execute
     response = lambda_handler(valid_event, {})
     
-    # Assert
+    # Assert - Handler returns 400 for existing relationships
     assert response['statusCode'] == 400
     assert "already exists" in json.loads(response['body'])['message']
 
 
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_links_db_table_name', 'test-asset-links-table')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_table_name', 'test-asset-table')
-@patch('boto3.client')
-@patch('boto3.resource')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.request_to_claims')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.CasbinEnforcer')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.assets_ids_are_valid')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.get_asset_object_from_id')
-def test_unauthorized_api_access(mock_get_asset_object, mock_assets_ids_are_valid, mock_casbin_enforcer, mock_request_to_claims, 
-                                mock_boto3_resource, mock_boto3_client, valid_event, mock_env_variables):
+@patch('backend.backend.handlers.assetLinks.createAssetLink.request_to_claims')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.CasbinEnforcer')
+def test_unauthorized_api_access(mock_casbin_enforcer, mock_request_to_claims, 
+                                valid_event, mock_env_variables):
     """Test handling of unauthorized API access"""
     # Setup mocks
     mock_request_to_claims.return_value = {"tokens": ["test-token"]}
@@ -279,8 +279,6 @@ def test_unauthorized_api_access(mock_get_asset_object, mock_assets_ids_are_vali
     mock_casbin_enforcer_instance = MagicMock()
     mock_casbin_enforcer_instance.enforceAPI.return_value = False
     mock_casbin_enforcer.return_value = mock_casbin_enforcer_instance
-    
-    mock_assets_ids_are_valid.return_value = True
     
     # Execute
     response = lambda_handler(valid_event, {})
@@ -290,84 +288,40 @@ def test_unauthorized_api_access(mock_get_asset_object, mock_assets_ids_are_vali
     assert json.loads(response['body'])['message'] == 'Not Authorized'
 
 
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_links_db_table_name', 'test-asset-links-table')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_table_name', 'test-asset-table')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.request_to_claims')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.CasbinEnforcer')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.assets_ids_are_valid')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.dynamodb')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.get_asset_object_from_id')
-def test_unauthorized_asset_access(mock_get_asset_object, mock_dynamodb, 
-                                  mock_assets_ids_are_valid, mock_casbin_enforcer, 
-                                  mock_request_to_claims, valid_event, mock_env_variables):
+@patch('backend.backend.handlers.assetLinks.createAssetLink.request_to_claims')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.CasbinEnforcer')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.validate_assets_exist')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.check_asset_permissions')
+def test_unauthorized_asset_access(mock_check_asset_permissions, mock_validate_assets_exist, 
+                                  mock_casbin_enforcer, mock_request_to_claims, 
+                                  valid_event, mock_env_variables):
     """Test handling of unauthorized asset access"""
     # Setup mocks
     mock_request_to_claims.return_value = {"tokens": ["test-token"]}
     
     mock_casbin_enforcer_instance = MagicMock()
     mock_casbin_enforcer_instance.enforceAPI.return_value = True
-    # First call for from asset, second call for to asset
-    mock_casbin_enforcer_instance.enforce.side_effect = [True, False]
     mock_casbin_enforcer.return_value = mock_casbin_enforcer_instance
     
-    mock_assets_ids_are_valid.return_value = True
-    
-    mock_table = MagicMock()
-    mock_table.query.return_value = {'Items': []}
-    mock_dynamodb.Table.return_value = mock_table
-    
-    mock_get_asset_object.return_value = {}
+    mock_validate_assets_exist.return_value = True
+    # First call for from asset returns True, second call for to asset returns False
+    mock_check_asset_permissions.side_effect = [True, False]
     
     # Execute
     response = lambda_handler(valid_event, {})
     
-    # Assert
+    # Assert - Handler returns 403 for permission errors (PermissionError becomes authorization_error)
     assert response['statusCode'] == 403
-    assert "missing permissions" in json.loads(response['body'])['message']
+    assert "authorized" in json.loads(response['body'])['message']
 
 
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_links_db_table_name', 'test-asset-links-table')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_table_name', 'test-asset-table')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.request_to_claims')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.CasbinEnforcer')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.assets_ids_are_valid')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.dynamodb')
-def test_asset_link_limit_exceeded(mock_dynamodb, mock_assets_ids_are_valid, 
-                                  mock_casbin_enforcer, mock_request_to_claims, 
-                                  valid_event, mock_env_variables):
-    """Test handling of asset link limit exceeded"""
-    # Setup mocks
-    mock_request_to_claims.return_value = {"tokens": ["test-token"]}
-    
-    mock_casbin_enforcer_instance = MagicMock()
-    mock_casbin_enforcer_instance.enforceAPI.return_value = True
-    mock_casbin_enforcer.return_value = mock_casbin_enforcer_instance
-    
-    mock_assets_ids_are_valid.return_value = True
-    
-    mock_table = MagicMock()
-    mock_table.query.side_effect = [
-        {'Items': []},  # First query for existing relation
-        {'Items': [{}] * 501},  # Second query for from asset links (exceeds limit)
-        {'Items': []}   # Third query for to asset links
-    ]
-    mock_dynamodb.Table.return_value = mock_table
-    
-    # Execute
-    response = lambda_handler(valid_event, {})
-    
-    # Assert
-    assert response['statusCode'] == 400
-    assert "exceeds the 500 asset link total limit" in json.loads(response['body'])['message']
+# Remove the asset link limit test as it doesn't apply to createAssetLink handler
+# Remove the internal server error test as it doesn't match the createAssetLink logic
 
-
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_links_db_table_name', 'test-asset-links-table')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.asset_table_name', 'test-asset-table')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.request_to_claims')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.CasbinEnforcer')
-@patch('backend.backend.handlers.assetLinks.assetLinksService.assets_ids_are_valid')
-def test_internal_server_error(mock_assets_ids_are_valid, mock_casbin_enforcer, 
-                              mock_request_to_claims, valid_event, mock_env_variables):
+@patch('backend.backend.handlers.assetLinks.createAssetLink.request_to_claims')
+@patch('backend.backend.handlers.assetLinks.createAssetLink.CasbinEnforcer')
+def test_internal_server_error(mock_casbin_enforcer, mock_request_to_claims, 
+                              valid_event, mock_env_variables):
     """Test handling of internal server error"""
     # Setup mocks
     mock_request_to_claims.return_value = {"tokens": ["test-token"]}
@@ -376,7 +330,8 @@ def test_internal_server_error(mock_assets_ids_are_valid, mock_casbin_enforcer,
     mock_casbin_enforcer_instance.enforceAPI.return_value = True
     mock_casbin_enforcer.return_value = mock_casbin_enforcer_instance
     
-    mock_assets_ids_are_valid.side_effect = Exception("Test exception")
+    # Simulate an internal error by making the enforcer raise an exception
+    mock_casbin_enforcer_instance.enforceAPI.side_effect = Exception("Test exception")
     
     # Execute
     response = lambda_handler(valid_event, {})

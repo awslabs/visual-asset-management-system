@@ -126,13 +126,50 @@ def update_metadata(database_id, asset_id):
 # API Implementations
 #######################
 
-def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_and_roles, event):
+def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_and_roles, event_auth):
     """Initialize an asset ingest operation"""
     database_id = request_model.databaseId
     asset_id = request_model.assetId
     
     # Verify database exists
     verify_database_exists(database_id)
+
+    # Check if asset exists
+    asset_exists = verify_asset_exists(database_id, asset_id)
+    
+    # If asset doesn't exist, create it first
+    if not asset_exists:
+        logger.info(f"Asset {asset_id} does not exist. Creating it first.")
+        
+        # Prepare payload for createAsset lambda
+        create_asset_payload = {
+            "body": {
+                "databaseId": database_id,
+                "assetName": request_model.assetName,
+                "description": request_model.description,
+                "isDistributable": request_model.isDistributable,
+                "tags": request_model.tags
+            },
+            "requestContext": {
+                "http": {
+                    "path": "/assets",
+                    "method": "POST"
+                },
+                "authorizer": event_auth
+            }
+        }
+        
+        # Invoke createAsset lambda
+        create_asset_response = invoke_lambda(create_asset_lambda, create_asset_payload)
+        
+        # Check response
+        if create_asset_response['statusCode'] != 200:
+            response_body = json.loads(create_asset_response.get("body", "{}"))
+            error_message = response_body.get('message', "Unknown error creating asset")
+            logger.error(f"Error creating asset: {error_message}")
+            raise VAMSGeneralErrorResponse(f"Error creating asset: {error_message}")
+        
+        logger.info("Asset created successfully")
     
     # Prepare payload for fileUpload lambda (initialize upload)
     initialize_upload_payload = {
@@ -141,12 +178,15 @@ def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_a
             "databaseId": database_id,
             "uploadType": "assetFile",
             "files": [file.dict() for file in request_model.files]
+        },
+        "requestContext": {
+            "http": {
+                "path": "/uploads",
+                "method": "POST"
+            },
+            "authorizer": event_auth
         }
     }
-
-    initialize_upload_payload .update({
-            "requestContext": event['requestContext']
-        })
     
     # Invoke fileUpload lambda to initialize the upload
     file_upload_response = invoke_lambda(file_upload_lambda, initialize_upload_payload)
@@ -168,7 +208,7 @@ def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_a
         files=response_body.get("files", [])
     )
 
-def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_roles, event):
+def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_roles, event_auth):
     """Complete an asset ingest operation"""
     database_id = request_model.databaseId
     asset_id = request_model.assetId
@@ -188,18 +228,19 @@ def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_r
         create_asset_payload = {
             "body": {
                 "databaseId": database_id,
-                "assetId": asset_id,
                 "assetName": request_model.assetName,
                 "description": request_model.description,
                 "isDistributable": request_model.isDistributable,
                 "tags": request_model.tags
+            },
+            "requestContext": {
+                "http": {
+                    "path": "/assets",
+                    "method": "POST"
+                },
+                "authorizer": event_auth
             }
         }
-
-        create_asset_payload.update({
-            "requestContext": event['requestContext']
-        })
-
         
         # Invoke createAsset lambda
         create_asset_response = invoke_lambda(create_asset_lambda, create_asset_payload)
@@ -223,12 +264,15 @@ def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_r
         },
         "pathParameters": {
             "uploadId": upload_id
+        },
+        "requestContext": {
+            "http": {
+                "path": "/uploads/complete",
+                "method": "POST"
+            },
+            "authorizer": event_auth
         }
     }
-
-    complete_upload_payload.update({
-            "requestContext": event['requestContext']
-        })
     
     # Invoke fileUpload lambda to complete the upload
     file_upload_response = invoke_lambda(file_upload_lambda, complete_upload_payload)
@@ -302,6 +346,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             "assetName": request_model.assetName,
             "tags": request_model.tags
         }
+
+        event_auth = event['requestContext']['authorizer']
         
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
@@ -311,10 +357,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         # Process request based on stage
         if is_complete_stage:
             # Stage 2 - Complete upload
-            response = complete_ingest(request_model, claims_and_roles, event)
+            response = complete_ingest(request_model, claims_and_roles, event_auth)
         else:
             # Stage 1 - Initialize upload
-            response = initialize_ingest(request_model, claims_and_roles, event)
+            response = initialize_ingest(request_model, claims_and_roles, event_auth)
         
         return success(body=response.dict())
             

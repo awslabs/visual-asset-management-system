@@ -179,7 +179,8 @@ This version includes significant enhancements to VAMS infrastructure, a complet
 -   Fixed fullscreen mode on visualizers not working on certain visualizers after exiting from a previous fullscreen session; removed compact mode as this had no benefit.
 -   Fixed OpenSearch search to exclude `bool_` fields that may get added to dynamodb tables it indexes. Wildcard searches in query don't work on bool fields.
 -   Added check to metadataschema creation API to make sure the database ID exists before creating the schema
--   Fixed bug with Asset Search that some columns were returning an API 500 error when trying to sort.
+-   Fixed bug with Asset Search that some columns were returning an API 500 error when trying to sort, fixed issue with deleted databases and records showing in aggregate results still
+-   Fixed a bug where OpenSearch SSM parameter didn't factor in all config naming variables, causing issues with deploying multiple VAMS stack instances to the same region.
 
 ### Chores
 
