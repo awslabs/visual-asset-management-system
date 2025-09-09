@@ -145,6 +145,7 @@ def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_a
         create_asset_payload = {
             "body": {
                 "databaseId": database_id,
+                "assetId": asset_id,
                 "assetName": request_model.assetName,
                 "description": request_model.description,
                 "isDistributable": request_model.isDistributable,
@@ -228,6 +229,7 @@ def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_r
         create_asset_payload = {
             "body": {
                 "databaseId": database_id,
+                "assetId": asset_id,
                 "assetName": request_model.assetName,
                 "description": request_model.description,
                 "isDistributable": request_model.isDistributable,
