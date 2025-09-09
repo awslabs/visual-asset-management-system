@@ -18,7 +18,7 @@ relative_file_path_pattern = r'^\/.*$'
 asset_path_pattern = r'^.+\/.+$'
 asset_folder_path_pattern = r'^.+\/.+\/$'
 asset_auxiliarypreview_path_pattern = r'^.+\/preview\/.+$'
-asset_path_pipeline_pattern = r'^pipelines\/.+\/.+\/outputs\/.+\/$'
+asset_path_pipeline_pattern = r'^pipelines\/.+\/.+\/output\/.+\/$'
 
 object_name_pattern = r'^[a-zA-Z0-9\-._\s]{1,256}$'
 userid_pattern = r'^[\w\-\.\+\@]{3,256}$'
@@ -122,21 +122,21 @@ def validate_asset_path_pipeline(name, value):
     
     # Split the path into sections
     remaining = value[len('pipelines/'):]
-    outputs_parts = remaining.split('/outputs/', 1)
+    outputs_parts = remaining.split('/output/', 1)
     
     if len(outputs_parts) != 2:
-        return (False, name + " is invalid. Must contain '/outputs/' exactly once.")
+        return (False, name + " is invalid. Must contain '/output/' exactly once.")
     
     middle_section = outputs_parts[0]
     end_section = outputs_parts[1]
     
     # Check middle section has at least one forward slash and is at least 4 characters
     if '/' not in middle_section or len(middle_section) < 4:
-        return (False, name + " is invalid. Section between 'pipelines/' and '/outputs/' must contain at least one forward slash and be at least 4 characters long.")
+        return (False, name + " is invalid. Section between 'pipelines/' and '/output/' must contain at least one forward slash and be at least 4 characters long.")
     
     # Check end section is at least 2 characters (not counting the trailing slash)
     if not end_section.endswith('/') or len(end_section.rstrip('/')) < 2:
-        return (False, name + " is invalid. Section after '/outputs/' must be at least 2 characters long and end with a forward slash.")
+        return (False, name + " is invalid. Section after '/output/' must be at least 2 characters long and end with a forward slash.")
     
     return (True, '')
 

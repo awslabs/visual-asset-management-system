@@ -49,16 +49,15 @@ def construct_rapidPipeline_definition(event) -> dict:
     inputOutput_s3_assetAuxiliary_files_bucket, inputOutput_s3_assetAuxiliary_files_key = inputOutput_s3_assetAuxiliary_files_uri .replace("s3://", "").split("/", 1)
     
     output_s3_asset_extension = event['outputFileType']
-    
-    # rename file based on conversion or compression
-    if input_s3_asset_extension == output_s3_asset_extension:
-        output_s3_asset_file_filename = input_s3_asset_file_filename + output_s3_asset_extension
-    else:
-        output_s3_asset_file_filename = input_s3_asset_file_filename + '-' + output_s3_asset_extension.replace(".", "") + output_s3_asset_extension
+
+    # Handle filename with spaces by adding quotes
+    escaped_input_file = f'"{input_s3_asset_file_filename}{input_s3_asset_extension}"'
+    output_s3_asset_file_filename = input_s3_asset_file_filename + output_s3_asset_extension
+    escaped_output_file = f'"{output_s3_asset_file_filename}"'
     
     # format standard RapidPipeline command string
-    standard_command_with_config = "aws s3 cp s3://" + input_s3_asset_file_bucket + "/" + input_s3_asset_file_key + " . && /rpdx/rpdx --read_config rp_config.json -i " + input_s3_asset_file_filename + input_s3_asset_extension + " -c -e " + output_s3_asset_file_filename + " && aws s3 cp " + output_s3_asset_file_filename + " s3://" + output_s3_asset_files_bucket + "/" + output_s3_asset_files_key
-    standard_command_no_config = "aws s3 cp s3://" + input_s3_asset_file_bucket + "/" + input_s3_asset_file_key + " . && /rpdx/rpdx -i " + input_s3_asset_file_filename + input_s3_asset_extension + " -c -e " + output_s3_asset_file_filename + " && aws s3 cp " + output_s3_asset_file_filename + " s3://" + output_s3_asset_files_bucket + "/" + output_s3_asset_files_key
+    standard_command_with_config = f"aws s3 cp s3://{input_s3_asset_file_bucket}/\"{input_s3_asset_file_key}\" . && /rpdx/rpdx --read_config rp_config.json -i {escaped_input_file} -c -e {escaped_output_file} && aws s3 cp {escaped_output_file} s3://{output_s3_asset_files_bucket}/{output_s3_asset_files_key}"
+    standard_command_no_config = f"aws s3 cp s3://{input_s3_asset_file_bucket}/\"{input_s3_asset_file_key}\" . && /rpdx/rpdx -i {escaped_input_file} -c -e {escaped_output_file} && aws s3 cp {escaped_output_file} s3://{output_s3_asset_files_bucket}/{output_s3_asset_files_key}"
     
     # Handle custom configurations using config.json file 
     if event['inputParameters'] != "":
