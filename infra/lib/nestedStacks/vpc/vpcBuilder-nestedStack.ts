@@ -43,10 +43,13 @@ export class VPCBuilderNestedStack extends NestedStack {
         //OpenSearchProvisioned - 3AZ - Private Subnet (Each)
         if (props.config.app.openSearch.useProvisioned.enabled) {
             this.azCount = 3;
-        } else if (props.config.app.useAlb.enabled || props.config.app.useGlobalVpc.useForAllLambdas) {
+        } else if (
+            props.config.app.useAlb.enabled ||
+            props.config.app.useGlobalVpc.useForAllLambdas
+        ) {
             this.azCount = 2;
         }
-        //Visualizer pipeline 
+        //Visualizer pipeline
         else this.azCount = 1;
 
         console.log("VPC AZ Count: ", this.azCount);
