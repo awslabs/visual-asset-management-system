@@ -96,7 +96,7 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
                 generateUniqueNameHash(
                     props.config.env.coreStackName,
                     props.config.env.account,
-                    "VAMS-API-AccessLogs",
+                    "VAMS-API-AccessLog",
                     10
                 ),
             retention: logs.RetentionDays.ONE_YEAR,
@@ -134,40 +134,35 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
                 maxAge: cdk.Duration.hours(1),
             },
             defaultAuthorizer: apiGatewayAuthorizer,
-            createDefaultStage: false,
+            createDefaultStage: true,
         });
 
-        const apiStage = new apigw.HttpStage(this, "DefaultStage", {
-            httpApi: api,
-            stageName: "$default", // Use $default to serve from the base API URL
-            autoDeploy: true,
-            throttle: {
-                rateLimit: props.config.app.api.globalRateLimit,
-                burstLimit: props.config.app.api.globalBurstLimit,
-            },
-            // accessLogSettings: {
-            //     destination: new apigw.LogGroupLogDestination(accessLogs),
-            //     format: apigwv1.AccessLogFormat.jsonWithStandardFields()
-            // }
-        });
+        const defaultStage = api.defaultStage?.node.defaultChild as apigw.CfnStage;
+        if (defaultStage) {
+            // Modify throttle settings using L1 construct properties
+            defaultStage.defaultRouteSettings = {
+                throttlingBurstLimit: props.config.app.api.globalBurstLimit, // Set burst limit
+                throttlingRateLimit: props.config.app.api.globalRateLimit, // Set rate limit
+            };
 
-        const stage = apiStage.node.defaultChild as apigw.CfnStage;
-        stage.accessLogSettings = {
-            destinationArn: accessLogs.logGroupArn,
-            format: JSON.stringify({
-                requestId: "$context.requestId",
-                userAgent: "$context.identity.userAgent",
-                sourceIp: "$context.identity.sourceIp",
-                requestTime: "$context.requestTime",
-                requestTimeEpoch: "$context.requestTimeEpoch",
-                httpMethod: "$context.httpMethod",
-                path: "$context.path",
-                status: "$context.status",
-                protocol: "$context.protocol",
-                responseLength: "$context.responseLength",
-                domainName: "$context.domainName",
-            }),
-        };
+            //Modify log settings
+            defaultStage.accessLogSettings = {
+                destinationArn: accessLogs.logGroupArn,
+                format: JSON.stringify({
+                    requestId: "$context.requestId",
+                    userAgent: "$context.identity.userAgent",
+                    sourceIp: "$context.identity.sourceIp",
+                    requestTime: "$context.requestTime",
+                    requestTimeEpoch: "$context.requestTimeEpoch",
+                    httpMethod: "$context.httpMethod",
+                    path: "$context.path",
+                    status: "$context.status",
+                    protocol: "$context.protocol",
+                    responseLength: "$context.responseLength",
+                    domainName: "$context.domainName",
+                }),
+            };
+        }
 
         //Always use non-FIPS URL in non-GovCloud. All endpoints in GovCloud are FIPS-compliant already
         //https://docs.aws.amazon.com/govcloud-us/latest/UserGuide/govcloud-abp.html
