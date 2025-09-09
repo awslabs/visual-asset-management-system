@@ -111,7 +111,7 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
                 generateUniqueNameHash(
                     props.config.env.coreStackName,
                     props.config.env.account,
-                    "VAMS-API-AccessLogs",
+                    "VAMS-API-AccessLog",
                     10
                 ),
             retention: logs.RetentionDays.ONE_YEAR,

@@ -39,14 +39,14 @@ export class VPCBuilderNestedStack extends NestedStack {
 
         //Set how many AZ's we need. Note: GovCloud only has max 3 AZs as of 11/09/2023
         //VisualizerPipelineReqs - 1Az - Private Subnet (Each)
-        //ALBReqs - 2AZ - Private or PublicSubnet (Each)
+        //ALBReqs or All Lambdas - 2AZ - Private or PublicSubnet (Each)
         //OpenSearchProvisioned - 3AZ - Private Subnet (Each)
         if (props.config.app.openSearch.useProvisioned.enabled) {
             this.azCount = 3;
-        } else if (props.config.app.useAlb.enabled) {
+        } else if (props.config.app.useAlb.enabled || props.config.app.useGlobalVpc.useForAllLambdas) {
             this.azCount = 2;
         }
-        //Visualizer pipeline and/or lambda functions only
+        //Visualizer pipeline 
         else this.azCount = 1;
 
         console.log("VPC AZ Count: ", this.azCount);
