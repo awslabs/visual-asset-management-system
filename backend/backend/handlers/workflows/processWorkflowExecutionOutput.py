@@ -214,7 +214,7 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
             
             # Add to file list
             file_list.append({
-                "key": file_name,
+                "relativeKey": file_name,
                 "tempKey": file_key
             })
         
@@ -233,9 +233,9 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
                 "uploadId": upload_id
             },
             "body": json.dumps(body),
-            "path": f"/uploads/{upload_id}/complete/external",
-            "httpMethod": "POST"
         }
+        lambda_payload["requestContext"]["http"]["path"] = f"/uploads/{upload_id}/complete/external"
+        lambda_payload["requestContext"]["http"]["httpMethod"] = f"POST"
         
         # Invoke the Lambda function
         response = _lambda_file_ingestion(lambda_payload)
@@ -291,9 +291,6 @@ def lambda_handler(event, context):
         
         #sub in body for event
         event = event["body"]
-
-        global claims_and_roles
-        claims_and_roles = request_to_claims(event)
 
         #Input validation
         if 'databaseId' not in event:
@@ -362,8 +359,10 @@ def lambda_handler(event, context):
             response['statusCode'] = 400
             return response
 
-        userName = event['executingUserName']
+        global claims_and_roles
         requestContext = event['executingRequestContext']
+        event["requestContext"] = requestContext
+        claims_and_roles = request_to_claims(event)
 
         # Get existing asset
         asset = lookup_existing_asset(event['databaseId'], event['assetId'])
@@ -380,11 +379,12 @@ def lambda_handler(event, context):
         })
         logger.info(asset)
 
+        operation_allowed_on_asset = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforce(asset, "PUT"):
                 operation_allowed_on_asset = True
-
+        
         if operation_allowed_on_asset:
             # Get bucket details from asset's bucketId
             bucketDetails = get_default_bucket_details(asset['bucketId'])
