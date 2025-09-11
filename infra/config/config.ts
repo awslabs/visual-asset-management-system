@@ -15,7 +15,7 @@ import { region_info } from "aws-cdk-lib";
 dotenv.config();
 
 //Top level configurations
-export const VAMS_VERSION = "2.2";
+export const VAMS_VERSION = "2.3.0";
 
 export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
 export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_20_X;
@@ -30,6 +30,9 @@ export const STACK_CORE_DESCRIPTION =
     "(SO9299) (uksb-1608h3hqer) (VAMS-CORE) (version:" +
     VAMS_VERSION +
     ") Primary Components for the Visual Asset Management Systems";
+
+// Custom Authorizer Configuration
+export const CUSTOM_AUTHORIZER_IGNORED_PATHS = ["/api/amplify-config", "/api/version"];
 
 export function getConfig(app: cdk.App): Config {
     const file: string = readFileSync(join(__dirname, "config.json"), {
@@ -166,6 +169,18 @@ export function getConfig(app: cdk.App): Config {
 
     if (config.app.webUi.allowUnsafeEvalFeatures == undefined) {
         config.app.webUi.allowUnsafeEvalFeatures = false;
+    }
+
+    // Initialize authorizerOptions if undefined
+    if (config.app.authProvider.authorizerOptions == undefined) {
+        config.app.authProvider.authorizerOptions = {
+            allowedIpRanges: [],
+        };
+    }
+
+    // Initialize allowedIpRanges if undefined
+    if (config.app.authProvider.authorizerOptions.allowedIpRanges == undefined) {
+        config.app.authProvider.authorizerOptions.allowedIpRanges = [];
     }
 
     if (config.app.api == undefined) {
@@ -513,6 +528,31 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
+    // Validate IP ranges configuration
+    if (config.app.authProvider.authorizerOptions.allowedIpRanges) {
+        for (let i = 0; i < config.app.authProvider.authorizerOptions.allowedIpRanges.length; i++) {
+            const range = config.app.authProvider.authorizerOptions.allowedIpRanges[i];
+            if (!Array.isArray(range) || range.length !== 2) {
+                throw new Error(
+                    `Configuration Error: IP range at index ${i} must be an array of exactly 2 IP addresses [min, max]. Got: ${JSON.stringify(
+                        range
+                    )}`
+                );
+            }
+
+            // Basic IP format validation
+            const ipRegex =
+                /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+            if (!ipRegex.test(range[0]) || !ipRegex.test(range[1])) {
+                throw new Error(
+                    `Configuration Error: Invalid IP address format in range at index ${i}. Expected format: ["192.168.1.1", "192.168.1.255"]. Got: ${JSON.stringify(
+                        range
+                    )}`
+                );
+            }
+        }
+    }
+
     return config;
 }
 
@@ -607,6 +647,9 @@ export interface ConfigPublic {
         };
         authProvider: {
             presignedUrlTimeoutSeconds: number;
+            authorizerOptions: {
+                allowedIpRanges: string[][];
+            };
             useCognito: {
                 enabled: boolean;
                 useSaml: boolean;

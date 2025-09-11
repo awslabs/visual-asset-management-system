@@ -38,6 +38,104 @@ Sample use cases that have leveraged early iterations of VAMS include:
 ![Asset Versioning](./diagrams/screenshots/asset_versioning.png)
 ![Workflows](./diagrams/screenshots/workflow_view.png)
 
+## Access Methods
+
+VAMS provides three primary methods for interacting with your visual asset management system:
+
+### Web Interface
+
+The web-based interface provides an intuitive, browser-based experience for:
+
+-   Visual asset browsing and search
+-   Interactive 3D model viewing
+-   Drag-and-drop file uploads
+-   Workflow and pipeline management
+-   User-friendly asset organization
+
+### Command Line Interface (VamsCLI)
+
+The command-line interface offers powerful automation capabilities for:
+
+-   Scripted asset management and bulk operations
+-   CI/CD pipeline integration
+-   Headless server environments
+-   Advanced file management with chunking and retry logic
+-   Multi-environment profile management
+
+### Direct API Access
+
+Direct REST API integration for custom applications and integrations:
+
+-   Custom application development
+-   Third-party system integrations
+-   Microservice architectures
+-   Advanced workflow automation
+-   Real-time data synchronization
+
+| Feature                | Web Interface                  | Command Line Interface                   | Direct API Access                 |
+| ---------------------- | ------------------------------ | ---------------------------------------- | --------------------------------- |
+| **Best for**           | Interactive use, visualization | Automation, scripting, bulk operations   | Custom integrations, applications |
+| **Asset Management**   | ✓ Visual interface             | ✓ Programmatic control                   | ✓ Full programmatic control       |
+| **File Upload**        | ✓ Drag & drop                  | ✓ Advanced chunking, progress monitoring | ✓ Custom upload implementations   |
+| **3D Viewing**         | ✓ Interactive viewers          | ✗ Not applicable                         | ✗ Not applicable                  |
+| **Automation**         | ✗ Manual operations            | ✓ Full automation support                | ✓ Complete automation control     |
+| **Bulk Operations**    | ✗ Limited                      | ✓ Optimized for bulk tasks               | ✓ Custom bulk implementations     |
+| **CI/CD Integration**  | ✗ Not suitable                 | ✓ Designed for integration               | ✓ Full integration flexibility    |
+| **Custom Logic**       | ✗ Fixed workflows              | ✗ Limited customization                  | ✓ Complete customization          |
+| **Learning Curve**     | ✓ Minimal                      | ✓ Moderate                               | ✗ Requires API knowledge          |
+| **Development Effort** | ✓ None required                | ✓ Minimal setup                          | ✗ Custom development required     |
+
+## VamsCLI - Command Line Interface
+
+VamsCLI is a powerful command-line tool that provides complete access to your VAMS deployment through an intuitive CLI interface. It's designed for automation, scripting, and power users who need programmatic control over their visual assets.
+
+### Key Features
+
+-   **Easy Setup**: Simple configuration with your API Gateway URL
+-   **Secure Authentication**: AWS Cognito integration with MFA support and override token system
+-   **Asset Management**: Create, update, and manage assets with comprehensive metadata support
+-   **Advanced File Upload**: Intelligent chunking, progress monitoring, and retry logic for reliable uploads
+-   **Profile Management**: Support for multiple environments and user accounts
+-   **Cross-Platform**: Works on Windows, macOS, and Linux
+-   **JSON Support**: Full JSON input/output for automation and scripting
+-   **Version Compatibility**: Automatic version checking with your VAMS deployment
+
+### Automation and Integration
+
+VamsCLI is designed for automation with features like:
+
+-   **JSON Input/Output**: All commands support JSON for scripting
+-   **Exit Codes**: Standard exit codes for script integration
+-   **Bulk Operations**: Optimized for large-scale operations
+-   **CI/CD Ready**: Perfect for continuous integration workflows
+
+### Documentation
+
+For complete VamsCLI documentation, see the comprehensive documentation in the [VamsCLI docs directory](./tools/VamsCLI/docs/):
+
+**Command Documentation:**
+
+-   Setup, authentication, and profile management
+-   Asset operations, versioning, and relationships
+-   File upload, organization, and management
+-   Database and bucket administration
+-   Tag and tag type operations
+-   Global options, JSON patterns, and automation
+
+**Troubleshooting Guides:**
+
+-   Setup, authentication, and profile issues
+-   Asset and file operation problems
+-   Database and tag management issues
+-   Network, SSL, and proxy configuration
+-   Debug mode, performance, and recovery procedures
+
+**Additional Resources:**
+
+-   Installation methods and setup details
+-   Authentication system documentation
+-   Development and contribution guidelines
+
 ## Architecture Overview
 
 ![VAMS Configuration Architecture](./diagrams/Commercial-GovCloud-VAMS_Architecture.png)

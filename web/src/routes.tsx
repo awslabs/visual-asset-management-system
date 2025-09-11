@@ -285,6 +285,8 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                         navigationOpen={navigationOpen}
                         onNavigationChange={({ detail }) => setNavigationOpen(detail.open)}
                         toolsHide={true}
+                        maxContentWidth={Number.MAX_SAFE_INTEGER}
+                        contentType="default"
                     />
                 }
             />

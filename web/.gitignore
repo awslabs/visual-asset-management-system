@@ -6,7 +6,11 @@
 .pnp.js
 
 /customInstalls/potree/source
+#/customInstalls/online3dviewer/source
 /public/potree_libs
+/public/cesium
+/public/online3dviewer
+/src/visualizerPlugin/viewers/Online3dViewerPlugin/source
 
 # testing
 /coverage

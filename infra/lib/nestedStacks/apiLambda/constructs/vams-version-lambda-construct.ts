@@ -10,7 +10,6 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as cdk from "aws-cdk-lib";
 import { LAMBDA_NODE_RUNTIME } from "../../../../config/config";
 import { Construct } from "constructs";
-import { IHttpRouteAuthorizer } from "aws-cdk-lib/aws-apigatewayv2";
 import { Service } from "../../../helper/service-helper";
 import * as Config from "../../../../config/config";
 import { VAMS_VERSION } from "../../../../config/config";
@@ -32,6 +31,11 @@ export interface VamsVersionLambdaConstructProps extends cdk.StackProps {
      * The ApiGatewayV2 HttpApi to create route from
      */
     api: apigatewayv2.HttpApi;
+
+    /**
+     * Custom authorizer function for ignored paths
+     */
+    customAuthorizerFunction: lambda.Function;
 }
 
 /**
@@ -50,7 +54,7 @@ export class VamsVersionLambdaConstruct extends Construct {
             handler: "index.handler",
             code: lambda.Code.fromInline(
                 this.getJavascriptInlineFunction({
-                    version: VAMS_VERSION || "0.0",
+                    version: VAMS_VERSION || "0.0.0",
                 })
             ),
             timeout: cdk.Duration.seconds(15),
@@ -65,30 +69,29 @@ export class VamsVersionLambdaConstruct extends Construct {
             lambdaFn
         );
 
-        // add route to the api gateway
+        // Determine cache TTL based on IP restrictions
+        const hasIpRestrictions =
+            props.config.app.authProvider.authorizerOptions?.allowedIpRanges?.length > 0;
+        const cacheTtlSeconds = hasIpRestrictions ? 900 : 900;
+
+        // Create custom authorizer for ignored path with routeKey identity source
+        const routeKeyAuthorizer = new apigwAuthorizers.HttpLambdaAuthorizer(
+            "VamsVersionAuthorizer",
+            props.customAuthorizerFunction,
+            {
+                authorizerName: "VamsVersionCustomAuthorizer",
+                resultsCacheTtl: cdk.Duration.seconds(cacheTtlSeconds),
+                identitySource: ["$context.identity.sourceIp"],
+                responseTypes: [apigwAuthorizers.HttpLambdaResponseType.SIMPLE],
+            }
+        );
+
+        // add route to the api gateway with custom authorizer
         props.api.addRoutes({
             path: "/api/version",
             methods: [apigatewayv2.HttpMethod.GET],
             integration: lambdaFnIntegration,
-            authorizer: this.createNoOpAuthorizer(),
-        });
-    }
-
-    private createNoOpAuthorizer(): IHttpRouteAuthorizer {
-        const authorizerFn = new cdk.aws_lambda.Function(this, "AuthorizerLambdaVamsVersion", {
-            runtime: LAMBDA_NODE_RUNTIME,
-            handler: "index.handler",
-            code: lambda.Code.fromInline(this.getAuthorizerLambdaCode()),
-            timeout: cdk.Duration.seconds(15),
-        });
-
-        authorizerFn.grantInvoke(Service("APIGATEWAY").Principal);
-
-        return new apigwAuthorizers.HttpLambdaAuthorizer("authorizerVamsVersion", authorizerFn, {
-            authorizerName: "VamsVersionAuthorizer",
-            resultsCacheTtl: cdk.Duration.seconds(3600),
-            identitySource: ["$context.routeKey"],
-            responseTypes: [apigwAuthorizers.HttpLambdaResponseType.SIMPLE],
+            authorizer: routeKeyAuthorizer,
         });
     }
 
@@ -105,16 +108,6 @@ export class VamsVersionLambdaConstruct extends Construct {
                     body: JSON.stringify(${resp}),
                 };
             };
-        `;
-    }
-
-    private getAuthorizerLambdaCode(): string {
-        return `
-            exports.handler = async function(event, context) {
-                return {
-                    isAuthorized: true
-                }
-            }
         `;
     }
 }

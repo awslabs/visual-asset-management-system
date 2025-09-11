@@ -568,7 +568,6 @@ def lambda_handler(
     global claims_and_roles
     aos_disabled = os.environ.get('AOS_DISABLED')
 
-    logger.info("Received event: " + json.dumps(event, indent=2))
     logger.info(event)
 
     try:

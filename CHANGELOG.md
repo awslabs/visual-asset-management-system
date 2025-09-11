@@ -2,7 +2,41 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
-## [2.2.0] (2025-09-11)
+## [2.3.0] (2025-10-31)
+
+This version includes significant enhancements to VAMS to include a new CLI tool
+
+### ⚠ BREAKING CHANGES
+
+All APIGateway authorizers were swapped for custom lambda authorizers to provide more flexibility in implementing additional functionality. This may cause issues with your organization so please review with your security teams.
+
+Additionally authorizer changes may require forced cache resets on API gateways if new authorizations are not follwoing new rules set. (https://docs.aws.amazon.com/cli/latest/reference/apigatewayv2/reset-authorizers-cache.html)
+
+### Features
+
+-   **CLI** VAMS now has a CLI tool that can be used to automate VAMS operations. It includes operations so far for authentication, database, asset, assetLinks, assetLinkMetadata, metadata, metadataSchema, tags, TagTypes, search, featureSwitch, and files. More operations to match API functionality to come in future releases such as more admin functionalities of VAMS.
+-   **UI** The website viewer system has been rewritten to support a plugin based dynamically loaded viewing system which allows for much easier capability to add new viewers and adds more functionality. Documentation can be found at: `web\src\visualizerPlugin\README.md`
+    -   Support for multiple viewers per file types which is now controlled with a drop-down as part of the viewer
+    -   Support to define which viewers are for multiple files or single files
+    -   Support for custom parameters as part of viewer plugin configuration which allows for token configuration for paid/ISV integrations
+    -   Support for custom code, UI, and dependency management for each viewer. Also supports lazy loading of plugins when needed for a viewer.
+    -   Viewer is now shown both on the View File page and as a modal pop-up from the file manager for easier quick access
+    -   Added a PDF viewer for `.pdf` extension
+    -   Added a text viewer for `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `ipynb`, and `.ini` extensions
+    -   Added the CesiumJS viewer for `.json` tileset files which can load subsequent other files referenced in the asset (even if not selected for viewing directly). This is an initial/basic CesiumJS viewer implementation with default options as part of this release. Requires `allowUnsafeEvalFeatures` CDK `config.json` configuration flag to be turned on (off by default).
+    -   3D Online viewer now has additional UI added to support basic extra functionality
+-   **UI** Added a draggable splitter in ViewAsset page between the file manager tree view and details panel
+-   Added a new API endpoint for asset file streaming (similar to asset preview auxiliary files) at `GET /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`
+-   Added .clineRules for CLINE AI workflows for AI-assisted development for VAMS backend API development, CDK development, and CLI development
+-   All HTTP APIGateway authorizers were swapped for custom lambda authorizers.
+    -   New Lambda Layer specifically with libraries for the lambda authorizers
+    -   New support for CDK configured IP range restrictions for API Gateway calls that are managed in the authorizer
+
+### Bug Fixes
+
+-   **UI** Scrolling issues on browsers with MacOS should now hopefulyl be fixed. This was due to an issue with Potree libraries being loaded globally before.
+
+## [2.2.0] (2025-09-31)
 
 This version includes significant enhancements to VAMS infrastructure, a complete overhaul of asset management APIs/Backend/UI, addition of supporting external IDP authentication, and various bug fixes. Key improvements include more flexible naming conventions, separation of assets and files, enhanced file management capabilities, new asset versioning, new use-case pipelines, global workflows/pipelines, and improved upload/download functionality.
 

@@ -23,13 +23,19 @@ import { Construct } from "constructs";
 import { NestedStack } from "aws-cdk-lib";
 import { Service } from "../../helper/service-helper";
 import { authResources } from "../auth/authBuilder-nestedStack";
-import { generateContentSecurityPolicy } from "../../helper/security";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
+import { buildApiGatewayAuthorizerHttpFunction } from "../../lambdaBuilder/authFunctions";
+import { LayerVersion } from "aws-cdk-lib/aws-lambda";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
 
 export interface ApiGatewayV2AmplifyNestedStackProps extends cdk.StackProps {
     config: Config.Config;
     authResources: authResources;
     storageResources: storageResources;
+    lambdaCommonBaseLayer: LayerVersion;
+    lambdaAuthorizerLayer: LayerVersion;
+    vpc: ec2.IVpc;
+    subnets: ec2.ISubnet[];
 }
 
 /**
@@ -61,34 +67,43 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
 
         props = { ...defaultProps, ...props };
 
-        let apiGatewayAuthorizer = undefined;
+        // Create custom authorizer Lambda function
+        const customAuthorizerFunction = buildApiGatewayAuthorizerHttpFunction(
+            this,
+            props.lambdaAuthorizerLayer,
+            props.config,
+            props.vpc,
+            props.subnets
+        );
 
-        //Setup Gateway Authorizer
+        // Update environment variables with actual Cognito values if using Cognito
         if (props.config.app.authProvider.useCognito.enabled) {
-            // init cognito authorizer
-            apiGatewayAuthorizer = new apigwAuthorizers.HttpUserPoolAuthorizer(
-                "DefaultCognitoAuthorizer",
-                props.authResources.cognito.userPool,
-                {
-                    userPoolClients: [props.authResources.cognito.webClientUserPool],
-                    identitySource: ["$request.header.Authorization"],
-                }
+            customAuthorizerFunction.addEnvironment(
+                "USER_POOL_ID",
+                props.authResources.cognito.userPoolId
             );
-        } else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
-            //init external OATH IDP JWT authorizer
-
-            apiGatewayAuthorizer = new apigwAuthorizers.HttpJwtAuthorizer(
-                "DefaultJwtAuthorizer",
-                props.config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl,
-                {
-                    jwtAudience: [
-                        props.config.app.authProvider.useExternalOAuthIdp
-                            .lambdaAuthorizorJWTAudience,
-                    ],
-                    identitySource: ["$request.header.Authorization"],
-                }
+            customAuthorizerFunction.addEnvironment(
+                "APP_CLIENT_ID",
+                props.authResources.cognito.webClientId
             );
         }
+
+        // Determine cache TTL based on IP restrictions
+        const hasIpRestrictions =
+            props.config.app.authProvider.authorizerOptions?.allowedIpRanges?.length > 0;
+        const cacheTtlSeconds = hasIpRestrictions ? 30 : 30;
+
+        // Setup custom Lambda authorizer with payload format version 2.0
+        const apiGatewayAuthorizer = new apigwAuthorizers.HttpLambdaAuthorizer(
+            "CustomHttpAuthorizer",
+            customAuthorizerFunction,
+            {
+                authorizerName: "VamsCustomAuthorizer",
+                resultsCacheTtl: cdk.Duration.seconds(cacheTtlSeconds),
+                identitySource: ["$request.header.Authorization"],
+                responseTypes: [apigwAuthorizers.HttpLambdaResponseType.SIMPLE],
+            }
+        );
 
         const accessLogs = new logs.LogGroup(this, "VAMS-API-AccessLogs", {
             logGroupName:
@@ -185,6 +200,7 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
             apiUrl: `https://${this.apiEndpoint}/`,
             authResources: props.authResources,
             region: props.config.env.region,
+            customAuthorizerFunction: customAuthorizerFunction,
         };
 
         if (props.config.app.authProvider.useCognito.useSaml) {
@@ -207,6 +223,7 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
         const vamsVersionProps: VamsVersionLambdaConstructProps = {
             ...props,
             api: api,
+            customAuthorizerFunction: customAuthorizerFunction,
         };
 
         const vamsVersionFn = new VamsVersionLambdaConstruct(

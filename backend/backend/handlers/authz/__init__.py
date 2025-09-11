@@ -46,7 +46,7 @@ casbin_user_policy_map = {} if CASBIN_NO_DICTIONARY_LOCKING else locked_dict.Loc
 #
 casbin_user_enforcer_map = {} if CASBIN_NO_DICTIONARY_LOCKING else locked_dict.LockedDict()
 
-logger = safeLogger(service="AuthzInit")
+logger = safeLogger()
 
 deserializer = TypeDeserializer()
 _dynamodb_client = boto3.client("dynamodb")

@@ -28,6 +28,7 @@ import {
 import {
     buildAssetService,
     buildStreamAuxiliaryPreviewAssetFunction,
+    buildStreamAssetFunction,
     buildDownloadAssetFunction,
     buildAssetFiles,
     buildIngestAssetFunction,
@@ -782,6 +783,20 @@ export function apiBuilder(
     );
     attachFunctionToApi(scope, streamAuxiliaryPreviewAssetFunction, {
         routePath: "/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}",
+        method: apigateway.HttpMethod.GET,
+        api: api,
+    });
+
+    const streamAssetFunction = buildStreamAssetFunction(
+        scope,
+        lambdaCommonBaseLayer,
+        storageResources,
+        config,
+        vpc,
+        subnets
+    );
+    attachFunctionToApi(scope, streamAssetFunction, {
+        routePath: "/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}",
         method: apigateway.HttpMethod.GET,
         api: api,
     });

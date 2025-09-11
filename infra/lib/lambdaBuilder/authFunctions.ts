@@ -21,6 +21,7 @@ import {
     kmsKeyPolicyStatementGenerator,
 } from "../helper/security";
 import { authResources } from "../nestedStacks/auth/authBuilder-nestedStack";
+import { CUSTOM_AUTHORIZER_IGNORED_PATHS } from "../../config/config";
 
 interface AuthFunctions {
     authConstraintsService: lambda.Function;
@@ -195,4 +196,137 @@ export function buildRoutesService(
     globalLambdaEnvironmentsAndPermissions(routesFunc, config);
 
     return routesFunc;
+}
+
+export function buildApiGatewayAuthorizerHttpFunction(
+    scope: Construct,
+    lambdaAuthorizerLayer: LayerVersion,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "apiGatewayAuthorizerHttp";
+
+    // Determine auth mode based on configuration
+    const authMode = config.app.authProvider.useCognito.enabled
+        ? "cognito"
+        : config.app.authProvider.useExternalOAuthIdp.enabled
+        ? "external"
+        : "cognito";
+
+    // Build environment variables
+    const environment: { [key: string]: string } = {
+        AUTH_MODE: authMode,
+        ALLOWED_IP_RANGES: JSON.stringify(
+            config.app.authProvider.authorizerOptions.allowedIpRanges || []
+        ),
+        IGNORED_PATHS: JSON.stringify(CUSTOM_AUTHORIZER_IGNORED_PATHS),
+    };
+
+    // Add Cognito-specific environment variables
+    if (config.app.authProvider.useCognito.enabled) {
+        environment.USER_POOL_ID = "${cognito_user_pool_id}"; // Will be replaced in nested stack
+        environment.APP_CLIENT_ID = "${cognito_app_client_id}"; // Will be replaced in nested stack
+        environment.COGNITO_BASE_URL = `https://${Service("COGNITO_IDP").Endpoint}`;
+    }
+
+    // Add External IDP-specific environment variables
+    if (config.app.authProvider.useExternalOAuthIdp.enabled) {
+        environment.JWT_ISSUER_URL =
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl;
+        environment.JWT_AUDIENCE =
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience;
+    }
+
+    const authorizerFunc = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.auth.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaAuthorizerLayer],
+        timeout: Duration.minutes(1),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: environment,
+    });
+
+    // Grant API Gateway invoke permissions
+    authorizerFunc.grantInvoke(Service("APIGATEWAY").Principal);
+
+    // Add global permissions
+    globalLambdaEnvironmentsAndPermissions(authorizerFunc, config);
+
+    return authorizerFunc;
+}
+
+export function buildApiGatewayAuthorizerWebsocketFunction(
+    scope: Construct,
+    lambdaAuthorizerLayer: LayerVersion,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "apiGatewayAuthorizerWebsocket";
+
+    // Determine auth mode based on configuration
+    const authMode = config.app.authProvider.useCognito.enabled
+        ? "cognito"
+        : config.app.authProvider.useExternalOAuthIdp.enabled
+        ? "external"
+        : "cognito";
+
+    // Build environment variables
+    const environment: { [key: string]: string } = {
+        AUTH_MODE: authMode,
+        ALLOWED_IP_RANGES: JSON.stringify(
+            config.app.authProvider.authorizerOptions.allowedIpRanges || []
+        ),
+        IGNORED_PATHS: JSON.stringify(CUSTOM_AUTHORIZER_IGNORED_PATHS),
+    };
+
+    // Add Cognito-specific environment variables
+    if (config.app.authProvider.useCognito.enabled) {
+        environment.USER_POOL_ID = "${cognito_user_pool_id}"; // Will be replaced in nested stack
+        environment.APP_CLIENT_ID = "${cognito_app_client_id}"; // Will be replaced in nested stack
+    }
+
+    // Add External IDP-specific environment variables
+    if (config.app.authProvider.useExternalOAuthIdp.enabled) {
+        environment.JWT_ISSUER_URL =
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl;
+        environment.JWT_AUDIENCE =
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience;
+    }
+
+    const authorizerFunc = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.auth.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaAuthorizerLayer],
+        timeout: Duration.minutes(1),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: environment,
+    });
+
+    // Grant API Gateway invoke permissions
+    authorizerFunc.grantInvoke(Service("APIGATEWAY").Principal);
+
+    // Add global permissions
+    globalLambdaEnvironmentsAndPermissions(authorizerFunc, config);
+
+    return authorizerFunc;
 }

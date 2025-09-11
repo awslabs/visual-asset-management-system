@@ -49,6 +49,7 @@ Federated authentication with SAML is available with additional configuration. S
 | cdk deployment            | infra            |
 | api and backend           | backend          |
 | use-case pipeline backend | backendPipelines |
+| command line interface    | tools/VamsCLI    |
 
 ## Install
 
@@ -268,6 +269,149 @@ The default logic is for external OAUTH IDP is to just set the MFA enabled flag 
 
 NOTE: Be mindful of the logic used as this can have great performance impacts for VAMS. Try to use caches in this method or reduce the amount of external API calls as this method is called very frequently during VAMS API authorization checks.
 
+### Custom API Gateway Authorizer
+
+VAMS uses a custom Lambda authorizer system for all API Gateway endpoints that provides unified authentication for both Cognito and External OAuth IDP configurations, along with optional IP range restrictions and comprehensive JWT claims context.
+
+#### Authorizer Features
+
+The custom authorizer provides the following capabilities:
+
+1. **Unified Authentication**: Supports both Cognito and External OAuth IDP JWT token verification
+2. **Hybrid JWT Libraries**: Uses python-jose for Cognito (AWS best practices) and PyJWT for External IDP
+3. **IP Range Restrictions**: Optional IP-based access control using configurable IP range pairs
+4. **Path-Based Authorization**: Specific authorizers for ignored paths with `$context.routeKey` identity source
+5. **Payload Format Version 2.0**: Simple boolean `{"isAuthorized": true/false}` responses
+6. **Comprehensive JWT Claims Context**: All JWT claims passed to downstream Lambda functions
+7. **Token Caching**: Implements public key caching for improved performance
+8. **Dedicated Lambda Layer**: Isolated dependencies for security and performance
+
+#### Configuration
+
+The custom authorizer is configured through the `authProvider.authorizerOptions` section in the configuration:
+
+```json
+{
+    "authProvider": {
+        "authorizerOptions": {
+            "allowedIpRanges": [
+                ["192.168.1.1", "192.168.1.255"],
+                ["10.0.0.1", "10.0.0.255"]
+            ]
+        }
+    }
+}
+```
+
+**Configuration Options:**
+
+-   `allowedIpRanges`: Array of IP range pairs `[["min_ip", "max_ip"], ...]`
+    -   Optional: Leave empty array `[]` to allow all IPs
+    -   Each range is defined as a pair of minimum and maximum IP addresses
+    -   Supports multiple ranges for complex network configurations
+    -   IP validation performed before JWT verification for performance optimization
+
+#### Implementation Architecture
+
+The custom authorizer implementation consists of:
+
+-   **HTTP Authorizer**: `/backend/backend/handlers/auth/apiGatewayAuthorizerHttp.py`
+-   **WebSocket Authorizer**: `/backend/backend/handlers/auth/apiGatewayAuthorizerWebsocket.py`
+-   **CDK Lambda Builders**: `/infra/lib/lambdaBuilder/authFunctions.ts`
+-   **Dedicated Lambda Layer**: `/backend/lambdaLayers/authorizer/` with specialized dependencies
+-   **Configuration Constants**: `/infra/config/config.ts` with `CUSTOM_AUTHORIZER_IGNORED_PATHS`
+
+#### Lambda Layer Dependencies
+
+The authorizer Lambda layer includes:
+
+```
+# Cognito JWT verification
+python-jose[cryptography]==3.3.0
+# External IDP JWT verification
+PyJWT[crypto]==2.10.1
+cryptography==45.0.6
+requests==2.32.5
+aws-lambda-powertools==3.19.0
+```
+
+#### JWT Claims Context Integration
+
+The authorizer passes **all JWT claims** to downstream Lambda functions through the API Gateway context. Claims are accessible via:
+
+```python
+    #Handle both claims from APIGateway standard authorizer format, lambda authorizers, or lambda cross-calls
+    if 'jwt' in lambdaRequestEvent['requestContext']['authorizer'] and 'claims' in lambdaRequestEvent['requestContext']['authorizer']['jwt']:
+        claims = lambdaRequestEvent['requestContext']['authorizer']['jwt']['claims']
+    elif 'lambda' in lambdaRequestEvent['requestContext']['authorizer']:
+        claims = lambdaRequestEvent['requestContext']['authorizer']['lambda']
+    elif 'lambdaCrossCall' in lambdaRequestEvent: #currently this case wouldn't apply for now due to check above
+        claims = lambdaRequestEvent['lambdaCrossCall']
+    else:
+        claims = {}
+```
+
+**Supported Claims Processing:**
+
+-   **Cognito Claims**: `sub`, `cognito:username`, `email`, `token_use`, `aud`, `iss`, `exp`
+-   **External IDP Claims**: `sub`, `preferred_username`, `email`, `upn`, `username`
+-   **VAMS Custom Claims**: `vams:tokens`, `vams:roles`, `vams:externalAttributes`
+-   **Standard JWT Claims**: All standard JWT fields are preserved and passed through
+
+#### Authorizer Types and Configuration
+
+**Default API Routes:**
+
+-   **Identity Source**: `$request.header.Authorization`
+-   **Cache TTL**: 15 seconds
+-   **Response Type**: `SIMPLE` (payload format version 2.0)
+
+**Ignored Paths** (`/api/amplify-config`, `/api/version`):
+
+-   **Identity Source**: `$context.routeKey`
+-   **Cache TTL**: 3600 seconds (1 hour)
+-   **Response Type**: `SIMPLE` (payload format version 2.0)
+-   **Behavior**: Bypasses JWT verification, allows immediate access
+
+#### Customization
+
+Organizations can customize the authorizer behavior by modifying:
+
+1. **IP Validation Logic**: Modify `is_ip_authorized()` function for custom IP validation
+2. **Path Handling**: Update ignored paths in `/infra/config/config.ts` constant `CUSTOM_AUTHORIZER_IGNORED_PATHS`
+3. **JWT Verification**:
+    - Cognito: Modify `verify_cognito_jwt()` using python-jose library
+    - External IDP: Modify `verify_external_jwt()` using PyJWT library
+4. **Claims Processing**: Extend context generation to include additional custom claims
+5. **Error Handling**: Customize error responses and logging behavior
+
+#### Security Considerations
+
+-   **Performance Optimized**: IP validation performed before JWT verification
+-   **Public Key Caching**: 1-hour TTL to reduce external API calls and improve performance
+-   **Comprehensive Error Logging**: Detailed logging without exposing sensitive information
+-   **Token Support**: Supports both ID and Access tokens for Cognito authentication
+-   **Full JWT Validation**: Validates signature, expiration, audience, and issuer claims
+-   **Dedicated Layer**: Security isolation with minimal dependencies
+-   **Hybrid Verification**: Uses AWS-recommended libraries for each identity provider type
+
+#### Troubleshooting
+
+**Common Issues:**
+
+-   **Missing Claims**: Ensure JWT tokens include required claims for VAMS operation
+-   **IP Restrictions**: Check `allowedIpRanges` configuration if requests are being denied
+-   **Cache Issues**: Authorizer responses are cached; consider cache TTL settings
+-   **Token Format**: Ensure tokens follow proper Bearer token format in Authorization header
+-   **WebSocket Tokens**: For WebSocket connections, tokens can be passed via query parameters or headers
+
+**Debugging:**
+
+-   Check CloudWatch logs for detailed authorizer execution information
+-   Verify environment variables are properly set in Lambda functions
+-   Confirm JWKS endpoints are accessible from Lambda execution environment
+-   Validate JWT token structure and claims using online JWT decoders
+
 ### Local Docker Builds - Custom Build Settings
 
 If you are needing to add custom settings to your local docker builds, such as adding custom SSL CA certificates to get through HTTPS proxies, modify the following docker build files:
@@ -291,6 +435,103 @@ RUN pip config set global.cert /var/task/Combined.crt
 ```
 
 4. You may need to add additional environment variables to allow using the ceritificate to be used for for `apk install` or `apt-get` system actions.
+
+### CSP Configuration
+
+VAMS supports configurable Content Security Policy (CSP) settings to allow organizations to add their specific external API endpoints and resources without modifying core code. This is particularly useful when integrating with external SaaS APIs or third-party services.
+
+#### Configuration File Location
+
+The CSP configuration is stored in `/infra/config/csp/cspAdditionalConfig.json`. This file allows you to specify additional CSP sources for different categories.
+
+#### Configuration Structure
+
+The configuration file supports the following CSP categories:
+
+```json
+{
+    "connectSrc": ["https://api.example.com", "https://external-service.com"],
+    "scriptSrc": ["https://cdn.example.com"],
+    "imgSrc": ["https://images.example.com"],
+    "mediaSrc": ["https://media.example.com"],
+    "fontSrc": ["https://fonts.example.com"],
+    "styleSrc": ["https://styles.example.com"]
+}
+```
+
+#### CSP Categories Explained
+
+-   **`connectSrc`**: Controls which URLs the application can connect to via XMLHttpRequest, WebSocket, EventSource, etc. Use this for external APIs and services.
+-   **`scriptSrc`**: Controls which scripts can be executed. Use this for external JavaScript libraries or CDNs.
+-   **`imgSrc`**: Controls which image sources can be loaded. Use this for external image services or CDNs.
+-   **`mediaSrc`**: Controls which media sources (audio/video) can be loaded.
+-   **`fontSrc`**: Controls which font sources can be loaded. Use this for external font services like Google Fonts.
+-   **`styleSrc`**: Controls which stylesheets can be loaded. Use this for external CSS libraries or CDNs.
+
+#### Common Use Cases
+
+**External API Integration**
+
+```json
+{
+    "connectSrc": [
+        "https://api.mapbox.com",
+        "https://api.openweathermap.org",
+        "https://api.stripe.com"
+    ]
+}
+```
+
+**CDN Resources**
+
+```json
+{
+    "scriptSrc": ["https://cdn.jsdelivr.net", "https://unpkg.com"],
+    "styleSrc": ["https://cdn.jsdelivr.net", "https://fonts.googleapis.com"],
+    "fontSrc": ["https://fonts.gstatic.com"]
+}
+```
+
+**Image and Media Services**
+
+```json
+{
+    "imgSrc": ["https://images.unsplash.com", "https://cdn.example.com"],
+    "mediaSrc": ["https://media.example.com"]
+}
+```
+
+#### Error Handling and Validation
+
+The CSP configuration system includes robust error handling:
+
+-   **Missing File**: If the configuration file doesn't exist, VAMS will use default CSP settings without failing.
+-   **Invalid JSON**: Malformed JSON will be logged as a warning, and default CSP settings will be used.
+-   **Empty Categories**: Empty arrays are ignored, and only default CSP sources are used for those categories.
+-   **Invalid Entries**: Non-string entries or empty strings are filtered out with appropriate warnings.
+
+#### Security Considerations
+
+-   Only add trusted domains to your CSP configuration
+-   Avoid using wildcards (`*`) as they can compromise security
+-   Regularly review and audit your CSP configuration
+-   Test your configuration in a development environment before deploying to production
+-   Monitor browser console for CSP violations to identify missing or incorrect entries
+
+#### Troubleshooting
+
+**CSP Violations in Browser Console**
+If you see CSP violation errors in the browser console, you may need to add the blocked domain to the appropriate CSP category.
+
+**Build Failures**
+The CSP configuration system is designed to never cause build failures. If you experience build issues, check the CDK deployment logs for CSP-related warnings.
+
+**Configuration Not Taking Effect**
+
+-   Ensure the JSON syntax is valid
+-   Verify the file is located at `/infra/config/csp/cspAdditionalConfig.json`
+-   Check CDK deployment logs for CSP configuration loading messages
+-   Redeploy the CDK stack after making configuration changes
 
 ### Web Development
 
@@ -859,9 +1100,55 @@ Once the solution is deployed, you will have to put in the below details as Glob
 
 ![Postman Variables](https://github.com/awslabs/visual-asset-management-system/blob/main/Postman_Test_Variables.png)
 
+# VamsCLI Development
+
+VamsCLI is a comprehensive command-line interface for VAMS located in the `tools/VamsCLI` directory. For developers interested in contributing to or extending the CLI tool, comprehensive development documentation is available within the CLI tool itself.
+
+## Developer Resources
+
+For detailed VamsCLI development information, see the documentation in the CLI tool directory:
+
+**Development Resources:**
+
+-   **[Development Guide](./tools/VamsCLI/docs/DEVELOPMENT.md)** - Complete development setup, architecture, and contribution guidelines
+-   **[Installation Guide](./tools/VamsCLI/docs/INSTALLATION.md)** - Installation methods and requirements
+-   **[Authentication Guide](./tools/VamsCLI/docs/AUTHENTICATION.md)** - Authentication system details
+
+The CLI tool includes comprehensive developer documentation covering architecture, testing strategies, development patterns, and extension guidelines for organizations wanting to customize or extend the CLI functionality.
+
 # Updating and Testing Frontend
 
 Within the web folder You can do `npm run start` to start a local frontend application.
+
+## Adding New File Visualizers
+
+VAMS uses a modular plugin system for file viewers that allows easy addition of new visualizers without modifying core code. The system supports various file types including 3D models, point clouds, images, videos, audio, HTML documents, and data visualizations.
+
+For complete documentation on adding new file visualizers, see the **[Visualizer Plugin System Documentation](./web/src/visualizerPlugin/README.md)**.
+
+### Quick Start - Adding a New Viewer
+
+Adding a new file viewer requires only 3 simple steps:
+
+1. **Create Component**: Create your React component in `web/src/visualizerPlugin/viewers/MyViewerPlugin/MyViewerComponent.tsx`
+2. **Update Manifest**: Add your component to the constants in `web/src/visualizerPlugin/viewers/manifest.ts`
+3. **Add Configuration**: Add your viewer configuration to `web/src/visualizerPlugin/config/viewerConfig.json`
+
+No core code modifications are required - the system automatically discovers and loads your viewer based on the configuration.
+
+### Supported File Types
+
+The current plugin system includes viewers for:
+
+-   **3D Models**: `.obj`, `.gltf`, `.glb`, `.stl`, `.fbx`, `.dae`, etc. (Online3dViewerPlugin)
+-   **Point Clouds**: `.e57`, `.las`, `.laz`, `.ply` (PotreeViewerPlugin)
+-   **Images**: `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif` (ImageViewerPlugin)
+-   **Videos**: `.mp4`, `.webm`, `.mov`, `.avi`, etc. (VideoViewerPlugin)
+-   **Audio**: `.mp3`, `.wav`, `.ogg`, `.aac`, etc. (AudioViewerPlugin)
+-   **HTML**: `.html` (HTMLViewerPlugin)
+-   **Data**: `.rds`, `.fcs`, `.csv` (ThreeDimensionalPlotterPlugin, ColumnarViewerPlugin)
+
+For detailed information on the architecture, configuration options, and step-by-step instructions, see the **[Visualizer Plugin System Documentation](./web/src/visualizerPlugin/README.md)**.
 
 # Preview Files
 

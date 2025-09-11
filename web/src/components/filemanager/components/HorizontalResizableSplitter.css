@@ -1,0 +1,105 @@
+.horizontal-resizable-splitter-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    position: relative;
+    overflow: visible;
+}
+
+.horizontal-resizable-top-panel {
+    flex-shrink: 0;
+    overflow: auto;
+    border-bottom: 1px solid #eaeded;
+    position: relative;
+}
+
+.horizontal-resizable-bottom-panel {
+    flex: 1;
+    overflow: visible;
+    min-height: 0; /* Important for flex child to allow scrolling */
+}
+
+.horizontal-resizable-splitter {
+    height: 6px;
+    background-color: transparent;
+    cursor: row-resize;
+    position: relative;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.2s ease;
+    z-index: 10;
+}
+
+.horizontal-resizable-splitter:hover {
+    background-color: #e9ecef;
+}
+
+.horizontal-resizable-splitter.dragging {
+    background-color: #007bff;
+}
+
+.horizontal-splitter-handle {
+    height: 2px;
+    width: 40px;
+    background-color: #dee2e6;
+    border-radius: 1px;
+    transition: background-color 0.2s ease;
+}
+
+.horizontal-resizable-splitter:hover .horizontal-splitter-handle {
+    background-color: #6c757d;
+}
+
+.horizontal-resizable-splitter.dragging .horizontal-splitter-handle {
+    background-color: #ffffff;
+}
+
+/* Prevent text selection during drag */
+.horizontal-resizable-splitter-container * {
+    user-select: none;
+}
+
+/* Override user-select for content areas when not dragging */
+.horizontal-resizable-top-panel *,
+.horizontal-resizable-bottom-panel * {
+    user-select: text;
+}
+
+/* Disable text selection during drag */
+body.dragging * {
+    user-select: none !important;
+}
+
+/* Ensure proper scrolling behavior */
+.horizontal-resizable-top-panel::-webkit-scrollbar,
+.horizontal-resizable-bottom-panel::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.horizontal-resizable-top-panel::-webkit-scrollbar-track,
+.horizontal-resizable-bottom-panel::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+}
+
+.horizontal-resizable-top-panel::-webkit-scrollbar-thumb,
+.horizontal-resizable-bottom-panel::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 4px;
+}
+
+.horizontal-resizable-top-panel::-webkit-scrollbar-thumb:hover,
+.horizontal-resizable-bottom-panel::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
+}
+
+/* Firefox scrollbar styling */
+.horizontal-resizable-top-panel,
+.horizontal-resizable-bottom-panel {
+    scrollbar-width: thin;
+    scrollbar-color: #c1c1c1 #f1f1f1;
+}
