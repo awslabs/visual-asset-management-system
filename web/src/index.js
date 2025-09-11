@@ -7,23 +7,22 @@
  * Establishes global css, fetches server-side resource,
  * configures amplify and initialized react app.
  */
-import React, { Suspense } from "react";
+import React, { Suspense, useEffect } from "react";
 import ReactDOM from "react-dom";
 import "./styles/index.scss";
 import reportWebVitals from "./reportWebVitals";
-// import ConfigLoader from "./ConfigLoader";
-import VAMSAuth from "./FedAuth/VAMSAuth";
+import Auth from "./FedAuth/Auth";
 
 window.LOG_LEVEL = "INFO";
 
 const App = React.lazy(() => import("./App"));
 ReactDOM.render(
     <React.StrictMode>
-        <VAMSAuth>
+        <Auth>
             <Suspense fallback={<div />}>
                 <App />
             </Suspense>
-        </VAMSAuth>
+        </Auth>
     </React.StrictMode>,
     document.getElementById("root")
 );

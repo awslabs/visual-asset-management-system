@@ -9,7 +9,7 @@ import DatabaseSelector from "./DatabaseSelector";
 import Synonyms from "../../synonyms";
 
 export default function DatabaseSelectorWithModal(props) {
-    const { open, setOpen, onSelectorChange } = props;
+    const { open, setOpen, onSelectorChange, showGlobal } = props;
 
     const handleClose = () => {
         setOpen(false);
@@ -23,7 +23,7 @@ export default function DatabaseSelectorWithModal(props) {
             size="medium"
             header={`Select ${Synonyms.Database}`}
         >
-            <DatabaseSelector onChange={onSelectorChange} />
+            <DatabaseSelector onChange={onSelectorChange} showGlobal={showGlobal} />
         </Modal>
     );
 }

@@ -1,0 +1,82 @@
+.folder-tree-view {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid #d5dbdb;
+    border-radius: 4px;
+    background-color: #ffffff;
+}
+
+.folder-tree-item {
+    user-select: none;
+}
+
+.folder-tree-item-content {
+    display: flex;
+    align-items: center;
+    padding: 4px 8px;
+    cursor: pointer;
+    min-height: 32px;
+    transition: background-color 0.15s ease;
+}
+
+.folder-tree-item-content:hover {
+    background-color: #f2f3f3;
+}
+
+.folder-tree-item-content.selected {
+    background-color: #0972d3;
+    color: #ffffff;
+}
+
+.folder-tree-item-content.selected:hover {
+    background-color: #0962c7;
+}
+
+.folder-tree-item-caret {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    margin-right: 4px;
+    cursor: pointer;
+}
+
+.folder-tree-item-spacer {
+    width: 16px;
+    height: 16px;
+    margin-right: 4px;
+}
+
+.folder-tree-item-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    margin-right: 8px;
+}
+
+.folder-tree-item-name {
+    flex: 1;
+    font-size: 14px;
+    line-height: 1.4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.folder-tree-item-children {
+    border-left: 1px solid #e9ebed;
+    margin-left: 8px;
+}
+
+/* Empty state */
+.folder-tree-view:empty::after {
+    content: "No folders available";
+    display: block;
+    padding: 16px;
+    text-align: center;
+    color: #687078;
+    font-style: italic;
+}

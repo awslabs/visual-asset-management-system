@@ -13,7 +13,10 @@ import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as kms from "aws-cdk-lib/aws-kms";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
-import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../helper/security";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
+} from "../helper/security";
 
 export function buildCreateDatabaseLambdaFunction(
     scope: Construct,
@@ -41,16 +44,22 @@ export function buildCreateDatabaseLambdaFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(createDatabaseFunction);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(createDatabaseFunction);
     storageResources.dynamo.userRolesStorageTable.grantReadData(createDatabaseFunction);
+    storageResources.dynamo.rolesStorageTable.grantReadData(createDatabaseFunction);
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(createDatabaseFunction);
     kmsKeyLambdaPermissionAddToResourcePolicy(createDatabaseFunction, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(createDatabaseFunction, config);
     return createDatabaseFunction;
 }
 
@@ -80,22 +89,28 @@ export function buildDatabaseService(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
             WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(databaseService);
     storageResources.dynamo.databaseStorageTable.grantReadWriteData(databaseService);
     storageResources.dynamo.workflowStorageTable.grantReadData(databaseService);
     storageResources.dynamo.pipelineStorageTable.grantReadData(databaseService);
     storageResources.dynamo.assetStorageTable.grantReadData(databaseService);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(databaseService);
     storageResources.dynamo.userRolesStorageTable.grantReadData(databaseService);
+    storageResources.dynamo.rolesStorageTable.grantReadData(databaseService);
     kmsKeyLambdaPermissionAddToResourcePolicy(databaseService, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(databaseService, config);
 
     return databaseService;
 }

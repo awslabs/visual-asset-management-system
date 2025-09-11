@@ -25,9 +25,32 @@ sns_client = boto3.client('sns')
 
 main_rest_response = STANDARD_JSON_RESPONSE
 
+# Hard-coded allowed values for subscription fields
+ALLOWED_EVENT_NAMES = [
+    'Asset Version Change'
+]
+
+ALLOWED_ENTITY_NAMES = [
+    'Asset'
+]
+
+def validate_subscription_fields(body):
+    """Validate subscription fields against allowed values"""
+    
+    # Validate eventName
+    if body['eventName'] not in ALLOWED_EVENT_NAMES:
+        raise ValueError(f"Invalid eventName. Allowed values: {', '.join(ALLOWED_EVENT_NAMES)}")
+    
+    # Validate entityName
+    if body['entityName'] not in ALLOWED_ENTITY_NAMES:
+        raise ValueError(f"Invalid entityName. Allowed values: {', '.join(ALLOWED_ENTITY_NAMES)}")
+    
+    return True
+
 try:
     subscription_table_name = os.environ["SUBSCRIPTIONS_STORAGE_TABLE_NAME"]
     asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    user_table_name = os.environ["USER_STORAGE_TABLE_NAME"]
 except:
     logger.exception("Failed loading environment variables")
     main_rest_response['body'] = json.dumps(
@@ -79,11 +102,11 @@ def get_subscriptions(query_params):
         }
 
         # Add Casbin Enforcer to check if the user has access to GET subscription of specific Assets
-        asset_object = get_asset_object_from_id(entity_id)
+        asset_object = get_asset_object_from_id(None, entity_id)
         asset_object.update({"object__type": "asset"})
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", asset_object, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(asset_object, "GET"):
                 output_objects.append(output_obj)
                 if entity_name == "Asset":
                     unique_asset_entity_ids.add(entity_id)
@@ -113,8 +136,8 @@ def get_subscriptions(query_params):
     return response
 
 
-def create_sns_topic(asset_id):
-    topic_response = sns_client.create_topic(Name=f'AssetTopic-{asset_id}')
+def create_sns_topic(asset_id, database_id):
+    topic_response = sns_client.create_topic(Name=f'AssetTopic{database_id}-{asset_id}')
     return topic_response['TopicArn']
 
 
@@ -161,30 +184,32 @@ def delete_sns_subscriptions(asset_id, subscribers, delete_sns=False):
         logger.error(f"No topic found for asset {asset_id}")
         return
 
-    resp = sns_client.list_subscriptions_by_topic(TopicArn=asset_obj.get("snsTopic"))
-    subscription_arns = [subscription['SubscriptionArn'] for subscription in resp['Subscriptions'] if subscription['Endpoint'] in subscribers]
-
-    for subscription_arn in subscription_arns:
-        if subscription_arn != "PendingConfirmation":
-            sns_client.unsubscribe(SubscriptionArn=subscription_arn)
-
     if delete_sns:
         sns_client.delete_topic(TopicArn=asset_obj.get("snsTopic"))
         asset_table.update_item(
             Key={'databaseId': asset_obj["databaseId"], 'assetId': asset_id},
             UpdateExpression=f"REMOVE snsTopic"
         )
+    else:
+        resp = sns_client.list_subscriptions_by_topic(TopicArn=asset_obj.get("snsTopic"))
+        subscription_arns = [subscription['SubscriptionArn'] for subscription in resp['Subscriptions'] if subscription['Endpoint'] in subscribers]
+
+        for subscription_arn in subscription_arns:
+            if subscription_arn != "PendingConfirmation":
+                sns_client.unsubscribe(SubscriptionArn=subscription_arn)
+
+    return
 
 
-def create_sns_subscriptions(asset_id, subscribers):
+def create_sns_subscriptions(asset_id, emails):
     asset_obj = get_asset(asset_id)
     asset_sns_topic = asset_obj.get("snsTopic")
 
     if not asset_sns_topic:
-        asset_sns_topic = create_sns_topic(asset_id)
+        asset_sns_topic = create_sns_topic(asset_id, asset_obj["databaseId"])
         add_sns_topic_in_asset(asset_id, asset_obj["databaseId"], asset_sns_topic)
 
-    for subscriber in subscribers:
+    for subscriber in emails:
         sns_client.subscribe(
             TopicArn=asset_sns_topic,
             Protocol='email',
@@ -203,10 +228,62 @@ def get_subscription_obj(event_name, entity_name, entity_id):
     return resp.get('Item')
 
 
+def get_userProfile_Email(userId):
+
+    #Try to get user email information
+    user_table = dynamodb.Table(user_table_name)
+    response = user_table.get_item(
+        Key={
+            'userId': userId
+        }
+    )
+
+    #Lookup user profile email and use that.
+    #If not available or blank, set to userID and validate it's in email format
+    email = None
+    if 'Item' in response:
+        email = response['Item'].get('email','')
+
+    if not email or email == '':
+        (valid, message) = validate({
+            'userIdEmail': {
+                'value': userId,
+                'validator': 'EMAIL'
+            }
+        })
+
+        if not valid:
+            email = "INVALID_FORMAT"
+        else: 
+            email = userId
+
+    return email
+
+
 def create_subscription(body):
     response = STANDARD_JSON_RESPONSE
     subscription_table = dynamodb.Table(subscription_table_name)
+    
+    # Validate subscription fields against allowed values
+    try:
+        validate_subscription_fields(body)
+    except ValueError as e:
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": str(e)})
+        return response
+    
     items = get_subscription_obj(body["eventName"], body["entityName"], body["entityId"])
+
+    #Lookup users email
+    emails = []
+    for subscriber in body["subscribers"]:
+        email = get_userProfile_Email(subscriber)
+        if email == "INVALID_FORMAT":
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": f"Subscriber {subscriber} does not have a valid email to use."})
+            return response
+        else:
+            emails.append(email)
 
     if not items:
         subscription_table.put_item(
@@ -219,17 +296,17 @@ def create_subscription(body):
 
         if body["entityName"] == "Asset":
             logger.info("creating subscription")
-            create_sns_subscriptions(body["entityId"], body["subscribers"])
+            create_sns_subscriptions(body["entityId"], emails)
 
     else:
         existing_subscribers = [item["S"] for item in items["subscribers"]['L']]
         if any(new_subscriber in existing_subscribers for new_subscriber in body["subscribers"]):
             response['statusCode'] = 400
-            response['body'] = json.dumps({"message": f'Subscription already exists for eventName-{body["eventName"]} for {body["entityName"]} - {body["entityId"]} for some of the subscribers.'})
+            response['body'] = json.dumps({"message": "Subscription already exists for some of the specified subscribers."})
             return response
         else:
             if body["entityName"] == "Asset":
-                create_sns_subscriptions(body["entityId"], body["subscribers"])
+                create_sns_subscriptions(body["entityId"], emails)
 
             subscription_table.update_item(
                 Key={
@@ -250,6 +327,15 @@ def create_subscription(body):
 def update_subscription(body):
     response = STANDARD_JSON_RESPONSE
     subscription_table = dynamodb.Table(subscription_table_name)
+    
+    # Validate subscription fields against allowed values
+    try:
+        validate_subscription_fields(body)
+    except ValueError as e:
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": str(e)})
+        return response
+    
     items = get_subscription_obj(body["eventName"], body["entityName"], body["entityId"])
 
     if not items:
@@ -261,6 +347,26 @@ def update_subscription(body):
     new_subscribers = body["subscribers"]
     deleted_subscribers = set(existing_subscribers) - set(new_subscribers)
     added_subscribers = set(new_subscribers) - set(existing_subscribers)
+
+    #Lookup users email
+    emailsAdded = []
+    emailsDeleted = []
+    for subscriber in added_subscribers:
+        email = get_userProfile_Email(subscriber)
+        if email == "INVALID_FORMAT":
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": f"Subscriber {subscriber} does not have a valid email to use."})
+            return response
+        else:
+            emailsAdded.append(email)
+    for subscriber in deleted_subscribers:
+        email = get_userProfile_Email(subscriber)
+        if email == "INVALID_FORMAT":
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": f"Subscriber {subscriber} does not have a valid email to use."})
+            return response
+        else:
+            emailsDeleted.append(email)
 
     subscription_table.update_item(
         Key={
@@ -274,8 +380,8 @@ def update_subscription(body):
     )
 
     if body["entityName"] == "Asset":
-        create_sns_subscriptions(body["entityId"], list(added_subscribers))
-        delete_sns_subscriptions(body["entityId"], list(deleted_subscribers), delete_sns=False)
+        create_sns_subscriptions(body["entityId"], list(emailsAdded))
+        delete_sns_subscriptions(body["entityId"], list(emailsDeleted), delete_sns=False)
 
     response['statusCode'] = 200
     response['body'] = json.dumps({"message": "success"})
@@ -296,14 +402,15 @@ def delete_subscription(body):
     except ClientError as e:
         if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
             response['statusCode'] = 400
-            response['body'] = json.dumps({"message": f'Subscription not found for Event: {body["eventName"]}, Entity: {body["entityName"]}, EntityId: {body["entityId"]}'})
+            response['body'] = json.dumps({"message": "Subscription not found for the specified event and entity"})
         else:
             response['statusCode'] = 500
             response['body'] = json.dumps({"message": "An unexpected error occurred while executing the request"})
         return response
 
+
     if body["entityName"] == "Asset":
-        delete_sns_subscriptions(body["entityId"], body["subscribers"], delete_sns=True)
+        delete_sns_subscriptions(body["entityId"], None, delete_sns=True)
 
     response['statusCode'] = 200
     response['body'] = json.dumps({"message": "success"})
@@ -322,8 +429,8 @@ def lambda_handler(event, context):
         validate_pagination_info(queryParameters)
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
 
@@ -335,6 +442,14 @@ def lambda_handler(event, context):
         #Handle GET request
         if httpMethod == 'GET':
             return get_subscriptions(queryParameters)
+        
+        # Parse request body
+        if not event.get('body'):
+            message = 'Request body is required'
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            logger.error(response)
+            return response
 
         #Expect body from this point forward and non-GET requests
         if isinstance(event['body'], str):
@@ -361,7 +476,7 @@ def lambda_handler(event, context):
             },
             'subscribers': {
                 'value': event['body']['subscribers'],
-                'validator': 'EMAIL_ARRAY'
+                'validator': 'USERID_ARRAY'
             }
         })
 
@@ -372,13 +487,13 @@ def lambda_handler(event, context):
 
         if event['body']["entityName"] == "Asset":
             allowed = False
-            asset_object = get_asset_object_from_id(event['body']["entityId"])
+            asset_object = get_asset_object_from_id(None, event['body']["entityId"])
             asset_object.update({"object__type": "asset"})
 
-            for user_name in claims_and_roles["tokens"]:
+            if len(claims_and_roles["tokens"]) > 0:
                 #This is a POST on asset as we are technically only modifying the asset for subscriptions (even a delete subscription)
-                casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", asset_object, "POST"):
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if casbin_enforcer.enforce(asset_object, "POST"):
                     allowed = True
 
             if allowed and httpMethod == 'POST':
@@ -400,4 +515,3 @@ def lambda_handler(event, context):
         response['statusCode'] = 500
         response['body'] = json.dumps({"message": "Internal Server Error"})
         return response
-

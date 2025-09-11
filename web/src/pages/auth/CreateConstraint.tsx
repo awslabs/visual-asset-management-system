@@ -54,18 +54,18 @@ interface CreateConstraintProps {
     initState: any;
 }
 
-// when a string is all lower case, return null, otherwise return the string "All lower case letters only"
+// when a string matches regex
 function validateNameLowercase(name: string) {
     if (name === undefined) return null;
-    return name.match(/^[a-z0-9_-]+$/) !== null
+    return name.match(/^[-_a-zA-Z0-9]{3,63}$/) !== null
         ? null
-        : "All lower case letters only. No special characters except - and _";
+        : "No special characters except - and _";
 }
 
-// when a string is between 4 and 64 characters, return null, otherwise return the string "Between 4 and 64 characters"
+// when a string is between 3 and 64 characters, return null, otherwise return the string "Between 4 and 64 characters"
 function validateNameLength(name: string) {
     if (name === undefined) return null;
-    return name.length >= 4 && name.length <= 64 ? null : "Between 4 and 64 characters";
+    return name.length >= 3 && name.length <= 64 ? null : "Between 3 and 64 characters";
 }
 
 // chain together the above three functions, when they return null, then return null

@@ -48,7 +48,7 @@ UNALLOWED_MIME_LIST = [
     "application/x-ms-dos-executable",
     "application/x-ini",
     "application/x-inf",
-    "application/x-sql"
+    "application/x-sql",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/x-ms-shortcut",
     "application/x-bat-script",
@@ -111,6 +111,7 @@ STANDARD_JSON_RESPONSE = {
     'statusCode': 200,
     'body': '',
     'headers': {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store',
     }
 }

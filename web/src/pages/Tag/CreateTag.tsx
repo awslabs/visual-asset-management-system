@@ -29,18 +29,18 @@ interface CreateTagProps {
     initState: any;
 }
 
-// when a string is all lower case, return null, otherwise return the string "All lower case letters only"
+// when a string is doesn't fit the regex
 function validateNameLowercase(name: string) {
     if (name === undefined) return undefined;
-    return name.match(/^[a-z0-9_-]+$/) !== null
+    return name.match(/^[-_a-zA-Z0-9]{3,63}$/) !== null
         ? null
-        : "All lower case letters only. No special characters except '-' and '_'";
+        : "No special characters except '-' and '_'";
 }
 
-// when a string is between 4 and 64 characters, return null, otherwise return the string "Between 4 and 64 characters"
+// when a string is between 3 and 64 characters, return null, otherwise return the string "Between 4 and 64 characters"
 function validateNameLength(name: string) {
     if (name === undefined) return undefined;
-    return name.length >= 4 && name.length <= 64 ? null : "Name to be between 4 and 64 characters";
+    return name.length >= 3 && name.length <= 64 ? null : "Name to be between 4 and 64 characters";
 }
 
 // chain together the above three functions, when they return null, then return null
@@ -62,7 +62,14 @@ function validateTagType(selectedOption: string | undefined): string | null {
     return selectedOption === undefined ? "Please select a Tag Type" : null;
 }
 
-export default function CraeteTag({
+function removeStringFromEnd(str: string | undefined, strToRemove: string) {
+    if (str?.endsWith(strToRemove)) {
+        return str.slice(0, -strToRemove.length);
+    }
+    return str;
+}
+
+export default function CreateTag({
     open,
     setOpen,
     setReload,
@@ -83,7 +90,7 @@ export default function CraeteTag({
     const tagBody = {
         tagName: formState.tagName,
         description: formState.description,
-        tagTypeName: formState.tagTypeName,
+        tagTypeName: removeStringFromEnd(formState.tagTypeName, " [R]"), // Remove the " [R]" from the end of the tagTypeName we are getting from tagService.py on the backend to pass validation when updating
     };
     const handleModalClose = () => {
         setShowModal(false);

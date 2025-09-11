@@ -2,18 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import logging
 import boto3
-import numpy
-import math
-import csv
-import pathlib
 import os
 import threading
 import os
 import trimesh
-from pathlib import Path
-from urllib.parse import urlparse
 from common.logger import safeLogger
 from botocore.exceptions import ClientError
 from boto3.s3.transfer import TransferConfig
@@ -69,9 +62,18 @@ def convert_input_output(input_path, output_path, output_filetype):
 
     supported_formats = ['.stl', '.obj', '.ply', '.gltf', '.glb', '.3mf', '.xaml', '.3dxml', '.dae', '.xyz']
 
+    #Folder check
+    if (input_key.endswith("/")):
+        return {
+            'statusCode': 400,
+            'body': {
+                "message": "Input S3 URI cannot be a folder"
+            }
+        }
+
     # Check input and output formats
     input_s3_asset_file_root, input_s3_asset_extension = os.path.splitext(input_key)
-    if input_s3_asset_extension not in supported_formats:
+    if (not input_s3_asset_extension or input_s3_asset_extension == '' or input_s3_asset_extension not in supported_formats):
         raise ValueError(f"Input format {input_s3_asset_extension} not supported by Trimesh pipeline")
     if output_filetype not in supported_formats:
         raise ValueError(f"Output format {output_filetype} not supported by Trimesh pipeline")
@@ -99,6 +101,22 @@ def convert_input_output(input_path, output_path, output_filetype):
 def lambda_handler(event, context):
 
     logger.info(event)
+    response = {
+        'statusCode': 200,
+        'body': '',
+        'headers': {
+            'Content-Type': 'application/json'
+        }
+    }
+
+    # Parse request body
+    if not event.get('body'):
+        message = 'Request body is required'
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        logger.error(response)
+        return response
+
     if isinstance(event['body'], str):
         data = json.loads(event['body'])
     else:

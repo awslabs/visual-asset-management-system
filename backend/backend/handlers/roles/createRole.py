@@ -3,6 +3,7 @@ import boto3
 import json
 import uuid
 import datetime
+from botocore.exceptions import ClientError
 
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
@@ -17,8 +18,23 @@ logger = safeLogger(service="CreateRole")
 
 main_rest_response = STANDARD_JSON_RESPONSE
 
+# Hard-coded allowed values for role fields
+ALLOWED_SOURCES = [
+    'INTERNAL_SYSTEM'
+]
+
+def validate_role_fields(body):
+    """Validate role fields against allowed values"""
+    
+    # Validate source if provided
+    if 'source' in body and body['source']:
+        if body['source'] not in ALLOWED_SOURCES:
+            raise ValueError(f"Invalid source. Allowed values: {', '.join(ALLOWED_SOURCES)}")
+    
+    return True
+
 try:
-    roles_db_table_name = os.environ["ROLES_STORAGE_TABLE_NAME"]
+    roles_db_table_name = os.environ["ROLES_TABLE_NAME"]
 except:
     logger.exception("Failed loading environment variables")
     main_rest_response['body']['message'] = "Failed Loading Environment Variables"
@@ -27,43 +43,96 @@ except:
 def create_role(body):
     response = STANDARD_JSON_RESPONSE
     role_table = dynamodb.Table(roles_db_table_name)
-    item = {
-        "id": str(uuid.uuid4()),
-        'roleName': body["roleName"],
-        'description': body["description"],
-        'createdOn': str(datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")),
-        'source': body.get("source"),
-        'sourceIdentifier': body.get("sourceIdentifier")
-    }
-    role_table.put_item(Item=item, ConditionExpression='attribute_not_exists(roleName)')
 
-    response['statusCode'] = 200
-    response['body'] = json.dumps({"message": "success"})
-    return response
+    # Validate role fields against allowed values
+    try:
+        validate_role_fields(body)
+    except ValueError as e:
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": str(e)})
+        return response
+
+    try:
+        item = {
+            "id": str(uuid.uuid4()),
+            'roleName': body["roleName"],
+            'description': body["description"],
+            'createdOn': str(datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")),
+            'source': body.get("source"),
+            'sourceIdentifier': body.get("sourceIdentifier"),
+            'mfaRequired': body.get("mfaRequired", False)
+        }
+        role_table.put_item(Item=item, ConditionExpression='attribute_not_exists(roleName)')
+
+        response['statusCode'] = 200
+        response['body'] = json.dumps({"message": "success"})
+        return response
+    except ClientError as e:
+        error_code = e.response['Error']['Code']
+        if error_code == 'ConditionalCheckFailedException':
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": "Role already exists."})
+        elif error_code == 'ValidationException':
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": "Invalid request parameters."})
+        else:
+            logger.exception(f"DynamoDB ClientError: {error_code}")
+            response['statusCode'] = 500
+            response['body'] = json.dumps({"message": "Internal Server Error"})
+        return response
+    except Exception as e:
+        logger.exception(f"Unexpected error in create_role: {e}")
+        response['statusCode'] = 500
+        response['body'] = json.dumps({"message": "Internal Server Error"})
+        return response
 
 
 def update_role(body):
     response = STANDARD_JSON_RESPONSE
     role_table = dynamodb.Table(roles_db_table_name)
+
+    # Validate role fields against allowed values
+    try:
+        validate_role_fields(body)
+    except ValueError as e:
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": str(e)})
+        return response
+
     try:
         role_table.update_item(
             Key={
                 'roleName': body["roleName"]
             },
-            UpdateExpression='SET description = :desc, sourceIdentifier = :sourceIdentifier',
+            UpdateExpression='SET description = :desc, #source = :source, sourceIdentifier = :sourceIdentifier, mfaRequired = :mfaRequired',
+            ExpressionAttributeNames={
+                '#source': 'source'
+            },
             ExpressionAttributeValues={
                 ':desc': body["description"],
-                ':sourceIdentifier': body.get("sourceIdentifier")
+                ':source': body.get("source"),
+                ':sourceIdentifier': body.get("sourceIdentifier"),
+                ':mfaRequired': body.get("mfaRequired", False)
             },
             ConditionExpression='attribute_exists(roleName)'
         )
-    except Exception as e:
-        if e.response['Error']['Code'] == 'ConditionalCheckFailedException' or e.response['Error']['Code'] == 'TransactionCanceledException':
+    except ClientError as e:
+        error_code = e.response['Error']['Code']
+        if error_code == 'ConditionalCheckFailedException':
             response['statusCode'] = 400
-            response['body'] = json.dumps({"message": "RoleName "+ body["roleName"] +" doesn't exists."})
+            response['body'] = json.dumps({"message": "Role doesn't exist."})
+        elif error_code == 'ValidationException':
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": "Invalid request parameters."})
         else:
+            logger.exception(f"DynamoDB ClientError: {error_code}")
             response['statusCode'] = 500
             response['body'] = json.dumps({"message": "Internal Server Error"})
+        return response
+    except Exception as e:
+        logger.exception(f"Unexpected error in update_role: {e}")
+        response['statusCode'] = 500
+        response['body'] = json.dumps({"message": "Internal Server Error"})
         return response
 
     response['statusCode'] = 200
@@ -73,8 +142,23 @@ def update_role(body):
 
 def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
+
+    # Parse request body
+    if not event.get('body'):
+        message = 'Request body is required'
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        logger.error(response)
+        return response
+
     if isinstance(event['body'], str):
-        event['body'] = json.loads(event['body'])
+        try:
+            event['body'] = json.loads(event['body'])
+        except json.JSONDecodeError as e:
+            logger.exception(f"Invalid JSON in request body: {e}")
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": "Invalid JSON in request body"})
+            return response
 
     try:
         if 'roleName' not in event['body'] or 'description' not in event['body']:
@@ -91,6 +175,20 @@ def lambda_handler(event, context):
             'description': {
                 'value': event['body']['description'],
                 'validator': 'STRING_256'
+            },
+            'source': {
+                'value': event['body'].get('source'),
+                'validator': 'STRING_256',
+                'optional': True
+            },
+            'sourceIdentifier': {
+                'value': event['body'].get('sourceIdentifier'),
+                'validator': 'STRING_256',
+                'optional': True
+            },
+            'mfaRequired': {
+                'value': str(event['body'].get("mfaRequired", "False")),
+                'validator': 'BOOL'
             }
         })
 
@@ -110,11 +208,10 @@ def lambda_handler(event, context):
             "object__type": "role",
             "roleName": event['body']['roleName']
         }
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", role_object, httpMethod) and casbin_enforcer.enforceAPI(event):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(role_object, httpMethod) and casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if httpMethod == 'POST' and method_allowed_on_api:
             return create_role(event['body'])

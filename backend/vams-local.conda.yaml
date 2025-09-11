@@ -1,0 +1,21 @@
+# This file is responsible for defining VAMS local development dependencies.
+# * https://build123d.readthedocs.io/en/latest/installation.html#special-notes-on-apple-silicon-installs
+name: vams
+channels:
+  - conda-forge
+  - cadquery
+  - defaults
+dependencies:
+  - python=3.12.0
+  - pip=24.2
+  - pip:
+    - flask==3.0.0
+    - python-oauth2==1.1.1
+    - pyopenssl==24.2.1
+    - requests==2.32.3
+    - python-jwt==4.1.0
+    - PyJWT==2.8.0
+    - Casbin==1.36.3
+    - boto3==1.35.37
+    - aws_lambda_powertools==3.1.0
+    - locked-dict==2023.10.22

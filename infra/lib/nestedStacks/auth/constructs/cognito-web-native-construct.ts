@@ -18,7 +18,10 @@ import { LAMBDA_PYTHON_RUNTIME } from "../../../../config/config";
 import { NagSuppressions } from "cdk-nag";
 import { Service } from "../../../helper/service-helper";
 import * as Config from "../../../../config/config";
-import { handler } from "../../search/constructs/schemaDeploy/provisioned/deployschemaprovisioned";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
+} from "../../../helper/security";
 
 export interface SamlSettings {
     metadata: cognito.UserPoolIdentityProviderSamlMetadata;
@@ -65,21 +68,32 @@ export class CognitoWebNativeConstructStack extends Construct {
                 AUTH_TABLE_NAME: props.storageResources.dynamo.authEntitiesStorageTable.tableName,
                 USER_ROLES_TABLE_NAME:
                     props.storageResources.dynamo.userRolesStorageTable.tableName,
-                ASSET_STORAGE_TABLE_NAME: props.storageResources.dynamo.assetStorageTable.tableName,
-                DATABASE_STORAGE_TABLE_NAME:
-                    props.storageResources.dynamo.databaseStorageTable.tableName,
+                ROLES_TABLE_NAME: props.storageResources.dynamo.rolesStorageTable.tableName,
             },
         });
         props.storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(
             preTokenGeneration
         );
         props.storageResources.dynamo.userRolesStorageTable.grantReadData(preTokenGeneration);
+        props.storageResources.dynamo.rolesStorageTable.grantReadData(preTokenGeneration);
+        kmsKeyLambdaPermissionAddToResourcePolicy(
+            preTokenGeneration,
+            props.storageResources.encryption.kmsKey
+        );
+        globalLambdaEnvironmentsAndPermissions(preTokenGeneration, props.config);
 
         const message =
             "Hello, Thank you for registering with your instance of Visual Asset Management System! Your verification code is:  {####}  ";
         const userPool = new cognito.UserPool(this, "UserPool", {
             selfSignUpEnabled: false,
             autoVerify: { email: true },
+            mfa: cognito.Mfa.OPTIONAL,
+            mfaSecondFactor: {
+                otp: true,
+                sms: true,
+                email: false,
+            },
+            accountRecovery: cognito.AccountRecovery.PHONE_WITHOUT_MFA_AND_EMAIL,
             userVerification: {
                 emailSubject: "Verify your email with Visual Asset Management System!",
                 emailBody: message,
@@ -155,10 +169,10 @@ export class CognitoWebNativeConstructStack extends Construct {
             userPoolClientName: "WebClient",
             refreshTokenValidity: Duration.hours(24), //AppSec Guidelines Recommendation
             accessTokenValidity: cdk.Duration.seconds(
-                props.config.app.authProvider.credTokenTimeoutSeconds
+                props.config.app.authProvider.useCognito.credTokenTimeoutSeconds
             ),
             idTokenValidity: cdk.Duration.seconds(
-                props.config.app.authProvider.credTokenTimeoutSeconds
+                props.config.app.authProvider.useCognito.credTokenTimeoutSeconds
             ),
             supportedIdentityProviders,
             authFlows: {
@@ -229,13 +243,17 @@ export class CognitoWebNativeConstructStack extends Construct {
         );
 
         const cognitoUser = new cognito.CfnUserPoolUser(this, "AdminUser", {
-            username: props.config.app.adminEmailAddress,
+            username: props.config.app.adminUserId,
             userPoolId: userPool.userPoolId,
             desiredDeliveryMediums: ["EMAIL"],
             userAttributes: [
                 {
                     name: "email",
                     value: props.config.app.adminEmailAddress,
+                },
+                {
+                    name: "email_verified",
+                    value: "True",
                 },
             ],
         });
@@ -288,6 +306,18 @@ export class CognitoWebNativeConstructStack extends Construct {
         this.userPoolId = userPool.userPoolId;
         this.identityPoolId = identityPool.ref;
         this.webClientId = userPoolWebClient.userPoolClientId;
+
+        //Nag supressions
+        NagSuppressions.addResourceSuppressions(
+            userPool,
+            [
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason: "Intend to use Cognito SMS Role as-is.",
+                },
+            ],
+            true
+        );
     }
 
     private createAuthenticatedRole(
@@ -310,7 +340,7 @@ export class CognitoWebNativeConstructStack extends Construct {
                 "sts:AssumeRoleWithWebIdentity"
             ),
             maxSessionDuration: cdk.Duration.seconds(
-                props.config.app.authProvider.credTokenTimeoutSeconds
+                props.config.app.authProvider.useCognito.credTokenTimeoutSeconds
             ),
         });
 

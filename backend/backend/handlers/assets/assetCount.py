@@ -12,6 +12,10 @@ dynamodb_client = boto3.client('dynamodb')
 
 
 def update_asset_count(db_database, asset_database, queryParams, databaseId):
+    # Set default values for pagination parameters if not provided
+    max_items = int(queryParams.get('maxItems', 1000))
+    page_size = int(queryParams.get('pageSize', 100))
+    
     table = dynamodb.Table(db_database)
     resp = table.query(
         KeyConditionExpression=Key('databaseId').eq(databaseId),
@@ -30,8 +34,8 @@ def update_asset_count(db_database, asset_database, queryParams, databaseId):
         KeyConditions=condition,
         ScanIndexForward=False,
         PaginationConfig={
-            'MaxItems': int(queryParams['maxItems']),
-            'PageSize': int(queryParams['pageSize']), 
+            'MaxItems': max_items,
+            'PageSize': page_size, 
         #    'StartingToken': queryParams['startingToken']
         }
     ).build_full_result()
@@ -44,8 +48,8 @@ def update_asset_count(db_database, asset_database, queryParams, databaseId):
             KeyConditions=condition,
             ScanIndexForward=False,
             PaginationConfig={
-                'MaxItems': int(queryParams['maxItems']),
-                'PageSize': int(queryParams['pageSize']), 
+                'MaxItems': max_items,
+                'PageSize': page_size, 
                 'StartingToken': nextToken
             }
         ).build_full_result()

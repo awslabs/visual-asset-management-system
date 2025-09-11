@@ -33,7 +33,7 @@ except:
     main_rest_response["body"] = json.dumps({"message": "Failed Loading Environment Variables"})
 
 
-def edit_comment(assetId: str, assetVersionIdAndCommentId: str, event: dict) -> dict:
+def edit_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, event: dict) -> dict:
     """
     Checks comment ownership then edits the comment to reflect the changes
     :param assetId: string containing the assetId of the comment
@@ -54,9 +54,10 @@ def edit_comment(assetId: str, assetVersionIdAndCommentId: str, event: dict) -> 
         logger.info(item)
         logger.info("Validating owner")
 
-        if item["commentOwnerID"] != event["requestContext"]["authorizer"]["jwt"]["claims"]["sub"]:
+
+        if item["commentOwnerID"] != userId:
             response["statusCode"] = 403
-            response["message"] = "Unauthorized"
+            response["message"] = "Unauthorized - only the creator can edit the comment"
             return response
 
         try:
@@ -93,12 +94,21 @@ def lambda_handler(event: dict, context: dict) -> dict:
 
     logger.info(event)
 
+    # Parse request body
+    if not event.get('body'):
+        message = 'Request body is required'
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        logger.error(response)
+        return response
+
     try:
-        if isinstance(event["body"], str):
-            event["body"] = json.loads(event["body"])
-    except Exception as e:
-        response["statusCode"] = 500
-        response["body"] = {"message": "Internal Server Error"}
+        if isinstance(event['body'], str):
+            event['body'] = json.loads(event['body'])
+    except json.JSONDecodeError as e:
+        logger.exception(f"Invalid JSON in request body: {e}")
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": "Invalid JSON in request body"})
         return response
 
     pathParameters = event.get("pathParameters", {})
@@ -130,15 +140,14 @@ def lambda_handler(event: dict, context: dict) -> dict:
         global claims_and_roles
         claims_and_roles = request_to_claims(event)
         method_allowed_on_api = False
-        asset_object = get_asset_object_from_id(pathParameters["assetId"])
+        asset_object = get_asset_object_from_id(None, pathParameters["assetId"])
         asset_object.update({"object__type": "asset"})
 
         # Add Casbin Enforcer to check if the current user has permissions to POST the Comment
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", asset_object, "POST") and casbin_enforcer.enforceAPI(event):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(asset_object, "POST") and casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if method_allowed_on_api:
             logger.info("Trying to get edit comment")
@@ -175,9 +184,12 @@ def lambda_handler(event: dict, context: dict) -> dict:
                 response['body'] = json.dumps({"message": message})
                 response['statusCode'] = 400
                 return response
+            
+            #Get user ID of person making request
+            userId = claims_and_roles.get("tokens", ["system"])[0]
 
             # call the edit_comment function if everything is valid
-            returned = edit_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], event)
+            returned = edit_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], userId, event)
             response["statusCode"] = returned["statusCode"]
             response["body"] = json.dumps({"message": returned["message"]})
             logger.info(response)

@@ -20,7 +20,7 @@ dynamodb_client = boto3.client('dynamodb')
 main_rest_response = STANDARD_JSON_RESPONSE
 
 try:
-    roles_table_name = os.environ["ROLES_STORAGE_TABLE_NAME"]
+    roles_table_name = os.environ["ROLES_TABLE_NAME"]
     user_roles_table_name = os.environ["USER_ROLES_TABLE_NAME"]
 except:
     logger.exception("Failed loading environment variables")
@@ -45,6 +45,15 @@ def get_role(roleName):
     return resp.get('Items', [])
 
 
+def validate_roles_exist_strict(role_names):
+    """Strictly validate that all role names exist"""
+    for role_name in role_names:
+        role_items = get_role(role_name)
+        if not role_items or len(role_items) == 0:
+            raise ValueError(f"Role does not exist in the system")
+    return True
+
+
 def update_user_roles(body):
     response = STANDARD_JSON_RESPONSE
     user_role_table = dynamodb.Table(user_roles_table_name)
@@ -62,7 +71,7 @@ def update_user_roles(body):
             response['statusCode'] = 403
             response['body'] = json.dumps({"message": "Role does not exist in available roles"})
             return response
-        
+
         create_user_role = {
             'userId': body["userId"],
             'roleName': role,
@@ -71,12 +80,11 @@ def update_user_roles(body):
         # Add Casbin Enforcer to check if the current user has permissions to POST the User Role
         allowed = False
         create_user_role.update({"object__type": "userRole"})
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", create_user_role, "POST"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(create_user_role, "POST"):
                 user_roles_to_create.append(create_user_role)
                 allowed = True
-                break
         if not allowed:
             response['statusCode'] = 403
             response['body'] = json.dumps({"message": "Action not allowed"})
@@ -97,12 +105,11 @@ def update_user_roles(body):
         temp_role_object.update(delete_user_role)
 
         temp_role_object.update({"object__type": "userRole"})
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", temp_role_object, "DELETE"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(temp_role_object, "DELETE"):
                 user_roles_to_delete.append(delete_user_role)
                 allowed = True
-                break
         if not allowed:
             response['statusCode'] = 403
             response['body'] = json.dumps({"message": "Action not allowed"})
@@ -131,12 +138,11 @@ def delete_user_roles(body):
         # Add Casbin Enforcer to check if the current user has permissions to DELETE the User Role
         user_role.update({"object__type": "userRole"})
         allowed = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", user_role, "DELETE"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(user_role, "DELETE"):
                 items_to_delete.append(user_role)
                 allowed = True
-                break
         if not allowed:
             response['statusCode'] = 403
             response['body'] = json.dumps({"message": "Action not allowed"})
@@ -173,6 +179,15 @@ def is_any_user_role_already_existing(items, body):
 def create_user_roles(body):
     response = STANDARD_JSON_RESPONSE
     user_role_table = dynamodb.Table(user_roles_table_name)
+    
+    # Validate that all roles exist before proceeding
+    try:
+        validate_roles_exist_strict(body["roleName"])
+    except ValueError as e:
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": str(e)})
+        return response
+    
     itemsUserRoles = get_all_roles_for_user(body["userId"])
     logger.info(itemsUserRoles)
     logger.info(is_any_user_role_already_existing(itemsUserRoles, body))
@@ -180,7 +195,7 @@ def create_user_roles(body):
         response['statusCode'] = 400
         response['body'] = json.dumps({"message": "Role is already existing for this user."})
         return response
-    
+
     items_to_insert = []
     for role in body["roleName"]:
         itemsRole = get_role(role)
@@ -197,12 +212,11 @@ def create_user_roles(body):
         # Add Casbin Enforcer to check if the current user has permissions to POST the User Roles
         user_role.update({"object__type": "userRole"})
         allowed = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", user_role, "POST"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(user_role, "POST"):
                 items_to_insert.append(user_role)
                 allowed = True
-                break
         if not allowed:
             response['statusCode'] = 403
             response['body'] = json.dumps({"message": "Action not allowed"})
@@ -218,8 +232,8 @@ def create_user_roles(body):
 
 
 def get_user_roles(query_params):
-    #Custom pagination logic for user roles which may be very non-performant. 
-    #TODO: Try to fix performance as this works across the whole users in role dataset every time before providing a subset page at the end. 
+    #Custom pagination logic for user roles which may be very non-performant.
+    #TODO: Try to fix performance as this works across the whole users in role dataset every time before providing a subset page at the end.
     response = STANDARD_JSON_RESPONSE
     deserializer = TypeDeserializer()
     paginator = dynamodb_client.get_paginator('scan')
@@ -259,9 +273,9 @@ def get_user_roles(query_params):
         deserialized_document.update({
             "object__type": "userRole"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", deserialized_document, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(deserialized_document, "GET"):
 
                 userIdExists = False
                 for item in grouped_data["Items"]:
@@ -336,9 +350,9 @@ def get_user_roles(query_params):
     #     deserialized_document.update({
     #         "object__type": "userRole"
     #     })
-    #     for user_name in claims_and_roles["tokens"]:
-    #         casbin_enforcer = CasbinEnforcer(user_name)
-    #         if casbin_enforcer.enforce(f"user::{user_name}", deserialized_document, "GET"):
+    #     if len(claims_and_roles["tokens"]) > 0:
+    #         casbin_enforcer = CasbinEnforcer(claims_and_roles)
+    #         if casbin_enforcer.enforce(deserialized_document, "GET"):
 
     #             userIdExists = False
     #             for item in grouped_data["Items"]:
@@ -374,16 +388,29 @@ def lambda_handler(event, context):
         validate_pagination_info(queryParameters)
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
         if http_method == 'GET' and method_allowed_on_api:
             return get_user_roles(queryParameters)
 
+        # Parse request body
+        if not event.get('body'):
+            message = 'Request body is required'
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            logger.error(response)
+            return response
+
         if isinstance(event['body'], str):
-            event['body'] = json.loads(event['body'])
+            try:
+                event['body'] = json.loads(event['body'])
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                response['statusCode'] = 400
+                response['body'] = json.dumps({"message": "Invalid JSON in request body"})
+                return response
 
         if http_method == 'POST' and method_allowed_on_api:
             if 'roleName' not in event['body'] or 'userId' not in event['body']:
@@ -399,7 +426,7 @@ def lambda_handler(event, context):
                 },
                 'userId': {
                     'value': event['body']['userId'],
-                    'validator': 'EMAIL'
+                    'validator': 'USERID'
                 }
             })
             if not valid:
@@ -421,7 +448,7 @@ def lambda_handler(event, context):
                 },
                 'userId': {
                     'value': event['body']['userId'],
-                    'validator': 'EMAIL'
+                    'validator': 'USERID'
                 }
             })
             if not valid:
@@ -439,7 +466,7 @@ def lambda_handler(event, context):
             (valid, message) = validate({
                 'userId': {
                     'value': event['body']['userId'],
-                    'validator': 'EMAIL'
+                    'validator': 'USERID'
                 }
             })
             if not valid:

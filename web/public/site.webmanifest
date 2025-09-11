@@ -1,6 +1,6 @@
 {
-    "name": "",
-    "short_name": "",
+    "name": "VAMS",
+    "short_name": "Visual Asset Management System",
     "icons": [
         {
             "src": "/android-chrome-72x72.png",

@@ -18,6 +18,7 @@ import {
     Multiselect,
     SpaceBetween,
     TextContent,
+    Toggle,
 } from "@cloudscape-design/components";
 import Synonyms from "../../synonyms";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
@@ -31,6 +32,7 @@ import { fetchTags } from "../../services/APIService";
 import ListPage from "../ListPage";
 import { fetchAllAssets, fetchDatabaseAssets } from "../../services/APIService";
 import { AssetListDefinition } from "../../components/list/list-definitions/AssetListDefinition";
+import { fetchAllDatabases } from "../../services/APIService";
 
 export interface SearchPageViewProps {
     state: any;
@@ -38,6 +40,8 @@ export interface SearchPageViewProps {
 }
 
 interface SearchPageProps {}
+
+let databases: any;
 
 const getMinMaxLatLongBounds = (result: any) => {
     let minLat = -90;
@@ -230,55 +234,10 @@ function searchReducer(state: any, action: any) {
                 map: action.map,
             };
 
-        case "set-delete-in-progress":
+        case "toggle-preview-thumbnails":
             return {
                 ...state,
-                disableSelection: true,
-                showDeleteModal: false,
-                notifications: [
-                    {
-                        type: "info",
-                        dismissible: false,
-                        loading: true,
-                        dismissLabel: "Dismiss message",
-                        content: `Deleting ${state.selectedItems.length} ${Synonyms.Assets}`,
-                    },
-                ],
-            };
-
-        case "end-delete-in-progress":
-            return {
-                ...state,
-                disableSelection: false,
-                showDeleteModal: false,
-                notifications: [],
-            };
-
-        case "delete-item-failed":
-            return {
-                ...state,
-                loading: false,
-                error: action.error,
-                notifications: [
-                    {
-                        type: "error",
-                        header: "Failed to Delete",
-                        content: action.payload.response,
-                    },
-                ],
-            };
-
-        case "clicked-initial-delete":
-            return {
-                ...state,
-                disableSelection: true,
-                showDeleteModal: true,
-            };
-        case "clicked-cancel-delete":
-            return {
-                ...state,
-                disableSelection: false,
-                showDeleteModal: false,
+                showPreviewThumbnails: !state.showPreviewThumbnails,
             };
 
         default:
@@ -312,6 +271,7 @@ export const INITIAL_STATE = {
     columnNames: [],
     columnDefinitions: [],
     notifications: [],
+    showPreviewThumbnails: false,
 };
 var tags: any[] = [];
 function SearchPage(props: SearchPageProps) {
@@ -327,6 +287,13 @@ function SearchPage(props: SearchPageProps) {
     );
 
     const { databaseId } = useParams();
+
+    useEffect(() => {
+        fetchAllDatabases().then((res) => {
+            databases = res;
+        });
+    }, []);
+
     const [state, dispatch] = useReducer(searchReducer, { ...INITIAL_STATE, databaseId });
 
     useEffect(() => {
@@ -377,9 +344,7 @@ function SearchPage(props: SearchPageProps) {
                             statusIconAriaLabel="Error"
                             type="error"
                             header={state.error.message}
-                        >
-                            {state.error.stack}
-                        </Alert>
+                        ></Alert>
                     )}
                     {state?.notifications.length > 0 && <Flashbar items={state.notifications} />}
 
@@ -456,6 +421,42 @@ function SearchPage(props: SearchPageProps) {
                                                 placeholder="Asset Type"
                                             />
                                             <Select
+                                                selectedOption={state?.filters?.str_databaseid}
+                                                placeholder="Database"
+                                                options={[
+                                                    { label: "All", value: "all" },
+                                                    //List every database from "databases" variable and then map to result aggregation to display (doc_count) next to each
+                                                    //We do this because opensearch has a max items it will return in a query which may not be everything across aggregated databases
+                                                    //Without this, you wouldn't be able to search on other databases not listed due to trimmed results.
+                                                    ...(databases?.map((b: any) => {
+                                                        var count = 0;
+                                                        //Map through result aggregation to find doc_count for each database
+                                                        state?.result?.aggregations?.str_databaseid?.buckets.map(
+                                                            (c: any) => {
+                                                                if (c.key === b.databaseId) {
+                                                                    count = c.doc_count;
+                                                                }
+                                                            }
+                                                        );
+
+                                                        return {
+                                                            label: `${b.databaseId} (Results: ${count} / Total: ${b.assetCount})`,
+                                                            value: b.databaseId,
+                                                        };
+                                                    }) || []),
+                                                ]}
+                                                onChange={({ detail }) =>
+                                                    changeFilter(
+                                                        "str_databaseid",
+                                                        detail.selectedOption,
+                                                        {
+                                                            state,
+                                                            dispatch,
+                                                        }
+                                                    )
+                                                }
+                                            />
+                                            <Select
                                                 selectedOption={state?.filters?.str_assettype}
                                                 placeholder="File Type"
                                                 options={[
@@ -472,31 +473,6 @@ function SearchPage(props: SearchPageProps) {
                                                 onChange={({ detail }) =>
                                                     changeFilter(
                                                         "str_assettype",
-                                                        detail.selectedOption,
-                                                        {
-                                                            state,
-                                                            dispatch,
-                                                        }
-                                                    )
-                                                }
-                                            />
-                                            <Select
-                                                selectedOption={state?.filters?.str_databaseid}
-                                                placeholder="Database"
-                                                options={[
-                                                    { label: "All", value: "all" },
-                                                    ...(state?.result?.aggregations?.str_databaseid?.buckets.map(
-                                                        (b: any) => {
-                                                            return {
-                                                                label: `${b.key} (${b.doc_count})`,
-                                                                value: b.key,
-                                                            };
-                                                        }
-                                                    ) || []),
-                                                ]}
-                                                onChange={({ detail }) =>
-                                                    changeFilter(
-                                                        "str_databaseid",
                                                         detail.selectedOption,
                                                         {
                                                             state,
@@ -531,6 +507,14 @@ function SearchPage(props: SearchPageProps) {
                                                     )
                                                 }
                                             />
+                                            <Toggle
+                                                onChange={({ detail }) =>
+                                                    dispatch({ type: "toggle-preview-thumbnails" })
+                                                }
+                                                checked={state.showPreviewThumbnails}
+                                            >
+                                                Show Preview Thumbnails
+                                            </Toggle>
                                         </Grid>
                                     </FormField>
                                     <FormField label="Search">

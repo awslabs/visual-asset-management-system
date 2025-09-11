@@ -33,9 +33,8 @@ def check_subscriptions(body):
     entity_name = "Asset"
     subscription_table = dynamodb.Table(subscription_table_name)
     result = subscription_table.query(
-        IndexName='eventName-entityName_entityId-index',
         KeyConditionExpression='#entityNameId = :entityNameId AND #eventName = :eventName',
-        FilterExpression='contains(#subscribers, :emailId)',
+        FilterExpression='contains(#subscribers, :userId)',
         ExpressionAttributeNames={
             '#entityNameId': 'entityName_entityId',
             '#eventName': 'eventName',
@@ -44,7 +43,7 @@ def check_subscriptions(body):
         ExpressionAttributeValues={
             ':entityNameId': f'{entity_name}#{body["assetId"]}',
             ':eventName': event_name,
-            ':emailId': body["userId"],
+            ':userId': body["userId"],
         }
     )
 
@@ -60,6 +59,15 @@ def check_subscriptions(body):
 
 def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
+
+    # Parse request body
+    if not event.get('body'):
+        message = 'Request body is required'
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        logger.error(response)
+        return response
+
     if isinstance(event['body'], str):
         event['body'] = json.loads(event['body'])
 
@@ -75,11 +83,11 @@ def lambda_handler(event, context):
         (valid, message) = validate({
             'userId': {
                 'value': event['body']['userId'],
-                'validator': 'EMAIL'
+                'validator': 'USERID'
             },
             'assetId': {
                 'value': event['body']['assetId'],
-                'validator': 'ID'
+                'validator': 'ASSET_ID'
             }
         })
 
@@ -92,12 +100,12 @@ def lambda_handler(event, context):
         claims_and_roles = request_to_claims(event)
         method_allowed_on_api = False
 
-        asset_object = get_asset_object_from_id(event['body']["assetId"])
+        asset_object = get_asset_object_from_id(None, event['body']["assetId"])
         asset_object.update({"object__type": "asset"})
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if (casbin_enforcer.enforceAPI(event) and
-                    casbin_enforcer.enforce(f"user::{user_name}", asset_object, "GET")):
+                    casbin_enforcer.enforce(asset_object, "GET")):
                 method_allowed_on_api = True
 
         if method_allowed_on_api and httpMethod == 'POST':

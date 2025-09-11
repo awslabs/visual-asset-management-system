@@ -187,7 +187,7 @@ def delete_all_path_contents(bucket_name: str, pathKey: str):
         #         )
 
         # get all other objects in bucket (non-verionsed?) - Final object sweep
-        response = client.list_objects(Bucket=bucket_name, Prefix=pathKey)
+        response = client.list_objects_v2(Bucket=bucket_name, Prefix=pathKey)
         if 'Contents' in response:
             # map object ket from object list for multi object delete request
             object_keys = map_object_keys(response["Contents"])
@@ -217,7 +217,7 @@ def get_all_files_in_path(bucket, path):
         "Items": []
     }
 
-    response = client.list_objects(Bucket=bucket, Prefix=path)
+    response = client.list_objects_v2(Bucket=bucket, Prefix=path)
     if 'Contents' in response:
         # map object from object list
         keys = []

@@ -49,7 +49,7 @@ def create_tag(body):
         )
     else:
         response['statusCode'] = 400
-        response['body'] = json.dumps({"message": "TagTypeName " + str(body["tagTypeName"]) + " doesn't exists."})
+        response['body'] = json.dumps({"message": "Invalid tag type specified."})
         return response
 
     return json.dumps({"message": 'Succeeded'})
@@ -98,8 +98,22 @@ def lambda_handler(event, context):
     global claims_and_roles
     claims_and_roles = request_to_claims(event)
 
+    # Parse request body
+    if not event.get('body'):
+        message = 'Request body is required'
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        logger.error(response)
+        return response
+
     if isinstance(event['body'], str):
-        event['body'] = json.loads(event['body'])
+        try:
+            event['body'] = json.loads(event['body'])
+        except json.JSONDecodeError as e:
+            logger.exception(f"Invalid JSON in request body: {e}")
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": "Invalid JSON in request body"})
+            return response
 
     try:
         if 'tagName' not in event['body'] or 'description' not in event['body'] or 'tagTypeName' not in event['body']:
@@ -134,11 +148,10 @@ def lambda_handler(event, context):
             "tagName": event['body']['tagName']
         }
         # Add Casbin Enforcer to check if the current user has permissions to POST/PUT the Tag
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", tag, httpMethod) and casbin_enforcer.enforceAPI(event):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(tag, httpMethod) and casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if httpMethod == 'POST' and method_allowed_on_api:
             return create_tag(event['body'])
@@ -154,9 +167,7 @@ def lambda_handler(event, context):
         if e.response['Error']['Code'] == 'ConditionalCheckFailedException' or e.response['Error'][
             'Code'] == 'TransactionCanceledException':
             response['statusCode'] = 400
-            response['body'] = json.dumps({"message": "TagName " + str(
-                event['body']['tagName'] + " already exists. or TagTypeName " + str(
-                    event['body']['tagTypeName']) + " don't exists.")})
+            response['body'] = json.dumps({"message": "Tag already exists or invalid tag type specified."})
         else:
             response['statusCode'] = 500
             response['body'] = json.dumps({"message": "Internal Server Error"})

@@ -40,14 +40,23 @@ export const put = async (
         return;
     }
     if (prefix) {
-        return API.put("api", `metadata/${databaseId}/${assetId}?prefix=${prefix}`, {
-            body: {
-                version: "1",
-                metadata: record,
-            },
-        });
+        //If prefix doesn't start with a forward slash, add it
+        if (!prefix.startsWith("/")) {
+            prefix = "/" + prefix;
+        }
+
+        return API.put(
+            "api",
+            `database/${databaseId}/assets/${assetId}/metadata?prefix=${prefix}`,
+            {
+                body: {
+                    version: "1",
+                    metadata: record,
+                },
+            }
+        );
     } else {
-        return API.put("api", `metadata/${databaseId}/${assetId}`, {
+        return API.put("api", `database/${databaseId}/assets/${assetId}/metadata`, {
             body: {
                 version: "1",
                 metadata: record,
@@ -58,9 +67,18 @@ export const put = async (
 
 const get = async (databaseId: string, assetId: string, prefix?: string): Promise<object> => {
     if (prefix) {
-        return API.get("api", `metadata/${databaseId}/${assetId}?prefix=${prefix}`, {});
+        //If prefix doesn't start with a forward slash, add it
+        if (!prefix.startsWith("/")) {
+            prefix = "/" + prefix;
+        }
+
+        return API.get(
+            "api",
+            `database/${databaseId}/assets/${assetId}/metadata?prefix=${prefix}`,
+            {}
+        );
     } else {
-        return API.get("api", `metadata/${databaseId}/${assetId}`, {});
+        return API.get("api", `database/${databaseId}/assets/${assetId}/metadata`, {});
     }
 };
 

@@ -20,6 +20,30 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+    /api/version:
+        get:
+            summary: "Get VAMS version information."
+            description: "Returns the current version of the Visual Asset Management System. This endpoint is unauthenticated and can be used for health checks or version verification."
+            responses:
+                "200":
+                    description: Version information retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    version:
+                                        type: string
+                                        description: "Current VAMS version"
+                                        example: "2.2.0"
+                                required:
+                                    - version
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
     /assets:
             put:
                 summary: "Create or update an asset."
@@ -102,62 +126,56 @@ paths:
                             application/json:
                                 schema:
                                     $ref: '#/components/schemas/error'
-    /assets/uploadAssetWorkflow:
-        post:
-            summary: "Upload asset workflow."
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            $ref: '#/components/schemas/uploadAssetWorkflow'
-            responses:
-                "200":
-                    description: OK
-                "400":
-                    description: Invalid parameters.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
     /asset-links:
         post:
-            summary: "Create or update asset links."
+            summary: "Create a new asset link."
+            description: "Create a new asset link between two assets with relationship type and optional metadata. Supports 'related' and 'parentChild' relationship types with cycle detection."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            $ref: "#/components/schemas/asset_links"
+                            $ref: "#/components/schemas/createAssetLinkRequest"
             responses:
                 "200":
-                    description: OK
+                    description: Asset link created successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/createAssetLinkResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or validation error.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not allowed to create/update asset link.
+                    description: Not authorized to create asset link.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-    /asset-links/{assetId}:
+            security:
+              - DefaultCognitoAuthorizer: []
+    /database/{databaseId}/assets/{assetId}/asset-links:
         get:
-            summary: "Create or update asset links."
+            summary: "Get asset links for a specific asset."
+            description: "Retrieve all asset links (related, parents, children) for a specific asset. Supports optional tree view for hierarchical display of parent-child relationships."
             responses:
                 "200":
-                    description: OK
+                    description: Asset links retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                oneOf:
+                                  - $ref: "#/components/schemas/getAssetLinksResponse"
+                                  - $ref: "#/components/schemas/getAssetLinksTreeViewResponse"
                 "400":
                     description: Invalid parameters.
                     content:
@@ -165,7 +183,17 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not allowed to create/update asset link.
+                    description: Not authorized to view asset links.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -173,23 +201,38 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
               - name: "assetId"
                 in: "path"
                 description: "Unique identifier for asset."
                 required: true
                 schema:
                     $ref: "#/components/schemas/id_regex"
+              - name: "databaseId"
+                in: "path"
+                description: "Database ID for the asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "childTreeView"
+                in: "query"
+                description: "Whether to return children as a tree structure."
+                required: false
+                schema:
+                    type: boolean
+                    default: false
             security:
               - DefaultCognitoAuthorizer: []
-    /asset-links/{relationId}:
-        delete:
-            summary: "Delete asset link."
+    /asset-links/single/{assetLinkId}:
+        get:
+            summary: "Get a single asset link by ID."
+            description: "Retrieve details of a specific asset link by its unique identifier."
             responses:
                 "200":
-                    description: OK
+                    description: Asset link retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/getSingleAssetLinkResponse"
                 "400":
                     description: Invalid parameters.
                     content:
@@ -197,7 +240,111 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not allowed to delete asset link.
+                    description: Not authorized to view this asset link.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset link not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "assetLinkId"
+                in: "path"
+                description: "Unique identifier for asset link."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/uuid_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /asset-links/{assetLinkId}:
+        put:
+            summary: "Update an asset link."
+            description: "Update an existing asset link. Currently only tags can be updated."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/updateAssetLinkRequest"
+            responses:
+                "200":
+                    description: Asset link updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/updateAssetLinkResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to update this asset link.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset link not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "assetLinkId"
+                in: "path"
+                description: "Unique identifier for asset link."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/uuid_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /asset-links/{relationId}:
+        delete:
+            summary: "Delete an asset link."
+            description: "Delete an asset link by its unique identifier. Also removes associated metadata."
+            responses:
+                "200":
+                    description: Asset link deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/deleteAssetLinkResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete asset link.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset link not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -207,10 +354,208 @@ paths:
             parameters:
               - name: "relationId"
                 in: "path"
+                description: "Unique identifier for asset link (name kept for backwards compatability for CDK deployment, actually is assetLinkId)."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/uuid_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /asset-links/{assetLinkId}/metadata:
+        get:
+            summary: "Get metadata for an asset link."
+            description: "Retrieve all metadata associated with a specific asset link."
+            responses:
+                "200":
+                    description: Metadata retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/getAssetLinkMetadataResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to view metadata for this asset link.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset link not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "assetLinkId"
+                in: "path"
                 description: "Unique identifier for asset link."
                 required: true
                 schema:
                     $ref: "#/components/schemas/uuid_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+        post:
+            summary: "Create metadata for an asset link."
+            description: "Add new metadata to a specific asset link."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/createAssetLinkMetadataRequest"
+            responses:
+                "200":
+                    description: Metadata created successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/createAssetLinkMetadataResponse"
+                "400":
+                    description: Invalid parameters or metadata key already exists.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create metadata for this asset link.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset link not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "assetLinkId"
+                in: "path"
+                description: "Unique identifier for asset link."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/uuid_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+    /asset-links/{assetLinkId}/metadata/{metadataKey}:
+        put:
+            summary: "Update metadata for an asset link."
+            description: "Update existing metadata for a specific asset link."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/updateAssetLinkMetadataRequest"
+            responses:
+                "200":
+                    description: Metadata updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/updateAssetLinkMetadataResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to update metadata for this asset link.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset link or metadata key not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "assetLinkId"
+                in: "path"
+                description: "Unique identifier for asset link."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/uuid_regex"
+              - name: "metadataKey"
+                in: "path"
+                description: "Metadata key to update."
+                required: true
+                schema:
+                    type: string
+            security:
+              - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Delete metadata for an asset link."
+            description: "Remove specific metadata from an asset link."
+            responses:
+                "200":
+                    description: Metadata deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/deleteAssetLinkMetadataResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete metadata for this asset link.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset link or metadata key not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "assetLinkId"
+                in: "path"
+                description: "Unique identifier for asset link."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/uuid_regex"
+              - name: "metadataKey"
+                in: "path"
+                description: "Metadata key to delete."
+                required: true
+                schema:
+                    type: string
             security:
               - DefaultCognitoAuthorizer: []
     /auth/constraints:
@@ -360,9 +705,72 @@ paths:
                     $ref: '#/components/schemas/object_name_pattern_regex'
             security:
             -   DefaultCognitoAuthorizer: []
+    /auth/loginProfile/{userId}/:
+        get:
+            summary: "Get loginProfile for the specified user"
+            responses:
+                "200":
+                    description: OK
+                "403":
+                    description: Unauthorized user.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "userId"
+                in: "path"
+                description: "Unique identifier for user."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/userid_regex'
+            security:
+            -   DefaultCognitoAuthorizer: []
+        post:
+            summary: "Update login profile for particular user. Primary API call to trigger updating profiles from JWT or organizational logic. Body contents (optional) may get overriden internally by organizational specific profile. "
+            requestBody:
+                required: false
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/constraint'
+            parameters:
+            - $ref: '#/components/parameters/maxItemsParam'
+            - $ref: '#/components/parameters/pageSizeParam'
+            - $ref: '#/components/parameters/startingTokenParam'            
+            - name: "userId"
+              in: "path"
+              description: "Unique identifier for user."
+              required: true
+              schema:
+                $ref: '#/components/schemas/userid_regex'
+            responses:
+                "200":
+                    description: OK
+                "403":
+                    description: Unauthorized user.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+            -   DefaultCognitoAuthorizer: []
+
     /auth/routes:
         post:
-            summary: "Authorize routes."
+            summary: "Authorized routes."
             requestBody:
                 required: true
                 content:
@@ -386,31 +794,6 @@ paths:
                                 $ref: '#/components/schemas/error'
             security:
             -   DefaultCognitoAuthorizer: []
-    /auth/scopeds3access:
-        post:
-            summary: "Get S3 access."
-            description: "Given an assetId and databaseId, determine if a user has access to mutate s3 objects for that asset."
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            $ref: "#/components/schemas/s3_access"
-            responses:
-                "200":
-                    description: OK
-                "400":
-                    description: Invalid parameters.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
     /check-subscription:
         post:
             summary: "Verify if subscription exists or not."
@@ -637,8 +1020,8 @@ paths:
                     $ref: '#/components/schemas/id_regex'
             security:
               - DefaultCognitoAuthorizer: []
-    /databases:
-        put:
+    /database:
+        post:
             summary: "Create or update a database."
             requestBody:
                 required: true
@@ -689,7 +1072,7 @@ paths:
               - $ref: "#/components/parameters/startingTokenParam"
             security:
               - DefaultCognitoAuthorizer: []
-    /databases/{databaseId}:
+    /database/{databaseId}:
         get:
             summary: "Get a database."
             responses:
@@ -715,6 +1098,34 @@ paths:
               - $ref: "#/components/parameters/maxItemsParam"
               - $ref: "#/components/parameters/pageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
+    /buckets:
+        get:
+            summary: "List all S3 bucket configurations."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/getBucketsResponse"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
         delete:
             summary: "Delete a database."
             responses:
@@ -815,6 +1226,67 @@ paths:
                   required: false
                   schema:
                     type: "boolean"
+        put:
+            summary: "Update an asset's editable fields."
+            description: "Update an asset's editable fields (assetName, description, isDistributable, tags)."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/assetUpdate"
+            responses:
+                "200":
+                    description: Asset updated successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: string
+                                        example: "Asset updated successfully"
+                                    asset:
+                                        $ref: "#/components/schemas/asset"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to update asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+                - name: "databaseId"
+                  in: path
+                  description: "Unique identifier for database."
+                  required: true
+                  schema:
+                    $ref: "#/components/schemas/id_regex"
+                - name: "assetId"
+                  in: path
+                  description: "Unique identifier for asset."
+                  required: true
+                  schema:
+                    $ref: "#/components/schemas/id_regex"
+            security:
+                - DefaultCognitoAuthorizer: []
         delete:
             summary: "Delete an asset."
             responses:
@@ -845,45 +1317,6 @@ paths:
               required: true
               schema:
                 $ref: '#/components/schemas/id_regex'
-    /database/{databaseId}/assets/{assetId}/columns:
-        get:
-            summary: "For CSV assets, get the names of all column headers."
-            responses:
-                "200":
-                    description: OK
-                "404":
-                    description: Database OR Asset not found.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-            parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
-              - name: "assetId"
-                in: "path"
-                description: "Unique identifier for asset."
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-              - name: "databaseId"
-                in: "path"
-                description: "Unique identifier for database."
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-              - name: "list"
-                in: "query"
-                required: true
-                schema:
-                    type: "boolean"
     /database/{databaseId}/assets/{assetId}/download:
         post:
             summary: "Generate presigned url for downloading the given or latest version of an asset"
@@ -956,6 +1389,10 @@ paths:
             responses:
                 "200":
                     description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/listAssetFilesResponse"
                 "403":
                     description: Database OR Asset OR Version not found.
                     content:
@@ -990,12 +1427,36 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
-    /database/{databaseId}/assets/{assetId}/metadata:
+              - name: includeArchived
+                in: query
+                description: Whether to include archived files
+                required: false
+                schema:
+                    type: boolean
+              - name: prefix
+                in: query
+                description: Filter files by prefix
+                required: false
+                schema:
+                    type: string
+    /database/{databaseId}/assets/{assetId}/fileInfo:
         get:
-            summary: "For CSV assets, get certain data within the document based on provided variables."
+            summary: "Get detailed information about a specific file."
             responses:
                 "200":
-                    description: Database OR Asset not found.
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/fileInfoResponse"
+                "403":
+                    description: Not authorized to access this file.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: File not found.
                     content:
                         application/json:
                             schema:
@@ -1006,10 +1467,7 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-        parameters:
-              - $ref: "#/components/parameters/maxItemsParam"
-              - $ref: "#/components/parameters/pageSizeParam"
-              - $ref: "#/components/parameters/startingTokenParam"
+            parameters:
               - name: databaseId
                 in: path
                 description: Database ID
@@ -1022,6 +1480,850 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
+              - name: filePath
+                in: query
+                description: Path to the file relative to the asset root
+                required: true
+                schema:
+                    type: string
+              - name: includeVersions
+                in: query
+                description: Whether to include version history
+                required: false
+                schema:
+                    type: boolean
+            security:
+              - DefaultCognitoAuthorizer: []
+    
+    /database/{databaseId}/assets/{assetId}/moveFile:
+        post:
+            summary: "Move a file within an asset."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/moveFileRequest"
+            responses:
+                "200":
+                    description: File moved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/fileOperationResponse"
+                "400":
+                    description: Invalid parameters or file already exists at destination.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to move files in this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Source file not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
+    
+    /database/{databaseId}/assets/{assetId}/copyFile:
+        post:
+            summary: "Copy a file within an asset or to another asset."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/copyFileRequest"
+            responses:
+                "200":
+                    description: File copied successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/fileOperationResponse"
+                "400":
+                    description: Invalid parameters or file already exists at destination.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to copy files in this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Source file not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
+    
+    /database/{databaseId}/assets/{assetId}/archiveFile:
+        delete:
+            summary: "Archive a file (soft delete)."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/archiveFileRequest"
+            responses:
+                "200":
+                    description: File archived successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/fileOperationResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to archive files in this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: File not found or already archived.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
+    
+    /database/{databaseId}/assets/{assetId}/unarchiveFile:
+        post:
+            summary: "Unarchive a previously archived file."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/unarchiveFileRequest"
+            responses:
+                "200":
+                    description: File unarchived successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/fileOperationResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to unarchive files in this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: File not found or not archived.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
+    
+    /database/{databaseId}/assets/{assetId}/deleteFile:
+        delete:
+            summary: "Permanently delete a file or files under a prefix."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/deleteFileRequest"
+            responses:
+                "200":
+                    description: File(s) deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/fileOperationResponse"
+                "400":
+                    description: Invalid parameters or confirmation required.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete files in this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: File not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
+              
+    /database/{databaseId}/assets/{assetId}/deleteAssetPreview:
+        delete:
+            summary: "Delete the asset preview file."
+            description: "Deletes the asset preview file from the S3 bucket and clears the previewLocation from the asset record in DynamoDB."
+            responses:
+                "200":
+                    description: Asset preview deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/deleteAssetPreviewResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete asset preview.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset preview not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
+              
+    /database/{databaseId}/assets/{assetId}/deleteAuxiliaryPreviewAssetFiles:
+        delete:
+            summary: "Delete auxiliary preview asset files."
+            description: "Deletes auxiliary preview asset files for a specific file path (treated as a prefix). This endpoint is used to clean up temporary auxiliary files that may be created during preview generation."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/deleteAuxiliaryPreviewAssetFilesRequest"
+            responses:
+                "200":
+                    description: Auxiliary preview files deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/deleteAuxiliaryPreviewAssetFilesResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete auxiliary preview files.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: No auxiliary files found under the specified prefix.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
+    
+    /database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}:
+        post:
+            summary: "Revert a file to a previous version."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/revertFileVersionRequest"
+            responses:
+                "200":
+                    description: File reverted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/revertFileVersionResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to revert files in this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: File or version not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: versionId
+                in: path
+                description: Version ID to revert to
+                required: true
+                schema:
+                    type: string
+            security:
+              - DefaultCognitoAuthorizer: []
+    
+    /database/{databaseId}/assets/{assetId}/setPrimaryFile:
+        put:
+            summary: "Set or remove primary type metadata for a file."
+            description: "Set or remove primary type metadata for a file in S3. The primary type can be used to categorize files within an asset (e.g., primary, lod1-lod5, other). Only works on files, not folders."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/setPrimaryFileRequest"
+            responses:
+                "200":
+                    description: Primary type set successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/setPrimaryFileResponse"
+                "400":
+                    description: Invalid parameters or trying to set primary type on folder.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to modify files in this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: File not found or file is archived.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
+    
+    /database/{databaseId}/assets/{assetId}/createVersion:
+        post:
+            summary: "Create a new asset version."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/createAssetVersionRequest"
+            responses:
+                "200":
+                    description: Asset version created successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/assetVersionOperationResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create versions for this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
+    
+    /database/{databaseId}/assets/{assetId}/revertAssetVersion/{assetVersionId}:
+        post:
+            summary: "Revert an asset to a previous version."
+            requestBody:
+                required: false
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/revertAssetVersionRequest"
+            responses:
+                "200":
+                    description: Asset reverted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/assetVersionOperationResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to revert this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset or version not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetVersionId
+                in: path
+                description: Asset version ID to revert to
+                required: true
+                schema:
+                    type: string
+            security:
+              - DefaultCognitoAuthorizer: []
+    
+    /database/{databaseId}/assets/{assetId}/getVersions:
+        get:
+            summary: "Get all versions for an asset."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/assetVersionsListResponse"
+                "403":
+                    description: Not authorized to view versions for this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - $ref: "#/components/parameters/maxItemsParam"
+              - $ref: "#/components/parameters/pageSizeParam"
+              - $ref: "#/components/parameters/startingTokenParam"
+            security:
+              - DefaultCognitoAuthorizer: []
+    
+    /database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}:
+        get:
+            summary: "Get details for a specific asset version."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/assetVersionResponse"
+                "403":
+                    description: Not authorized to view this version.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset or version not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetVersionId
+                in: path
+                description: Asset version ID
+                required: true
+                schema:
+                    type: string
+            security:
+              - DefaultCognitoAuthorizer: []
+    
+    /database/{databaseId}/assets/{assetId}/archiveAsset:
+        delete:
+            summary: "Archive an asset (soft delete)."
+            responses:
+                "200":
+                    description: Asset archived successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: string
+                                        example: "Asset archived successfully"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to archive this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
+    
+    /database/{databaseId}/assets/{assetId}/deleteAsset:
+        delete:
+            summary: "Permanently delete an asset."
+            responses:
+                "200":
+                    description: Asset deleted successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: string
+                                        example: "Asset deleted successfully"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to delete this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: databaseId
+                in: path
+                description: Database ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+              - name: assetId
+                in: path
+                description: Asset ID
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
     /database/{databaseId}/assets/{assetId}/revert:
         post:
             summary: "Revert an asset to a previous version."
@@ -1068,9 +2370,89 @@ paths:
             required: true
             schema:
                 $ref: '#/components/schemas/id_regex'
+                
+    /database/{databaseId}/assets/{assetId}/createFolder:
+        post:
+            summary: "Create a folder in S3 for the specified asset"
+            description: "Creates a folder (zero-byte object with trailing slash) in S3 for the specified asset. The key path must be a folder prefix (ends with a slash) and must contain the base assetlocation key as the start of the path."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            required:
+                                - keyPath
+                            properties:
+                                keyPath:
+                                    type: string
+                                    description: "The key path for the folder to create. Must end with a slash and start with the asset's base key."
+            responses:
+                "200":
+                    description: Folder created successfully.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        type: string
+                                        example: "Folder created successfully"
+                                    keyPath:
+                                        type: string
+                                        example: "asset-id/folder/subfolder/"
+                "400":
+                    description: Invalid parameters or key path.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to create folders for this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+                - name: "databaseId"
+                  in: "path"
+                  description: "Unique identifier for database."
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/id_regex'
+                - name: "assetId"
+                  in: "path"
+                  description: "Unique identifier for asset."
+                  required: true
+                  schema:
+                      $ref: '#/components/schemas/id_regex'
+            security:
+                - DefaultCognitoAuthorizer: []
     /database/{databaseId}/assets/{assetId}/workflows/{workflowId}:
         post:
             summary: "Execute a workflow using an asset as the input source."
+            requestBody:
+                required: false
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                fileKey:
+                                    $ref: "#/components/schemas/asset_path_pattern_regex"
+                                    description: "Optional file key to specify which file to use for workflow execution"
             responses:
                 "200":
                     description: Workflow execution started.
@@ -2420,6 +3802,113 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/asset_path_pattern_regex'
+    /uploads:
+        post:
+            summary: "Initialize a multipart upload for asset files or preview."
+            description: "Initialize a multipart upload for asset files or preview. Returns an uploadId and presigned URLs for uploading file parts."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/initializeUploadRequest"
+            responses:
+                "200":
+                    description: Upload initialized successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/initializeUploadResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to upload to this asset.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "429":
+                    description: Rate limit exceeded. Maximum 5 upload initializations per user per minute.
+                    headers:
+                        Retry-After:
+                            description: "Number of seconds to wait before retrying"
+                            schema:
+                                type: integer
+                                example: 60
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+    
+    /uploads/{uploadId}/complete:
+        post:
+            summary: "Complete a multipart upload."
+            description: "Complete a multipart upload by providing the ETags for all uploaded parts. Files are validated and moved from temporary to final location."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/completeUploadRequest"
+            responses:
+                "200":
+                    description: Upload completed successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/completeUploadResponse"
+                "400":
+                    description: Invalid parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to complete this upload.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Upload not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+                - name: "uploadId"
+                  in: path
+                  description: "Unique identifier for the upload."
+                  required: true
+                  schema:
+                    type: string
+            security:
+                - DefaultCognitoAuthorizer: []
+    
     /workflows:
         put:
             summary: "Create or update a workflow."
@@ -2572,9 +4061,13 @@ components:
                 description:
                     #example: 3d models used in training programs.
                     $ref: "#/components/schemas/string256Param"
+                defaultBucketId:
+                    #example: 550e8400-e29b-41d4-a716-446655440000
+                    $ref: '#/components/schemas/uuid_regex'
             required:
                 - databaseId
                 - description
+                - defaultBucketId
         email_pattern_regex: 
             type: string
             pattern: ^[\w\-\.\+]+@([\w-]+\.)+[\w-]{2,4}$
@@ -2738,25 +4231,9 @@ components:
             required: 
                 - tagTypeName
                 - description
-        uploadAssetWorkflow:
-            type: object
-            properties:
-                databaseId:
-                    $ref: '#/components/schemas/id_regex'
-                assetId:
-                    $ref: '#/components/schemas/id_regex'
-                assetName:
-                    $ref: '#/components/schemas/object_name_pattern_regex'
-                description:
-                    $ref: "#/components/schemas/string256Param"
-                assetPathKey:
-                    $ref: '#/components/schemas/asset_path_pattern_regex'
-            required:
-                - databaseId
-                - assetId
-                - assetName
-                - description
-                - assetPathKey
+        userid_regex:
+            type: string
+            pattern: ^[\w\-\.\+\@]{3,256}$
         userRole:
             type: object
             properties: 
@@ -2796,6 +4273,699 @@ components:
                     type: array
                     items:
                         type: string
+        assetUpdate:
+            type: object
+            properties:
+                assetName:
+                    $ref: '#/components/schemas/object_name_pattern_regex'
+                description:
+                    $ref: "#/components/schemas/string256Param"
+                isDistributable:
+                    type: boolean
+                tags:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/object_name_pattern_regex"
+        
+        initializeUploadRequest:
+            type: object
+            properties:
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                uploadType:
+                    type: string
+                    enum: [assetFile, assetPreview]
+                files:
+                    type: array
+                    maxItems: 1000
+                    items:
+                        $ref: "#/components/schemas/uploadFile"
+                    description: "Array of files to upload. Maximum 1000 files per request. Total parts across all files cannot exceed 5000."
+            required:
+                - assetId
+                - databaseId
+                - uploadType
+                - files
+        
+        uploadFile:
+            type: object
+            properties:
+                relativeKey:
+                    $ref: '#/components/schemas/filename_pattern'
+                file_size:
+                    type: integer
+                    minimum: 0
+                    description: "File size in bytes. Use 0 for zero-byte files."
+                num_parts:
+                    type: integer
+                    minimum: 0
+                    maximum: 10000
+                    description: "Number of parts for multipart upload. Use 0 for zero-byte files. Maximum 10,000 parts per file."
+            required:
+                - relativeKey
+            description: "Either file_size or num_parts must be provided. For zero-byte files, use file_size=0 and num_parts=0."
+        
+        uploadPart:
+            type: object
+            properties:
+                PartNumber:
+                    type: integer
+                    minimum: 1
+                UploadUrl:
+                    type: string
+                    format: uri
+            required:
+                - PartNumber
+                - UploadUrl
+        
+        uploadFileResponse:
+            type: object
+            properties:
+                relativeKey:
+                    $ref: '#/components/schemas/filename_pattern'
+                uploadIdS3:
+                    type: string
+                    description: "Upload ID for S3 multipart upload, or 'zero-byte' for zero-byte files"
+                numParts:
+                    type: integer
+                    minimum: 0
+                    description: "Number of parts for upload. 0 for zero-byte files."
+                partUploadUrls:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/uploadPart"
+                    description: "Presigned URLs for uploading parts. Empty array for zero-byte files."
+            required:
+                - relativeKey
+                - uploadIdS3
+                - numParts
+                - partUploadUrls
+        
+        initializeUploadResponse:
+            type: object
+            properties:
+                uploadId:
+                    type: string
+                files:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/uploadFileResponse"
+                message:
+                    type: string
+            required:
+                - uploadId
+                - files
+                - message
+        
+        uploadPartCompletion:
+            type: object
+            properties:
+                PartNumber:
+                    type: integer
+                    minimum: 1
+                ETag:
+                    type: string
+            required:
+                - PartNumber
+                - ETag
+        
+        uploadFileCompletion:
+            type: object
+            properties:
+                key:
+                    $ref: '#/components/schemas/filename_pattern'
+                uploadIdS3:
+                    type: string
+                parts:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/uploadPartCompletion"
+            required:
+                - key
+                - uploadIdS3
+                - parts
+        
+        completeUploadRequest:
+            type: object
+            properties:
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                uploadType:
+                    type: string
+                    enum: [assetFile, assetPreview]
+                files:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/uploadFileCompletion"
+            required:
+                - assetId
+                - databaseId
+                - uploadType
+                - files
+        
+        fileCompletionResult:
+            type: object
+            properties:
+                key:
+                    $ref: '#/components/schemas/filename_pattern'
+                uploadIdS3:
+                    type: string
+                success:
+                    type: boolean
+                error:
+                    type: string
+            required:
+                - key
+                - uploadIdS3
+                - success
+        
+        completeUploadResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                uploadId:
+                    type: string
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                assetType:
+                    type: string
+                version:
+                    type: string
+                fileResults:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/fileCompletionResult"
+                overallSuccess:
+                    type: boolean
+            required:
+                - message
+                - uploadId
+                - assetId
+                - fileResults
+                - overallSuccess
+        
+        # Asset File Operations Schemas
+        assetFileItem:
+            type: object
+            properties:
+                fileName:
+                    type: string
+                    description: "Name of the file"
+                key:
+                    type: string
+                    description: "Full S3 key of the file"
+                relativePath:
+                    type: string
+                    description: "Path relative to the asset root"
+                isFolder:
+                    type: boolean
+                    description: "Whether this item is a folder"
+                size:
+                    type: integer
+                    description: "Size of the file in bytes"
+                dateCreatedCurrentVersion:
+                    type: string
+                    format: date-time
+                    description: "Date when the current version was created"
+                storageClass:
+                    type: string
+                    description: "S3 storage class"
+                versionId:
+                    type: string
+                    description: "S3 version ID"
+                isArchived:
+                    type: boolean
+                    description: "Whether the file is archived (soft deleted)"
+                currentAssetVersionFileVersionMismatch:
+                    type: boolean
+                    description: "Whether this file's version doesn't match the current asset version"
+                primaryType:
+                    type: string
+                    description: "Primary type metadata for the file (e.g., primary, lod1-lod5, other). Only present for non-folder objects."
+                    nullable: true
+                previewFile:
+                    type: string
+                    description: "Path to the preview file for this file, if any. Empty string if no preview file exists."
+            required:
+                - fileName
+                - key
+                - relativePath
+                - isFolder
+        
+        listAssetFilesRequest:
+            type: object
+            properties:
+                maxItems:
+                    type: integer
+                    description: "Maximum number of items to return"
+                    default: 1000
+                pageSize:
+                    type: integer
+                    description: "Number of items per page"
+                    default: 100
+                startingToken:
+                    type: string
+                    description: "Token for pagination"
+                prefix:
+                    type: string
+                    description: "Filter files by prefix"
+                includeArchived:
+                    type: boolean
+                    description: "Whether to include archived files"
+                    default: false
+        
+        listAssetFilesResponse:
+            type: object
+            properties:
+                items:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetFileItem"
+                nextToken:
+                    type: string
+                    description: "Token for pagination"
+            required:
+                - items
+        
+        fileInfoRequest:
+            type: object
+            properties:
+                filePath:
+                    type: string
+                    description: "Path to the file relative to the asset root"
+                includeVersions:
+                    type: boolean
+                    description: "Whether to include version history"
+                    default: false
+            required:
+                - filePath
+        
+        fileInfoResponse:
+            type: object
+            properties:
+                fileName:
+                    type: string
+                    description: "Name of the file"
+                key:
+                    type: string
+                    description: "Full S3 key of the file"
+                relativePath:
+                    type: string
+                    description: "Path relative to the asset root"
+                isFolder:
+                    type: boolean
+                    description: "Whether this item is a folder"
+                size:
+                    type: integer
+                    description: "Size of the file in bytes"
+                contentType:
+                    type: string
+                    description: "MIME type of the file"
+                lastModified:
+                    type: string
+                    format: date-time
+                    description: "Last modified date"
+                etag:
+                    type: string
+                    description: "ETag of the file"
+                storageClass:
+                    type: string
+                    description: "S3 storage class"
+                isArchived:
+                    type: boolean
+                    description: "Whether the file is archived (soft deleted)"
+                primaryType:
+                    type: string
+                    description: "Primary type metadata for the file (e.g., primary, lod1-lod5, other). Only present for non-folder objects."
+                    nullable: true
+                previewFile:
+                    type: string
+                    description: "Path to the preview file for this file, if any. Empty string if no preview file exists."
+                versions:
+                    type: array
+                    items:
+                        type: object
+                        properties:
+                            versionId:
+                                type: string
+                                description: "S3 version ID"
+                            lastModified:
+                                type: string
+                                format: date-time
+                                description: "Last modified date of this version"
+                            size:
+                                type: integer
+                                description: "Size of this version in bytes"
+                            isLatest:
+                                type: boolean
+                                description: "Whether this is the latest version"
+                            storageClass:
+                                type: string
+                                description: "S3 storage class of this version"
+                            etag:
+                                type: string
+                                description: "ETag of this version"
+                            isArchived:
+                                type: boolean
+                                description: "Whether this version is archived"
+                            currentAssetVersionFileVersionMismatch:
+                                type: boolean
+                                description: "Whether this version doesn't match the current asset version"
+            required:
+                - fileName
+                - key
+                - relativePath
+                - isFolder
+        
+        moveFileRequest:
+            type: object
+            properties:
+                sourcePath:
+                    type: string
+                    description: "Source file path relative to the asset root"
+                destinationPath:
+                    type: string
+                    description: "Destination file path relative to the asset root"
+            required:
+                - sourcePath
+                - destinationPath
+        
+        copyFileRequest:
+            type: object
+            properties:
+                sourcePath:
+                    type: string
+                    description: "Source file path relative to the asset root"
+                destinationPath:
+                    type: string
+                    description: "Destination file path relative to the asset root"
+                destinationAssetId:
+                    type: string
+                    description: "Optional destination asset ID if copying to another asset"
+            required:
+                - sourcePath
+                - destinationPath
+        
+        archiveFileRequest:
+            type: object
+            properties:
+                filePath:
+                    type: string
+                    description: "File path relative to the asset root"
+                isPrefix:
+                    type: boolean
+                    description: "Whether to archive all files under this prefix"
+                    default: false
+            required:
+                - filePath
+        
+        unarchiveFileRequest:
+            type: object
+            properties:
+                filePath:
+                    type: string
+                    description: "File path relative to the asset root"
+            required:
+                - filePath
+        
+        deleteFileRequest:
+            type: object
+            properties:
+                filePath:
+                    type: string
+                    description: "File path relative to the asset root"
+                isPrefix:
+                    type: boolean
+                    description: "Whether to delete all files under this prefix"
+                    default: false
+                confirmPermanentDelete:
+                    type: boolean
+                    description: "Safety confirmation for permanent deletion"
+                    default: false
+            required:
+                - filePath
+                - confirmPermanentDelete
+        
+        fileOperationResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                affectedFiles:
+                    type: array
+                    items:
+                        type: string
+                    description: "List of files affected by the operation"
+            required:
+                - success
+                - message
+        
+        revertFileVersionRequest:
+            type: object
+            properties:
+                filePath:
+                    type: string
+                    description: "File path relative to the asset root"
+            required:
+                - filePath
+        
+        revertFileVersionResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                filePath:
+                    type: string
+                    description: "File path that was reverted"
+                revertedFromVersionId:
+                    type: string
+                    description: "Version ID that was reverted from"
+                newVersionId:
+                    type: string
+                    description: "New version ID created by the revert operation"
+            required:
+                - success
+                - message
+                - filePath
+                - revertedFromVersionId
+        
+        # Asset Version Operations Schemas
+        assetVersionFileModel:
+            type: object
+            properties:
+                relativeKey:
+                    type: string
+                    description: "Path relative to the asset root"
+                versionId:
+                    type: string
+                    description: "S3 version ID"
+                isPermanentlyDeleted:
+                    type: boolean
+                    description: "Whether this file version was permanently deleted"
+                isLatestVersionArchived:
+                    type: boolean
+                    description: "Whether the latest version of this file is archived"
+                size:
+                    type: integer
+                    description: "Size of the file in bytes"
+                lastModified:
+                    type: string
+                    format: date-time
+                    description: "Last modified date"
+                etag:
+                    type: string
+                    description: "ETag of the file"
+            required:
+                - relativeKey
+                - versionId
+        
+        assetVersionResponse:
+            type: object
+            properties:
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                assetVersionId:
+                    type: string
+                    description: "Asset version ID"
+                dateCreated:
+                    type: string
+                    format: date-time
+                    description: "Date when this version was created"
+                comment:
+                    type: string
+                    description: "Comment for this version"
+                files:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetVersionFileModel"
+                createdBy:
+                    type: string
+                    description: "User who created this version"
+            required:
+                - assetId
+                - assetVersionId
+                - files
+        
+        assetVersionListItemModel:
+            type: object
+            properties:
+                Version:
+                    type: string
+                    description: "Asset version ID"
+                DateModified:
+                    type: string
+                    format: date-time
+                    description: "Date when this version was created"
+                Comment:
+                    type: string
+                    description: "Comment for this version"
+                description:
+                    type: string
+                    description: "Description of this version"
+                specifiedPipelines:
+                    type: array
+                    items:
+                        type: string
+                    description: "Pipelines specified for this version"
+                createdBy:
+                    type: string
+                    description: "User who created this version"
+                isCurrent:
+                    type: boolean
+                    description: "Whether this is the current version"
+                fileCount:
+                    type: integer
+                    description: "Number of files in this version"
+            required:
+                - Version
+                - DateModified
+        
+        assetVersionsListResponse:
+            type: object
+            properties:
+                versions:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetVersionListItemModel"
+                nextToken:
+                    type: string
+                    description: "Token for pagination"
+            required:
+                - versions
+        
+        assetVersionOperationResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                assetVersionId:
+                    type: string
+                    description: "Asset version ID"
+                operation:
+                    type: string
+                    description: "Operation performed (create, revert)"
+                timestamp:
+                    type: string
+                    format: date-time
+                    description: "Timestamp of the operation"
+                skippedFiles:
+                    type: array
+                    items:
+                        type: string
+                    description: "List of files that were skipped during the operation"
+            required:
+                - success
+                - message
+                - assetId
+                - assetVersionId
+                - operation
+                - timestamp
+        
+        createAssetVersionRequest:
+            type: object
+            properties:
+                useLatestFiles:
+                    type: boolean
+                    description: "Whether to use the latest files for this version"
+                    default: true
+                files:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetFileVersionItemModel"
+                    description: "Specific files to include in this version"
+                comment:
+                    type: string
+                    description: "Comment for this version"
+            required:
+                - useLatestFiles
+        
+        assetFileVersionItemModel:
+            type: object
+            properties:
+                relativeKey:
+                    type: string
+                    description: "Path relative to the asset root"
+                versionId:
+                    type: string
+                    description: "S3 version ID"
+                isArchived:
+                    type: boolean
+                    description: "Whether this file is archived"
+            required:
+                - relativeKey
+                - versionId
+        
+        revertAssetVersionRequest:
+            type: object
+            properties:
+                comment:
+                    type: string
+                    description: "Comment for the new version created by the revert operation"
+            required: []
+        
+        getAssetVersionRequest:
+            type: object
+            properties:
+                assetVersionId:
+                    type: string
+                    description: "Asset version ID to get details for"
+            required:
+                - assetVersionId
+        
+        getAssetVersionsRequestModel:
+            type: object
+            properties:
+                maxItems:
+                    type: integer
+                    description: "Maximum number of items to return"
+                    default: 100
+                pageSize:
+                    type: integer
+                    description: "Number of items per page"
+                    default: 100
+                startingToken:
+                    type: string
+                    description: "Token for pagination"
+        
         workflow:
             type: object
             properties:
@@ -2818,6 +4988,470 @@ components:
                 - pipelineId
                 - workflowId
                 - description
+        bucket:
+            type: object
+            properties:
+                bucketId:
+                    $ref: '#/components/schemas/id_regex'
+                bucketName:
+                    type: string
+                    description: "Name of the S3 bucket used for asset storage"
+                baseAssetsPrefix:
+                    type: string
+                    description: "Base prefix path within the bucket for assets"
+            required:
+                - bucketId
+                - bucketName
+                - baseAssetsPrefix
+        getBucketsResponse:
+            type: object
+            properties:
+                Items:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/bucket"
+                NextToken:
+                    type: string
+                    description: "Token for pagination"
+            required:
+                - Items
+        
+        # New Asset Links API Schemas
+        createAssetLinkRequest:
+            type: object
+            properties:
+                fromAssetId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Source asset ID"
+                fromAssetDatabaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Source asset database ID"
+                toAssetId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Target asset ID"
+                toAssetDatabaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Target asset database ID"
+                relationshipType:
+                    type: string
+                    enum: [related, parentChild]
+                    description: "Type of relationship between assets"
+                tags:
+                    type: array
+                    items:
+                        type: string
+                    description: "Tags associated with the asset link"
+                    default: []
+            required:
+                - fromAssetId
+                - fromAssetDatabaseId
+                - toAssetId
+                - toAssetDatabaseId
+                - relationshipType
+        
+        createAssetLinkResponse:
+            type: object
+            properties:
+                assetLinkId:
+                    $ref: '#/components/schemas/uuid_regex'
+                    description: "Generated asset link ID"
+                message:
+                    type: string
+                    description: "Success message"
+            required:
+                - assetLinkId
+                - message
+        
+        assetLinkModel:
+            type: object
+            properties:
+                assetLinkId:
+                    $ref: '#/components/schemas/uuid_regex'
+                    description: "Asset link ID"
+                fromAssetId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Source asset ID"
+                fromAssetDatabaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Source asset database ID"
+                toAssetId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Target asset ID"
+                toAssetDatabaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Target asset database ID"
+                relationshipType:
+                    type: string
+                    enum: [related, parentChild]
+                    description: "Type of relationship between assets"
+                tags:
+                    type: array
+                    items:
+                        type: string
+                    description: "Tags associated with the asset link"
+            required:
+                - assetLinkId
+                - fromAssetId
+                - fromAssetDatabaseId
+                - toAssetId
+                - toAssetDatabaseId
+                - relationshipType
+                - tags
+        
+        getSingleAssetLinkResponse:
+            type: object
+            properties:
+                assetLink:
+                    $ref: "#/components/schemas/assetLinkModel"
+                message:
+                    type: string
+                    description: "Response message"
+                    default: "Success"
+            required:
+                - assetLink
+        
+        updateAssetLinkRequest:
+            type: object
+            properties:
+                tags:
+                    type: array
+                    items:
+                        type: string
+                    description: "Updated tags for the asset link"
+                    default: []
+            required: []
+        
+        updateAssetLinkResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                    description: "Success message"
+            required:
+                - message
+        
+        deleteAssetLinkResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                    description: "Success message"
+            required:
+                - message
+        
+        assetNodeModel:
+            type: object
+            properties:
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Asset ID"
+                assetName:
+                    type: string
+                    description: "Asset name"
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Database ID"
+                assetLinkId:
+                    $ref: '#/components/schemas/uuid_regex'
+                    description: "Asset link ID if applicable"
+            required:
+                - assetId
+                - assetName
+                - databaseId
+        
+        assetTreeNodeModel:
+            type: object
+            properties:
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Asset ID"
+                assetName:
+                    type: string
+                    description: "Asset name"
+                databaseId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Database ID"
+                assetLinkId:
+                    $ref: '#/components/schemas/uuid_regex'
+                    description: "Asset link ID"
+                children:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetTreeNodeModel"
+                    description: "Child nodes in the tree"
+                    default: []
+            required:
+                - assetId
+                - assetName
+                - databaseId
+                - assetLinkId
+        
+        unauthorizedCountsModel:
+            type: object
+            properties:
+                related:
+                    type: integer
+                    description: "Count of unauthorized related assets"
+                    default: 0
+                parents:
+                    type: integer
+                    description: "Count of unauthorized parent assets"
+                    default: 0
+                children:
+                    type: integer
+                    description: "Count of unauthorized child assets"
+                    default: 0
+        
+        getAssetLinksResponse:
+            type: object
+            properties:
+                related:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetNodeModel"
+                    description: "Related assets"
+                    default: []
+                parents:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetNodeModel"
+                    description: "Parent assets"
+                    default: []
+                children:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetNodeModel"
+                    description: "Child assets (flat list)"
+                    default: []
+                unauthorizedCounts:
+                    $ref: "#/components/schemas/unauthorizedCountsModel"
+                    description: "Counts of unauthorized assets"
+                message:
+                    type: string
+                    description: "Response message"
+                    default: "Success"
+            required:
+                - related
+                - parents
+                - children
+                - unauthorizedCounts
+        
+        getAssetLinksTreeViewResponse:
+            type: object
+            properties:
+                related:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetNodeModel"
+                    description: "Related assets"
+                    default: []
+                parents:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetNodeModel"
+                    description: "Parent assets"
+                    default: []
+                children:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetTreeNodeModel"
+                    description: "Child assets (tree structure)"
+                    default: []
+                unauthorizedCounts:
+                    $ref: "#/components/schemas/unauthorizedCountsModel"
+                    description: "Counts of unauthorized assets"
+                message:
+                    type: string
+                    description: "Response message"
+                    default: "Success"
+            required:
+                - related
+                - parents
+                - children
+                - unauthorizedCounts
+        
+        # Asset Link Metadata Schemas
+        createAssetLinkMetadataRequest:
+            type: object
+            properties:
+                metadataKey:
+                    type: string
+                    description: "Metadata key"
+                metadataValue:
+                    type: string
+                    description: "Metadata value"
+                metadataValueType:
+                    type: string
+                    enum: [string, number, boolean, date]
+                    description: "Type of metadata value"
+                    default: "string"
+            required:
+                - metadataKey
+                - metadataValue
+        
+        updateAssetLinkMetadataRequest:
+            type: object
+            properties:
+                metadataValue:
+                    type: string
+                    description: "Updated metadata value"
+                metadataValueType:
+                    type: string
+                    enum: [string, number, boolean, date]
+                    description: "Type of metadata value"
+                    default: "string"
+            required:
+                - metadataValue
+        
+        assetLinkMetadataModel:
+            type: object
+            properties:
+                assetLinkId:
+                    $ref: '#/components/schemas/uuid_regex'
+                    description: "Asset link ID"
+                metadataKey:
+                    type: string
+                    description: "Metadata key"
+                metadataValue:
+                    type: string
+                    description: "Metadata value"
+                metadataValueType:
+                    type: string
+                    enum: [string, number, boolean, date]
+                    description: "Type of metadata value"
+            required:
+                - assetLinkId
+                - metadataKey
+                - metadataValue
+                - metadataValueType
+        
+        createAssetLinkMetadataResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                    description: "Success message"
+            required:
+                - message
+        
+        getAssetLinkMetadataResponse:
+            type: object
+            properties:
+                metadata:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/assetLinkMetadataModel"
+                    description: "List of metadata for the asset link"
+                message:
+                    type: string
+                    description: "Response message"
+                    default: "Success"
+            required:
+                - metadata
+        
+        updateAssetLinkMetadataResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                    description: "Success message"
+            required:
+                - message
+        
+        deleteAssetLinkMetadataResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                    description: "Success message"
+            required:
+                - message
+        
+        # Set Primary File Schemas
+        setPrimaryFileRequest:
+            type: object
+            properties:
+                filePath:
+                    type: string
+                    description: "Path to the file relative to the asset root"
+                primaryType:
+                    type: string
+                    enum: ["", "primary", "lod1", "lod2", "lod3", "lod4", "lod5", "other"]
+                    description: "Primary type for the file. Empty string removes the metadata."
+                primaryTypeOther:
+                    type: string
+                    maxLength: 30
+                    description: "Custom primary type when primaryType is 'other'"
+            required:
+                - filePath
+                - primaryType
+        
+        setPrimaryFileResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                filePath:
+                    type: string
+                    description: "File path that was modified"
+                primaryType:
+                    type: string
+                    description: "The primary type that was set (null if removed)"
+            required:
+                - success
+                - message
+                - filePath
+                
+        deleteAssetPreviewResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                assetId:
+                    $ref: '#/components/schemas/id_regex'
+                    description: "Asset ID whose preview was deleted"
+            required:
+                - success
+                - message
+                - assetId
+                
+        deleteAuxiliaryPreviewAssetFilesRequest:
+            type: object
+            properties:
+                filePath:
+                    type: string
+                    description: "Path to the file or prefix relative to the asset root. Will be treated as a prefix for deletion."
+            required:
+                - filePath
+                
+        deleteAuxiliaryPreviewAssetFilesResponse:
+            type: object
+            properties:
+                success:
+                    type: boolean
+                    description: "Whether the operation was successful"
+                message:
+                    type: string
+                    description: "Message describing the result"
+                filePath:
+                    type: string
+                    description: "File path or prefix that was used for deletion"
+                deletedCount:
+                    type: integer
+                    description: "Number of auxiliary files deleted"
+            required:
+                - success
+                - message
+                - filePath
+                - deletedCount
     parameters:
       maxItemsParam:
         name: maxItems

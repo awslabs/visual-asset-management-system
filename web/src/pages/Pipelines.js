@@ -19,6 +19,7 @@ export default function Pipelines() {
             CreateNewElement={CreatePipeline || undefined}
             fetchElements={fetchDatabasePipelines}
             fetchAllElements={fetchAllPipelines}
+            editEnabled={true}
         />
     );
 }

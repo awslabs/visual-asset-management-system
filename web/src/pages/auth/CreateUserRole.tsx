@@ -30,18 +30,21 @@ const userRoleBody = {
     roleName: [""],
 };
 
-function validateEmails(emails: string) {
-    if (typeof emails !== "string" || emails.trim().length === 0) {
-        return "Required. Please enter at least one User ID (Email).";
+function validateUsers(users: string) {
+    if (typeof users !== "string" || users.trim().length === 0) {
+        return "Required. Please enter at least one User ID.";
     }
 
-    const emailArray = emails.split(",").map((email) => email.trim());
+    const userArray = users.split(",").map((user) => user.trim());
 
-    const isValidEmail = emailArray.every((email) => {
-        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    //Valid user regex to see if at least 3 characters alphanumeric
+    const isValidUser = userArray.every((user) => {
+        return /^[\w\-\.\+\@]{3,256}$/.test(user);
     });
 
-    return isValidEmail ? null : "Use format user@domain";
+    return isValidUser
+        ? null
+        : "User ID should be at least 3 characters alphanumeric with support for special characters: . + - @";
 }
 
 export default function CreateTagType({
@@ -170,7 +173,7 @@ export default function CreateTagType({
                             }}
                             disabled={
                                 inProgress ||
-                                validateEmails(formState.userId) !== null ||
+                                validateUsers(formState.userId) !== null ||
                                 selectedRoles.length === 0
                             }
                             data-testid={`${createOrUpdate}-authcriteria-button`}
@@ -184,8 +187,8 @@ export default function CreateTagType({
             <Form errorText={formError}>
                 <SpaceBetween direction="vertical" size="l">
                     <FormField
-                        label="Email"
-                        constraintText="Required. Enter user ID (email) of user"
+                        label="User ID"
+                        constraintText="Required. Enter user ID of user"
                         errorText={nameError}
                     >
                         <Input
@@ -193,10 +196,10 @@ export default function CreateTagType({
                             disabled={createOrUpdate === "Update"}
                             onChange={({ detail }) => {
                                 setFormState({ ...formState, userId: detail.value });
-                                setNameError(validateEmails(detail.value));
+                                setNameError(validateUsers(detail.value));
                             }}
-                            placeholder="Enter User ID (email)"
-                            data-testid="email"
+                            placeholder="Enter User ID"
+                            data-testid="userId"
                         />
                     </FormField>
                     <FormField

@@ -8,6 +8,14 @@ body {
     touch-action: none;
 }
 
+/* Firefox-specific rule to enable scrolling */
+@-moz-document url-prefix() {
+    html,
+    body {
+        touch-action: auto; /* Enable scrolling in Firefox */
+    }
+}
+
 body {
     margin: 0;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen", "Ubuntu",
@@ -31,7 +39,7 @@ code {
 
 #headerWrapper {
     display: block;
-    position: fixed;
+    position: sticky;
     top: 0;
     left: 0;
     right: 0;
@@ -42,7 +50,7 @@ code {
 }
 
 #root {
-    margin-top: 56px;
+    margin-top: 0px;
 }
 
 #root div[class^="awsui_drawer-content"] {

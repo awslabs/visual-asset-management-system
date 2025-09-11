@@ -33,7 +33,7 @@ async function search(overrides: any, { dispatch, state }: SearchPropertyFilterP
         });
     if (state.databaseId) {
         filters.push({
-            query_string: { query: `(str_databaseid:(${state?.databaseId}))` },
+            query_string: { query: `(str_databaseid:("${state?.databaseId}"))` },
         });
     }
 
@@ -100,34 +100,8 @@ export async function sortSearch(
     search(body, { dispatch, state });
 }
 
-export async function deleteSelected({ state, dispatch }: SearchPropertyFilterProps) {
-    dispatch({ type: "set-delete-in-progress" });
-
-    setTimeout(async () => {
-        await state?.selectedItems.forEach(async (item: any) => {
-            const [status, resp] = await deleteElement({
-                elementId: "assetId",
-                deleteRoute: "database/{databaseId}/assets/{assetId}",
-                item: {
-                    databaseId: item.str_databaseid,
-                    assetId: item.str_assetid,
-                },
-            });
-            if (status === false) {
-                dispatch({
-                    type: "delete-item-failed",
-                    payload: {
-                        response: resp,
-                    },
-                });
-            }
-        });
-        setTimeout(async () => {
-            await search({}, { state, dispatch });
-            dispatch({ type: "end-delete-in-progress" });
-        }, 5000);
-    });
-}
+// The deleteSelected function has been replaced by the AssetDeleteModal component
+// which handles both archive and permanent delete operations directly
 
 export async function paginateSearch(
     from: number,

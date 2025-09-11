@@ -2,9 +2,197 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.2.0] (2025-09-11)
+
+This version includes significant enhancements to VAMS infrastructure, a complete overhaul of asset management APIs/Backend/UI, addition of supporting external IDP authentication, and various bug fixes. Key improvements include more flexible naming conventions, separation of assets and files, enhanced file management capabilities, new asset versioning, new use-case pipelines, global workflows/pipelines, and improved upload/download functionality.
+
+### ⚠ BREAKING CHANGES
+
+-   CDK Configuration files must be updated to include the new required fields. See ConfigurationGuide.md and template configuration files for new formats.
+-   Asset and Database DynamoDB table fields and formats have changed, which require using the migration scripts after CDK deployment to update the new field values. See /infra/deploymentDataMigration/v2.1_to_v2.2/upgrade/v2.2_to_v2.3_migration_README.md for details on using the migration scripts to upgrade your DynamoDB databases after deployment.
+-   Due to VPC subnet breakout changes, this may break existing deployments. It is recommended to use an A/B deployment if you run into subnet configuration issues.
+-   Due to Cognito changes, a new Cognito user pool may be generated on stack deployment. To migrate existing users from the previous user pool, follow the following blog instructions: https://aws.amazon.com/blogs/security/approaches-for-migrating-users-to-amazon-cognito-user-pools/
+
+**Recommended Upgrade Path:** A/B Stack Deployment with data migration using staging bucket configuration and upgrade migration scripts for DynamoDB tables in `./infra/upgradeMigrationScripts`
+
+### Contributions
+
+-   Lockheed Martin Corporation (LMCO) - LMCO has significantly contributed to this release with both external and internal pull requests (https://github.com/awslabs/visual-asset-management-system/pull/204)
+
+### Features
+
+-   Database, Pipeline, Workflow, Tag, Tag Types, Role, and Constraints id/names no longer need to follow as strict regex guidelines. New Regex: ^[-_a-zA-Z0-9]{3,63}$
+-   AssetId no longer needs to follow as strict regex guidelines. New Regex (regular filename regex): ^(?!._[<>:"\/\\|?_])(?!.\*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$'
+-   File paths no longer need to follow as strict regex guidelines and now allow for deep pathing. Some restrictions apply to specific input paths for auxiliary asset previews and pipeline output paths.
+-   The asset upload API and backend along with many associated supporting asset API backends have been rewritten to support new features, security, and performance improvements.
+    -   The old uploadAsset, uploadAssetWorkflow, and s3scoped access APIs and backend have been removed
+    -   A new uploadFile (initialize, complete, createFolder), createAsset, and assetService (edit asset) have been created to support separation of assets and files. UploadFile now fully supports S3 Signed URL uploads for better security and performance (replaces providing UI with scoped S3 access).
+    -   ScopedS3Access removal provides benefits as previous implementations had issues with scoped role timeouts, different authentication implementations in VAMS, parallelization issues, which prevented file validation, asset file overwrite issues, and more.
+    -   New AssetUploads DynamoDB created to track uploads between initializations and completions
+    -   IngestAsset API, intended for backend data system ingresses, wraps the new APIs as an all-in-one API caller.
+    -   UploadFile is now split into two stages for upload, which allow for multiple files and multiple parts per file to be specified for better performant uploads of large files
+    -   Assets now are better built to support a range of different files, including no files. The separation allows for better reliance on S3 functionalities to support file versioning.
+    -   AssetType on assets are now specified as "none" (no files on asset), "folder" (multiple files on an asset), or single file extension (single file on asset and provides the extension, as before)
+    -   File Uploads will go to a temporary S3 location on stage 1 while stage 2 upload completions performs checks, including for malicious file extensions or MIME types, before moving files into an asset for versioning
+    -   File uploads restricted to 10 upload initializations (stage 1) per-user per-minute to minimize DDoS possibility and maximize system availability
+    -   UploadFile now supports upload types for assetFiles and assetPreview to better support the separation of the uploads. This will allow for future enhancement support of adding filePreviews, separate from assets.
+    -   Workflow execution final steps, which return files to an asset, are now rigged to use the new uploadFile lambda to support all file checks before versioning as part of an asset and to now support pipelines that return asset previews. This process follows an alternate external upload stage where presigned URLs are not needed due to the direct access nature of pipelines into the assets bucket (still uses temporary locations for security).
+    -   AssetFiles API now brings back additional information for each file such as size, version, version created, and if the file is a versioned prefix folder or a file
+    -   Support for empty asset creation and/or throughout life cycle of an asset (uploads no longer required during asset creation)
+    -   Asset uploads in the UI now keep their original filenames and no longer change them to the asset name.
+    -   The concept of "primary file" in an asset has been removed to support assets being truly multi-file
+    -   New File URL Sharing action/modal for files in the file manager that generates presigned URLs for all files or folder selected
+-   **Web** The front-end asset upload has been heavily modified to support the new backend asset changes
+    -   Now supports choosing multiple files and/or entire folders
+    -   Files now keep their original names and are no longer changed to the assetName
+    -   Supports the presigned URL and multi-stage API calls needed now for an upload (including support for splitting large files into multiple parts for parallel upload)
+    -   Supports stage and file error recovery options, including proceeding with certain failed uploads that will be discarded
+    -   Comments are no longer a supported field as part of upload, as this functionality has been moved to creating asset versions
+-   The assetFiles API now supports additional paths for functionality including `../fileInfo`, `../createFolder`, `../moveFile`, `../copyFile`, `../archiveFile`, `../unarchiveFile`, `../deleteFile`, `../deleteAssetPreview`, `../deleteAuxiliaryPreviewAssetFiles`,`../revertFileVersion`. ListFiles now provides additional data about each file.
+-   **Web** The front-end asset download for multiple files has been updated to support downloading an entire folder's worth of files in parallel
+    -   Note: This still fetches individual files based on their presigned URL for automation, it does not pre-ZIP files on a server and may still cause issues if hundreds or thousands of files need to be downloaded
+-   **Web** The asset viewer file manager has been rewritten to support new features and richer user experience
+    -   Instead of having a separate redundant icon view of files in the right pane of the file manager, it now shows file information such as file name, path, size, and any version information. For top-level asset nodes and image files, this will show the Preview file or actual file (image type files) now. This supports preview files now for both assets and files. See DeveloperGuide.md for documentation on preview file support (non-auxiliary).
+    -   Added buttons for various downloads of files and folders
+    -   Added ability and button to create sub-folders in an asset
+    -   ViewAsset button still shown on files for asset 3D visualization, file-specific metadata, and file versioning
+-   **Web** Execute Workflow in View Assets now allows the user to choose which file on the asset will be processed due to the new multifile support implementation of assets
+-   **Web** Enhanced asset file management capabilities with comprehensive file operations:
+    -   Added new API endpoints for file operations: fileInfo, moveFile, copyFile, archiveFile, unarchive, deleteFile, getVersion, getVersions, revertFileVersion
+    -   Implemented file versioning with UI for showing files, knowing what version you are looking at, and reverting to a version
+    -   Implemented file archiving which uses S3 delete markers (versus a permanent delete that removes the entire file)
+    -   Added support for cross-asset file copying with proper permission validation (must stay within the same VAMS database)
+    -   Implemented detailed file metadata retrieval including size, storage class, and version history
+    -   Added permanent file deletion with safety confirmation to prevent accidental data loss
+    -   Implemented proper error handling and validation for all file operations
+    -   Asset files and versions will now show a flag for archived files and indicate if the asset is part of the current version files' version
+-   **Web** (Breaking Change) All new asset versioning capability and version comparisons
+    -   Asset versions must now be manually created and will no longer auto-create when editing the asset or uploading files
+    -   New APIs are defined for asset versioning for create, get, and revert options
+    -   Asset table has changed fields and new asset version and asset file versions tables are created, which require a database migration script to be used when upgrading from a previous VAMS version
+    -   Displayed as Versions tab under Asset Viewer and labels throughout (such as on file versions) to show file versions included in the current asset version (or mismatched)
+-   **Web** New tabbed design for Viewing Asset
+    -   Moved comments page for assets to now be a tab under view assets
+-   Assets as a whole now support both permanent deletion and archiving
+    -   Note: currently unarchiving an asset as a whole doesn't exist yet
+-   Turned off the wireframe view for the 3DOnlineViewer for viewing models
+-   Disabled for now the ability to see/view assets in Workflow Editor and the ability to Execute Workflows from Workflow Editor (doesn't fit the current functionality implementation)
+-   Updated API and associated viewers/files for aux asset streaming endpoint from /auxiliaryPreviewAssets/stream/{proxy+} to /database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}
+    -   Added additional validation checks to make sure users only stream assets that belong to the asset ID provided
+-   Subscription emails for assets will now trigger any time an asset itself changes or versions, or one of its files changes
+-   Added infra configuration option for basic GovCloud IL6 compliance checks for features/services enabled or disabled
+-   Added presignedUrlTimeoutSeconds configuration to infra config, moved credTokenTimeoutSeconds under useCognito configuration option (previously used one configuration value for both)
+-   Changed metadata API paths (to standardize) from '/metadata/{databaseId}/{assetId}/' to '/database/{databaseId}/assets/{assetId}/metadata'
+-   Created new DynamoDB table for workflow executions, migration of old jobs will not occur. The new table has better fields for tracking of workflow database ID to now cause conflicts of same name between databases.
+-   Added capability to support multiple S3 buckets for assets now for a solution
+    -   (Breaking Change) New CDK configuration options are added and required for defining asset buckets (created with solution or external load), see DeveloperGuide and ConfigurationGuide for details
+    -   **Web** Databases now allow you to select which bucket/prefix the database will use for its assets
+    -   New DynamoDB table for S3 Asset Buckets is set up with CDK deployment to define available asset S3 buckets
+    -   Direct changes to asset S3 buckets are allowed and will be synced back to VAMS. New asset prefix files will create new assets and databases based on configuration details defined. File changes within an asset will be indexed and pulled with any new API requests involving asset file operations
+    -   **Web** Pipelines in the navigation menu is now under "Orchestrate and Automate"
+-   Standardized API route paths that had /databases* (plural) to /database* (singular)
+-   Changed VPC subnet to now break out subnets for isolated, private, and public. Previously, only private (which was actually isolated) and public existed.
+    -   For those using external VPC and subnet import configuration, previously private subnet IDs should now be copied into isolated subnets configuration option.
+-   Added a new use-case pipeline and configuration option for `RapidPipeline` that optimizes 3D assets using mesh decimation & remeshing, texture baking, UV aggregation, and more.
+    -   RapidPipeline can also convert assets between GLTF, GLB, USD, OBJ, FBX, VRM, STL, and PLY file types.
+    -   Pipeline can be called by registering 'vamsExecuteRapidPipeline' lambda function with VAMS pipelines / workflows.
+-   Updated backend infrastructure configuration options and functionality to support External OAuth IDP systems besides AWS Cognito. Includes many additional infrastructure configuration settings.
+-   **Web** Added web support for External OAuth IDP configuration.
+-   Added configuration option `addStackCloudTrailLogs` for creating AWS CloudTrail log groups and trails for the stack. This is defaulted to `true`.
+-   Added configuration option `useAlb.addAlbS3SpecialVpcEndpoint` for creating the special S3 VPC Interface Endpoint for ALB deployment configurations. This is defaulted to `true`. See documentation for this setting if turned off.
+-   **Web** Added infrastructure configuration option `webUi.optionalBannerHtmlMessage` for adding a persistent banner (HTML) message at the top of the WebUI.
+-   **Web** Added capability to define which tag types are required to be added to an asset. If tag types are required, at least one of the defined tags on the tag type must always be included on the asset.
+-   The ingestAsset API now supports passing in tags (to support required tag types).
+-   Changed UserId to no longer need to be an email, added a new LoginProfile table to track user emails for notification service which gets updated from JWT tokens or organization custom logic for retrieving user emails. New API for updating LoginProfile added to web login.
+-   Enabled Cognito user pool optional Multi-Factor Authentication (MFA) for created accounts across TOTP or SMS. **Note:** SMS sending requires additional AWS Cognito / SNS setup to a SNS production account and origination identity (if sending to US phone #'s).
+    -   Added backend broken out custom logic and flag to know if a user is logged in with MFA or not. For external OAuth IDP implementations, this logic must be tailored to the IDP system.
+-   Enabled ability for a VAMS external IDP authentication system to report back if a user is logged in via MFA through an additional MFA IDP scope request. This can be configured via infrastructure configuration script by specifying a specific scope for MFA. Leaving this configuration null turns off external IDP MFA support.
+    -   **Web** The external IDP login will show a MFA login button if a mfa scope configuration request is defined.
+-   **Web** Added capability to set on a role if it requires the logged in user to have authenticated via MFA in order for any constraints against that role to take effect. If MFA is not turned on in the selected authentication system, this would effectively disable the role as no user would satisfy the criteria.
+-   Added new feature that gives users the ability to edit pipelines after initial creation. Users also have the option to update all workflows that contain the edited pipeline. The EDIT feature can be found as a button on the Pipelines page.
+-   **Web** Added a new file viewer for video files using the HTML5 video player component. You can now view and stream files of types: ".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".m4v"
+-   **Web** Added a new file viewer for audio files using the HTML5 audio player component. You can now view and stream files of types: ".mp3", ".wav", ".ogg", ".aac", ".flac", ".m4a"
+-   Added a new use-case pipeline and configuration option for `ModelOps` complex tasks such as file format conversions, optimizations for 3D assets, and generating image captures of 3D models.
+    -   VAMS pipeline registration `inputParameters` will define for each pipeline registration what the output file extension type(s) will be. ModelOps can output multiple file types in one execution. Pipeline can be called by registering 'vamsExecuteModelOps' lambda function with VAMS pipelines / workflows.
+-   Pipelines and workflows can now be created under a GLOBAL database. GLOBAL database workflows can be executed across all assets across all databases. The GLOBAL database is a reserved keyword now which implies that an entity applies to all databases (right now only workflows/pipelines) This now allows for the capability of registering pipelines/workflows automatically as part of use-case pipeline deployments as a database no longer needs to exist (GLOBAL).
+-   Asset links backend APIs were re-written to accommodate tracking databaseId with to/from assets, tracking tags on asset links, and now tracking metadata against asset links
+    -   New DynamoDB tables are created for these new trackings, one of which requires a data migration script to move data from the old tables.
+-   **Web** Asset Links under View Asset is now part of the tabbing window under "Relationships"
+-   **Web** Asset links / relationships now has a new look similar to the new file manager to track relationships. This is in both View Assets and on Asset upload for new assets.
+    -   Metadata key/pair values can now be tracked against asset links with String and XYZ type. Translation, Rotation, and Scale are hard- XYZ typed fields that can be used before adding custom metadata
+    -   Ability to see child sub-trees from all child assets recursively down
+-   **Web** Add file primary type attribute viewing and setting such as "primary", "lod1" - "lod5", and a custom primary type. These can be set on any file and are saved as metadata in S3 on the file. This is useful for identifying what the primary files are as part of an asset and if they are the prime or a particular level of detail (lod), or other designation. There is no logic tied to this value yet in VAMS but can be used for visual identification or in custom logic implementations.
+-   **Web** Added option to show asset and file preview thumbnails on the Asset Search page.
+-   Added a '/api/version' GET API path (NoOp authorizer) to get back the version of the current deployment of VAMS. This is stored in the config.ts file during CDK deployment and should be updated with VAMS version rollouts.
+    -   Added '/database/{databaseId}/assets/{assetId}/setPrimaryFile' API endpoint to support this and returns this value as part of listing files and returning file information as part of those respective APIs.
+-   Added feature in CDK configuration to allow for unsafe-eval web features. This is turned off by default as it may require an organization's security team to evaluate this before enabling. This is implemented to allow for future plugins and libraries that require this flag to be enabled in the web browser.
+-   Add CDK Configuration options for API Rate and Burst limits to prevent denial of service situations. Adjust based on your traffic and your AWS account limits for both API Gateway and Lambda invocation allowances. Default configuration is set to 50 API requests per second and 100 bursts per second.
+-   VendedLogs CloudWatch log groups have been set as a default retention of 1 year in the core CDK stack
+-   (Draft Implementation) Started overhaul of lambda backend unit tests that were previously outdated and non-functioning. Unit tests as of 2.2 still have many non-functioning (skipped) tests that will need to be corrected. Passed tests will also need additional validation and coverage evaluation.
+
+### Bug Fixes
+
+-   Fixed permission caching in lambdas to actually reset caches after 30 seconds per lambda per user. Currently since v2.0 caches have been invalidating inconsistently.
+-   Fixed opensearch lambda event source mapping for regions that don't support event source tagging yet (i.e., GovCloud) [bug introduced in v2.1.0 with CDK version upgrade].
+-   Additional checks are made for valid parameter data in the asset deletion/archiving service.
+-   Fixed local web local development support, updated documentation for new local development processes.
+-   Fixed numerous lambda functions that were not adhering to the VPC/subnet configuration options for placing behind a VPC from v2.0 update.
+-   Fixed more validation bugs to ensure API fields that take in arrays are actually arrays.
+-   Miscellaneous minor bug fixes across web and backend components.
+-   Fixed some multi-file/folder upload issues in UploadAssetWorkflow, Path Validation, and ScopedS3 retries
+-   Fixed bug where asset search results using OpenSearch were not paginating correctly when total results went over 100
+-   Fixed bug where asset search result filters for database may restrict what users can search on based on previous results returned
+-   Fixed scrolling issues with Firefox browser
+-   Fixed bug with PointClouder viewer / pipeline from executing and showing final outputs
+-   Fixed various bugs with asset comments editing and deleting
+-   Fixed various UI and backend bugs related to the asset management overhaul
+-   Fixed fullscreen mode on visualizers not working on certain visualizers after exiting from a previous fullscreen session; removed compact mode as this had no benefit.
+-   Fixed OpenSearch search to exclude `bool_` fields that may get added to dynamodb tables it indexes. Wildcard searches in query don't work on bool fields.
+-   Added check to metadataschema creation API to make sure the database ID exists before creating the schema
+-   Fixed bug with Asset Search that some columns were returning an API 500 error when trying to sort, fixed issue with deleted databases and records showing in aggregate results still
+-   Fixed a bug where OpenSearch SSM parameter didn't factor in all config naming variables, causing issues with deploying multiple VAMS stack instances to the same region.
+
+### Chores
+
+-   Added more input variables for use in pipeline lambdas called such as bucketAssetAuxiliary, bucketAsset, and inputAssetFileKey. This is in addition to the predetermined "easy" paths setup for pipeline use
+-   Added more error checks and outer workflow abort procedures for workflows/pipelines in use-case pipelines
+-   Updated auxiliary asset handling to match the new asset location keys and handling
+-   Updated workflow execution to handle new asset location keys, bucket, and handling
+-   Created new DynamoDB workflow executions table (old one will remain as deprecated to not lose data) to store better format for lambda storage and retrieval
+-   Modified workflow executions API to '/database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}' and also added '/database/{databaseId}/assets/{assetId}/workflows/executions/' to get all executions for an asset
+-   Subscription SNS topics now store databaseId along with assetId in the topic name to prevent future conflicts
+-   Create/Execute workflow backend update to support new asset management file/bucket/prefix locations, to be more dynamic based on the calling asset and file
+-   Updated S3 asset bucket event notifications to be a SNS->SQS fan-out for bucket sync/indexing and other bucket subscriptions like for the PcPotreePreview pipeline
+-   Cleaned up and removed backend and UI files and components that were no longer needed and/or deprecated related to assets
+-   **Web** Cleaned up unused web files and consolidated functionalities for authentication and amplify configuration setting.
+-   Upgraded lambda and all associated libraries (including use-case pipelines) to use Python 3.12 runtimes.
+-   Upgraded infrastructure NPM package dependencies. Note: This switches CDK to use Node 20.x runtimes for Lambdas used for CustomResources or S3 Bucket deployments.
+-   Optimized some backend lambda initialization code in various functions and globally in the casbin authorization functions for cold start performance improvement.
+-   Updated S3 bucket name for WebAppAccessLogs for ALB deployment (to be based on the domain name used `<ALBDomainName>-webappaccesslogs`) to help with organization policy exceptions.
+-   Added scripts and documentation for external oauth IDP and API local development servers.
+-   **Web** Turned on amplify gen1 Secure Cookie storage option.
+-   Updated GenAIMetadataLabeling pipeline container to use the latest blender version when deploying due to Alpine APK restrictions on holding earlier versions.
+-   Switched web API calls to use Cognito user access token for all requests authorizations instead of Id token. Created separate parameter for scopedS3Access to pass in ID token for this specific API call that needs it.
+-   Added logic to prefilter asset OpenSearch querying to only databases the user has access in order to increase performance for final asset permission checks for large asset databases
+-   Updated CDK library dependencies to convert from alpha versions to regular implementations
+-   Added Stack Formation Template descriptions
+-   Added CSP header policies to ALB deployment listener on top of injecting into REACT front-end
+-   When using lambdas behind VPC (`useForAllLambdas` setting), this now needs and sets up 2 subnets instead of 1 (best practice for Lambdas behind VPCs)
+-   Updated documentation for developer deployment machines to use Node version 20.18.1
+-   Updated README documentation with new application screenshots
+
+### Known Outstanding Issues
+
+-   With updating to support multiple S3 buckets, there are scenarios that can occur where if there are multiple buckets/prefixes across different databases where the assetId are now the same, there will be lookup conflicts within Comments and subscriptions functionality. This can only occur right now with manual changes/updates as done directly to S3 as assetIds generated from VAMS uploads still generate unique GUIDs.
+-   Using the same pipeline ID in a GLOBAL and non-GLOBAL database will cause overlap conflicts and issues.
+-   There is an issue with OpenSearch recognizing asset fields as numbers if they contain all numbers instead of strings. Future updates will provide utility script to clear OpenSearch index and rebuild with the new mapping schema. Avoid using asset names or descriptions with all numbers to avoid them showing blank in asset search.
+-   There is an issue with using lambdas behind a VPC using the `useForAllLambdas` setting where API Gateway produces 503 service unavailable errors when using this setting. This needs to be tracked down if this is a VAMS issue or otherwise.
+
 ## [2.1.1] (2025-01-17)
 
 This hotfix version includes bug fixes related to dependency tools and library updates.
+
+This release may require a installation of the latest aws-cdk library to either your global npm or as part of your local VAMS infra folder. Please re-run "npm install" in VAMS infra to install the latest local dependencies for existing deployments.
 
 ### Bug Fixes
 
@@ -12,6 +200,7 @@ This hotfix version includes bug fixes related to dependency tools and library u
 -   Fixed Dockerfile container environment variable formats to no longer use the deprecated Docker format. `ENV KEY VALUE` -> `ENV KEY=VALUE`
 -   Fixed 3D Metadata Labeling pipeline use-case to use the latest Blender version due to Alpine APK support deprecation for earlier specified versions.
 -   Fixed 3D Metadata Labeling pipeline use-case state machine Lambda to not hard-code the `us-east-1` region for IAM role resource permission and use the stack-deployed region instead.
+-   Updated aws-cdk dependency versions to the latest and updated GitHub CI/CD pipeline build checks
 
 ## [2.1.0] (2024-11-15)
 
@@ -21,11 +210,11 @@ Recommended Upgrade Path: A/B Stack Deployment with data migration using staging
 
 ### ⚠ BREAKING CHANGES
 
--   Due to packaged library version upgrades in the solution, customer must make sure they are using the latest global installs of aws cli/CDK
+-   Due to packaged library version upgrades in the solution, customers must make sure they are using the latest global installs of aws cli/CDK
 -   Pipelines are now changed to support a new pipelineType meaning, and the old pipelineType was renamed to pipelineExecutionType.
 -   Execution workflow input parameter names to pipelines have also changed, which can break existing workflows/pipelines.
 
-Due to DynamoDB table structure changes, a A/B Stack deployment with migration script is recommended if there are existing pipelines that need to be automatically brought over.
+Due to DynamoDB table structure changes, A/B Stack deployment with migration script is recommended if there are existing pipelines that need to be automatically brought over.
 
 ### Features
 
@@ -46,9 +235,9 @@ Due to DynamoDB table structure changes, a A/B Stack deployment with migration s
 -   Added `credTokenTimeoutSeconds` authProvider config on the infrastructure side to allow manual specification of access, ID, and pre-signed URL tokenExpiration. Extending this can fix upload timeouts for larger files or slower connections. Auth refresh tokens timeouts are fixed to 24 hours currently.
 -   -   Implements a new approach for s3ScopedAccess for upload that allows tokens up to 12 hours using AssumeRoleWithWebIdentity.
 -   **Web** Added PointCloud viewer and pipeline support for `.ply` file formats, moved from the 3D Mesh 3D Online Viewer
--   **Web** The asset file viewer now says `(primary)` next to the assets main/primary associated file. The primary file is what get's used right now for pipeline ingestion when launching a workflow.
+-   **Web** The asset file viewer now says `(primary)` next to the asset's main/primary associated file. The primary file is what gets used right now for pipeline ingestion when launching a workflow.
 -   Changed access logs S3 bucket lifecycle policy to only remove logs after 90 days
--   Added lifecycle polcies on asset and asset auxiliary bucket to remove incomplete upload parts after 14 days
+-   Added lifecycle policies on asset and asset auxiliary bucket to remove incomplete upload parts after 14 days
 
 ### Bug Fixes
 
@@ -60,14 +249,14 @@ Due to DynamoDB table structure changes, a A/B Stack deployment with migration s
 -   **Web** The asset file viewer now appropriately shows multiple files that are uploaded to the asset
 -   **Web** Hid the `View %AssetName% Metadata` button for top-level root folder on asset details page file manager that led to a blank page. The metadata for this is already on the asset details page.
 -   Fixed GovCloud deployments where v2 Lambda PreTokenGen for Cognito are not supported, reverted to v1 lambdas that only support Access Tokens (instead of both ID and Access token use for VAMS authorizers)
--   Fixed GovCloud deployments for erronouesly including a GeoServices reference that is not supported in GovCloud partition
+-   Fixed GovCloud deployments for erroneously including a GeoServices reference that is not supported in GovCloud partition
 -   Fixed KMS key IAM policy principals (for non-externally imported key setting) to include OpenSearch when using OpenSearch deployment configurations
--   Added logic to look at other claims data if "vams:\*" claims are not in the original JWT token. This is in prepartion for external IDP support and some edge case setups customers have.
+-   Added logic to look at other claims data if "vams:\*" claims are not in the original JWT token. This is in preparation for external IDP support and some edge case setups customers have.
 -   Fixed CDK deployment bug not deploying the required VPC endpoints during particular configurations of OpenSearch Provisioned, Not using all Lambda's behind VPCs, and using the option to use VPC endpoints
 -   **Web** Fixed bug where adding asset links had swapped the child/parent asset (WebUI only bug, API direct calls were not affected)
 -   Fixed CDK deployment bug of encrypting the WebAppLogsBucket when deploying with ALB and KMS encryption. The WebAppLogsBucket cannot be KMS encrypted when used for ALB logging output.
 -   Fixed bug for exceeding PolicyLimitSize of STS temporary role calls in S3ScopedAccess used during asset upload from the Web UI when KMS encryption is enabled.
--   Increased CustomResource lambda timeouts for OpenSearch schema deployment that caused issues intermitently during GovCloud deployments
+-   Increased CustomResource lambda timeouts for OpenSearch schema deployment that caused issues intermittently during GovCloud deployments
 -   Fixed bug in constraint service API that was saving constraints on POST/PUT properly but was erroring on generating a 200 response resulting in a 500 error
 -   Fixed bug in OpenSearch indexing (bad logging method) during certain edge cases that prevented adding new data to the index
 -   Fixed bug in CDK storageResource helper function where S3 buckets were not getting the proper resource policies applied
@@ -76,10 +265,10 @@ Due to DynamoDB table structure changes, a A/B Stack deployment with migration s
 
 -   VisualizerPipeline now re-named to PreviewPotreeViewerPipeline as the previous name was too generic and other "visualizer" or viewer pipelines may exist later
 -   'visualizerAssets' S3 bucket renamed to 'assetAuxiliary'. This bucket will now be used for all pipeline or otherwise auto-generated files (previews/thumbnails) associated with assets that should not be versioned
--   'visualizerAssets/{proxy+}' API route and related function re-named to 'auxililaryPreviewAssets/stream/{proxy+}'. This function is used for retrieving auto-generated preview files that should be rapidly streamed such as the PreviewPotreeViewerPipeline files.
+-   'visualizerAssets/{proxy+}' API route and related function re-named to 'auxiliaryPreviewAssets/stream/{proxy+}'. This function is used for retrieving auto-generated preview files that should be rapidly streamed such as the PreviewPotreeViewerPipeline files.
 -   Renamed and moved `uploadAllAssets` lambda function handler. It is now `processWorkflowExecutionOutput` and moved to the `workflows` backend folder
 -   Updated Workflow ListExecutions to write stopDate, startDate, and executionStatus back to DynamoDB table after an SFN fetch where the execution has stopped. This is done for performance / caching reasons.
--   Workflow executions are now limited to only 1 active running execution per workflow per asset. This helps prevent workflows from globbering each other and preventing other errors and race conditions
+-   Workflow executions are now limited to only 1 active running execution per workflow per asset. This helps prevent workflows from clobbering each other and preventing other errors and race conditions
 -   Updated a pipeline's default taskTimeout to 24 hours and taskHeartBeat to 1 hour unless otherwise specified. Previously, it defaulted to the service default which was up to a year. This helps prevent runaway asynchronous processes that never properly return and closeout workflow executions.
 -   Added some external sfn token heartbeats into the new and existing use-case pipeline implementations at the end of a container run. These heartbeat locations can still be improved, but it is expected that these pipelines take longer to run.
 -   Workflow executions now pass the originating execution caller's username and request context, which can be used for lambda cross-call logic
@@ -90,9 +279,9 @@ Due to DynamoDB table structure changes, a A/B Stack deployment with migration s
 -   Added security.txt file to website for AWS security reporting information.
 -   Updated documentation on security, legal, and use notices.
 
-### Known Oustanding Issues
+### Known Outstanding Issues
 
--   Using s3ScopedAccess for Upload (currently in use by VAMS WebUI) can also cause synchronization issues due to race conditions between uploading and calling the asset upload APIs. Additionally handling very large file uplaods and downloads (+1TB) can cause issues. Expect a future re-write to use solely pre-signed storage URLs for upload and a 3/4-step guided API call process for this to resolve this issue, similar to `ingestAsset` API used to test the core of this new method.
+-   Using s3ScopedAccess for Upload (currently in use by VAMS WebUI) can also cause synchronization issues due to race conditions between uploading and calling the asset upload APIs. Additionally handling very large file uploads and downloads (+1TB) can cause issues. Expect a future re-write to use solely pre-signed storage URLs for upload and a 3/4-step guided API call process for this to resolve this issue, similar to `ingestAsset` API used to test the core of this new method.
 
 ## [2.0.0] (2024-6-14)
 
@@ -276,7 +465,7 @@ Recommended Upgrade Path: A/B Stack Deployment with data migration using staging
 ### Bug Fixes
 
 -   dependency conflict was causing downloads to fail ([#94](https://github.com/awslabs/visual-asset-management-system/issues/94)) ([4cde458](https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/vams/commits/4cde45874d099bf72cf4a69a5da8e17ab16ae81f))
--   download asset only if they are marked as distributatble ([#106](https://github.com/awslabs/visual-asset-management-system/issues/106)) ([93f9c1b](https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/vams/commits/93f9c1b89da9f1cd15e5eb8930c90150d80f1db4))
+-   download asset only if they are marked as distributable ([#106](https://github.com/awslabs/visual-asset-management-system/issues/106)) ([93f9c1b](https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/vams/commits/93f9c1b89da9f1cd15e5eb8930c90150d80f1db4))
 -   Release fixes ([#109](https://github.com/awslabs/visual-asset-management-system/issues/109)) ([d2060c2](https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/vams/commits/d2060c21dab0187d4231e5e0b66724bc561cd203))
 -   repair first deployment with opensearch ([#107](https://github.com/awslabs/visual-asset-management-system/issues/107)) ([4e0ba30](https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/vams/commits/4e0ba306295bd0bd254d3eb5ed74d4b8511b4ea2))
 -   repair regression on createPipeline ([#93](https://github.com/awslabs/visual-asset-management-system/issues/93)) ([997241f](https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/vams/commits/997241f39bed6ae9a5ce3e61a9cee80e136dad95))
@@ -304,7 +493,7 @@ Recommended Upgrade Path: A/B Stack Deployment with data migration using staging
 
 ### Bug Fixes
 
--   automatically naviagte to asset page once asset upload completes ([05d7bfe](https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/vams/commits/05d7bfed1236499cb3d834caccbd8449094eca72))
+-   automatically navigate to asset page once asset upload completes ([05d7bfe](https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/vams/commits/05d7bfed1236499cb3d834caccbd8449094eca72))
 -   cdk nag suppressions for python 3.9 and nodejs14.x ([#78](https://github.com/awslabs/visual-asset-management-system/issues/78)) ([926d159](https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/vams/commits/926d159985b86541bcb5190167706cd64fea9e55))
 -   ci.yml formatting ([46fd622](https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/vams/commits/46fd62287f7af66c9dfa6bad631927099454f619))
 -   congitoUsername --> cognitoUsername, added dependency to ([b2ca84f](https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/vams/commits/b2ca84fab210ee9d1852f169fe9fc7c37d14fec4))

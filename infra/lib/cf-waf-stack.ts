@@ -21,6 +21,7 @@ interface EnvProps {
     env?: cdk.Environment;
     stackName: string;
     wafScope?: WAFScope;
+    description: string;
 }
 
 export class CfWafStack extends cdk.Stack {

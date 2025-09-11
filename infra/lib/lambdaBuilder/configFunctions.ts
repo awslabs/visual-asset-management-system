@@ -14,12 +14,14 @@ import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as kms from "aws-cdk-lib/aws-kms";
-import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../helper/security";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
+} from "../helper/security";
 
 export function buildConfigService(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    assetStorageBucket: s3.Bucket,
     appFeatureEnabledStorageTable: dynamodb.Table,
     config: Config.Config,
     vpc: ec2.IVpc,
@@ -43,12 +45,12 @@ export function buildConfigService(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            ASSET_STORAGE_BUCKET: assetStorageBucket.bucketName,
             APPFEATUREENABLED_STORAGE_TABLE_NAME: appFeatureEnabledStorageTable.tableName,
         },
     });
 
     appFeatureEnabledStorageTable.grantReadData(configService);
     kmsKeyLambdaPermissionAddToResourcePolicy(configService, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(configService, config);
     return configService;
 }

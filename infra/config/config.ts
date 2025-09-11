@@ -15,10 +15,21 @@ import { region_info } from "aws-cdk-lib";
 dotenv.config();
 
 //Top level configurations
-export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_10;
-export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_18_X;
+export const VAMS_VERSION = "2.2";
+
+export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
+export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_20_X;
 export const LAMBDA_MEMORY_SIZE = 3003;
 export const OPENSEARCH_VERSION = cdk.aws_opensearchservice.EngineVersion.OPENSEARCH_2_7;
+
+export const STACK_WAF_DESCRIPTION =
+    "(SO9299) (uksb-1608h3hqer) (VAMS-WAF) (version:" +
+    VAMS_VERSION +
+    ") WAF Components for the Visual Asset Management Systems";
+export const STACK_CORE_DESCRIPTION =
+    "(SO9299) (uksb-1608h3hqer) (VAMS-CORE) (version:" +
+    VAMS_VERSION +
+    ") Primary Components for the Visual Asset Management Systems";
 
 export function getConfig(app: cdk.App): Config {
     const file: string = readFileSync(join(__dirname, "config.json"), {
@@ -56,25 +67,31 @@ export function getConfig(app: cdk.App): Config {
         "-" +
         config.env.region;
 
-    config.app.bucketMigrationStaging.assetBucketName = <string>(app.node.tryGetContext(
-        "staging-bucket"
-    ) || //here to keep backwards compatability
-        app.node.tryGetContext("asset-staging-bucket") ||
-        config.app.bucketMigrationStaging.assetBucketName ||
-        process.env.STAGING_BUCKET || //here to keep backwards compatability
-        process.env.ASSET_STAGING_BUCKET);
-
     config.app.adminEmailAddress = <string>(
         (app.node.tryGetContext("adminEmailAddress") ||
             config.app.adminEmailAddress ||
             process.env.ADMIN_EMAIL_ADDRESS)
     );
-    config.app.authProvider.credTokenTimeoutSeconds = <number>(
+    config.app.adminUserId = <string>(app.node.tryGetContext("adminUserId") ||
+        app.node.tryGetContext("adminEmailAddress") || //user email in this case for ENV backwards compatibility
+        config.app.adminUserId ||
+        process.env.ADMIN_EMAIL_ADDRESS || //user email in this case for ENV backwards compatibility
+        process.env.ADMIN_USER_ID);
+
+    config.app.authProvider.useCognito.credTokenTimeoutSeconds = <number>(
         (app.node.tryGetContext("credTokenTimeoutSeconds") ||
-            config.app.authProvider.credTokenTimeoutSeconds ||
+            config.app.authProvider.useCognito.credTokenTimeoutSeconds ||
             process.env.CRED_TOKEN_TIMEOUT_SECONDS ||
             3600)
     );
+
+    config.app.authProvider.presignedUrlTimeoutSeconds = <number>(
+        (app.node.tryGetContext("presignedUrlTimeoutSeconds") ||
+            config.app.authProvider.presignedUrlTimeoutSeconds ||
+            process.env.PRESIGNED_URL_TIMEOUT_SECONDS ||
+            86400)
+    );
+
     config.app.useFips = <boolean>(
         (app.node.tryGetContext("useFips") ||
             config.app.useFips ||
@@ -93,9 +110,9 @@ export function getConfig(app: cdk.App): Config {
     //OpenSearch Variables
     config.openSearchIndexName = "assets1236";
     config.openSearchIndexNameSSMParam =
-        "/" + ["vams-" + config.app.baseStackName, "aos", "indexName"].join("/");
+        "/" + [config.name + "-" + config.app.baseStackName, "aos", "indexName"].join("/");
     config.openSearchDomainEndpointSSMParam =
-        "/" + ["vams-" + config.app.baseStackName, "aos", "endPoint"].join("/");
+        "/" + [config.name + "-" + config.app.baseStackName, "aos", "endPoint"].join("/");
 
     //Fill in some basic values to false if blank
     //Note: usually added for backwards compatabibility of an old config file that hasn't had the newest elements added
@@ -115,12 +132,52 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useGenAiMetadata3dLabeling.enabled = false;
     }
 
+    if (config.app.pipelines.useRapidPipeline.enabled == undefined) {
+        config.app.pipelines.useRapidPipeline.enabled = false;
+    }
+
+    if (config.app.pipelines.useModelOps.enabled == undefined) {
+        config.app.pipelines.useModelOps.enabled = false;
+    }
+
     if (config.app.authProvider.useCognito.useUserPasswordAuthFlow == undefined) {
         config.app.authProvider.useCognito.useUserPasswordAuthFlow = false;
     }
 
     if (config.app.pipelines.useConversion3dBasic.enabled == undefined) {
         config.app.pipelines.useConversion3dBasic.enabled = true;
+    }
+
+    if (config.app.authProvider.useExternalOAuthIdp.enabled == undefined) {
+        config.app.authProvider.useExternalOAuthIdp.enabled = false;
+    }
+
+    if (config.app.addStackCloudTrailLogs == undefined) {
+        config.app.addStackCloudTrailLogs = true;
+    }
+
+    if (config.app.useAlb.addAlbS3SpecialVpcEndpoint == undefined) {
+        config.app.useAlb.addAlbS3SpecialVpcEndpoint = true;
+    }
+
+    if (config.app.assetBuckets.createNewBucket == undefined) {
+        config.app.assetBuckets.createNewBucket = true;
+    }
+
+    if (config.app.webUi.allowUnsafeEvalFeatures == undefined) {
+        config.app.webUi.allowUnsafeEvalFeatures = false;
+    }
+
+    if (config.app.api == undefined) {
+        config.app.api = { globalRateLimit: 50, globalBurstLimit: 100 };
+    }
+
+    if (config.app.api.globalRateLimit == undefined) {
+        config.app.api.globalRateLimit = 50;
+    }
+
+    if (config.app.api.globalBurstLimit == undefined) {
+        config.app.api.globalBurstLimit = 100;
     }
 
     //Load S3 Policy statements JSON
@@ -138,24 +195,61 @@ export function getConfig(app: cdk.App): Config {
         config.s3AdditionalBucketPolicyJSON = undefined;
     }
 
-    //If we are govCloud, we always use VPC, ALB deploy, use OpenSearch Provisioned (serverless not available in GovCloud), and disable location service (currently not supported in GovCloud 08-29-2023)
+    //If we are govCloud, check for certain features that are required to be on or off.
     //Note: FIP not required for use in GovCloud. Some GovCloud endpoints are natively FIPS compliant regardless of this flag to use specific FIPS endpoints.
     //Note: FedRAMP best practices require all Lambdas/OpenSearch behind VPC but not required for GovCloud
     if (config.app.govCloud.enabled) {
-        if (
-            !config.app.useGlobalVpc.enabled ||
-            !config.app.useAlb.enabled ||
-            config.app.openSearch.useServerless.enabled ||
-            config.app.useLocationService.enabled
-        ) {
-            console.warn(
-                "Configuration Warning: Due to GovCloud being enabled, auto-enabling Use Global VPC, Use ALB, Use OpenSearch Provisioned, and disable Use Location Services"
+        if (!config.app.useGlobalVpc.enabled) {
+            throw new Error(
+                "Configuration Error: GovCloud must have useGlobalVpc.enabled set to true"
             );
         }
-        config.app.useGlobalVpc.enabled = true;
-        config.app.useAlb.enabled = true;
-        config.app.openSearch.useServerless.enabled = false;
-        config.app.useLocationService.enabled = false;
+
+        if (!config.app.useAlb.enabled) {
+            throw new Error(
+                "Configuration Error: GovCloud must have app.useAlb.enabled set to true"
+            );
+        }
+
+        if (config.app.openSearch.useServerless.enabled) {
+            throw new Error(
+                "Configuration Error: GovCloud must have openSearch.useServerless.enabled set to false"
+            );
+        }
+
+        if (config.app.useLocationService.enabled) {
+            throw new Error(
+                "Configuration Error: GovCloud must have app.useLocationService.enabled set to false"
+            );
+        }
+
+        //Now check additional IL6 compliance
+        // https://aws.amazon.com/compliance/services-in-scope/DoD_CC_SRG/
+        if (config.app.govCloud.il6Compliant) {
+            if (config.app.authProvider.useCognito.enabled) {
+                throw new Error(
+                    "Configuration Error: GovCloud IL6 must have app.authProvider.useCognito.enabled set to false"
+                );
+            }
+
+            if (config.app.useWaf) {
+                throw new Error(
+                    "Configuration Error: GovCloud IL6 must have config.app.useWaf set to false"
+                );
+            }
+
+            if (!config.app.useGlobalVpc.useForAllLambdas) {
+                throw new Error(
+                    "Configuration Error: GovCloud IL6 must have app.useGlobalVpc.useForAllLambdas set to true"
+                );
+            }
+
+            if (!config.app.useKmsCmkEncryption.enabled) {
+                throw new Error(
+                    "Configuration Error: GovCloud IL6 must have config.app.useKmsCmkEncryption.enabled set to true"
+                );
+            }
+        }
     }
 
     //If using ALB, data pipelines , or opensearch provisioned, make sure Global VPC is on as this needs to be in a VPC
@@ -163,6 +257,8 @@ export function getConfig(app: cdk.App): Config {
         config.app.useAlb.enabled ||
         config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
         config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
+        config.app.pipelines.useRapidPipeline.enabled ||
+        config.app.pipelines.useModelOps.enabled ||
         config.app.openSearch.useProvisioned.enabled
     ) {
         if (!config.app.useGlobalVpc.enabled) {
@@ -175,6 +271,24 @@ export function getConfig(app: cdk.App): Config {
     }
 
     //Any configuration warnings/errors checks
+    if (
+        config.app.assetBuckets.createNewBucket &&
+        (!config.app.assetBuckets.defaultNewBucketSyncDatabaseId ||
+            config.app.assetBuckets.defaultNewBucketSyncDatabaseId == "" ||
+            config.app.assetBuckets.defaultNewBucketSyncDatabaseId == "UNDEFINED")
+    ) {
+        throw new Error(
+            "Configuration Error: Must define a app.assetBuckets.defaultNewBucketSyncDatabaseId if app.assetBuckets.createNewBucke is true"
+        );
+    }
+
+    //If we aren't creating a new bucket and aren't adding any external asset buckets throw an error
+    if (!config.app.assetBuckets.createNewBucket && !config.app.assetBuckets.externalAssetBuckets) {
+        throw new Error(
+            "Configuration Error: Must define at least a new asset bucket and/or app.assetBuckets.externalAssetBuckets"
+        );
+    }
+
     if (
         config.app.useGlobalVpc.enabled &&
         config.app.useGlobalVpc.optionalExternalVpcId &&
@@ -226,20 +340,44 @@ export function getConfig(app: cdk.App): Config {
         config.app.useGlobalVpc.optionalExternalVpcId != ""
     ) {
         if (
-            !config.app.useGlobalVpc.optionalExternalPrivateSubnetIds ||
-            config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == "UNDEFINED" ||
-            config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == ""
+            !config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds ||
+            config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds == "UNDEFINED" ||
+            config.app.useGlobalVpc.optionalExternalIsolatedSubnetIds == ""
         ) {
             throw new Error(
-                "Configuration Error: Must define at least one private subnet ID when using an External VPC ID."
+                "Configuration Error: Must define at least one isolated subnet ID when using an External VPC ID."
             );
         }
     }
 
+    //If using RapidPipeline or ModelOps, make sure Imported VPC has at least one private subnet included
     if (
         config.app.useGlobalVpc.enabled &&
-        config.app.useAlb.enabled &&
-        config.app.useAlb.usePublicSubnet &&
+        config.app.useGlobalVpc.optionalExternalVpcId &&
+        config.app.useGlobalVpc.optionalExternalVpcId != "UNDEFINED" &&
+        config.app.useGlobalVpc.optionalExternalVpcId != ""
+    ) {
+        if (
+            config.app.pipelines.useRapidPipeline.enabled ||
+            config.app.pipelines.useModelOps.enabled
+        ) {
+            if (
+                !config.app.useGlobalVpc.optionalExternalPrivateSubnetIds ||
+                config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == "UNDEFINED" ||
+                config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == ""
+            ) {
+                throw new Error(
+                    "Configuration Error: Must define at least one private subnet ID when using RapidPipeline."
+                );
+            }
+        }
+    }
+
+    if (
+        ((config.app.useAlb.enabled && config.app.useAlb.usePublicSubnet) ||
+            config.app.pipelines.useRapidPipeline.enabled ||
+            config.app.pipelines.useModelOps.enabled) &&
+        config.app.useGlobalVpc.enabled &&
         config.app.useGlobalVpc.optionalExternalVpcId &&
         config.app.useGlobalVpc.optionalExternalVpcId != "UNDEFINED" &&
         config.app.useGlobalVpc.optionalExternalVpcId != ""
@@ -250,7 +388,7 @@ export function getConfig(app: cdk.App): Config {
             config.app.useGlobalVpc.optionalExternalPublicSubnetIds == ""
         ) {
             throw new Error(
-                "Configuration Error: Must define at least one public subnet ID when using an External VPC ID and Public ALB configuration."
+                "Configuration Error: Must define at least one public subnet ID when using an External VPC ID and Public ALB or RapidPipeline configuration."
             );
         }
     }
@@ -279,6 +417,16 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
+    if (
+        !config.app.adminUserId ||
+        config.app.adminUserId == "" ||
+        config.app.adminUserId == "UNDEFINED"
+    ) {
+        throw new Error(
+            "Configuration Error: Must specify an initial admin user ID as part of this deployment configuration!"
+        );
+    }
+
     //Error check when implementing openSearch
     if (
         config.app.openSearch.useServerless.enabled &&
@@ -290,7 +438,7 @@ export function getConfig(app: cdk.App): Config {
     //Check when implementing auth providers
     if (
         config.app.authProvider.useCognito.enabled &&
-        config.app.authProvider.useExternalOathIdp.enabled
+        config.app.authProvider.useExternalOAuthIdp.enabled
     ) {
         throw new Error("Configuration Error: Must specify only one authentication method!");
     }
@@ -303,19 +451,75 @@ export function getConfig(app: cdk.App): Config {
             "Configuration Warning: UserPasswordAuth flow is enabled for Cognito which allows non-SRP authentication methods with username/passwords. This could be a security finding in some deployment environments!"
         );
     }
-    config.app.authProvider.useCognito.useUserPasswordAuthFlow;
 
     if (
-        config.app.authProvider.useExternalOathIdp.enabled &&
-        (config.app.authProvider.useExternalOathIdp.idpAuthProviderUrl == "UNDEFINED" ||
-            config.app.authProvider.useExternalOathIdp.idpAuthProviderUrl == "")
+        config.app.authProvider.useExternalOAuthIdp.enabled &&
+        (!config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl == "" ||
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl ==
+                "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl == "" ||
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience ==
+                "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScopeMfa == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScopeMfa == "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint ==
+                "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint ==
+                "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint ==
+                "UNDEFINED" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderDiscoveryEndpoint == "" ||
+            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderDiscoveryEndpoint ==
+                "UNDEFINED")
     ) {
         throw new Error(
-            "Configuration Error: Must specify a external IDP auth URL when using an external OATH provider!"
+            "Configuration Error: Must specify a external IDP auth URL, external IDP principal domain, external IDP client ID, external IDP client secret, Lambda Authorizer JWT Issuer URL, Lambda Authorizer JWT Identity Source, and Lambda Authorizer JWT Audience when using an external OAUTH provider!"
+        );
+    }
+
+    //If using Location services, for now must use cognito due to IDP authenticated role need
+    if (config.app.useLocationService.enabled && !config.app.authProvider.useCognito.enabled) {
+        throw new Error(
+            "Configuration Error: Cannot use location services without using the Cognito authentication method."
+        );
+    }
+
+    //API Configuration Error Checks
+    if (config.app.api.globalRateLimit <= 0) {
+        throw new Error(
+            "Configuration Error: API globalRateLimit must be a positive number greater than 0."
+        );
+    }
+
+    if (config.app.api.globalBurstLimit <= 0) {
+        throw new Error(
+            "Configuration Error: API globalBurstLimit must be a positive number greater than 0."
+        );
+    }
+
+    if (config.app.api.globalBurstLimit < config.app.api.globalRateLimit) {
+        throw new Error(
+            "Configuration Error: API globalBurstLimit must be greater than or equal to globalRateLimit."
         );
     }
 
     return config;
+}
+
+export interface ConfigPublicAssetS3Buckets {
+    bucketArn: string;
+    baseAssetsPrefix: string;
+    defaultSyncDatabaseId: string;
 }
 
 //Public config values that should go into a configuration file
@@ -332,24 +536,30 @@ export interface ConfigPublic {
     //autoDelete: boolean;
     app: {
         baseStackName: string;
-        bucketMigrationStaging: {
-            assetBucketName: string;
+        assetBuckets: {
+            createNewBucket: boolean;
+            defaultNewBucketSyncDatabaseId: string;
+            externalAssetBuckets: [ConfigPublicAssetS3Buckets];
         };
+        adminUserId: string;
         adminEmailAddress: string;
         useFips: boolean;
         useWaf: boolean;
+        addStackCloudTrailLogs: boolean;
         useKmsCmkEncryption: {
             enabled: boolean;
             optionalExternalCmkArn: string;
         };
         govCloud: {
             enabled: boolean;
+            il6Compliant: boolean;
         };
         useGlobalVpc: {
             enabled: boolean;
             useForAllLambdas: boolean;
             addVpcEndpoints: boolean;
             optionalExternalVpcId: string;
+            optionalExternalIsolatedSubnetIds: string;
             optionalExternalPrivateSubnetIds: string;
             optionalExternalPublicSubnetIds: string;
             vpcCidrRange: string;
@@ -371,6 +581,7 @@ export interface ConfigPublic {
         useAlb: {
             enabled: boolean;
             usePublicSubnet: boolean;
+            addAlbS3SpecialVpcEndpoint: boolean;
             domainHost: string;
             certificateArn: string;
             optionalHostedZoneId: string;
@@ -385,18 +596,44 @@ export interface ConfigPublic {
             useGenAiMetadata3dLabeling: {
                 enabled: boolean;
             };
+            useRapidPipeline: {
+                enabled: boolean;
+                ecrContainerImageURI: string;
+            };
+            useModelOps: {
+                enabled: boolean;
+                ecrContainerImageURI: string;
+            };
         };
         authProvider: {
-            credTokenTimeoutSeconds: number;
+            presignedUrlTimeoutSeconds: number;
             useCognito: {
                 enabled: boolean;
                 useSaml: boolean;
                 useUserPasswordAuthFlow: boolean;
+                credTokenTimeoutSeconds: number;
             };
-            useExternalOathIdp: {
+            useExternalOAuthIdp: {
                 enabled: boolean;
                 idpAuthProviderUrl: string;
+                idpAuthClientId: string;
+                idpAuthProviderScope: string;
+                idpAuthProviderScopeMfa: string;
+                idpAuthPrincipalDomain: string;
+                idpAuthProviderTokenEndpoint: string;
+                idpAuthProviderAuthorizationEndpoint: string;
+                idpAuthProviderDiscoveryEndpoint: string;
+                lambdaAuthorizorJWTIssuerUrl: string;
+                lambdaAuthorizorJWTAudience: string;
             };
+        };
+        webUi: {
+            optionalBannerHtmlMessage: string;
+            allowUnsafeEvalFeatures: boolean;
+        };
+        api: {
+            globalRateLimit: number;
+            globalBurstLimit: number;
         };
     };
 }

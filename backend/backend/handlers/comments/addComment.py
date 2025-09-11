@@ -32,7 +32,7 @@ except:
     main_rest_response["body"] = json.dumps({"message": "Failed Loading Environment Variables"})
 
 
-def add_comment(assetId: str, assetVersionIdAndCommentId: str, event: dict) -> dict:
+def add_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, event: dict) -> dict:
     """
     Creates the JSON for a comment based on the parameters and adds the comment to the database
     :param assetId: string containing the assetId that the comment will be attached to
@@ -51,8 +51,8 @@ def add_comment(assetId: str, assetVersionIdAndCommentId: str, event: dict) -> d
         "assetId": assetId,
         "assetVersionId:commentId": assetVersionIdAndCommentId,
         "commentBody": event["body"]["commentBody"],
-        "commentOwnerID": event["requestContext"]["authorizer"]["jwt"]["claims"]["sub"],
-        "commentOwnerUsername": event["requestContext"]["authorizer"]["jwt"]["claims"]["email"],
+        "commentOwnerID": userId,
+        "commentOwnerUsername": userId,
         "dateCreated": dtNow,
     }
     try:
@@ -78,12 +78,21 @@ def lambda_handler(event: dict, context: dict) -> dict:
     response = STANDARD_JSON_RESPONSE
     logger.info(event)
 
+    # Parse request body
+    if not event.get('body'):
+        message = 'Request body is required'
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        logger.error(response)
+        return response
+
     try:
-        if isinstance(event["body"], str):
-            event["body"] = json.loads(event["body"])
-    except Exception as e:
-        response["statusCode"] = 500
-        response["body"] = {"message": "Internal Server Error"}
+        if isinstance(event['body'], str):
+            event['body'] = json.loads(event['body'])
+    except json.JSONDecodeError as e:
+        logger.exception(f"Invalid JSON in request body: {e}")
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": "Invalid JSON in request body"})
         return response
 
     pathParameters = event.get("pathParameters", {})
@@ -111,16 +120,17 @@ def lambda_handler(event: dict, context: dict) -> dict:
 
         httpMethod = event['requestContext']['http']['method']
         method_allowed_on_api = False
+        userId = None
 
-        asset_object = get_asset_object_from_id(pathParameters["assetId"])
+        asset_object = get_asset_object_from_id(None, pathParameters["assetId"])
         asset_object.update({"object__type": "asset"})
 
         # Add Casbin Enforcer to check if the current user has permissions to POST the Comment
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", asset_object, httpMethod) and casbin_enforcer.enforceAPI(event):
+        if len(claims_and_roles["tokens"]) > 0:
+            userId = claims_and_roles["tokens"][0]
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(asset_object, httpMethod) and casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if method_allowed_on_api:
             logger.info("Trying to add comment")
@@ -165,7 +175,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
                 return response
 
             # call the add_comment function if everything is valid
-            returned = add_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], event)
+            returned = add_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], userId, event)
             response["statusCode"] = returned["statusCode"]
             response["body"] = json.dumps({"message": returned["message"]})
             logger.info(response)
@@ -179,7 +189,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
             response["statusCode"] = 400
             response["body"] = json.dumps(
-                {"message": "comment " + str(event["body"]["assetVersionId:commentId"] + " already exists.")}
+                {"message": "Comment already exists."}
             )
         else:
             response["statusCode"] = 500

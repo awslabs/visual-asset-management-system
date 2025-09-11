@@ -5,29 +5,12 @@
 
 import { useEffect, useState } from "react";
 import ReactDOM from "react-dom";
-import { Cache } from "aws-amplify";
-import { Authenticator } from "@aws-amplify/ui-react";
-import { BrowserRouter, HashRouter } from "react-router-dom";
+import { Cache, Auth as AmplifyAuth } from "aws-amplify";
+import { HashRouter } from "react-router-dom";
 import { TopNavigation } from "@cloudscape-design/components";
 import { AppRoutes } from "./routes";
 import logoWhite from "./resources/img/logo_white.png";
 import "@aws-amplify/ui-react/styles.css";
-
-import { GlobalHeader } from "./common/GlobalHeader";
-import { Header } from "./authenticator/Header";
-import { Footer } from "./authenticator/Footer";
-import { SignInHeader } from "./authenticator/SignInHeader";
-import { SignInFooter } from "./authenticator/SignInFooter";
-
-const components = {
-    GlobalHeader,
-    Header,
-    SignIn: {
-        Header: SignInHeader,
-        Footer: SignInFooter,
-    },
-    Footer,
-};
 
 const HeaderPortal = ({ children }) => {
     const domNode = document.querySelector("#headerWrapper");
@@ -36,6 +19,10 @@ const HeaderPortal = ({ children }) => {
 
 function App() {
     const [navigationOpen, setNavigationOpen] = useState(true);
+
+    const user = localStorage.getItem("user")
+        ? JSON.parse(localStorage.getItem("user"))
+        : undefined;
 
     useEffect(() => {
         const cachedNavigationOpen = Cache.getItem("navigationOpen");
@@ -56,54 +43,62 @@ function App() {
         }
     }, [navigationOpen]);
 
+    console.log("current user is", user);
+
+    const menuText = user?.username;
+    localStorage.setItem("email", user?.username);
+
+    const signOut = () => {
+        localStorage.clear();
+        AmplifyAuth.signOut()
+            .then(() => {
+                console.log("User signed out - signout button clicked");
+            })
+            .catch((error) => {
+                console.log("User sign out error - signout button clicked", error);
+            });
+
+        window.location.href = "/";
+    };
+
     return (
-        <Authenticator components={components} loginMechanisms={["email"]} hideSignUp={true}>
-            {({ signOut, user }) => {
-                const menuText =
-                    user.signInUserSession?.idToken?.payload?.name || user.username || user.email;
-                localStorage.setItem("email", menuText);
-                return (
-                    <>
-                        <HeaderPortal>
-                            <GlobalHeader />
-                            <TopNavigation
-                                identity={{
-                                    href: "/",
-                                    logo: {
-                                        src: logoWhite,
-                                        alt: "Visual Asset Management System",
-                                    },
-                                }}
-                                utilities={[
-                                    {
-                                        type: "menu-dropdown",
-                                        text: menuText,
-                                        description: menuText,
-                                        iconName: "user-profile",
-                                        onItemClick: (e) => {
-                                            if (e?.detail?.id === "signout") signOut();
-                                        },
-                                        items: [{ id: "signout", text: "Sign out" }],
-                                    },
-                                ]}
-                                i18nStrings={{
-                                    searchIconAriaLabel: "Search",
-                                    searchDismissIconAriaLabel: "Close search",
-                                    overflowMenuTriggerText: "More",
-                                }}
-                            />
-                        </HeaderPortal>
-                        <HashRouter>
-                            <AppRoutes
-                                navigationOpen={navigationOpen}
-                                user={user}
-                                setNavigationOpen={setNavigationOpen}
-                            />
-                        </HashRouter>
-                    </>
-                );
-            }}
-        </Authenticator>
+        <>
+            <HeaderPortal>
+                <TopNavigation
+                    identity={{
+                        href: "/",
+                        logo: {
+                            src: logoWhite,
+                            alt: "Visual Asset Management System",
+                        },
+                    }}
+                    utilities={[
+                        {
+                            type: "menu-dropdown",
+                            text: menuText,
+                            description: menuText,
+                            iconName: "user-profile",
+                            onItemClick: (e) => {
+                                if (e?.detail?.id === "signout") signOut();
+                            },
+                            items: [{ id: "signout", text: "Sign out" }],
+                        },
+                    ]}
+                    i18nStrings={{
+                        searchIconAriaLabel: "Search",
+                        searchDismissIconAriaLabel: "Close search",
+                        overflowMenuTriggerText: "More",
+                    }}
+                />
+            </HeaderPortal>
+            <HashRouter>
+                <AppRoutes
+                    navigationOpen={navigationOpen}
+                    user={user}
+                    setNavigationOpen={setNavigationOpen}
+                />
+            </HashRouter>
+        </>
     );
 }
 

@@ -115,6 +115,14 @@ def lambda_handler(event, context):
     try:
         httpMethod = event['requestContext']['http']['method']
 
+        # Parse request body
+        if not event.get('body'):
+            message = 'Request body is required'
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            logger.error(response)
+            return response
+
         if isinstance(event['body'], str):
             event['body'] = json.loads(event['body'])
 
@@ -139,7 +147,7 @@ def lambda_handler(event, context):
             },
             'subscribers': {
                 'value': event['body']['subscribers'],
-                'validator': 'EMAIL_ARRAY'
+                'validator': 'USERID_ARRAY'
             }
         })
 
@@ -152,12 +160,12 @@ def lambda_handler(event, context):
         claims_and_roles = request_to_claims(event)
         method_allowed_on_api = False
 
-        asset_object = get_asset_object_from_id(event['body']["entityId"])
+        asset_object = get_asset_object_from_id(None, event['body']["entityId"])
         asset_object.update({"object__type": "asset"})
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if (casbin_enforcer.enforceAPI(event) and
-                    casbin_enforcer.enforce(f"user::{user_name}", asset_object, "POST")):
+                    casbin_enforcer.enforce(asset_object, "POST")):
                 method_allowed_on_api = True
 
         if method_allowed_on_api and httpMethod == 'DELETE':

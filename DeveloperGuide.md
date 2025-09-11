@@ -1,20 +1,146 @@
 <h1> VAMS Developer Guide </h1>
 
+## Architecture components
+
+### Architecture Overview
+
+![VAMS Configuration Architecture](./diagrams/Commercial-GovCloud-VAMS_Architecture.png)
+
+### Backend
+
+VAMS Backend is composed of AWS Lambda functions that are accessed through an AWS API Gateway.
+
+#### Architecture diagrams for Individual components
+
+#### Asset Management
+
+![asset_management](./diagrams/asset_management.jpeg)
+
+#### Pipelines Creation
+
+Pipelines are a feature in VAMS that allow you to edit
+![pipelines_creation](./diagrams/pipeline_creation.jpeg)
+
+#### Workflows Execution
+
+![Workflows Execution](/diagrams/workflow_execution.jpeg)
+
+### Frontend WebApp
+
+VAMS Frontend is a single page ReactJS application. It can be deployed via CloudFront or ALB
+
+![Web App Network CloudFront](./diagrams/web_app_network_cf.jpeg)
+
+![Web App Network ALB](./diagrams/web_app_network_alb.jpeg)
+
+### Security
+
+VAMS API and frontend are authorized through AWS Cognito user accounts by default. Additional options include external IDP use.
+
+![Security](./diagrams/security.jpeg)
+
+Federated authentication with SAML is available with additional configuration. See [SAML Authentication in the developer guide](./DeveloperGuide.md#saml-authentication) for instructions.
+
+### Code Layout
+
+| component                 | folder           |
+| ------------------------- | ---------------- |
+| web application           | web              |
+| cdk deployment            | infra            |
+| api and backend           | backend          |
+| use-case pipeline backend | backendPipelines |
+
 ## Install
 
 ### Requirements
 
--   Python 3.10
+-   Python 3.12
 -   Poetry (for managing python dependencies in the VAMS backend)
 -   Docker
--   Node >=18.7
+-   Node >=20.18.1
 -   Yarn >=1.22.19
 -   Node Version Manager (nvm)
+-   Conda-forge [only for optional local development]
 -   AWS cli
 -   AWS CDK cli
 -   Programatic access to AWS account at minimum access levels outlined above.
 
 ### Deploy VAMS for the First Time
+
+#### Local Development
+
+For local development, there are 2 options in regards to the backend: pointing to a local mocked backend or a remote backend that has already been deployed.
+
+##### Local Backend
+
+Some local development is possible when using a local backend, but not all APIs are available locally.
+
+Pre-reqs for local development:
+
+-   Conda installed and on PATH
+-   In `web/src/config.ts`, update the following values:
+    -   Set `DEV_API_ENDPOINT='http://localhost:8002/'`
+
+Terminal 1 (Running mocked API server):
+Before running the mockup API server, make sure to update amplifyConfig and secureConfig values accordingly in `backend/backend/localDev_api_server.py`
+Note: You may get errors due to other environment variables not set, you can ignore these as they do not hold up the mock API server
+
+```bash
+source ~/.bash_profile # for conda
+cd ./backend
+conda env create --name vams --file=vams-local.conda.yaml -y
+conda activate vams
+USE_LOCAL_MOCKS=true python3 backend/localDev_api_server.py # port 8002 # powershell: $env:USE_LOCAL_MOCKS = "true"
+```
+
+Terminal 2 (Running mocked auth server):
+
+```bash
+source ~/.bash_profile # for conda
+cd ./backend
+conda env create --name vams --file=vams-local.conda.yaml -y
+conda activate vams
+python3 localDev_oauth2_server.py # port 9031
+```
+
+Terminal 3 (Running web server):
+
+```bash
+cd ./web && yarn install && npm run build && python3 -m http.server 8001 -d build
+```
+
+The `yarn install` only need to be run once if dependencies haven't been modified, local frontend can be started with only:
+
+`npm run build && python3 -m http.server 8001 -d build`
+
+or `npm run start` to have **live reload** on code changes.
+
+_Note_: `npm run start` will need the port set via an environment variable `PORT=8001`.
+
+Now load [http://localhost:8001](http://localhost:8001) in a browser. (Don't need to provide any credentials on login)
+
+##### Remote Backend
+
+Pointing local frontend to a remote backend assumes the backend has already been deployed and functioning.
+
+-   In `web/src/config.ts`, update the following values:
+    -   Update `DEV_API_ENDPOINT` to point to the remote API endpoint
+
+Terminal 1 (Running web server):
+
+```bash
+cd ./web && yarn install && npm run build && cd ./build
+```
+
+The `yarn install` only need to be run once if dependencies haven't been modified, local frontend can be started with only:
+
+`npm run build && python3 -m http.server 8001 -d build`
+
+or `npm run start` to have **live reload** on code changes.
+
+_Note_: `npm run start` will need the port set via an environment variable `PORT=8001`.
+
+Now load [http://localhost:8001](http://localhost:8001) in a browser.
 
 #### Build & Deploy Steps (Linux/Mac)
 
@@ -62,7 +188,23 @@ Please note, depending on what changes are in flight, VAMS may not be available 
 
 Deployment data migration documentation and scripts between major VAMS version deployments are located in `/infra/deploymentDataMigration`
 
-### SAML Authentication
+### Deployment Troubleshooting
+
+#### CDK Error: failed commit on ref "manifest-sha256:...": unexpected status from PUT request to https://....dkr.ecr.REGION.amazonaws.com/v2/foo/manifests/bar: 400 Bad Request
+
+#### CDK Error: Lambda function XXX reached terminal FAILED state due to InvalidImage(ImageLayerFailure: UnsupportedImageLayerDetected - Layer Digest sha256:XXX) and failed to stabilize
+
+If you receive these errors, it may be related to a defect in the latest CDK version working with Docker documented here: https://github.com/aws/aws-cdk/issues/31549
+
+As a possible workaround if you are using the docker buildx platform, set the following terminal or operating system environment variable to stop the error:
+`BUILDX_NO_DEFAULT_ATTESTATIONS=1`
+
+Additionally, you may need to clear docker cache and set docker to handle cross-platform emulation when deploying from ARM64 deployment machines (i.e., Mac M3):
+
+-   Clear your Docker cache: `docker system prune -a`
+-   Set cross-platform emulation: `docker run --rm --privileged multiarch/qemu-user-static --reset -p yes`
+
+### SAML Authentication - Cognito
 
 SAML authentication enables you to provision access to your VAMS instance using your organization's federated identity provider such as Auth0, Active Directory, or Google Workspace.
 
@@ -84,7 +226,7 @@ The following stack outputs are required by your identity provider to establish 
 -   SP urn / Audience URI / SP entity ID
 -   CloudFrontDistributionUrl for the list of callback urls. Include this url with and without a single trailing slack (e.g., <https://example.com> and <https://example.com/>)
 
-### JWT Token Authentication
+### JWT Token Authentication - Cognito
 
 VAMS API requires a valid authorization token that will be validated on each call against the configured authentication system (eg. Cognito).
 
@@ -103,6 +245,28 @@ The critical component right now is that the authenticated VAMS username be incl
 ```
 
 NOTE: GovCloud deployments when the GovCloud configuration setting is true only support v1 of the Cognito lambdas. This means that ONLY Access tokens produced by Cognito can be used with VAMS API Calls for authentication/authorization. Otherwise both ID and Access tokens can be used for Non-govcloud deployments.
+
+### LoginProfile Custom Organizational Updates
+
+VAMS supports adding custom logic to how VAMS user profile information is updated and with what information.
+
+This logic should be overriden by each oranization as needed within `/backend/backend/customConfigCommon/customAuthLoginProfile.py`
+
+The default logic is to fill in and override login profile information like email from the JWT token returned by the IDP.
+
+LoginProfile is updated via a authenticated API call by the user from the webUI (on login) via a POST call to `/api/auth/loginProfile/{userId}`.
+
+Email field of the loginProfile is used by systems that need to send emails to the user. It will revert to the userId of email is blank or not in an email format as a backup.
+
+### Auth Claims / MFACheck Custom Organizational Updates
+
+VAMS supports adding custom logic to how to check auth claims, including if Multi-Factor Authentication (MFA) is enabled for a logged in user when using an external OAUTH IDP configuration
+
+This logic should be overriden by each oranization as needed within `/backend/backend/customConfigCommon/customAuthClaimsCheck.py`
+
+The default logic is for external OAUTH IDP is to just set the MFA enabled flag hard-coded to false. As each IDP is different, this must be a custom call.
+
+NOTE: Be mindful of the logic used as this can have great performance impacts for VAMS. Try to use caches in this method or reduce the amount of external API calls as this method is called very frequently during VAMS API authorization checks.
 
 ### Local Docker Builds - Custom Build Settings
 
@@ -128,7 +292,7 @@ RUN pip config set global.cert /var/task/Combined.crt
 
 4. You may need to add additional environment variables to allow using the ceritificate to be used for for `apk install` or `apt-get` system actions.
 
-#### Web Development
+### Web Development
 
 The web front-end runs on NodeJS React with a supporting library of amplify-js SDK. The React web page is setup as a single page app using React routes with a hash (#) router.
 
@@ -138,7 +302,56 @@ Infrastructure Note (Hash Router): The hash router was chosen in order so suppor
 
 The front end when loading the page receives a configuration from the AWS backend to include amplify storage bucket, API Gateway/Cloudfront endpoints, authentication endpoints, and features enabled. Some of these are retrieved on load pre-authentication while others are received post-authentication. Features enabled is a comma-deliminated list of infrastructure features that were enabled/disabled on CDK deployment through the `config.json` file and toggle different front-end features to view.
 
-#### Implementing pipelines outside of Lambda
+#### 3D Asset Types Supported for In-Browser Viewing
+
+VAMS currently integrates with several different asset viewers and supports the following formats for viewing 3D assets interactively.
+
+| Name                              | Extension | Type   | Viewer             | Excluded Library | Notes                                                                                        |
+| :-------------------------------- | :-------- | :----- | :----------------- | :--------------- | -------------------------------------------------------------------------------------------- |
+| Wavefront                         | obj       | text   | Online 3D Viewer   |                  |                                                                                              |
+| 3D Studio                         | 3ds       | binary | Online 3D Viewer   |                  |                                                                                              |
+| Stereolithography                 | stl       | text   | Online 3D Viewer   |                  |                                                                                              |
+| Stereolithography                 | stl       | binary | Online 3D Viewer   |                  |                                                                                              |
+| glTF                              | gltf      | text   | Online 3D Viewer   |                  |                                                                                              |
+| glTF                              | glb       | binary | Online 3D Viewer   |                  |                                                                                              |
+| Object File Format                | off       | text   | Online 3D Viewer   |                  |                                                                                              |
+| Object File Format                | off       | binary | Online 3D Viewer   |                  |                                                                                              |
+| Dotbim                            | bim       | text   | Online 3D Viewer   |                  |                                                                                              |
+| Rhinoceros 3D                     | 3dm       | binary | Online 3D Viewer   |                  |                                                                                              |
+| Filmbox                           | fbx       | text   | Online 3D Viewer   |                  |                                                                                              |
+| Filmbox                           | fbx       | binary | Online 3D Viewer   |                  |                                                                                              |
+| Collada                           | dae       | text   | Online 3D Viewer   |                  |                                                                                              |
+| Virtual Reality Modeling Language | wrl       | text   | Online 3D Viewer   |                  |                                                                                              |
+| 3D Manufacturing Format           | 3mf       | text   | Online 3D Viewer   |                  |                                                                                              |
+| Additive Manufacturing            | amf       | text   | Online 3D Viewer   |                  |                                                                                              |
+| (Excluded\*) Dotbim               | ifc       | text   | Online 3D Viewer\* | web-ifc          |                                                                                              |
+| (Excluded\*) FreeCad              | fcstd     | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
+| (Excluded\*) Boundary Rep         | brep      | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
+| (Excluded\*) ISO 10303 CAD        | step      | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
+| (Excluded\*) Graphics Exchange    | iges      | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
+| Point Cloud - LiDAR Data Exchange | laz       | binary | Potree Viewer      |                  |                                                                                              |
+| Point Cloud - LiDAR Data Exchange | las       | binary | Potree Viewer      |                  |                                                                                              |
+| Point Cloud - LiDAR Data Exchange | e57       | binary | Potree Viewer      |                  |                                                                                              |
+| Polygon File Format               | ply       | binary | Potree Viewer      |                  | Type stores meshes and point clouds - VAMS currently showing only point cloud viewer for PLY |
+| Polygon File Format               | ply       | text   | Potree Viewer      |                  |                                                                                              |
+
+Viewers available include:
+
+-   [Online 3D Viewer](https://github.com/kovacsv/Online3DViewer)
+-   [Potree Viewer](https://github.com/potree/potree)
+
+Please take note:
+
+-   While we are limited to these formats to view assets, any file format may be uploaded to VAMS.
+-   There are some limitations with formats that leverage multiple files such as glTF that uses json with references to other files.
+-   Some viewers like Potree Viewer requires additional pipelines to be deployed to fully generate and view point cloud files.
+
+Exclusion\* notes:
+
+-   Online 3D Viewer requires the more restrivi licensed opencascade sub-library to view these file types. They are excluded due to VAMS license restrictions on carrying LGPL libraries.
+-   -   If an organizations wishes to implement this sub-library and view these excluded file types with Online 3D viewer, add the excluded file types to the `onlineViewer3DFileFormats` constants array in `./web/src/common/constants/fileFormats.js`. Then add the listed excluded npm library in the web folder through `yarn add`.
+
+### Implementing pipelines outside of Lambda
 
 To process an asset through VAMS using an external system or when a job can take longer than the Lambda timeout of 15 minutes, it is recommended that you use the _Wait for a Callback with the Task Token_ feature so that the Pipeline Lambda can initiate your job and then exit instead of waiting for the work to complete before it also finishes. This reduces your Lambda costs and helps you avoid failed jobs that fail simply because they take longer than the timeout to complete.
 
@@ -167,7 +380,42 @@ Two additional settings enable your job to end with a timeout error by defining 
 
 If you would like your job check in to show that it is still running and fail the step if it does not check in within some amount of time less than the task timeout, define the Task Heartbeat Timeout on the create pipeline screen also. If more time than the specified seconds elapses between heartbeats from the task, this state fails with a States.Timeout error name.
 
-#### Uninstalling
+### Special Configurations
+
+#### Static WebApp - ALB w/ Manual VPC Interface Endpoint Creation
+
+During deployment of the ALB configuration for the static web contents, some organizations require that all VPC endpoints be created outside of a CDK stack.
+
+Turn the `app.useAlb.addAlbS3SpecialVpcEndpoint` infrastructure configuration to `false` in this scenario. The following VPC Interface Endpoint will need to be created as well as the other required steps to link it to the ALB target groups and S3 (after the stack has been deployed):
+
+1. Deploy the stack first with the configuration setting to `false`
+2. Create a VPC Interface Endpoint on the VPC on the same subnets used on the ALB deployment and using/linked to the newly created VPCe security group already setup as part of the stack for the VPC endpoint.
+3. Add a new IAM resource policy on the VPC endpoint to allow all `["s3:Get*", "s3:List*"]` actions for the S3 webAppBucket (bucket name will be the domain name used for the ALB) and its objects
+4. Update the IAM resource policy on the webAppBucket S3 bucket (bucket name will be the domain name used for the ALB) to add a condition to only allow connections from the created VPC Interface Endpoint
+5. Lookup all the Private IP Addresses for each ALB subnet that are assigned to the VPC Interface endpoint
+6. Add to the stack-created ALB target group all the VPCe IP addresses looked up in the previous step.
+7. Update the resource policy of the S3 ALB domainname bucket (which contains the webapp files) to update the condition of `aws:SourceVpce` to point to the new VPCe endpoint ID
+
+#### Single/Multi-S3 Assets Bucket Support and Setup
+
+During deployment of CDK you can define different asset buckets to create and/or use. The `app.assetBuckets.createNewBucket` and `app.assetBuckets.defaultNewBucketSyncDatabaseId` CDK configuration define if the CDK should create and manage a new bucket and which databaseId it should sync direct S3 changes to. The default prefix it uses for this bucket is `/` for assets.
+
+Or, you can additionally define external buckets that already exist to use for assets and syncing. This is defined in the `app.assetBuckets.externalAssetBuckets[]` CDK configuration that requires fields for `app.assetBuckets.externalAssetBuckets[].bucketArn`, `app.assetBuckets.externalAssetBuckets[].baseAssetsPrefix`, `app.assetBuckets.externalAssetBuckets[].defaultSyncDatabaseId` per external bucket. See the [Configuration Guide](./ConfigurationGuide.md) for information on these fields
+
+At least a new creation or 1 external bucket must be defined.
+
+NOTE!!!: Follow the instructions in this External S3 Setup Guide before deploying the VAMS CDK infrastructure if using external buckets!!!
+See the [External S3 Setup Guide](./External-S3-Setup-Guide.md) for all external buckets, especially those going cross-account.
+
+During CDK the S3 Assets Buckets dynamoDB table will be populated with the available buckets defined. This table is the basis for VAMS databases to define which bucket / prefix to use. the defaultSyncDatabaseId is used to narrow down on a database (or create one) if multiple for a bucket/prefix are defined or not existing.
+
+Assets separately store which bucket and bucket prefix they are assigned to once an asset is initially created. This is determined based on what the defaultDatabaseBucketId is at the time of asset creation.
+
+Any buckets within the base asset prefix will also sync changes back to dynamoDB tables and opensearch indexes if changes are made directly. New asset prefix folders will create a new asset in VAMS. File changes under that asset will be picked up by the file manager API calls and auto-index in OpenSearch as needed. Asset folder S3 deletions will not delete assets out of VAMS entirely (it will show as an empty asset) in VAMS, these must be manually archived or deleted through the VAMS API / UI currently.
+
+Existing buckets that are brought in with existing files/asset folders in the base prefix defined will need to change a file in each asset prefix folder or add a `init` file to create/catalog the asset in VAMS. `init` files will be deleted after the asset is processed if you don't/can't change an existing file in a asset folder in S3.
+
+### Uninstalling
 
 1. Run `cdk destroy` from infra folder
 2. Some resources may not be deleted by CDK (e.g S3 buckets and DynamoDB table) and you will have to delete them via aws cli or using aws console
@@ -176,35 +424,61 @@ Note:
 
 After running CDK destroy there might still some resources be running in AWS that will have to be cleaned up manually as CDK does not delete some resources.
 
-#### Deployment Overview
+### Deployment Overview
 
 The CDK deployment deploys the VAMS stack into your account. The components that are created by this app are:
 
 1. Web app hosted on [cloudfront](https://aws.amazon.com/cloudfront/) distribution
-1. [API Gateway](https://aws.amazon.com/api-gateway/) to route front end calls to api handlers.
-1. [Lambda](https://aws.amazon.com/lambda/) Lambda handlers are created per API path.
-1. [DynamoDB](https://aws.amazon.com/dynamodb/) tables to store Workflows, Assets, Pipelines
-1. [S3 Buckets](https://aws.amazon.com/s3/) for assets, cdk deployments and log storage
-1. [Cognito User Pool](https://docs.aws.amazon.com/cognito/) for authentication
-1. [Open Search Collection](https://aws.amazon.com/opensearch-service/features/serverless/) for searching the assets using metadata
+2. [API Gateway](https://aws.amazon.com/api-gateway/) to route front end calls to api handlers.
+3. [Lambda](https://aws.amazon.com/lambda/) Lambda handlers are created per API path.
+4. [DynamoDB](https://aws.amazon.com/dynamodb/) tables to store Workflows, Assets, Pipelines
+5. [S3 Buckets](https://aws.amazon.com/s3/) for assets, cdk deployments and log storage
+6. [Cognito User Pool](https://docs.aws.amazon.com/cognito/) for authentication
+7. [Open Search Collection](https://aws.amazon.com/opensearch-service/features/serverless/) for searching the assets using metadata
    ![ARCHITECTURE](./VAMS_Architecture.jpg)
 
 # API Schema
 
 Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-system/blob/main/VAMS_API.yaml) for details
 
-# Database Schema
+# S3 Buckets
 
-| Table                         | Partition Key | Sort Key   | Attributes                                                                                                                        |
-| ----------------------------- | ------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| AppFeatureEnabledStorageTable | featureName   | n/a        |                                                                                                                                   |
-| AssetStorageTable             | databaseId    | assetId    | assetLocation, assetName, assetType, currentVersion, description, generated_artifacts, isDistributable, previewLocation, versions |
-| JobStorageTable               | jobId         | databaseId |                                                                                                                                   |
-| PipelineStorageTable          | databaseId    | pipelineId | assetType, dateCreated, description, enabled, outputType, pipelineType, pipelineExecutionType                                     |
-| DatabaseStorageTable          | databaseId    | n/a        | assetCount, dateCreated, description                                                                                              |
-| WorkflowStorageTable          | databaseId    | workflowId | dateCreated, description, specifiedPipelines, workflow_arn                                                                        |
-| WorkflowExecutionStorageTable | pk            | sk         | asset_id, database_id, execution_arn, execution_id, workflow_arn, workflow_id, assets                                             |
-| MetadataStorageTable          | databaseId    | assetId    | Varies with user provided attributes                                                                                              |
+| Bucket                 | Description                                                                                                                                                      |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| accessLogsBucket       | For storing access logs from other S3 buckets                                                                                                                    |
+| assetBucket            | Primary bucket for asset storage (optional creation if loading from external)                                                                                    |
+| assetAuxiliaryBucket   | For auto-generated auxiliary working objects associated with asset storage (includes auto-generated previews, visualizer files, temporary storage for pipelines) |
+| artefactsBucket        | For storing artefacts                                                                                                                                            |
+| webAppAccessLogsBucket | For storing web app access logs                                                                                                                                  |
+| webAppBucket           | For hosting the web application (static content)                                                                                                                 |
+
+# DynamoDB Database Tables and Schema
+
+## Tables
+
+| Table                         | Partition Key          | Sort Key                    | Attributes                                                                                                                                      |
+| ----------------------------- | ---------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| AppFeatureEnabledStorageTable | featureName            | n/a                         |                                                                                                                                                 |
+| AssetStorageTable             | databaseId             | assetId                     | assetLocation, assetName, assetType, currentVersion, description, generated_artifacts, isDistributable, previewLocation, versions, tags, status |
+| AssetLinksStorageTable        | assetIdFrom            | assetIdTo                   |                                                                                                                                                 |
+| AssetFileVersionsStorageTable | assetId:assetVersionId | fileKey                     |                                                                                                                                                 |
+| AssetVersionsStorageTable     | assetId                | assetVersionId              | dateCreated, comment, description, specifiedPipelines, createdBy                                                                                |
+| AssetUploadsStorageTable      | uploadId               | assetId                     | databaseId                                                                                                                                      |
+| AuthEntitiesStorageTable      | entityType             | sk                          |                                                                                                                                                 |
+| CommentStorageTable           | assetId                | assetVersionId:commentId    |                                                                                                                                                 |
+| DatabaseStorageTable          | databaseId             | n/a                         | assetCount, dateCreated, description                                                                                                            |
+| MetadataStorageTable          | databaseId             | assetId                     | Varies with user provided attributes                                                                                                            |
+| MetadataSchemaStorageTable    | databaseId             | field                       |                                                                                                                                                 |
+| PipelineStorageTable          | databaseId             | pipelineId                  | assetType, dateCreated, description, enabled, outputType, pipelineType, pipelineExecutionType, inputParameters                                  |
+| RolesStorageTable             | roleName               | n/a                         |                                                                                                                                                 |
+| SubscriptionsStorageTable     | eventName              | entityName_entityId         |                                                                                                                                                 |
+| TagStorageTable               | tagName                | n/a                         |                                                                                                                                                 |
+| TagTypeStorageTable           | tagTypeName            | n/a                         |                                                                                                                                                 |
+| UserRolesStorageTable         | userId                 | roleName                    |                                                                                                                                                 |
+| UserStorageTable              | userId                 | n/a                         | email                                                                                                                                           |
+| S3AssetBucketsStorageTable    | bucketId               | bucketName:baseAssetsPrefix | bucketName, baseAssetsPrefix                                                                                                                    |
+| WorkflowStorageTable          | databaseId             | workflowId                  | dateCreated, description, specifiedPipelines, workflow_arn                                                                                      |
+| WorkflowExecutionStorageTable | assetId                | executionId                 | workflowId, databaseId, workflow_arn, execution_arn, startDate, stopDate, executionStatus                                                       |
 
 ## AssetStorageTable
 
@@ -217,6 +491,13 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 | description         | String    | The user provided description                                                                                  |
 | generated_artifacts | Map       | S3 bucket and key references to artifacts generated automatically through pipelines when an asset is uploaded. |
 | isDistributable     | Boolean   | Whether the asset is distributable                                                                             |
+| bucketId            | String    | The bucket ID where this asset is stored that matches S3AssetBucketsStorageTable                               |
+
+### Global Secondary Indexes
+
+| Index Name  | Partition Key | Sort Key | Description                                 |
+| ----------- | ------------- | -------- | ------------------------------------------- |
+| BucketIdGSI | bucketId      | assetId  | For querying assets to a S3 bucket location |
 
 ## PipelineStorageTable
 
@@ -233,11 +514,12 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 
 ## DatabaseStorageTable
 
-| Field       | Data Type | Description                       |
-| ----------- | --------- | --------------------------------- |
-| assetCount  | String    | Number of assets in this database |
-| dateCreated | String    | Creation date of this record      |
-| description | String    | User provided description         |
+| Field           | Data Type | Description                                                                         |
+| --------------- | --------- | ----------------------------------------------------------------------------------- |
+| assetCount      | String    | Number of assets in this database                                                   |
+| dateCreated     | String    | Creation date of this record                                                        |
+| description     | String    | User provided description                                                           |
+| defaultBucketId | String    | Default bucket ID to use for new assets that matches the S3AssetBucketsStorageTable |
 
 ## WorkflowStorageTable
 
@@ -263,6 +545,49 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 | executionStatus | String    | Execution final status (if blank, still running)                                |
 | assets          | List, Map | List of Maps of asset objects (see AssetStorageTable for attribute definitions) |
 
+### Global Secondary Indexes
+
+| Index Name     | Partition Key | Sort Key    | Description                                   |
+| -------------- | ------------- | ----------- | --------------------------------------------- |
+| WorkflowIdGSI  | assetId       | workflowId  | For querying executions by asset and workflow |
+| ExecutionIdGSI | workflowId    | executionId | For querying executions by workflow           |
+
+## AssetLinksStorageTable
+
+| Field       | Data Type | Description                         |
+| ----------- | --------- | ----------------------------------- |
+| assetIdFrom | String    | Source asset ID in the relationship |
+| assetIdTo   | String    | Target asset ID in the relationship |
+
+### Global Secondary Indexes
+
+| Index Name     | Partition Key | Sort Key | Description                                |
+| -------------- | ------------- | -------- | ------------------------------------------ |
+| AssetIdFromGSI | assetIdFrom   | n/a      | For querying all outgoing links from asset |
+| AssetIdToGSI   | assetIdTo     | n/a      | For querying all incoming links to asset   |
+
+## AssetUploadsStorageTable
+
+| Field      | Data Type | Description                         |
+| ---------- | --------- | ----------------------------------- |
+| uploadId   | String    | Unique identifier for the upload    |
+| assetId    | String    | Asset identifier                    |
+| databaseId | String    | Database to which the asset belongs |
+
+### Global Secondary Indexes
+
+| Index Name    | Partition Key | Sort Key | Description                      |
+| ------------- | ------------- | -------- | -------------------------------- |
+| AssetIdGSI    | assetId       | uploadId | For querying uploads by asset    |
+| DatabaseIdGSI | databaseId    | uploadId | For querying uploads by database |
+
+## SubscriptionsStorageTable
+
+| Field               | Data Type | Description                       |
+| ------------------- | --------- | --------------------------------- |
+| eventName           | String    | Name of the event to subscribe to |
+| entityName_entityId | String    | Combined entity name and ID       |
+
 ## MetadataStorageTable
 
 | Field       | Data Type | Description                                  |
@@ -270,8 +595,30 @@ Please see [Swagger Spec](https://github.com/awslabs/visual-asset-management-sys
 | asset_id    | String    | Asset identifier for this workflow execution |
 | database_id | String    | Database to which the asset belongs          |
 
-Attributes are driven by user input. No predetermined fields aside from the partition and sort key.
-From rel 1.4 onwards, when you add metadata on a file / folder, the s3 key prefix of the file/folder is used as the asset key in the metadata table
+## UserStorageTable
+
+| Field  | Data Type | Description                               |
+| ------ | --------- | ----------------------------------------- |
+| userId | String    | (PK) Main user ID associated with profile |
+| email  | String    | Email belonging to the user               |
+
+## S3AssetBucketsStorageTable
+
+| Field                       | Data Type | Description                                                |
+| --------------------------- | --------- | ---------------------------------------------------------- |
+| bucketId                    | String    | Unique identifier (UUID/GUID) for the bucket configuration |
+| bucketName:baseAssetsPrefix | String    | Composite key combining bucket name and prefix             |
+| bucketName                  | String    | Name of the S3 bucket used for asset storage               |
+| baseAssetsPrefix            | String    | Base prefix path within the bucket for assets              |
+| isVersioningEnabled         | Bool      | If the bucket has versioning enabled or not                |
+
+### Global Secondary Indexes
+
+| Index Name    | Partition Key | Sort Key         | Description                             |
+| ------------- | ------------- | ---------------- | --------------------------------------- |
+| bucketNameGSI | bucketName    | baseAssetsPrefix | For querying buckets by name and prefix |
+
+The S3AssetBucketsStorageTable stores information about S3 buckets used for asset storage in the VAMS system. This table supports a multi-bucket architecture where assets can be stored across different S3 buckets with different base prefixes. The table is populated during deployment by a custom resource that adds entries for each bucket configured in the system.
 
 # Updating Backend
 
@@ -355,11 +702,42 @@ def lambda_handler(event, context):
     Example of a NoOp pipeline
     Uploads input file to output
     """
-    print(event)
-    if isinstance(event['body'], str):
-        data = json.loads(event['body'])
-    else:
-        data = event['body']
+    logger.info(event)
+    response = {
+        'statusCode': 200,
+        'body': '',
+        'headers': {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache, no-store'
+        }
+    }
+
+    # Parse request body
+    if not event.get('body'):
+        message = 'Request body is required'
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        logger.error(response)
+        return response
+
+        # Parse request body with enhanced error handling
+        body = event.get('body')
+
+        # Parse JSON body safely
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                return validation_error(body={'message': "Invalid JSON in request body"})
+        elif isinstance(body, dict):
+            body = body
+        else:
+            message = 'Request body cannot be parsed'
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            logger.error(response)
+            return response
 
     write_input_output(data['inputS3AssetFilePath'], data['outputS3AssetFilesPath'])
     return {
@@ -439,6 +817,40 @@ NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback 
 | :------------------------------------------------------ | :----------------------------------------- |
 | OBJ, GLB/GLTF, FBX, ABC, DAE, PLY, STL, USD (3D Meshes) | vamsExecuteGenAiMetadata3dLabelingPipeline |
 
+### Standard Type - RapidPipeline Asset Optimization & Conversion Pipeline (Asynchronous)
+
+RapidPipeline 3D Processor is used to convert between various 3D mesh file types, as well as optimize mesh files using techniques like mesh decimation & remeshing, texture baking, UV aggregation, LOD generation, configurable scene graph flattening, and more.
+
+If you wish to trigger this pipelines additionally/manually through VAMS pipeline, you can setup a new VAMS pipeline using the table below. You will need to lookup the lambda function name in the AWS console based on the base deployment name listed.
+
+The pipeline uses a third-party tool from Darmstadt Graphics Group (DGG), RapidPipeline 3D Processor, and requires an active subscription to their [AWS Marketplace Listing](https://aws.amazon.com/marketplace/pp/prodview-zdg4blxeviyyi?sr=0-1&ref_=beagle&applicationId=AWSMPContessa).
+
+The pipeline uses the selected file type on the asset as the input type and the registered pipeline `outputType` as the final conversion type. For now, a separate pipeline registration is required for each from-to file type conversion that a organization would like to support.
+
+NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback with the Task Token".
+
+| Input File Types Supported                          | Base Lambda Function Name |
+| :-------------------------------------------------- | :------------------------ |
+| GLTF, GLB, USD, OBJ, FBX, VRM, STL, PLY (3D Meshes) | vamsExecuteRapidPipeline  |
+
+### Standard Type - ModelOps Asset Optimization & Conversion Pipeline (Asynchronous)
+
+ModelOps 3D Task Handler is used to convert between various 3D mesh file types, optimize mesh files, and more.
+
+If you wish to trigger this pipelines additionally/manually through VAMS pipeline, you can setup a new VAMS pipeline using the table below. You will need to lookup the lambda function name in the AWS console based on the base deployment name listed.
+
+The pipeline uses a third-party tool from VNTANA, VNTANA Intelligent 3D Optimization Engine Container, and requires an active subscription to their [AWS Marketplace Listing](https://aws.amazon.com/marketplace/pp/prodview-ooio3bidshgy4?applicationId=AWSMPContessa&ref_=beagle&sr=0-1).
+
+The pipeline uses templated (JSON) files with distinct modules for each action the pipeline should perform. To set the pipeline template, copy/paste the template code in the registered pipeline `inputParameters`. The template must be used to determine the pipeline actions and final conversion type(s).
+
+NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback with the Task Token".
+
+| Input File Types Supported                          | Base Lambda Function Name |
+| :-------------------------------------------------- | :------------------------ |
+| GLTF, GLB, USDZ, OBJ, FBX, STL, various CAD formats | vamsExecuteModelOps       |
+
+See VNTANA [documentation](https://www.vntana.com/resource/platform-inputs/) for all supported input and output formats.
+
 # Testing API
 
 Please see the corresponding [Postman Collection](https://github.com/awslabs/visual-asset-management-system/blob/main/VAMS_API_Tests.postman_collection.json) provided.
@@ -450,3 +862,145 @@ Once the solution is deployed, you will have to put in the below details as Glob
 # Updating and Testing Frontend
 
 Within the web folder You can do `npm run start` to start a local frontend application.
+
+# Preview Files
+
+## Overview
+
+Preview files are a key feature in VAMS that provide visual representations of assets and individual files. The system supports two types of preview files:
+
+1. **Asset-level previews**: Associated with an entire asset, typically shown in search results and asset listings.
+2. **File-level previews**: Associated with specific files within an asset, using the `.previewFile.{extension}` naming pattern.
+
+Preview files enhance the user experience by providing visual context for assets and files without requiring users to download or open the full content.
+
+## Preview File Types and Limitations
+
+VAMS supports the following preview file formats:
+
+-   PNG (`.png`)
+-   JPEG (`.jpg`, `.jpeg`)
+-   SVG (`.svg`)
+-   GIF (`.gif`)
+
+Preview files are subject to the following limitations:
+
+-   Maximum file size: 5MB
+-   Only image formats listed above are supported
+
+## Upload and Management
+
+### Asset-Level Preview Upload
+
+Asset-level previews are stored in the S3 bucket under the `previews/{assetId}/` prefix. These previews are associated with the entire asset and are referenced in the asset's metadata via the `previewLocation` field.
+
+To upload an asset-level preview:
+
+1. Use the `/uploads` API endpoint with `uploadType: "assetPreview"`
+2. Complete the upload using the `/uploads/{uploadId}/complete` endpoint
+3. The system will automatically update the asset's `previewLocation` field
+
+### File-Level Preview Upload
+
+File-level previews are associated with specific files within an asset using the `.previewFile.{extension}` naming pattern. For example, a file named `model.obj` could have a preview file named `model.obj.previewFile.png`.
+
+To upload a file-level preview:
+
+1. Use the `/uploads` API endpoint with `uploadType: "assetFile"`
+2. Include the file with the `.previewFile.{extension}` naming pattern
+3. Complete the upload using the `/uploads/{uploadId}/complete` endpoint
+4. The system will automatically associate the preview with its base file
+
+### Automatic Preview Management
+
+VAMS provides automatic management of preview files:
+
+-   When a base file is moved, its associated preview files are moved automatically
+-   When a base file is copied, its associated preview files are copied automatically
+-   When a base file is archived or deleted, its associated preview files are archived or deleted automatically
+-   When a new preview file is uploaded for a base file, any existing preview files for that base file are deleted
+
+## Frontend Integration
+
+### Search Results
+
+Preview files are displayed in search results using the `PreviewThumbnailCell` component. This component:
+
+1. Fetches the asset details to get the preview location
+2. Downloads and displays the preview image
+3. Provides a way to view the full-size preview
+
+### File Manager
+
+In the file manager, preview files are displayed using the `FilePreviewThumbnail` component when a file is selected. The component:
+
+1. Displays thumbnails for individual files
+2. Shows preview files associated with the selected file
+3. Provides a way to view the full-size preview
+
+### Data Structures
+
+Preview files are represented in the frontend data structures:
+
+-   `FileKey` interface includes a `previewFile` field that contains the relative path to the preview file
+-   `FileTree` interface also includes a `previewFile` field for use in the file manager
+
+## Technical Implementation
+
+### S3 Storage Structure
+
+-   Asset-level previews: `{baseAssetsPrefix}/previews/{assetId}/{filename}`
+-   File-level previews: `{baseAssetsPrefix}/{assetId}/{path}/{filename}.previewFile.{extension}`
+
+### Preview File Detection
+
+The system identifies preview files using the following methods:
+
+-   For file-level previews: Checks if the file path contains `.previewFile.`
+-   For asset-level previews: Checks if the file is stored in the previews directory
+
+### API Endpoints
+
+The following API endpoints are used for preview file operations:
+
+-   **Upload Initialization**: `/uploads` with appropriate `uploadType`
+-   **Upload Completion**: `/uploads/{uploadId}/complete`
+-   **Preview Deletion**: `/deleteAssetPreview` for asset-level previews, or file operations for file-level previews
+
+### Backend Implementation
+
+The backend implementation for preview files is primarily in two files:
+
+-   `uploadFile.py`: Handles upload and validation of preview files
+-   `assetFiles.py`: Manages file operations that affect preview files (move, copy, delete, etc.)
+
+Key functions include:
+
+-   `is_preview_file()`: Detects if a file is a preview file
+-   `validate_preview_file_extension()`: Validates that preview files have allowed extensions
+-   `find_preview_files_for_base()`: Finds all preview files associated with a base file
+-   `get_top_preview_file()`: Gets the primary preview file for a base file
+
+## Best Practices
+
+1. **Use appropriate preview formats**:
+
+    - Use PNG for high-quality images with transparency
+    - Use JPEG for photographs or complex images where file size is a concern
+    - Use SVG for vector graphics, icons, or diagrams
+    - Use GIF for simple animations
+
+2. **Optimize preview file size**:
+
+    - Keep preview files under the 5MB limit
+    - Compress images appropriately before upload
+    - Use appropriate dimensions for thumbnails (recommended: 300-500px width)
+
+3. **Naming conventions for file-level previews**:
+
+    - Always use the exact base filename followed by `.previewFile.{extension}`
+    - Example: For `document.pdf`, use `document.pdf.previewFile.png`
+
+4. **Preview file management**:
+    - Let the system handle preview file lifecycle management
+    - Don't manually delete or move preview files outside of the VAMS API

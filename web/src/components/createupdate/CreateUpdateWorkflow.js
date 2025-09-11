@@ -23,7 +23,7 @@ import { useNavigate } from "react-router";
 import { useParams } from "react-router";
 import CreatePipeline from "./CreatePipeline";
 import WorkflowPipelineSelector from "../selectors/WorkflowPipelineSelector";
-import AssetSelector from "../selectors/AssetSelector";
+//import AssetSelector from "../selectors/AssetSelector";
 import { Cache } from "aws-amplify";
 import { fetchDatabaseWorkflows, saveWorkflow, runWorkflow } from "../../services/APIService";
 import { WorkflowContext } from "../../context/WorkflowContex";
@@ -33,7 +33,13 @@ import Synonyms from "../../synonyms";
 const WorkflowEditor = React.lazy(() => import("../interactive/WorkflowEditor"));
 
 export default function CreateUpdateWorkflow(props) {
-    const { databaseId, workflowId } = useParams();
+    // Get parameters from URL
+    const { databaseId: urlDatabaseId, workflowId } = useParams();
+
+    // If this is a global workflow, use "GLOBAL" as databaseId
+    const databaseId = urlDatabaseId;
+
+    const isGlobalWorkflow = databaseId === "GLOBAL";
     const navigate = useNavigate();
     const [reload, setReload] = useState(true);
     const [loaded, setLoaded] = useState(!workflowId);
@@ -41,6 +47,7 @@ export default function CreateUpdateWorkflow(props) {
     const [reloadPipelines, setReloadPipelines] = useState(true);
     const [openCreatePipeline, setOpenCreatePipeline] = useState(false);
     const [asset, setAsset] = useState(null);
+    const [assetDatabaseId, setAssetDatabaseId] = useState(null);
     const [pipelines, setPipelines] = useState([]);
     const [workflowPipelines, setWorkflowPipelines] = useState([null]);
     const [loadedWorkflowPipelines, setLoadedWorkflowPipelines] = useState([]);
@@ -73,6 +80,7 @@ export default function CreateUpdateWorkflow(props) {
                 const loadedPipelines = currentItem?.specifiedPipelines?.functions.map((item) => {
                     return {
                         value: item.name,
+                        databaseId: item.databaseId,
                         pipelineType: item.pipelineType,
                         pipelineExecutionType: item.pipelineExecutionType,
                         outputType: item.outputType,
@@ -144,6 +152,7 @@ export default function CreateUpdateWorkflow(props) {
             const functions = workflowPipelines.map((item) => {
                 return {
                     name: item.value,
+                    databaseId: item.databaseId,
                     pipelineType: item.pipelineType,
                     pipelineExecutionType: item.pipelineExecutionType,
                     outputType: item.outputType,
@@ -175,33 +184,35 @@ export default function CreateUpdateWorkflow(props) {
         setSaving(false);
     };
 
-    const handleExecuteWorkflow = async (event) => {
-        event.preventDefault();
-        setSaving(true);
-        // reset all workflow-related error messages when either save or run workflow is executed
-        clearWorkflowErrors();
-        setActiveTab("asset");
-        const result = await runWorkflow({
-            databaseId: databaseId,
-            assetId: asset?.value,
-            workflowId: workflowId,
-        });
-        if (result !== false && Array.isArray(result)) {
-            if (result[0] === false) {
-                setRunWorkflowError(`Unable to run workflow. Error: ${result[1]}`);
-            } else {
-                navigate(result[1]);
-                setSaving(false);
-            }
-        }
-        setSaving(false);
-    };
+    // const handleExecuteWorkflow = async (event) => {
+    //     event.preventDefault();
+    //     setSaving(true);
+    //     // reset all workflow-related error messages when either save or run workflow is executed
+    //     clearWorkflowErrors();
+    //     setActiveTab("asset");
+    //     const result = await runWorkflow({
+    //         databaseId: databaseId,
+    //         assetId: asset?.value,
+    //         workflowId: workflowId,
+    //         isGlobalWorkflow: isGlobalWorkflow
+    //     });
+    //     if (result !== false && Array.isArray(result)) {
+    //         if (result[0] === false) {
+    //             setRunWorkflowError(`Unable to run workflow. Error: ${result[1]}`);
+    //         } else {
+    //             navigate(result[1]);
+    //             setSaving(false);
+    //         }
+    //     }
+    //     setSaving(false);
+    // };
 
     return (
         <WorkflowContext.Provider
             value={{
                 asset,
                 setAsset,
+                setAssetDatabaseId,
                 pipelines,
                 setPipelines,
                 workflowPipelines,
@@ -249,13 +260,13 @@ export default function CreateUpdateWorkflow(props) {
                                 actions={
                                     <SpaceBetween direction="horizontal" size="xs">
                                         <Button onClick={handleSaveWorkflow}>Save</Button>
-                                        <Button onClick={handleExecuteWorkflow} variant="primary">
+                                        {/* <Button onClick={handleExecuteWorkflow} variant="primary">
                                             Run Workflow
-                                        </Button>
+                                        </Button> */}
                                     </SpaceBetween>
                                 }
                             >
-                                Container Workflow
+                                {isGlobalWorkflow ? "Global Workflow" : "Container Workflow"}
                             </Header>
                         }
                     >
@@ -305,7 +316,7 @@ export default function CreateUpdateWorkflow(props) {
                                                             <FormField
                                                                 label={"Workflow Name"}
                                                                 constraintText={
-                                                                    "Required. All lower case, no special chars or spaces except - and _ only letters for first character min 4 and max 64."
+                                                                    "Required. No special chars or spaces except - and _ only letters for first character min 4 and max 64."
                                                                 }
                                                                 errorText={workflowIdError}
                                                             >
@@ -412,18 +423,18 @@ export default function CreateUpdateWorkflow(props) {
                                                     </Form>
                                                 ),
                                             },
-                                            {
-                                                label: `Source ${Synonyms.Asset}`,
-                                                id: "asset",
-                                                content: (
-                                                    <Form
-                                                        errorText={runWorkflowError}
-                                                        style={{ padding: "5px 20px" }}
-                                                    >
-                                                        <AssetSelector database={databaseId} />
-                                                    </Form>
-                                                ),
-                                            },
+                                            // {
+                                            //     label: `Source ${Synonyms.Asset}`,
+                                            //     id: "asset",
+                                            //     content: (
+                                            //         <Form
+                                            //             errorText={runWorkflowError}
+                                            //             style={{ padding: "5px 20px" }}
+                                            //         >
+                                            //             <AssetSelector database={databaseId} />
+                                            //         </Form>
+                                            //     ),
+                                            // },
                                         ]}
                                     />
                                 </div>

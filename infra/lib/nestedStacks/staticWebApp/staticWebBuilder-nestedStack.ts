@@ -15,6 +15,7 @@ import { GatewayAlbDeployConstruct } from "./constructs/gateway-albDeploy-constr
 import { AlbS3WebsiteAlbDeployConstruct } from "./constructs/alb-s3-website-albDeploy-construct";
 import { CustomCognitoConfigConstruct } from "./constructs/custom-cognito-config-construct";
 import { addBehaviorToCloudFrontDistribution } from "./constructs/cloudfront-s3-website-construct";
+import { generateContentSecurityPolicy } from "../../helper/security";
 import { NagSuppressions } from "cdk-nag";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { requireTLSAndAdditionalPolicyAddToResourcePolicy } from "../../helper/security";
@@ -27,12 +28,11 @@ export interface StaticWebBuilderNestedStackProps extends cdk.StackProps {
     config: Config.Config;
     webAppBuildPath: string;
     apiUrl: string;
-    csp: string;
     storageResources: storageResources;
     ssmWafArn: string;
     authResources: authResources;
     vpc: ec2.IVpc;
-    subnetsPrivate: ec2.ISubnet[];
+    subnetsIsolated: ec2.ISubnet[];
     subnetsPublic: ec2.ISubnet[];
 }
 
@@ -73,6 +73,9 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
         const webAppAccessLogsBucket = new s3.Bucket(this, "WebAppAccessLogsBucket", {
             ...s3DefaultProps,
+            bucketName: props.config.app.useAlb.enabled
+                ? props.config.app.useAlb.domainHost + "-webappaccesslogs"
+                : undefined,
             encryption:
                 props.config.app.useKmsCmkEncryption.enabled && !props.config.app.useAlb.enabled //ALB doesn't support encryption logs bucket encrypted with KMS
                     ? s3.BucketEncryption.KMS
@@ -139,6 +142,23 @@ export class StaticWebBuilderNestedStack extends NestedStack {
         //Set public variable to bucket
         this.webAppBucket = webAppBucket;
 
+        //Generate CSP
+        //Generate Auth Domain and Global CSP policy
+        let authDomain = "";
+
+        if (props.config.app.authProvider.useCognito.useSaml) {
+            authDomain = `https://${samlSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`;
+        } else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
+            authDomain = props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl;
+        }
+
+        const cspPolicy = generateContentSecurityPolicy(
+            props.storageResources,
+            authDomain,
+            props.apiUrl,
+            props.config
+        );
+
         //Deploy website distribution infrastructure and authentication tie-ins
         if (!props.config.app.useAlb.enabled) {
             //Deploy through CloudFront (default)
@@ -151,7 +171,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 webSiteBuildPath: props.webAppBuildPath,
                 webAcl: props.ssmWafArn,
                 apiUrl: props.apiUrl,
-                csp: props.csp,
+                csp: cspPolicy,
                 cognitoDomain: props.config.app.authProvider.useCognito.useSaml
                     ? `https://${samlSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`
                     : "",
@@ -226,7 +246,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
             const webAppDistroNetwork = new GatewayAlbDeployConstruct(this, "WebAppDistroNetwork", {
                 ...props,
                 vpc: props.vpc,
-                subnetsPrivate: props.subnetsPrivate,
+                subnetsIsolated: props.subnetsIsolated,
                 subnetsPublic: props.subnetsPublic,
             });
 
@@ -239,9 +259,9 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 webSiteBuildPath: props.webAppBuildPath,
                 webAcl: props.ssmWafArn,
                 apiUrl: props.apiUrl,
+                csp: cspPolicy,
                 vpc: webAppDistroNetwork.vpc,
                 albSubnets: webAppDistroNetwork.subnets.webApp,
-                s3VPCEndpoint: webAppDistroNetwork.s3VpcEndpoint,
                 albSecurityGroup: webAppDistroNetwork.securityGroups.webAppALB,
                 vpceSecurityGroup: webAppDistroNetwork.securityGroups.webAppVPCE,
             });
@@ -253,8 +273,14 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 resources: [webAppBucket.arnForObjects("*"), webAppBucket.bucketArn],
             });
 
+            //Restrict to just the VPCe (if enabled)
+            //Note: If not adding VPCe at deployment, add condition restriction to blank VPCe (that get's filled in afterwards as part of manual steps)
+            let vpcEndpointId = "";
+            if (props.config.app.useAlb.addAlbS3SpecialVpcEndpoint) {
+                vpcEndpointId = website.s3VpcEndpoint.vpcEndpointId;
+            }
             webAppBucketPolicy.addCondition("StringEquals", {
-                "aws:SourceVpce": webAppDistroNetwork.s3VpcEndpoint.vpcEndpointId,
+                "aws:SourceVpce": vpcEndpointId,
             });
 
             webAppBucket.addToResourcePolicy(webAppBucketPolicy);

@@ -7,11 +7,13 @@
         "yarn": ">= 1.22.18"
     },
     "dependencies": {
-        "@aws-amplify/storage": "^5.4.0",
+        "@aws-amplify/auth": "5.6.15",
+        "@aws-amplify/core": "5.8.14",
         "@aws-amplify/ui-react": "^2.1.5",
         "@aws-sdk/client-s3": "^3.400.0",
         "@aws-sdk/lib-storage": "^3.400.0",
         "@aws-sdk/s3-request-presigner": "^3.400.0",
+        "@badgateway/oauth2-client": "2.4.2",
         "@cloudscape-design/collection-hooks": "^1.0.19",
         "@cloudscape-design/components": "^3.0.196",
         "@cloudscape-design/design-tokens": "^3.0.8",
@@ -23,7 +25,7 @@
         "@types/styled-components": "^5.1.21",
         "@types/wicg-file-system-access": "2020.9.6",
         "arraybuffer-to-buffer": "^0.0.7",
-        "aws-amplify": "^5.3.12",
+        "aws-amplify": "5.3.27",
         "aws-amplify-react": "^5.1.9",
         "axios": "^1.6.0",
         "babylonjs": "^4.2.0",
@@ -41,7 +43,7 @@
         "maplibre-gl": "^3.0.0",
         "maplibre-gl-js-amplify": "^3.0.5",
         "moment": "^2.29.4",
-        "online-3d-viewer": "^0.12.0",
+        "online-3d-viewer": "0.16.0",
         "papaparse": "^5.4.1",
         "patch-package": "^6.4.7",
         "postcss": "^8.4.31",
@@ -124,8 +126,7 @@
         "sass": "^1.43.4",
         "sass-loader": "^12.3.0",
         "simple-git": "^3.19.0",
-        "ts-node": "^10.9.1",
-        "yarn-audit-fix": "^10.0.7"
+        "ts-node": "^10.9.1"
     },
     "jest": {
         "collectCoverageFrom": [

@@ -14,16 +14,23 @@ import { Duration } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../config/config";
 import * as Config from "../../../../../../config/config";
+import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import * as kms from "aws-cdk-lib/aws-kms";
-import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../../../../../helper/security";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
+} from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
+import {
+    grantReadWritePermissionsToAllAssetBuckets,
+    grantReadPermissionsToAllAssetBuckets,
+} from "../../../../../helper/security";
 
 export function buildVamsExecuteMetadata3dLabelingPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    assetBucket: s3.Bucket,
-    assetAuxiliaryBucket: s3.Bucket,
+    assetAuxiliaryBucket: s3.IBucket,
     openPipelineLambdaFunction: lambda.IFunction,
     config: Config.Config,
     vpc: ec2.IVpc,
@@ -56,10 +63,11 @@ export function buildVamsExecuteMetadata3dLabelingPipelineFunction(
         },
     });
 
-    assetBucket.grantRead(fun);
+    grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
     openPipelineLambdaFunction.grantInvoke(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
@@ -68,8 +76,7 @@ export function buildVamsExecuteMetadata3dLabelingPipelineFunction(
 export function buildOpenPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    assetBucket: s3.Bucket,
-    assetAuxiliaryBucket: s3.Bucket,
+    assetAuxiliaryBucket: s3.IBucket,
     pipelineStateMachine: sfn.StateMachine,
     allowedPipelineInputExtensions: string,
     config: Config.Config,
@@ -108,10 +115,11 @@ export function buildOpenPipelineFunction(
         },
     });
 
-    assetBucket.grantRead(fun);
+    grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
     pipelineStateMachine.grantStartExecution(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
@@ -158,6 +166,7 @@ export function buildConstructPipelineFunction(
     });
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
 
     return fun;
 }
@@ -166,8 +175,7 @@ export function buildMetadataGenerationPipelineFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     lambdaMetadataGenerationLayer: LayerVersion,
-    assetBucket: s3.Bucket,
-    assetAuxiliaryBucket: s3.Bucket,
+    assetAuxiliaryBucket: s3.IBucket,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
@@ -204,9 +212,11 @@ export function buildMetadataGenerationPipelineFunction(
                 ? pipelineSecurityGroups
                 : undefined,
     });
-    assetBucket.grantReadWrite(fun);
+
+    grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantReadWrite(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     // Add permissions to Lambda function to access Bedrock
@@ -214,7 +224,7 @@ export function buildMetadataGenerationPipelineFunction(
         effect: iam.Effect.ALLOW,
         actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
         resources: [
-            "arn:aws:bedrock:" +
+            `arn:${ServiceHelper.Partition()}:bedrock:` +
                 config.env.region +
                 "::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0",
         ],
@@ -254,8 +264,7 @@ export function buildMetadataGenerationPipelineFunction(
 export function buildPipelineEndFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
-    assetBucket: s3.Bucket,
-    assetAuxiliaryBucket: s3.Bucket,
+    assetAuxiliaryBucket: s3.IBucket,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
@@ -294,9 +303,10 @@ export function buildPipelineEndFunction(
         environment: {},
     });
 
-    assetBucket.grantRead(fun);
+    grantReadPermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantRead(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     const stateTaskPolicy = new iam.PolicyStatement({

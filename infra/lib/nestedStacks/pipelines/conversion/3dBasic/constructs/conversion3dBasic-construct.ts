@@ -57,7 +57,6 @@ export class Conversion3dBasicConstruct extends NestedStack {
         const pipelineConversion3dBasicLambdaFunction =
             buildVamsExecute3dBasicConversionPipelineFunction(
                 this,
-                props.storageResources.s3.assetBucket,
                 props.storageResources.s3.assetAuxiliaryBucket,
                 props.config,
                 props.vpc,

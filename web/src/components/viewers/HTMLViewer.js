@@ -9,7 +9,7 @@ import { downloadAsset } from "../../services/APIService";
 
 export default function HTMLViewer(props) {
     const shadowElement = useRef(null);
-    const { assetId, databaseId, assetKey } = props;
+    const { assetId, databaseId, assetKey, versionId } = props;
     const [loaded, setLoaded] = useState(false);
 
     useEffect(() => {
@@ -18,7 +18,8 @@ export default function HTMLViewer(props) {
                 assetId: assetId,
                 databaseId: databaseId,
                 key: assetKey,
-                version: "",
+                versionId: versionId || "",
+                downloadType: "assetFile",
             }).then((response) => {
                 if (response !== false && Array.isArray(response)) {
                     if (response[0] === false) {

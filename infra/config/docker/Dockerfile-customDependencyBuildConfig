@@ -3,12 +3,15 @@
 # Modify this file when needing to conduct custom actions as part of building lambda dependency requirement
 
 # The correct AWS SAM build image based on the runtime of the function will be
-
 # passed as build arg. The default allows to do `docker build .` when testing. Be cautious when modifying
-
 # platform as this is critical for ensuring deployment builds across host OS types.
 
-ARG IMAGE=public.ecr.aws/sam/build-python3.10
+#Note: This container only runs locally on the development machine for the purposes of generating
+#      the final build packages. The base container is already setup for a non-root user.
+
+ARG IMAGE=public.ecr.aws/sam/build-python3.12
 FROM --platform=linux/amd64 $IMAGE
 
 # Add Custom Commands like importing specific SSL certificates below
+#COPY Combined.pem /var/task/Combined.crt
+#RUN pip config set global.cert /var/task/Combined.crt

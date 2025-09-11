@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from handlers.metadata import build_response, create_or_update, validate_event, validate_body, ValidationError
+from handlers.metadata import build_response, create_or_update, validate_event, validate_body, ValidationError, normalize_s3_path
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -24,25 +24,23 @@ def lambda_handler(event, context):
 
         claims_and_roles = request_to_claims(event)
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if method_allowed_on_api:
-            asset_of_metadata = get_asset_object_from_id(assetId)
+            asset_of_metadata = get_asset_object_from_id(databaseId, assetId)
             if asset_of_metadata:
                 allowed = False
                 # Add Casbin Enforcer to check if the current user has permissions to POST the asset:
                 asset_of_metadata.update({
                     "object__type": "asset"
                 })
-                for user_name in claims_and_roles["tokens"]:
-                    casbin_enforcer = CasbinEnforcer(user_name)
-                    if casbin_enforcer.enforce(f"user::{user_name}", asset_of_metadata, "POST"):
+                if len(claims_and_roles["tokens"]) > 0:
+                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                    if casbin_enforcer.enforce(asset_of_metadata, "POST"):
                         allowed = True
-                        break
 
                 #Use prefix (if given) now that we have done base asset ID checks
                 if ('queryStringParameters' in event and 'prefix' in event['queryStringParameters']):

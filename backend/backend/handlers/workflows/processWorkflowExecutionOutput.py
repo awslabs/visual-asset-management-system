@@ -5,6 +5,8 @@ import os
 import boto3
 import botocore
 import json
+import uuid
+from datetime import datetime, timedelta
 from boto3.dynamodb.conditions import Key
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
@@ -12,19 +14,25 @@ from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from common.s3 import validateS3AssetExtensionsAndContentType
+from models.assetsV3 import AssetUploadTableModel
 
 asset_Database = None
 db_Database = None
 workflow_execution_database = None
-bucket_name = None
-logger = safeLogger(service_name="UploadAllAssets")
+asset_upload_table_name = None
+s3_asset_buckets_table = None
+logger = safeLogger(service_name="ProcessWorkflowExecutionOutput")
+
+# Constants
+UPLOAD_EXPIRATION_DAYS = 1  # TTL for upload records for pipeline output
 
 try:
-    bucket_name = os.environ["S3_ASSET_STORAGE_BUCKET"]
-    upload_function = os.environ['UPLOAD_LAMBDA_FUNCTION_NAME'] 
+    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
     read_metadata_function = os.environ['READ_METADATA_LAMBDA_FUNCTION_NAME']
     create_metadata_function = os.environ['CREATE_METADATA_LAMBDA_FUNCTION_NAME']
+    file_upload_function = os.environ['FILE_UPLOAD_LAMBDA_FUNCTION_NAME']
     asset_Database = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    asset_upload_table_name = os.environ["ASSET_UPLOAD_TABLE_NAME"]
     db_Database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
     workflow_execution_database = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_NAME"]
 
@@ -35,10 +43,9 @@ except Exception as e:
 s3c = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
 client = boto3.client('lambda')
+asset_upload_table = dynamodb.Table(asset_upload_table_name)
+buckets_table = dynamodb.Table(s3_asset_buckets_table)
 
-
-def _lambda_upload(payload): return client.invoke(FunctionName=upload_function,
-                                           InvocationType='RequestResponse', Payload=json.dumps(payload).encode('utf-8'))
 
 def _lambda_read_metadata(payload): return client.invoke(FunctionName=read_metadata_function,
                                            InvocationType='RequestResponse', Payload=json.dumps(payload).encode('utf-8'))
@@ -46,54 +53,83 @@ def _lambda_read_metadata(payload): return client.invoke(FunctionName=read_metad
 def _lambda_create_metadata(payload): return client.invoke(FunctionName=create_metadata_function,
                                            InvocationType='RequestResponse', Payload=json.dumps(payload).encode('utf-8'))
 
-# def getS3MetaData(key, asset):
-#     # VersionId and ContentLength (bytes)
-#     resp = s3c.head_object(Bucket=bucket_name, Key=key)
-#     asset['currentVersion']['S3Version'] = resp['VersionId']
-#     asset['currentVersion']['FileSize'] = str(
-#         resp['ContentLength']/1000000)+'MB'
-#     return asset
+def _lambda_file_ingestion(payload): return client.invoke(FunctionName=file_upload_function,
+                                           InvocationType='RequestResponse', Payload=json.dumps(payload).encode('utf-8'))
 
-def attach_execution_assets(assets, execution_id, database_id, asset_id, workflow_id):
-    logger.info("Attaching assets to execution")
+# def attach_execution_assets(assets, execution_id, database_id, asset_id, workflow_id):
+#     logger.info("Attaching assets to execution")
 
-    asset_table = dynamodb.Table(asset_Database)
-    all_assets = assets
+#     asset_table = dynamodb.Table(asset_Database)
+#     all_assets = assets
 
-    source_assets = asset_table.query(
-        KeyConditionExpression=Key('databaseId').eq(database_id) & Key('assetId').begins_with(
-            asset_id))
-    logger.info("Source assets: ")
-    logger.info(source_assets)
-    if source_assets['Items']:
-        all_assets.append(source_assets['Items'][0])
+#     source_assets = asset_table.query(
+#         KeyConditionExpression=Key('databaseId').eq(database_id) & Key('assetId').begins_with(
+#             asset_id))
+#     logger.info("Source assets: ")
+#     logger.info(source_assets)
+#     if source_assets['Items']:
+#         all_assets.append(source_assets['Items'][0])
 
-    table = dynamodb.Table(workflow_execution_database)
-    pk = f'{asset_id}-{workflow_id}'
+#     table = dynamodb.Table(workflow_execution_database)
+#     pk = f'{asset_id}-{workflow_id}'
 
-    table.update_item(
-        Key={'pk': pk, 'sk': execution_id},
-        UpdateExpression='SET #attr1 = :val1',
-        ExpressionAttributeNames={'#attr1': 'assets'},
-        ExpressionAttributeValues={':val1': all_assets}
-    )
+#     table.update_item(
+#         Key={'pk': pk, 'sk': execution_id},
+#         UpdateExpression='SET #attr1 = :val1',
+#         ExpressionAttributeNames={'#attr1': 'assets'},
+#         ExpressionAttributeValues={':val1': all_assets}
+#     )
 
-    return
+#     return
 
+def get_default_bucket_details(bucketId):
+    """Get default S3 bucket details from database default bucket DynamoDB"""
+    try:
+
+        bucket_response = buckets_table.query(
+            KeyConditionExpression=Key('bucketId').eq(bucketId),
+            Limit=1
+        )
+        # Use the first item from the query results
+        bucket = bucket_response.get("Items", [{}])[0] if bucket_response.get("Items") else {}
+        bucket_id = bucket.get('bucketId')
+        bucket_name = bucket.get('bucketName')
+        base_assets_prefix = bucket.get('baseAssetsPrefix')
+
+        #Check to make sure we have what we need
+        if not bucket_name or not base_assets_prefix:
+            raise Exception(f"Error getting database default bucket details: missing bucket_name or base_assets_prefix")
+        
+        #Make sure we end in a slash for the path
+        if not base_assets_prefix.endswith('/'):
+            base_assets_prefix += '/'
+
+        # Remove leading slash from file path if present
+        if base_assets_prefix.startswith('/'):
+            base_assets_prefix = base_assets_prefix[1:]
+
+        return {
+            'bucketId': bucket_id,
+            'bucketName': bucket_name,
+            'baseAssetsPrefix': base_assets_prefix
+        }
+    except Exception as e:
+        logger.exception(f"Error getting bucket details: {e}")
+        raise Exception(f"Error getting bucket details.")
 
 def verify_get_path_objects(bucketName: str, pathPrefix: str):
 
     #Do MIME check on whatever is uploaded to S3 at this point for this asset, before we do DynamoDB insertion, to validate it's not malicious
-    if(not validateS3AssetExtensionsAndContentType(bucket_name, pathPrefix)):
+    if(not validateS3AssetExtensionsAndContentType(bucketName, pathPrefix)):
         raise Exception("Pipeline uploaded objects contains a potentially malicious executable type object. Unable to process asset upload.")
 
     # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3.html#S3.Client.list_objects_v2
-    all_outputs = s3c.list_objects_v2(Bucket=bucket_name, Prefix=pathPrefix)
+    all_outputs = s3c.list_objects_v2(Bucket=bucketName, Prefix=pathPrefix)
     if 'IsTruncated' in all_outputs and all_outputs['IsTruncated']:
         logger.warning(
             "WARN: s3 object listing exceeds 1,000 objects,"+
             "this is unexpected for this operation with the bucket and prefix"+
-            bucket_name+" "+pathPrefix
+            bucketName+" "+pathPrefix
         )
     logger.info(all_outputs)
 
@@ -108,22 +144,151 @@ def lookup_existing_asset(database_id, asset_id):
     else:
         return None
 
+def create_external_upload_record(asset_id, database_id, upload_type, temporary_prefix):
+    """Create an external upload record in DynamoDB"""
+    try:
+        # Generate upload ID
+        upload_id = f"y{str(uuid.uuid4())}"
+        
+        # Calculate expiration time (7 days from now)
+        now = datetime.utcnow()
+        expires_at = int((now + timedelta(days=UPLOAD_EXPIRATION_DAYS)).timestamp())
+        
+        # Create upload record
+        upload_record = AssetUploadTableModel(
+            uploadId=upload_id,
+            assetId=asset_id,
+            databaseId=database_id,
+            uploadType=upload_type,
+            createdAt=now.isoformat(),
+            expiresAt=expires_at,
+            totalFiles=0,  # Will be updated later
+            totalParts=0,  # Not relevant for external uploads
+            status="initialized",
+            isExternalUpload=True,
+            temporaryPrefix=temporary_prefix
+        )
+        
+        # Save to DynamoDB
+        asset_upload_table.put_item(Item=upload_record.to_dict())
+        
+        return upload_id
+    except Exception as e:
+        logger.exception(f"Error creating external upload record: {e}")
+        raise e
+
+def update_s3_object_metadata(key, asset_id, database_id, upload_id, bucket_name):
+    """Update S3 object metadata with asset and upload information"""
+    try:
+        # Get current object metadata
+        head_response = s3c.head_object(Bucket=bucket_name, Key=key)
+        content_type = head_response.get('ContentType', 'application/octet-stream')
+        
+        # Copy object to itself with new metadata
+        s3c.copy_object(
+            CopySource={'Bucket': bucket_name, 'Key': key},
+            Bucket=bucket_name,
+            Key=key,
+            ContentType=content_type,
+            Metadata={
+                'databaseid': database_id,
+                'assetid': asset_id,
+                'uploadid': upload_id
+            },
+            MetadataDirective='REPLACE'
+        )
+        
+        return True
+    except Exception as e:
+        logger.exception(f"Error updating S3 object metadata: {e}")
+        return False
+
+def process_external_upload(upload_id, asset_id, database_id, upload_type, files, temporary_prefix, request_context):
+    """Process an external upload using the fileIngestion Lambda"""
+    try:
+        # Prepare the request payload
+        file_list = []
+        for file_key in files:
+            # Extract the file name from the key
+            file_name = os.path.basename(file_key)
+            
+            # Add to file list
+            file_list.append({
+                "relativeKey": file_name,
+                "tempKey": file_key
+            })
+        
+        # Create the request body
+        body = {
+            "assetId": asset_id,
+            "databaseId": database_id,
+            "uploadType": upload_type,
+            "files": file_list
+        }
+        
+        # Create the Lambda payload to simulate an API Gateway request
+        lambda_payload = {
+            "requestContext": request_context,
+            "pathParameters": {
+                "uploadId": upload_id
+            },
+            "body": json.dumps(body),
+        }
+        lambda_payload["requestContext"]["http"]["path"] = f"/uploads/{upload_id}/complete/external"
+        lambda_payload["requestContext"]["http"]["httpMethod"] = f"POST"
+        
+        # Invoke the Lambda function
+        response = _lambda_file_ingestion(lambda_payload)
+        
+        # Process the response
+        if response and 'Payload' in response:
+            stream = response['Payload']
+            if stream:
+                json_response = json.loads(stream.read().decode("utf-8"))
+                logger.info("fileIngestion response:")
+                logger.info(json_response)
+                
+                if "statusCode" in json_response and json_response["statusCode"] == 200:
+                    if "body" in json_response:
+                        return json.loads(json_response["body"])
+                    else:
+                        logger.error("No body in fileIngestion response")
+                        return None
+                else:
+                    logger.error(f"Error in fileIngestion response: {json_response}")
+                    return None
+            else:
+                logger.error("No payload stream in fileIngestion response")
+                return None
+        else:
+            logger.error("Invalid response from fileIngestion Lambda")
+            return None
+    except Exception as e:
+        logger.exception(f"Error processing external upload: {e}")
+        return None
+
 
 def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
     logger.info(event)
 
-    if 'body' in event:
-        if isinstance(event['body'], str):
-            event['body'] = json.loads(event['body'])
-    else:
-        message = "No Body in API Call"
-        logger.error(message)
-        response['statusCode'] = 400
-        response['body'] = json.dumps({"message": message})
-        return response
-    
     try:
+        if 'body' in event:
+            if isinstance(event['body'], str):
+                try:
+                    event['body'] = json.loads(event['body'])
+                except json.JSONDecodeError as e:
+                    logger.exception(f"Invalid JSON in request body: {e}")
+                    response['statusCode'] = 400
+                    response['body'] = json.dumps({"message": "Invalid JSON in request body"})
+                    return response
+        else:
+            message = "No Body in API Call"
+            logger.error(message)
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": message})
+            return response
+        
         #sub in body for event
         event = event["body"]
 
@@ -141,7 +306,7 @@ def lambda_handler(event, context):
             response['statusCode'] = 400
             response['body'] = json.dumps({"message": message})
             return response
-        
+
         if 'executingRequestContext' not in event:
             message = "No executingRequestContext in API Call"
             logger.error(message)
@@ -155,7 +320,7 @@ def lambda_handler(event, context):
             response['statusCode'] = 400
             response['body'] = json.dumps({"message": message})
             return response
-        
+
 
         logger.info("Validating parameters")
         #required fields
@@ -166,11 +331,11 @@ def lambda_handler(event, context):
             },
             'assetId': {
                 'value': event['assetId'],
-                'validator': 'ID'
+                'validator': 'ASSET_ID'
             },
             'executingUserName': {
                 'value': event['executingUserName'],
-                'validator': 'EMAIL'
+                'validator': 'USERID'
             },
             'assetFilesPathPipelineKey': {
                 'value': event.get("filesPathKey", ""),
@@ -193,30 +358,42 @@ def lambda_handler(event, context):
             response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
             return response
-        
-        userName = event['executingUserName']
+
+        global claims_and_roles
         requestContext = event['executingRequestContext']
+        event["requestContext"] = requestContext
+        claims_and_roles = request_to_claims(event)
+
+        # Get existing asset
+        asset = lookup_existing_asset(event['databaseId'], event['assetId'])
+        if not asset:
+            logger.error(f"Asset {event['assetId']} not found in database {event['databaseId']}")
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": "Asset not found in database"})
+            return response
 
         #ABAC Checks for Asset
-        #ABAC Implementation Deviation - Not called through API. Username passed through Pipeline Execution Call. 
-        asset = {
+        #ABAC Implementation Deviation - Not called through API. Username passed through Pipeline Execution Call.
+        asset.update({
             "object__type": "asset",
-            "databaseId": event['databaseId'],
-            "assetName": event['assetId'],
-            "assetType": event['outputType'],
-            "tags": event.get('tags', [])
-        }
+        })
         logger.info(asset)
 
-        casbin_enforcer = CasbinEnforcer(userName)
-        if casbin_enforcer.enforce(f"user::{userName}", asset, "PUT"):
-            operation_allowed_on_asset = True
-
+        operation_allowed_on_asset = False
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(asset, "PUT"):
+                operation_allowed_on_asset = True
+        
         if operation_allowed_on_asset:
+            # Get bucket details from asset's bucketId
+            bucketDetails = get_default_bucket_details(asset['bucketId'])
+            bucket_name = bucketDetails['bucketName']
+
             #Handle preview outputs
             if ('previewPathKey' in event):
                 previewPathKey = event['previewPathKey']
-                
+
                 objectsFound = {}
                 try:
                     objectsFound = verify_get_path_objects(bucket_name, previewPathKey)
@@ -228,16 +405,51 @@ def lambda_handler(event, context):
 
                     if(len(files) > 1):
                         logger.error("Multiple files present in pipeline output preview folder. Limiting to top 1 for now.")
-
-                    for file in files:
-                        #Only process files that end in image extension for now
-                        if file.endswith('.jpeg') or file.endswith('.jpg') or file.endswith('.png'):
-                            logger.info("PREVIEW UPLOAD TO BE IMPLEMENTED") 
-                            #TODO: Add preview file upload
-
-                            break #only process 1 preview file for now
-                        else:
-                            logger.error("Files present in pipeline output preview folder outside of an image. Skipping...")
+                    
+                    # Filter for image files
+                    image_files = [f for f in files if f.endswith('.jpeg') or f.endswith('.jpg') or f.endswith('.png') or f.endswith('.gif') or f.endswith('.svg')]
+                    
+                    if image_files:
+                        # Only process the first image file
+                        preview_file = image_files[0]
+                        
+                        try:
+                            # Create external upload record
+                            upload_id = create_external_upload_record(
+                                event['assetId'],
+                                event['databaseId'],
+                                "assetPreview",
+                                previewPathKey
+                            )
+                            
+                            # Update S3 object metadata
+                            update_s3_object_metadata(
+                                preview_file,
+                                event['assetId'],
+                                event['databaseId'],
+                                upload_id,
+                                bucket_name
+                            )
+                            
+                            # Process the external upload
+                            result = process_external_upload(
+                                upload_id,
+                                event['assetId'],
+                                event['databaseId'],
+                                "assetPreview",
+                                [preview_file],
+                                previewPathKey,
+                                requestContext
+                            )
+                            
+                            if result:
+                                logger.info("Preview upload completed successfully")
+                            else:
+                                logger.error("Preview upload failed")
+                        except Exception as e:
+                            logger.exception(f"Error processing preview upload: {e}")
+                    else:
+                        logger.error("No image files found in preview folder")
 
             #Handle metadata outputs
             if('metadataPathKey' in event):
@@ -258,7 +470,7 @@ def lambda_handler(event, context):
                         "pathParameters": {
                             "databaseId": event['databaseId'],
                             "assetId": event['assetId']
-                        } 
+                        }
                     }
                     logger.info("Getting metadata")
                     logger.info(l_payload)
@@ -359,61 +571,64 @@ def lambda_handler(event, context):
                 except Exception as e:
                     logger.error(e)
 
-                existingAsset = None
-                try:
-                    existingAsset = lookup_existing_asset(event['databaseId'], event['assetId'])
-                except Exception as e:
-                    logger.error(e)
-
                 assets = []
-                if 'Contents' in objectsFound and existingAsset:
+                if 'Contents' in objectsFound:
                     files = [x['Key'] for x in objectsFound['Contents'] if '/' != x['Key'][-1]]
                     logger.info("Files present in pipeline output asset folder:")
                     logger.info(files)
-                    for file in files:
-                        outputType = event['outputType']
-                        pipelineName = event['pipeline']
-                        l_payload = {
-                            "requestContext": requestContext,
-                            "body": {
-                                "databaseId": event['databaseId'],
-                                "assetId": event['assetId'],
-                                #"assetName": existingAsset['assetName'], #not needed for asset update
-                                "pipelineId": pipelineName,
-                                "executionId": event['executionId'],
-                                "tags": existingAsset.get('tags', []),
-                                "key": file,
-                                "assetType": outputType,
-                                #"description": existingAsset.get('description', ""), #not needed for asset update
-                                "specifiedPipelines": [],
-                                "isDistributable": existingAsset.get('isDistributable', False),
-                                "isMultiFile": existingAsset.get('isMultiFile', False),
-                                "uploadTempLocation": True,
-                                "Comment": "Pipeline Upload",
-                                "assetLocation": {
-                                    "Key": file
-                                },
-                                "previewLocation": existingAsset.get('previewLocation', {"Key": ""}),
-                            },
-                            "returnAsset": True
-                        }
-                        logger.info("Uploading asset:")
-                        logger.info(l_payload)
-                        upload_response = _lambda_upload(l_payload)
-                        logger.info("uploadAsset response:")
-                        logger.info(upload_response)
-                        stream = upload_response['Payload']
-                        if stream:
-                            json_response = json.loads(stream.read().decode("utf-8"))
-                            logger.info("uploadAsset payload:")
-                            logger.info(json_response)
-                            if "body" in json_response:
-                                response_body = json.loads(json_response['body'])
-                                if "asset" in response_body:
-                                    assets.append(response_body['asset'])
-                        response['body'] = str(objectsFound)
-
-                    attach_execution_assets(assets, event['executionId'], event['databaseId'], event['assetId'], event['workflowId'])
+                    
+                    if files:
+                        try:
+                            # Create external upload record
+                            upload_id = create_external_upload_record(
+                                event['assetId'],
+                                event['databaseId'],
+                                "assetFile",
+                                filesPathKey
+                            )
+                            
+                            # Update S3 object metadata for each file
+                            for file in files:
+                                update_s3_object_metadata(
+                                    file,
+                                    event['assetId'],
+                                    event['databaseId'],
+                                    upload_id,
+                                    bucket_name
+                                )
+                            
+                            # Process the external upload
+                            result = process_external_upload(
+                                upload_id,
+                                event['assetId'],
+                                event['databaseId'],
+                                "assetFile",
+                                files,
+                                filesPathKey,
+                                requestContext
+                            )
+                            
+                            # if result and "assetType" in result:
+                            #     # Create a simplified asset object for attachment
+                            #     asset = {
+                            #         "databaseId": event['databaseId'],
+                            #         "assetId": event['assetId'],
+                            #         "assetType": result["assetType"],
+                            #         "version": result["version"],
+                            #         "pipeline": event.get('pipeline', ''),
+                            #         "executionId": event.get('executionId', '')
+                            #     }
+                            #     assets.append(asset)
+                            #     logger.info("Asset file upload completed successfully")
+                            # else:
+                            #     logger.error("Asset file upload failed or returned incomplete data")
+                                
+                            # # Attach assets to execution record
+                            # attach_execution_assets(assets, event['executionId'], event['databaseId'], event['assetId'], event['workflowId'])
+                        except Exception as e:
+                            logger.exception(f"Error processing asset file upload: {e}")
+                    else:
+                        logger.warning("No files found in asset output folder")
 
 
             response['statusCode'] = 200
