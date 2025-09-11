@@ -23,7 +23,7 @@ flake8 = "^6.0.0"
 coverage = "^7.1.0"
 mypy = "^1.0.0"
 pytest-mock = "^3.12.0"
-moto = "^4.2.14"
+moto = "^5.1.0"
 pytest-watch = "^4.2.0"
 boto3-stubs = {extras = ["stepfunctions"], version = "^1.26.69"}
 

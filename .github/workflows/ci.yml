@@ -46,7 +46,7 @@ jobs:
 
             - name: Npm audit root directory
               working-directory: vams
-              run: npm audit --production
+              run: npm audit --omit=dev
 
             - name: Prettier Check
               working-directory: vams
@@ -93,7 +93,7 @@ jobs:
 
             - name: Npm audit infrastructure directory
               working-directory: vams/infra
-              run: npm audit --production
+              run: npm audit --omit=dev
 
             - name: Synthesize Cloudformation templates
               working-directory: vams/infra
