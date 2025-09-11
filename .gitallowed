@@ -1,1 +1,4 @@
+^arn:aws:kms:us-east-1:123456789012:key\/example-key$
 arn:aws:kms:us-east-1:123456789012:key/example-key
+backend/conftest.py
+backend/tests/test_env.py
