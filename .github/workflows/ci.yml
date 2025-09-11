@@ -11,20 +11,20 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - name: Checkout repo
-              uses: actions/checkout@v3
+              uses: actions/checkout@v4
               with:
                   path: ./vams
 
             - name: Setup Python Version
-              uses: actions/setup-python@v2
+              uses: actions/setup-python@v4
               with:
                   python-version: 3.12.7
 
             - name: Setup node for the whole package
-              uses: actions/setup-node@v3
+              uses: actions/setup-node@v4
 
             - name: Clone automated security helper
-              uses: actions/checkout@v3
+              uses: actions/checkout@v4
               with:
                   repository: aws-samples/automated-security-helper
                   path: ./ash
@@ -35,7 +35,7 @@ jobs:
                   export PATH=$PATH:./
                   ash --source-dir ../vams || true
             - name: Upload Report
-              uses: actions/upload-artifact@v3
+              uses: actions/upload-artifact@v4
               with:
                   name: automated-security-helper-report
                   path: ash/aggregated_results.txt
