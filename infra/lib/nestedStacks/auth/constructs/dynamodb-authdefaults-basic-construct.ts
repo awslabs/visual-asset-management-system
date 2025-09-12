@@ -107,6 +107,9 @@ export class DynamoDbAuthDefaultsBasicConstructStack extends Construct {
                     createdOn: {
                         S: new Date().toISOString(),
                     },
+                    mfaRequired: {
+                        BOOL: false,
+                    },
                 },
                 //ConditionExpression: "attribute_not_exists(id)",
             },

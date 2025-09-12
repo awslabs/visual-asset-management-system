@@ -92,8 +92,8 @@ export const fileTypePropType = function (props, propName) {
 All lower case, no special chars or spaces except - and _ only letters for first character min 4 and max 64
  */
 export const validateEntityId = (value) => {
-    // ^[a-z] means the string should start with chars a~z, ([-_a-z0-9]){3,63}$ means the string should end with 3~63 chars -_a-z0-9
-    const regex = /^[a-z]([-_a-z0-9]){3,63}$/g;
+    // ^[-_a-zA-Z0-9]{3,63}$ means the string should end with 3~63 chars -_a-zA-Z0-9
+    const regex = /^[-_a-zA-Z0-9]{3,63}$/g;
     const result = String(value).match(regex);
     if (result === null) {
         return false;

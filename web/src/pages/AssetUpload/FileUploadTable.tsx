@@ -59,10 +59,14 @@ const FileUploadTableColumnDefinitions = [
 interface FileUploadTableProps {
     allItems: FileUploadTableItem[];
     onRetry?: () => void;
+    onRetryItem?: (index: number) => void;
     resume: boolean;
     columnDefinitions?: typeof FileUploadTableColumnDefinitions;
     showCount?: boolean;
     mode?: "Upload" | "Download" | "Delete";
+    onRemoveItem?: (index: number) => void;
+    onRemoveAll?: () => void;
+    allowRemoval?: boolean;
 }
 
 /**
@@ -88,6 +92,9 @@ export interface FileUploadTableItem {
     startedAt?: number;
     loaded: number;
     total: number;
+    error?: string; // Error message for failed uploads
+    versionId?: string; // Version ID for download mode
+    finalDownloadPath?: string; // Final download path for download mode
 }
 
 const getStatusIndicator = (status?: string) => {
@@ -203,39 +210,146 @@ function getActions(
     allItems: FileUploadTableItem[],
     resume: boolean,
     onRetry?: () => void,
+    onRemoveAll?: () => void,
     mode: "Upload" | "Download" | "Delete" = "Upload"
 ) {
+    const actions = [];
+
+    // Add retry button for failed items when onRetry is provided
     const failed = allItems.filter((item) => item.status === "Failed").length;
-    const notCompleted = allItems.filter((item) => item.status !== "Completed").length;
-    if (failed > 0) {
-        return (
-            <Button variant={"primary"} onClick={onRetry}>
-                {mode} {failed} failed Items
+    if (failed > 0 && onRetry) {
+        actions.push(
+            <Button key="retry" variant={"primary"} onClick={onRetry}>
+                Retry {failed} failed Items
             </Button>
         );
-    } else if (resume) {
-        return (
-            <Button variant={"primary"} onClick={onRetry}>
-                {mode} {notCompleted} Items
+    }
+
+    // Add remove all button when onRemoveAll is provided and there are items
+    if (onRemoveAll && allItems.length > 0) {
+        actions.push(
+            <Button key="removeAll" variant={"normal"} onClick={onRemoveAll}>
+                Remove All Files
             </Button>
         );
-    } else {
+    }
+
+    if (actions.length === 0) {
         return <></>;
     }
+
+    return (
+        <SpaceBetween direction="horizontal" size="xs">
+            {actions}
+        </SpaceBetween>
+    );
 }
 
 export const FileUploadTable = ({
     allItems,
     onRetry,
+    onRetryItem,
     resume,
     columnDefinitions,
     showCount,
     mode = "Upload",
+    onRemoveItem,
+    onRemoveAll,
+    allowRemoval = false,
 }: FileUploadTableProps) => {
     let visibleContent = ["filesize", "status", "progress"];
+
+    // If no custom column definitions are provided, add actions column if needed
     if (!columnDefinitions) {
-        columnDefinitions = FileUploadTableColumnDefinitions;
-    } else {
+        // Start with the default column definitions
+        let customColumnDefinitions = [...FileUploadTableColumnDefinitions];
+
+        // Find the index of the status column to insert version ID before it
+        const statusColumnIndex = customColumnDefinitions.findIndex((col) => col.id === "status");
+
+        // Add Download-specific columns if in Download mode
+        if (mode === "Download") {
+            // Update the existing filepath column to show "Asset Preview Path"
+            const filepathColumnIndex = customColumnDefinitions.findIndex(
+                (col) => col.id === "filepath"
+            );
+            if (filepathColumnIndex !== -1) {
+                customColumnDefinitions[filepathColumnIndex] = {
+                    ...customColumnDefinitions[filepathColumnIndex],
+                    header: "Asset Preview Path",
+                };
+            }
+
+            // Add Final Download Path column
+            const finalDownloadPathColumn = {
+                id: "finalDownloadPath",
+                header: "Final Download Path",
+                cell: (item: FileUploadTableItem) => (
+                    <div>{item.finalDownloadPath || "Select folder first"}</div>
+                ),
+                sortingField: "finalDownloadPath",
+                isRowHeader: false,
+            };
+
+            // Add Version ID column
+            const versionColumn = {
+                id: "versionId",
+                header: "Version ID",
+                cell: (item: FileUploadTableItem) => (
+                    <div>{item.versionId && item.versionId.trim() ? item.versionId : "Latest"}</div>
+                ),
+                sortingField: "versionId",
+                isRowHeader: false,
+            };
+
+            if (statusColumnIndex !== -1) {
+                // Insert final download path and version columns before status column
+                customColumnDefinitions.splice(
+                    statusColumnIndex,
+                    0,
+                    finalDownloadPathColumn,
+                    versionColumn
+                );
+            } else {
+                // Fallback: add to the end if status column not found
+                customColumnDefinitions.push(finalDownloadPathColumn, versionColumn);
+            }
+        }
+
+        // Add actions column if we need retry or removal functionality
+        if (onRetryItem || (allowRemoval && onRemoveItem)) {
+            customColumnDefinitions.push({
+                id: "actions",
+                header: "Actions",
+                cell: (item: FileUploadTableItem) => (
+                    <SpaceBetween direction="horizontal" size="xs">
+                        {item.status === "Failed" && onRetryItem && (
+                            <Button
+                                iconName="refresh"
+                                variant="icon"
+                                onClick={() => onRetryItem(item.index)}
+                                ariaLabel={`Retry ${item.name}`}
+                            />
+                        )}
+                        {allowRemoval && onRemoveItem && (
+                            <Button
+                                iconName="remove"
+                                variant="icon"
+                                onClick={() => onRemoveItem(item.index)}
+                                ariaLabel={`Remove ${item.name}`}
+                            />
+                        )}
+                    </SpaceBetween>
+                ),
+                sortingField: "actions",
+                isRowHeader: false,
+            });
+        }
+
+        columnDefinitions = customColumnDefinitions;
+    }
+
+    if (columnDefinitions) {
         visibleContent = columnDefinitions.map((definition) => definition.id);
     }
     const [preferences, setPreferences] = useState({
@@ -262,7 +376,7 @@ export const FileUploadTable = ({
                                     ? `${getCompletedItemsCount(allItems)}/${allItems.length}`
                                     : `(${allItems.length})`
                             }
-                            actions={getActions(allItems, true, onRetry, mode)}
+                            actions={getActions(allItems, true, onRetry, onRemoveAll, mode)}
                         >
                             Files
                         </Header>

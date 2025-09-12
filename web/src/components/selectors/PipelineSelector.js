@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { fetchDatabasePipelines } from "../../services/APIService";
+import { fetchDatabasePipelines, fetchAllPipelines } from "../../services/APIService";
 import { Select, Multiselect } from "@cloudscape-design/components";
 
 const PipelineSelector = (props) => {
@@ -14,7 +14,16 @@ const PipelineSelector = (props) => {
 
     useEffect(() => {
         const getData = async () => {
-            const items = await fetchDatabasePipelines({ databaseId: databaseId });
+            let items;
+            let db_items;
+            let global_items;
+            if (databaseId === "GLOBAL") {
+                items = await fetchDatabasePipelines({ databaseId: "GLOBAL" });
+            } else {
+                db_items = await fetchDatabasePipelines({ databaseId: databaseId });
+                global_items = await fetchDatabasePipelines({ databaseId: "GLOBAL" });
+                items = [...db_items, ...global_items];
+            }
             if (items !== false && Array.isArray(items)) {
                 setReload(false);
                 setAllItems(items);

@@ -9,7 +9,7 @@ import { useState, useEffect, useContext } from "react";
 import ReactFlow, { MiniMap, Controls, Background, Elements, Position } from "react-flow-renderer";
 import { Button, Icon } from "@cloudscape-design/components";
 import { useParams } from "react-router";
-import AssetSelector from "../selectors/AssetSelector";
+//import AssetSelector from "../selectors/AssetSelector";
 import WorkflowPipelineSelector from "../selectors/WorkflowPipelineSelector";
 import { WorkflowContext } from "../../context/WorkflowContex";
 
@@ -107,19 +107,19 @@ export const workflowPipelineToElements = (
             return arry;
         },
         [
-            {
-                id: `asset0`,
-                type: "input",
-                data: {
-                    label: (
-                        <>
-                            <AssetSelector database={databaseId} />
-                        </>
-                    ),
-                },
-                sourcePosition: Position.Bottom,
-                position: { x: 0, y: 0 },
-            },
+            // {
+            //     id: `asset0`,
+            //     type: "input",
+            //     data: {
+            //         label: (
+            //             <>
+            //                 <AssetSelector database={databaseId} />
+            //             </>
+            //         ),
+            //     },
+            //     sourcePosition: Position.Bottom,
+            //     position: { x: 0, y: 0 },
+            // },
         ]
     );
 };

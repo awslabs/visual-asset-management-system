@@ -7,15 +7,15 @@
 
 ## _Notice_
 
-_Visual Asset Management System (VAMS) version 2.X+ is the official recognized and approved version series._
+_Visual Asset Management System (VAMS) is considered a sample project that is non-production-grade. Evaluate with your organizional security before deploying to production environments._
 
-_All previous 1.X versions of VAMS, although still available, will no longer be supported or recommended for use._
+_VAMS version 2.X+ is the official recognized and approved version series. 1.X versions are no longer recommended for use._
 
 ## Introduction
 
 _Visual Asset Management System (VAMS)_ is a purpose-built, AWS native solution for the management and distribution of specialized visual assets used in spatial computing. VAMS offers a simplified solution for organizations to ingest, store, and manage visual assets in the cloud, which empowers any user with a web browser to upload, manage, visualize, transform, and retrieve visual assets. Existing workflows that leverage both custom code and pre-built or third-party applications can also be migrated to VAMS and ran in the AWS cloud, as opposed to being limited by the on-premise capacity available. VAMS is customizable and expandable with option of being further tailored to specific use-cases by development teams.
 
-_Customer Value:_ VAMS addresses challenges faced by customers embarking on Spatial Computing initiatives, such as Augmented and Virtual Reality (AR/VR). Organizations that previously had to manage these assets on local systems can now do so from a web-based application.
+_Customer Value:_ VAMS addresses challenges faced by customers embarking on Spatial Computing initiatives, such as Robotics, Digital Twins, Augmented and Virtual Reality (AR/VR), or other 3D-data related technologies. Organizations that previously had to manage these assets on local systems can now do so from a web-based application.
 
 Leveraging Amazon Simple Storage Service (Amazon S3) as a low-cost, high availability storage layer, VAMS provides a purpose-built API for 3D asset management. This API provides a layer of abstraction, allowing custom integrations to be built. Custom integrations allow workloads and applications to be moved to the cloud, unlocking access to the entire breadth and depth of the AWS ecosystem.
 
@@ -31,63 +31,16 @@ Sample use cases that have leveraged early iterations of VAMS include:
 ## Screenshots
 
 ![Database View](./diagrams/screenshots/database_view.png)
-![assets](./diagrams/screenshots/assets.png)
-![model](./diagrams/screenshots/model_view.png)
-![metadata](./diagrams/screenshots/metadata.png)
+![Asset Search](./diagrams/screenshots/assets.png)
+![Asset Details](./diagrams/screenshots/asset_detail_view.jpeg)
+![3D Model Viewer](./diagrams/screenshots/model_view.png)
+![Asset Metadata](./diagrams/screenshots/metadata.png)
+![Asset Versioning](./diagrams/screenshots/asset_versioning.png)
 ![Workflows](./diagrams/screenshots/workflow_view.png)
 
 ## Architecture Overview
 
 ![VAMS Configuration Architecture](./diagrams/Commercial-GovCloud-VAMS_Architecture.png)
-
-## 3D Asset Types Supported for In-Browser Viewing
-
-VAMS currently integrates with several different asset viewers and supports the following formats for viewing 3D assets interactively.
-
-| Name                              | Extension | Type   | Viewer             | Excluded Library | Notes                                                                                        |
-| :-------------------------------- | :-------- | :----- | :----------------- | :--------------- | -------------------------------------------------------------------------------------------- |
-| Wavefront                         | obj       | text   | Online 3D Viewer   |                  |                                                                                              |
-| 3D Studio                         | 3ds       | binary | Online 3D Viewer   |                  |                                                                                              |
-| Stereolithography                 | stl       | text   | Online 3D Viewer   |                  |                                                                                              |
-| Stereolithography                 | stl       | binary | Online 3D Viewer   |                  |                                                                                              |
-| glTF                              | gltf      | text   | Online 3D Viewer   |                  |                                                                                              |
-| glTF                              | glb       | binary | Online 3D Viewer   |                  |                                                                                              |
-| Object File Format                | off       | text   | Online 3D Viewer   |                  |                                                                                              |
-| Object File Format                | off       | binary | Online 3D Viewer   |                  |                                                                                              |
-| Dotbim                            | bim       | text   | Online 3D Viewer   |                  |                                                                                              |
-| Rhinoceros 3D                     | 3dm       | binary | Online 3D Viewer   |                  |                                                                                              |
-| Filmbox                           | fbx       | text   | Online 3D Viewer   |                  |                                                                                              |
-| Filmbox                           | fbx       | binary | Online 3D Viewer   |                  |                                                                                              |
-| Collada                           | dae       | text   | Online 3D Viewer   |                  |                                                                                              |
-| Virtual Reality Modeling Language | wrl       | text   | Online 3D Viewer   |                  |                                                                                              |
-| 3D Manufacturing Format           | 3mf       | text   | Online 3D Viewer   |                  |                                                                                              |
-| Additive Manufacturing            | amf       | text   | Online 3D Viewer   |                  |                                                                                              |
-| (Excluded\*) Dotbim               | ifc       | text   | Online 3D Viewer\* | web-ifc          |                                                                                              |
-| (Excluded\*) FreeCad              | fcstd     | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
-| (Excluded\*) Boundary Rep         | brep      | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
-| (Excluded\*) ISO 10303 CAD        | step      | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
-| (Excluded\*) Graphics Exchange    | iges      | text   | Online 3D Viewer\* | occt-import-js   |                                                                                              |
-| Point Cloud - LiDAR Data Exchange | laz       | binary | Potree Viewer      |                  |                                                                                              |
-| Point Cloud - LiDAR Data Exchange | las       | binary | Potree Viewer      |                  |                                                                                              |
-| Point Cloud - LiDAR Data Exchange | e57       | binary | Potree Viewer      |                  |                                                                                              |
-| Polygon File Format               | ply       | binary | Potree Viewer      |                  | Type stores meshes and point clouds - VAMS currently showing only point cloud viewer for PLY |
-| Polygon File Format               | ply       | text   | Potree Viewer      |                  |                                                                                              |
-
-Viewers available include:
-
--   [Online 3D Viewer](https://github.com/kovacsv/Online3DViewer)
--   [Potree Viewer](https://github.com/potree/potree)
-
-Please take note:
-
--   While we are limited to these formats to view assets, any file format may be uploaded to VAMS.
--   There are some limitations with formats that leverage multiple files such as glTF that uses json with references to other files.
--   Some viewers like Potree Viewer requires additional pipelines to be deployed to fully generate and view point cloud files.
-
-Exclusion\* notes:
-
--   Online 3D Viewer requires the more restrivi licensed opencascade sub-library to view these file types. They are excluded due to VAMS license restrictions on carrying LGPL libraries.
--   -   If an organizations wishes to implement this sub-library and view these excluded file types with Online 3D viewer, add the excluded file types to the `onlineViewer3DFileFormats` constants array in `./web/src/common/constants/fileFormats.js`. Then add the listed excluded npm library in the web folder through `yarn add`.
 
 ## Install
 
@@ -100,12 +53,13 @@ Exclusion\* notes:
 
 ### Requirements
 
--   Python 3.10
+-   Python 3.12
 -   Poetry (for managing python dependencies in the VAMS backend)
 -   Docker
--   Node >=18.7
+-   Node >=20.18.1
 -   Yarn >=1.22.19
 -   Node Version Manager (nvm)
+-   Conda-forge [only for optional local development]
 -   AWS cli
 -   AWS CDK cli
 -   Programatic access to AWS account at minimum access levels outlined above.
@@ -170,13 +124,7 @@ It is reccommended that VAMS be upgraded between major version changes, major co
 
 **NOTE** This should not be used for VAMS version upgrades or A/B deployments which should follow the instructions in ![VAMS Deployment Data Migration](./infra/deploymentDataMigration/README.md).
 
-VAMS can be deployed with a staging bucket config parameter to enable copying from an existing asset bucket.
-
-To deploy with staging bucket, just set the `app.bucketMigrationStaging.assetBucketName` config parameter in `./infra/config/config.json` to your cdk deployment and VAMS will register your existing bucket as a staging bucket.
-
-Once the deployment is complete, you can invoke the `/assets/uploadAssetWorkflow` API to start copying the assets into the VAMS S3 bucket and registering the assets.
-
-Please refer to the uploadAssetWorkflow in the [API docs](./VAMS_API.yaml) to find out about the API request body.
+VAMS can be deployed with a external buckets to enable using non-VAMS created buckets for assets.
 
 ### Configuration Options
 
@@ -192,49 +140,7 @@ See [Permissions Guide](./PermissionsGuide.md) for how to use the VAMS permissio
 
 ## Architecture components
 
-### Backend
-
-VAMS Backend is composed of AWS Lambda functions that are accessed through an AWS API Gateway.
-
-#### Architecture diagrams for Individual components
-
-#### Asset Management
-
-![asset_management](./diagrams/asset_management.jpeg)
-
-#### Pipelines Creation
-
-Pipelines are a feature in VAMS that allow you to edit
-![pipelines_creation](./diagrams/pipeline_creation.jpeg)
-
-#### Workflows Execution
-
-![Workflows Execution](/diagrams/workflow_execution.jpeg)
-
-### Frontend WebApp
-
-VAMS Frontend is a single page ReactJS application. It can be deployed via CloudFront or ALB
-
-![Web App Network CloudFront](./diagrams/web_app_network_cf.jpeg)
-
-![Web App Network ALB](./diagrams/web_app_network_alb.jpeg)
-
-### Security
-
-VAMS API and frontend are authorized through AWS Cognito user accounts by default.
-
-![Security](./diagrams/security.jpeg)
-
-Federated authentication with SAML is available with additional configuration. See [SAML Authentication in the developer guide](./DeveloperGuide.md#saml-authentication) for instructions.
-
-### Code Layout
-
-| component                 | folder           |
-| ------------------------- | ---------------- |
-| web application           | web              |
-| cdk deployment            | infra            |
-| api and backend           | backend          |
-| use-case pipeline backend | backendPipelines |
+Refer to the ![Architecture Components in the Developer Guide](./DeveloperGuide.md/#architecture-components).
 
 ## Demo and Workshop
 
@@ -317,7 +223,17 @@ Please review all considerations with your organizations' security teams to dete
 
 ## Content Security Legal Disclaimer
 
-The sample code; software libraries; command line tools; proofs of concept; templates; or other related technology (including any of the foregoing that are provided by our personnel) is provided to you as AWS Content under the AWS Customer Agreement, or the relevant written agreement between you and AWS (whichever applies). You should not use this AWS Content in your production accounts, or on production or other critical data. You are responsible for testing, securing, and optimizing the AWS Content, such as sample code, as appropriate for production grade use based on your specific quality control practices and standards. Deploying AWS Content may incur AWS charges for creating or using AWS chargeable resources, such as running Amazon EC2 instances or using Amazon S3 storage.
+The sample code; software libraries; command line tools; proofs of concept; templates; or other related technology (including any of the foregoing that are provided by our personnel) is provided to you as AWS Content, as defined in the [Online Customer Agreement](https://aws.amazon.com/agreement/), or the relevant written agreement between you and AWS (whichever applies). You should not use this AWS Content in your production accounts, or on production or other critical data. You are responsible for testing, securing, and optimizing the AWS Content, such as sample code, as appropriate for production grade use based on your specific quality control practices and standards. Deploying AWS Content may incur AWS charges for creating or using AWS chargeable resources, such as running Amazon EC2 instances or using Amazon S3 storage.
+
+## Operational Metrics Collection
+
+To measure the performance of this solution, and to help improve and develop
+AWS Content, AWS may collect and use anonymous operational metrics related
+to your use of this AWS Content. We will not access Your Content, as is
+defined in the [Online Customer Agreement](https://aws.amazon.com/agreement/). Data collection is subject to
+the [AWS Privacy Policy](https://aws.amazon.com/privacy/). You may opt-out of the operational metrics being
+collected and used by removing the tag(s) starting with "uksb-" or “SO” from
+the description(s) in any CloudFormation templates or CDK TemplateOptions.
 
 ## Contributing
 

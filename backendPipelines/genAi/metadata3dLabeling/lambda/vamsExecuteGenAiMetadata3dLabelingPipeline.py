@@ -51,6 +51,22 @@ def lambda_handler(event, context):
     logger.info(event)
 
     try:
+        response = {
+            'statusCode': 200,
+            'body': '',
+            'headers': {
+                'Content-Type': 'application/json'
+            }
+        }
+
+        # Parse request body
+        if not event.get('body'):
+            message = 'Request body is required'
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            logger.error(response)
+            return response
+    
         if isinstance(event['body'], str):
             data = json.loads(event['body'])
         else:

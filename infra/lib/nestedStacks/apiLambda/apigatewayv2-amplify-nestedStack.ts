@@ -3,15 +3,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as apigw from "@aws-cdk/aws-apigatewayv2-alpha";
-import * as apigwAuthorizers from "@aws-cdk/aws-apigatewayv2-authorizers-alpha";
+import * as apigw from "aws-cdk-lib/aws-apigatewayv2";
+import * as apigwv1 from "aws-cdk-lib/aws-apigateway";
+import * as apigwAuthorizers from "aws-cdk-lib/aws-apigatewayv2-authorizers";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as cdk from "aws-cdk-lib";
 import * as Config from "../../../config/config";
 import { samlSettings } from "../../../config/saml-config";
+import { generateUniqueNameHash } from "../../helper/security";
 import {
     AmplifyConfigLambdaConstruct,
     AmplifyConfigLambdaConstructProps,
 } from "./constructs/amplify-config-lambda-construct";
+import {
+    VamsVersionLambdaConstruct,
+    VamsVersionLambdaConstructProps,
+} from "./constructs/vams-version-lambda-construct";
 import { Construct } from "constructs";
 import { NestedStack } from "aws-cdk-lib";
 import { Service } from "../../helper/service-helper";
@@ -48,22 +55,53 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
      */
     public apiGatewayV2: apigw.HttpApi;
     public apiEndpoint: string;
-    public csp: string;
 
     constructor(parent: Construct, name: string, props: ApiGatewayV2AmplifyNestedStackProps) {
         super(parent, name);
 
         props = { ...defaultProps, ...props };
 
-        // init cognito authorizer
-        const cognitoAuth = new apigwAuthorizers.HttpUserPoolAuthorizer(
-            "DefaultCognitoAuthorizer",
-            props.authResources.cognito.userPool,
-            {
-                userPoolClients: [props.authResources.cognito.webClientUserPool],
-                identitySource: ["$request.header.Authorization"],
-            }
-        );
+        let apiGatewayAuthorizer = undefined;
+
+        //Setup Gateway Authorizer
+        if (props.config.app.authProvider.useCognito.enabled) {
+            // init cognito authorizer
+            apiGatewayAuthorizer = new apigwAuthorizers.HttpUserPoolAuthorizer(
+                "DefaultCognitoAuthorizer",
+                props.authResources.cognito.userPool,
+                {
+                    userPoolClients: [props.authResources.cognito.webClientUserPool],
+                    identitySource: ["$request.header.Authorization"],
+                }
+            );
+        } else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
+            //init external OATH IDP JWT authorizer
+
+            apiGatewayAuthorizer = new apigwAuthorizers.HttpJwtAuthorizer(
+                "DefaultJwtAuthorizer",
+                props.config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl,
+                {
+                    jwtAudience: [
+                        props.config.app.authProvider.useExternalOAuthIdp
+                            .lambdaAuthorizorJWTAudience,
+                    ],
+                    identitySource: ["$request.header.Authorization"],
+                }
+            );
+        }
+
+        const accessLogs = new logs.LogGroup(this, "VAMS-API-AccessLogs", {
+            logGroupName:
+                "/aws/vendedlogs/VAMS-API-AccessLogs" +
+                generateUniqueNameHash(
+                    props.config.env.coreStackName,
+                    props.config.env.account,
+                    "VAMS-API-AccessLog",
+                    10
+                ),
+            retention: logs.RetentionDays.ONE_YEAR,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
 
         // init api gateway
         const api = new apigw.HttpApi(this, "Api", {
@@ -95,8 +133,36 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
                 exposeHeaders: ["Access-Control-Allow-Origin"],
                 maxAge: cdk.Duration.hours(1),
             },
-            defaultAuthorizer: cognitoAuth,
+            defaultAuthorizer: apiGatewayAuthorizer,
+            createDefaultStage: true,
         });
+
+        const defaultStage = api.defaultStage?.node.defaultChild as apigw.CfnStage;
+        if (defaultStage) {
+            // Modify throttle settings using L1 construct properties
+            defaultStage.defaultRouteSettings = {
+                throttlingBurstLimit: props.config.app.api.globalBurstLimit, // Set burst limit
+                throttlingRateLimit: props.config.app.api.globalRateLimit, // Set rate limit
+            };
+
+            //Modify log settings
+            defaultStage.accessLogSettings = {
+                destinationArn: accessLogs.logGroupArn,
+                format: JSON.stringify({
+                    requestId: "$context.requestId",
+                    userAgent: "$context.identity.userAgent",
+                    sourceIp: "$context.identity.sourceIp",
+                    requestTime: "$context.requestTime",
+                    requestTimeEpoch: "$context.requestTimeEpoch",
+                    httpMethod: "$context.httpMethod",
+                    path: "$context.path",
+                    status: "$context.status",
+                    protocol: "$context.protocol",
+                    responseLength: "$context.responseLength",
+                    domainName: "$context.domainName",
+                }),
+            };
+        }
 
         //Always use non-FIPS URL in non-GovCloud. All endpoints in GovCloud are FIPS-compliant already
         //https://docs.aws.amazon.com/govcloud-us/latest/UserGuide/govcloud-abp.html
@@ -104,20 +170,13 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
         this.apiEndpoint = apiEndpoint;
 
         //Generate Global CSP policy
-        const cognitoDomain = props.config.app.authProvider.useCognito.useSaml
-            ? `https://${samlSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`
-            : "";
-        const cspPolicy = generateContentSecurityPolicy(
-            props.storageResources,
-            cognitoDomain,
-            apiEndpoint,
-            props.config
-        );
-        this.csp = cspPolicy;
+        let authDomain = "";
 
-        //Set amplify CSP (only when Cloudfront can't deploy, like with ALB)
-        let amplifyCsp = "";
-        if (props.config.app.useAlb.enabled) amplifyCsp = cspPolicy;
+        if (props.config.app.authProvider.useCognito.useSaml) {
+            authDomain = `https://${samlSettings.cognitoDomainPrefix}.auth.${props.config.env.region}.amazoncognito.com`;
+        } else if (props.config.app.authProvider.useExternalOAuthIdp.enabled) {
+            authDomain = props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl;
+        }
 
         //Setup Initial Amplify Config
         const amplifyConfigProps: AmplifyConfigLambdaConstructProps = {
@@ -126,13 +185,11 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
             apiUrl: `https://${this.apiEndpoint}/`,
             authResources: props.authResources,
             region: props.config.env.region,
-            externalOathIdpURL: props.config.app.authProvider.useExternalOathIdp.idpAuthProviderUrl,
-            contentSecurityPolicy: amplifyCsp,
         };
 
         if (props.config.app.authProvider.useCognito.useSaml) {
-            amplifyConfigProps.federatedConfig = {
-                customCognitoAuthDomain: cognitoDomain,
+            amplifyConfigProps.cognitoFederatedConfig = {
+                customCognitoAuthDomain: authDomain,
                 customFederatedIdentityProviderName: samlSettings.name,
                 // if necessary, the callback urls can be determined here and passed to the UI through the config endpoint
                 // redirectSignIn: callbackUrls[0],
@@ -144,6 +201,18 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
             this,
             "AmplifyConfigNestedStack",
             amplifyConfigProps
+        );
+
+        //Setup Version
+        const vamsVersionProps: VamsVersionLambdaConstructProps = {
+            ...props,
+            api: api,
+        };
+
+        const vamsVersionFn = new VamsVersionLambdaConstruct(
+            this,
+            "VamsVersionNestedStack",
+            vamsVersionProps
         );
 
         // export any cf outputs

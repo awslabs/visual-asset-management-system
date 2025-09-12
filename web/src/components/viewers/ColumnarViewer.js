@@ -82,7 +82,7 @@ const readCsvFile = (remoteFileUrl, setColumns, setRows) => {
 };
 
 export default function ColumnarViewer(props) {
-    const { assetId, databaseId, assetKey } = props;
+    const { assetId, databaseId, assetKey, versionId } = props;
     const [loaded, setLoaded] = useState(false);
     const [columns, setColumns] = useState([]);
     const [rows, setRows] = useState([]);
@@ -93,7 +93,8 @@ export default function ColumnarViewer(props) {
                 assetId: assetId,
                 databaseId: databaseId,
                 key: assetKey,
-                version: "",
+                versionId: versionId || "",
+                downloadType: "assetFile",
             }).then((response) => {
                 if (response !== false && Array.isArray(response)) {
                     if (response[0] === false) {

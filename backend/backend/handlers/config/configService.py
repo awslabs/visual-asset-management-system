@@ -17,7 +17,6 @@ def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
     try:
         logger.info("Looking up the requested resource")
-        assetS3Bucket = os.getenv("ASSET_STORAGE_BUCKET", None)
         appFeatureEnabledDynamoDBTable = os.getenv("APPFEATUREENABLED_STORAGE_TABLE_NAME", None)
 
         # Specify the column name you want to aggregate
@@ -68,12 +67,11 @@ def lambda_handler(event, context):
         logger.info(appFeatureEnableDynamoDB_column_values)
 
         # Create a concatenated string from the column values
-        appFeatureEnabledconcatenated_string = ','.join(
+        appFeatureEnabledConcatenated_string = ','.join(
             appFeatureEnableDynamoDB_column_values)
 
         response = {
-            "bucket": assetS3Bucket,
-            "featuresEnabled": appFeatureEnabledconcatenated_string,
+            "featuresEnabled": appFeatureEnabledConcatenated_string
         }
         logger.info("Success")
         return {
@@ -81,6 +79,7 @@ def lambda_handler(event, context):
             "body": json.dumps(response),
             "headers": {
                 "Content-Type": "application/json",
+                'Cache-Control': 'no-cache, no-store',
             },
         }
     except Exception as e:

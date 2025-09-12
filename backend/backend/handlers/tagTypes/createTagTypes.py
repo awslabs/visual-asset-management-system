@@ -29,7 +29,8 @@ def create_tag_type(body):
     table = dynamodb.Table(tag_type_db_table_name)
     item = {
         "tagTypeName": body["tagTypeName"],
-        "description": body["description"]
+        "description": body["description"],
+        "required": body.get("required", "False")
     }
     table.put_item(Item=item, ConditionExpression="attribute_not_exists(tagTypeName)")
     return json.dumps({"message": 'Succeeded'})
@@ -41,10 +42,12 @@ def update_tag(body):
         Key={
             'tagTypeName': body["tagTypeName"]
         },
-        UpdateExpression='SET description = :value',
+        UpdateExpression='SET description = :descriptionValue, required = :requiredValue',
         ExpressionAttributeValues={
-            ':value': body["description"]
-        }
+            ':descriptionValue': body["description"],
+            ':requiredValue': body.get("required", "False")
+        },
+        ConditionExpression='attribute_exists(tagTypeName)'
     )
     return json.dumps({"message": 'Succeeded'})
 
@@ -55,8 +58,22 @@ def lambda_handler(event, context):
     global claims_and_roles
     claims_and_roles = request_to_claims(event)
 
+    # Parse request body
+    if not event.get('body'):
+        message = 'Request body is required'
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        logger.error(response)
+        return response
+
     if isinstance(event['body'], str):
-        event['body'] = json.loads(event['body'])
+        try:
+            event['body'] = json.loads(event['body'])
+        except json.JSONDecodeError as e:
+            logger.exception(f"Invalid JSON in request body: {e}")
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": "Invalid JSON in request body"})
+            return response
 
     try:
         if 'tagTypeName' not in event['body'] or 'description' not in event['body']:
@@ -73,6 +90,11 @@ def lambda_handler(event, context):
             'description': {
                 'value': event['body']['description'],
                 'validator': 'STRING_256'
+            },
+            'required': {
+                'value': event['body'].get("required", "False"),
+                'validator': 'BOOL',
+                'optional': True
             }
         })
 
@@ -88,11 +110,10 @@ def lambda_handler(event, context):
             "object__type": "tagType",
             "tagTypeName": event['body']['tagTypeName']
         }
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", tag_type, httpMethod) and casbin_enforcer.enforceAPI(event):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(tag_type, httpMethod) and casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if httpMethod == 'POST' and method_allowed_on_api:
             return create_tag_type(event['body'])
@@ -108,7 +129,7 @@ def lambda_handler(event, context):
         if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
             response['statusCode'] = 400
             response['body'] = json.dumps(
-                {"message": "TagTypeName " + str(event['body']['tagTypeName'] + " already exists.")})
+                {"message": "Tag type already exists."})
         else:
             response['statusCode'] = 500
             response['body'] = json.dumps({"message": "Internal Server Error"})

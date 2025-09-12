@@ -16,7 +16,14 @@ export const SubscriptionListDefinition = new ListDefinition({
     pluralName: "Roles",
     pluralNameTitleCase: "Roles",
     singularNameTitleCase: "Role",
-    visibleColumns: ["roleName", "source", "sourceIdentifier", "createdOn", "description"],
+    visibleColumns: [
+        "roleName",
+        "source",
+        "sourceIdentifier",
+        "createdOn",
+        "description",
+        "mfaRequired",
+    ],
     filterColumns: [{ name: "name", placeholder: "Name" }],
     elementId: "name",
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
@@ -74,6 +81,22 @@ export const SubscriptionListDefinition = new ListDefinition({
             header: "Description",
             cellWrapper: (props: any) => <>{props.children}</>,
             sortingField: "description",
+        }),
+        new ColumnDefinition({
+            id: "mfaRequired",
+            header: "MFA Required",
+            cellWrapper: (props: any) => {
+                const content =
+                    props.children === "undefined" || props.children === "null"
+                        ? "false"
+                        : props.children;
+                return (
+                    <>
+                        <Box textAlign="center">{content}</Box>
+                    </>
+                );
+            },
+            sortingField: "mfaRequired",
         }),
     ],
 });

@@ -1,0 +1,38 @@
+/*
+ * Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* Ensure the file versions modal has proper styling */
+.version-cell {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.version-id {
+    font-family: monospace;
+    font-size: 14px;
+    margin-right: 4px;
+}
+
+/* Ensure proper spacing for revert confirmation modal */
+.revert-confirmation-modal {
+    z-index: 1000;
+}
+
+/* Custom styling for larger modal if needed */
+.file-versions-modal-max {
+    max-width: 95vw !important;
+    max-height: 90vh !important;
+}
+
+/* Ensure table actions don't wrap unnecessarily */
+.file-versions-table .awsui-table-cell {
+    white-space: nowrap;
+}
+
+/* Better spacing for action buttons */
+.file-versions-table .awsui-button-group {
+    gap: 4px;
+}

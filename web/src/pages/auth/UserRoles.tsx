@@ -37,7 +37,7 @@ export const UserRolesListDefinition = new ListDefinition({
     columnDefinitions: [
         new ColumnDefinition({
             id: "userId",
-            header: "User ID (Email)",
+            header: "User ID",
             cellWrapper: (props: any) => {
                 return <>{props.children}</>;
             },

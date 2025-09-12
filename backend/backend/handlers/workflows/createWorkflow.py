@@ -117,16 +117,16 @@ def create_step_function(pipelines, databaseId, workflowId):
 
         output_s3_asset_files_uri = "States.Format('s3://{}/pipelines/" + \
                 pipeline["name"] + "/" + job_names[i] + "/output/{}/files/', $.bucketAsset, $$.Execution.Name)"
-        
+
         output_s3_asset_preview_uri = "States.Format('s3://{}/pipelines/" + \
-                pipeline["name"] + "/" + job_names[i] + "/output/{}/preview/', $.bucketAsset, $$.Execution.Name)"
-        
+                pipeline["name"] + "/" + job_names[i] + "/output/{}/previews/', $.bucketAsset, $$.Execution.Name)"
+
         output_s3_asset_metadata_uri = "States.Format('s3://{}/pipelines/" + \
                 pipeline["name"] + "/" + job_names[i] + "/output/{}/metadata/', $.bucketAsset, $$.Execution.Name)"
-        
+
         inputOutput_s3_assetAuxiliary_files_uri = "States.Format('s3://{}/{}/" + \
                assetAuxiliaryAssetSubFolderName + "/" + pipeline["name"] + "/', $.bucketAssetAuxiliary, $.inputAssetFileKey)"
-        
+
         if i == 0:
             input_s3_asset_uri = "States.Format('s3://{}/{}', $.bucketAsset, $.inputAssetFileKey)"
         else:
@@ -151,13 +151,14 @@ def create_step_function(pipelines, databaseId, workflowId):
             "body": {
                 "databaseId.$": "$.databaseId",
                 "assetId.$": "$.assetId",
+                "workflowDatabaseId.$": "$.workflowDatabaseId",
                 "workflowId.$": "$.workflowId",
                 "filesPathKey.$": "States.Format('pipelines/" + pipeline["name"] + "/" + job_names[
                     i] + "/output/{}/files/', $$.Execution.Name)",
                 "metadataPathKey.$": "States.Format('pipelines/" + pipeline["name"] + "/" + job_names[
                     i] + "/output/{}/metadata/', $$.Execution.Name)",
                 "previewPathKey.$": "States.Format('pipelines/" + pipeline["name"] + "/" + job_names[
-                    i] + "/output/{}/preview/', $$.Execution.Name)",
+                    i] + "/output/{}/previews/', $$.Execution.Name)",
                 "description": f'Output from {pipeline["name"]}',
                 "executionId.$": "$$.Execution.Name",
                 "pipeline": pipeline["name"],
@@ -182,7 +183,7 @@ def create_step_function(pipelines, databaseId, workflowId):
     if len(workFlowName) > 66:
         workFlowName = workFlowName[-66:]  # use 66 characters
     workFlowName = workFlowName + generate_random_string(8)
-    workFlowName = "vams-"+ workFlowName 
+    workFlowName = "vams-"+ workFlowName
     if len(workFlowName) > 80:
         workFlowName = workFlowName[-79:]  # use 79 characters for buffer
 
@@ -208,7 +209,7 @@ def create_step_function(pipelines, databaseId, workflowId):
             if original_workflow["States"][step_name]["Type"] == "Task":
                 outputResultPath = "$." + step_name + ".output"
                 original_workflow["States"][step_name]["ResultPath"] = outputResultPath
-                
+
             pipelineName = step_name.split("-")[0]
             original_workflow["States"][step_name]["Parameters"].pop(
                 "ProcessingJobName")
@@ -267,15 +268,18 @@ def create_lambda_step(pipeline, input_s3_asset_file_uri, output_s3_asset_files_
         except json.decoder.JSONDecodeError:
             logger.warn("Input parameters provided is not a JSON object.... skipping inclusion")
 
-    #TODO: Generate Presigned URLs for download to S3. Create function / API for pipelines to call to generate upload URLs. More secure and extensible. 
+    #TODO: Generate Presigned URLs for download to S3. Create function / API for pipelines to call to generate upload URLs. More secure and extensible.
     lambda_payload = {
         "body": {
             "inputS3AssetFilePath.$": input_s3_asset_file_uri,
             "outputS3AssetFilesPath.$": output_s3_asset_files_uri,
             "outputS3AssetPreviewPath.$": output_s3_asset_preview_uri,
             "outputS3AssetMetadataPath.$": output_s3_asset_metadata_uri,
-            "outputType": pipeline["outputType"],
             "inputOutputS3AssetAuxiliaryFilesPath.$": inputOutput_s3_assetAuxiliary_files_uri,
+            "bucketAssetAuxiliary.$": "$.bucketAssetAuxiliary",
+            "bucketAsset.$": "$.bucketAsset",
+            "inputAssetFileKey.$": "$.inputAssetFileKey",
+            "outputType": pipeline["outputType"],           
             "inputMetadata.$": "$.inputMetadata",
             "inputParameters": inputParameters,
             "executingUserName.$": "$.executingUserName",
@@ -314,16 +318,30 @@ def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
     claims_and_roles = request_to_claims(event)
     logger.info(event)
+
+    # Parse request body
+    if not event.get('body'):
+        message = 'Request body is required'
+        response['body'] = json.dumps({"message": message})
+        response['statusCode'] = 400
+        logger.error(response)
+        return response
+
     if isinstance(event['body'], str):
-        event['body'] = json.loads(event['body'])
+        try:
+            event['body'] = json.loads(event['body'])
+        except json.JSONDecodeError as e:
+            logger.exception(f"Invalid JSON in request body: {e}")
+            response['statusCode'] = 400
+            response['body'] = json.dumps({"message": "Invalid JSON in request body"})
+            return response
     # event['body']=json.loads(event['body'])
     try:
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if method_allowed_on_api:
             # TODO: Validate if database and pipelines exist before proceeding
@@ -344,6 +362,12 @@ def lambda_handler(event, context):
             for pipeline in event['body']['specifiedPipelines']['functions']:
                 logger.info("pipeline in workflow creation: ")
                 logger.info(pipeline)
+                # If global workflow, included pipeline should also be global
+                if event['body']['databaseId'] == "GLOBAL":
+                    if pipeline['databaseId'] != "GLOBAL":
+                        response['statusCode'] = 400
+                        response['body'] = json.dumps({"message": "Only global pipelines are allowed in global workflows."})
+                        return response
                 # Add Casbin Enforcer to check if the current user has permissions to GET the pipeline:
                 pipeline_allowed = False
                 pipeline.update({
@@ -353,11 +377,10 @@ def lambda_handler(event, context):
                     "pipelineType": pipeline['pipelineType'],
                     "pipelineExecutionType": pipeline['pipelineExecutionType'],
                 })
-                for user_name in claims_and_roles["tokens"]:
-                    casbin_enforcer = CasbinEnforcer(user_name)
-                    if casbin_enforcer.enforce(f"user::{user_name}", pipeline, "GET"):
+                if len(claims_and_roles["tokens"]) > 0:
+                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                    if casbin_enforcer.enforce(pipeline, "GET"):
                         pipeline_allowed = True
-                        break
 
                 if pipeline_allowed:
                     pipelineArray.append(pipeline['name'])
@@ -380,7 +403,8 @@ def lambda_handler(event, context):
             (valid, message) = validate({
                 'databaseId': {
                     'value': event['body']['databaseId'],
-                    'validator': 'ID'
+                    'validator': 'ID',
+                    'allowGlobalKeyword': True
                 },
                 'pipelineId': {
                     'value': pipelineArray,
@@ -409,11 +433,10 @@ def lambda_handler(event, context):
                 'databaseId': event['body']['databaseId'],
                 'workflowId': event['body']['workflowId'],
             }
-            for user_name in claims_and_roles["tokens"]:
-                casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", workflow, "PUT"):
+            if len(claims_and_roles["tokens"]) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if casbin_enforcer.enforce(workflow, "PUT"):
                     workflow_allowed = True
-                    break
 
             if workflow_allowed:
                 response['body'] = create_workflow(event['body'])
@@ -428,7 +451,7 @@ def lambda_handler(event, context):
             response['body'] = json.dumps({"message": "Not Authorized"})
             return response
     except botocore.exceptions.ClientError as err:
-        if err.response['Error']['Code'] == 'LimitExceededException' or err.response['Error']['Code'] == 'ThrottlingException': 
+        if err.response['Error']['Code'] == 'LimitExceededException' or err.response['Error']['Code'] == 'ThrottlingException':
             logger.exception("Throttling Error")
             response['statusCode'] = err.response['ResponseMetadata']['HTTPStatusCode']
             response['body'] = json.dumps({"message": "ThrottlingException: Too many requests within a given period."})

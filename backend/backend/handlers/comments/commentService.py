@@ -52,26 +52,35 @@ def get_all_comments(queryParams: dict, showDeleted=False) -> dict:
         }
     }
 
-    pageIterator = paginator.paginate(
-        TableName=comment_database,
-        ScanFilter=filter,
-        PaginationConfig={
-            "MaxItems": int(queryParams["maxItems"]),
-            "PageSize": int(queryParams["pageSize"]),
-            "StartingToken": queryParams["startingToken"],
-        },
-    ).build_full_result()
+    # Handle empty string for startingToken
+    pagination_config = {
+        "MaxItems": int(queryParams["maxItems"]),
+        "PageSize": int(queryParams["pageSize"]),
+    }
+    if queryParams["startingToken"] and queryParams["startingToken"] != "":
+        pagination_config["StartingToken"] = queryParams["startingToken"]
 
-    logger.info("Fetching results")
-    result = {}
-    items = []
-    for item in pageIterator["Items"]:
-        deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
-        items.append(deserialized_document)
-    result["Items"] = items
-    if "NextToken" in pageIterator:
-        result["NextToken"] = pageIterator["NextToken"]
-    return result
+    try:
+        pageIterator = paginator.paginate(
+            TableName=comment_database,
+            ScanFilter=filter,
+            PaginationConfig=pagination_config,
+        ).build_full_result()
+
+        logger.info("Fetching results")
+        result = {}
+        items = []
+        for item in pageIterator["Items"]:
+            deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
+            items.append(deserialized_document)
+        result["Items"] = items
+        if "NextToken" in pageIterator:
+            result["NextToken"] = pageIterator["NextToken"]
+        return result
+    except Exception as e:
+        logger.exception(f"Error in get_all_comments: {str(e)}")
+        # Return empty result on error
+        return {"Items": []}
 
 
 def get_comments(assetId: str, queryParams: dict, showDeleted=False) -> dict:
@@ -84,18 +93,27 @@ def get_comments(assetId: str, queryParams: dict, showDeleted=False) -> dict:
     """
     paginator = dynamodb.meta.client.get_paginator('query')
 
-    response = paginator.paginate(
-        TableName=comment_database,
-        KeyConditionExpression=Key("assetId").eq(assetId),
-        ScanIndexForward=False,
-        PaginationConfig={
-            'MaxItems': int(queryParams['maxItems']),
-            'PageSize': int(queryParams['pageSize']),
-            'StartingToken': queryParams['startingToken']
-        }
-    ).build_full_result()
+    # Handle empty string for startingToken
+    pagination_config = {
+        'MaxItems': int(queryParams['maxItems']),
+        'PageSize': int(queryParams['pageSize']),
+    }
+    if queryParams['startingToken'] and queryParams['startingToken'] != "":
+        pagination_config['StartingToken'] = queryParams['startingToken']
 
-    return response["Items"]
+    try:
+        response = paginator.paginate(
+            TableName=comment_database,
+            KeyConditionExpression=Key("assetId").eq(assetId),
+            ScanIndexForward=False,
+            PaginationConfig=pagination_config
+        ).build_full_result()
+
+        return response["Items"]
+    except Exception as e:
+        logger.exception(f"Error in get_comments: {str(e)}")
+        # Return empty result on error
+        return []
 
 
 def get_comments_version(assetId: str, assetVersionId: str, queryParams: dict, showDeleted=False) -> dict:
@@ -109,19 +127,28 @@ def get_comments_version(assetId: str, assetVersionId: str, queryParams: dict, s
     """
     paginator = dynamodb.meta.client.get_paginator('query')
 
-    # Queries partition key (assetId) and queries sort keys that begin_with the desired asset version
-    response = paginator.paginate(
-        TableName=comment_database,
-        KeyConditionExpression=Key("assetId").eq(assetId) & Key("assetVersionId:commentId").begins_with(assetVersionId),
-        ScanIndexForward=False,
-        PaginationConfig={
-            'MaxItems': int(queryParams['maxItems']),
-            'PageSize': int(queryParams['pageSize']),
-            'StartingToken': queryParams['startingToken']
-        }
-    ).build_full_result()
+    # Handle empty string for startingToken
+    pagination_config = {
+        'MaxItems': int(queryParams['maxItems']),
+        'PageSize': int(queryParams['pageSize']),
+    }
+    if queryParams['startingToken'] and queryParams['startingToken'] != "":
+        pagination_config['StartingToken'] = queryParams['startingToken']
 
-    return response["Items"]
+    try:
+        # Queries partition key (assetId) and queries sort keys that begin_with the desired asset version
+        response = paginator.paginate(
+            TableName=comment_database,
+            KeyConditionExpression=Key("assetId").eq(assetId) & Key("assetVersionId:commentId").begins_with(assetVersionId),
+            ScanIndexForward=False,
+            PaginationConfig=pagination_config
+        ).build_full_result()
+
+        return response["Items"]
+    except Exception as e:
+        logger.exception(f"Error in get_comments_version: {str(e)}")
+        # Return empty result on error
+        return []
 
 
 def get_single_comment(assetId: str, assetVersionIdAndCommentId: str, showDeleted=False) -> dict:
@@ -139,7 +166,7 @@ def get_single_comment(assetId: str, assetVersionIdAndCommentId: str, showDelete
     return response.get("Item", {})
 
 
-def delete_comment(assetId: str, assetVersionIdAndCommentId: str, event: dict) -> dict:
+def delete_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, event: dict) -> dict:
     """
     Deletes a specific comment from the database (actually just adds #deleted tag)
     :param assetId: id of the asset the comment is attached to
@@ -156,12 +183,11 @@ def delete_comment(assetId: str, assetVersionIdAndCommentId: str, event: dict) -
         logger.info(item)
 
         logger.info("Verifying user")
-        api_call_user_id = event["requestContext"]["authorizer"]["jwt"]["claims"]["sub"]
         comment_user_id = item["commentOwnerID"]
-        if api_call_user_id != comment_user_id:
-            logger.warning("invalid user")
-            response["statusCode"] = 401
-            response["message"] = "Unauthorized"
+        if userId != comment_user_id:
+            logger.warning("invalid user - ownerID mismatch with caller")
+            response["statusCode"] = 403
+            response["message"] = "Unauthorized - only the creator of the comment can delete it"
             return response
 
         logger.info("Deleting comment")
@@ -210,15 +236,14 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
 
     method_allowed_on_api = False
 
-    asset_object = get_asset_object_from_id(pathParameters["assetId"])
+    asset_object = get_asset_object_from_id(None, pathParameters["assetId"])
     asset_object.update({"object__type": "asset"})
 
     # Add Casbin Enforcer to check if the current user has permissions to GET the Comment
-    for user_name in claims_and_roles["tokens"]:
-        casbin_enforcer = CasbinEnforcer(user_name)
-        if casbin_enforcer.enforce(f"user::{user_name}", asset_object, "GET"):
+    if len(claims_and_roles["tokens"]) > 0:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if casbin_enforcer.enforce(asset_object, "GET"):
             method_allowed_on_api = True
-            break
 
     if method_allowed_on_api:
         if "assetVersionId:commentId" not in pathParameters:
@@ -245,6 +270,7 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
                         )
                     }
                 )
+                response["statusCode"] = 200
                 return response
 
             # if we just have assetId, call get_comments
@@ -259,11 +285,13 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
 
                 logger.info(f"Listing comments for asset: {pathParameters['assetId']}")
                 response["body"] = json.dumps({"message": get_comments(pathParameters["assetId"], queryParameters, showDeleted)})
+                response["statusCode"] = 200
                 return response
             else:
                 # if we have nothing, call get_all_comments
                 logger.info("Listing All Comments")
                 response["body"] = json.dumps({"message": get_all_comments(queryParameters, showDeleted)})
+                response["statusCode"] = 200
                 return response
         else:
             # error, no assetId in call
@@ -302,10 +330,12 @@ def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> 
                     )
                 }
             )
+            response["statusCode"] = 200
             return response
     else:
         response["statusCode"] = 403
         response["body"] = json.dumps({"message": "Action not allowed"})
+        return response
 
 
 def delete_handler(response: dict, pathParameters: dict, event: dict) -> dict:
@@ -329,12 +359,29 @@ def delete_handler(response: dict, pathParameters: dict, event: dict) -> dict:
 
     logger.info("Validating parameters")
     split_arr = pathParameters["assetVersionId:commentId"].split(":")
+
+    #if split_arr length is not 2, generate a validation error
+    if len(split_arr) != 2:
+        message = "Invalid assetVersionId:commentId format"
+        response["body"] = json.dumps({"message": message})
+        response["statusCode"] = 400
+        return response
+
     (valid, message) = validate(
         {
-            "assetId": {"value": pathParameters["assetId"], "validator": "ID"},
-            "commentId": {"value": split_arr[1], "validator": "ID"},
+            "assetId": 
+            {
+                "value": pathParameters["assetId"], 
+                "validator": "ASSET_ID"
+            },
+            "commentId": 
+            {
+                "value": split_arr[1], 
+                "validator": "ID"
+                },
         }
     )
+
     if not valid:
         logger.warning(message)
         response["body"] = json.dumps({"message": message})
@@ -345,21 +392,26 @@ def delete_handler(response: dict, pathParameters: dict, event: dict) -> dict:
     claims_and_roles = request_to_claims(event)
     method_allowed_on_api = False
 
-    asset_object = get_asset_object_from_id(pathParameters["assetId"])
+    asset_object = get_asset_object_from_id(None, pathParameters["assetId"])
     asset_object.update({"object__type": "asset"})
 
     # Add Casbin Enforcer to check if the current user has permissions to DELETE the Comment
-    for user_name in claims_and_roles["tokens"]:
-        casbin_enforcer = CasbinEnforcer(user_name)
-        if casbin_enforcer.enforce(f"user::{user_name}", asset_object, "DELETE"):
+    if len(claims_and_roles["tokens"]) > 0:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if casbin_enforcer.enforce(asset_object, "DELETE"):
             method_allowed_on_api = True
-            break
 
     if method_allowed_on_api:
+
+        #Get user ID of person making request
+        userId = claims_and_roles.get("tokens", ["system"])[0]
+
         logger.info(
             f"Deleting comment for assetId: {pathParameters['assetId']} and versionId:commentId: {pathParameters['assetVersionId:commentId']}",
         )
-        result = delete_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], event)
+
+        result = delete_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], userId, event)
+        
         response["body"] = json.dumps({"message": result["message"]})
         response["statusCode"] = result["statusCode"]
         return response
@@ -394,16 +446,24 @@ def lambda_handler(event: dict, context: dict) -> dict:
         method_allowed_on_api = False
 
         # Add Casbin Enforcer to check if the current user has permissions to GET the Comment
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
+        
 
         if httpMethod == "GET" and method_allowed_on_api:
-            return get_handler(response, pathParameters, queryParameters)
+            result = get_handler(response, pathParameters, queryParameters)
+            return result
         if httpMethod == "DELETE" and method_allowed_on_api:
-            return delete_handler(response, pathParameters, event)
+            result = delete_handler(response, pathParameters, event)
+            return result
+        
+        # If we get here, we didn't handle the request
+        logger.error("No handler matched")
+        response["statusCode"] = 405
+        response["body"] = json.dumps({"message": "Method not allowed"})
+        return response
 
     except Exception as e:
         response["statusCode"] = 500

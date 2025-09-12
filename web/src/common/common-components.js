@@ -24,7 +24,7 @@ export const EmptyState = ({ title, subtitle, action }) => {
             <Box variant="p" padding={{ bottom: "s" }} color="inherit">
                 {subtitle}
             </Box>
-            {action}
+            {action && action}
         </Box>
     );
 };
@@ -61,7 +61,7 @@ export const TableNoMatchState = (props) => (
     </Box>
 );
 
-export const TableEmptyState = ({ resourceName }) => (
+export const TableEmptyState = ({ resourceName, showCreateButton = true }) => (
     <Box margin={{ vertical: "xs" }} textAlign="center" color="inherit">
         <SpaceBetween size="xxs">
             <div>
@@ -70,7 +70,7 @@ export const TableEmptyState = ({ resourceName }) => (
                     No {resourceName.toLowerCase()}s associated with this resource.
                 </Box>
             </div>
-            <Button>Create {resourceName.toLowerCase()}</Button>
+            {showCreateButton && <Button>Create {resourceName.toLowerCase()}</Button>}
         </SpaceBetween>
     </Box>
 );

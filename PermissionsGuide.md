@@ -97,14 +97,11 @@ Administrators can create new users for your user pool from the Amazon Cognito c
 ### Object Types and Related Fields
 
 Object types below are specified in the `object__type` policy field. The fields mapped below each object type are possible inputs to check against for each object type within constraint criteria.
-Object types below are specified in the `object__type` policy field. The fields mapped below each object type are possible inputs to check against for each object type within constraint criteria.
 
-If any `AND` constraint criteria are defined, all must be true to allow an action on an object. If any `OR` constraint criteria are defined, at least 1 of the criteria must be true. A constraint must have at least 1 `AND` or `OR` criteria item defined.
 If any `AND` constraint criteria are defined, all must be true to allow an action on an object. If any `OR` constraint criteria are defined, at least 1 of the criteria must be true. A constraint must have at least 1 `AND` or `OR` criteria item defined.
 
 A object type field will only be evaluated in a given set of constraints for an action/object function performed by a user if the field is defined in a criteria. As an example, if `assetName` is not defined in any constraint criteria for a particular user assigned constraints / roles, `assetName` will be ignored during checks.
 
-Fields marked below as `recommended check` are fields that are recommended to be checked in a criteria if constraints are defined for a particular object type for a user or role.
 Fields marked below as `recommended check` are fields that are recommended to be checked in a criteria if constraints are defined for a particular object type for a user or role.
 
 -   API [`api`] (route object)
@@ -141,7 +138,6 @@ Fields marked below as `recommended check` are fields that are recommended to be
 #### Web - Routes
 
 Below are the web routes possible as part of a `GET` method type. Requests for these are made through the `/auth/routes` API. These are only for enabling/disabling front-end functionality and does not impact any data or functionality retrieval from APIs. It uses the field `route__path` field for all WEB object type checks.
-Below are the web routes possible as part of a `GET` method type. Requests for these are made through the `/auth/routes` API. These are only for enabling/disabling front-end functionality and does not impact any data or functionality retrieval from APIs. It uses the field `route__path` field for all WEB object type checks.
 
 -   `*` (Default Landing Page, Static web UI always allows this)
 -   `/` (Default Landing Page, Static web UI always allows this)
@@ -153,12 +149,12 @@ Below are the web routes possible as part of a `GET` method type. Requests for t
 -   `/auth/subscriptions`
 -   `/auth/tags`
 -   `/auth/userroles`
--   `/comments`
 -   `/databases`
 -   `/databases/:databaseId/assets`
 -   `/databases/:databaseId/assets/:assetId`
 -   `/databases/:databaseId/assets/:assetId/file`
 -   `/databases/:databaseId/assets/:assetId/uploads`
+-   `/databases/:databaseId/assets/:assetId/download`
 -   `/databases/:databaseId/pipelines`
 -   `/databases/:databaseId/workflows`
 -   `/databases/:databaseId/workflows/:workflowId`
@@ -176,22 +172,39 @@ Below are the web routes possible as part of a `GET` method type. Requests for t
 #### API - Routes, Methods, and Object Checks
 
 Below are the API routes with the current supported method types. It uses the field `route__path` field for all initial API object type checks.
-Below are the API routes with the current supported method types. It uses the field `route__path` field for all initial API object type checks.
 
 Additionally it shows which object authorization checks it does for a particular object type and field.
 
 -   `/api/amplify-config` - GET (No authentication or API authorization logic checks on base call)
--   `/asset-links/{assetId}` - GET
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
--   `/asset-links/{relationId}` - DELETE
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
+-   `/api/version` - GET (No authentication or API authorization logic checks on base call)
+-   `/assets` - POST
+-   -   `Asset` (assetName, databaseId, tags) - POST (api: POST)
 -   `/asset-links` - POST
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   -   `Asset` (fromAssetId, fromAssetDatabaseId, assetName, assetType, tags) - POST (api: POST)
+-   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - POST (api: POST)
+-   `/asset-links/single/{assetLinkId}` - GET
+-   -   `Asset` (fromAssetId, fromAssetDatabaseId, assetName, assetType, tags) - GET (api: GET)
+-   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - GET (api: GET)
+-   `/asset-links/{assetLinkId}` - PUT
+-   -   `Asset` (fromAssetId, fromAssetDatabaseId, assetName, assetType, tags) - PUT (api: PUT)
+-   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - PUT (api: PUT)
+-   `/asset-links/{relationId}` - DELETE
+-   -   `Asset` (fromAssetId, fromAssetDatabaseId, assetName, assetType, tags) - DELETE (api: DELETE)
+-   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - DELETE (api: DELETE)
+-   `/asset-links/{assetLinkId}/metadata` - GET/POST
+-   -   `Asset` (fromAssetId, fromAssetDatabaseId, assetName, assetType, tags) - GET (api: GET)
+-   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - GET (api: GET)
+-   -   `Asset` (fromAssetId, fromAssetDatabaseId, assetName, assetType, tags) - POST (api: POST)
+-   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - POST (api: POST)
+-   `/asset-links/{assetLinkId}/metadata/{metadataKey}` - PUT/DELETE
+-   -   `Asset` (fromAssetId, fromAssetDatabaseId, assetName, assetType, tags) - PUT (api: PUT)
+-   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - PUT (api: PUT)
+-   -   `Asset` (fromAssetId, fromAssetDatabaseId, assetName, assetType, tags) - DELETE (api: DELETE)
+-   -   `Asset` (toAssetId, toAssetDatabaseId, assetName, assetType, tags) - DELETE (api: DELETE)
 -   `/auth/constraints` - GET
 -   `/auth/constraints/{constraintId}` - GET/PUT/POST/DELETE
+-   `/auth/loginProfile/{userId}` - GET/POST
 -   `/auth/routes` - POST (No API authorization logic checks on base call) (POST considered non-mutating to retrieve data only)
--   `/auth/scopeds3access` - POST
--   -   `Asset` (assetId, databaseId) - POST (api: POST)
 -   `/comments/assets/{assetId}` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/comments/assets/{assetId}/assetVersionId/{assetVersionId}` - GET
@@ -201,33 +214,75 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
--   `/databases` - GET/PUT
+-   `/database` - GET/POST
 -   -   `Database` (databaseId) - GET (api: GET)
--   -   `Database` (databaseId) - PUT (api: PUT)
--   `/databases/{databaseId}` - GET/DELETE
+-   -   `Database` (databaseId) - PUT (api: POST)
+-   `/database/{databaseId}` - GET/DELETE
 -   -   `Database` (databaseId) - GET (api: GET)
 -   -   `Database` (databaseId) - DELETE (api: DELETE)
+-   `/buckets` - GET
 -   `/database/{databaseId}/assets` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
--   `/database/{databaseId}/assets/{assetId}` - GET/DELETE
+-   `/database/{databaseId}/assets/{assetId}` - GET/PUT
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
+-   `/database/{databaseId}/assets/{assetId}/asset-links` - GET
+-   -   `Asset` (assetId, assetName, databaseId, assetType, tags) - GET (api: GET)
+-   `/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}` - GET
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
+-   `/database/{databaseId}/assets/{assetId}/createFolder` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: POST)
 -   `/database/{databaseId}/assets/{assetId}/listFiles` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
--   `/database/{databaseId}/assets/{assetId}/columns` - GET
+-   `/database/{databaseId}/assets/{assetId}/fileInfo` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
--   `/database/{databaseId}/assets/{assetId}/metadata` - GET
--   `/database/{databaseId}/assets/{assetId}/revert` - POST
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/moveFile` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/copyFile` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/archiveFile` - DELETE
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
+-   `/database/{databaseId}/assets/{assetId}/unarchiveFile` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/deleteAssetPreview` - DELETE
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
+-   `/database/{databaseId}/assets/{assetId}/deleteAuxiliaryPreviewAssetFiles` - DELETE
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
+-   `/database/{databaseId}/assets/{assetId}/deleteFile` - DELETE
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
+-   `/database/{databaseId}/assets/{assetId}/archiveAsset` - DELETE
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
+-   `/database/{databaseId}/assets/{assetId}/deleteAsset` - DELETE
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
+-   `/database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/setPrimaryFile` - PUT
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: PUT)
+-   `/database/{databaseId}/assets/{assetId}/createVersion` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/revertAssetVersion/{assetVersionId}` - POST
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   `/database/{databaseId}/assets/{assetId}/getVersions` - GET
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
+-   `/database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}` - GET
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/database/{databaseId}/assets/{assetId}/download` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: POST)
 -   `/database/{databaseId}/assets/{assetId}/workflows/{workflowId}` - POST
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
 -   -   `Workflow` (databaseId, workflowId) - POST (api: POST)
 -   -   `Pipeline` (databaseId, pipelineId, pipelineType, pipelineExecutionType) - POST (api: POST)
--   `/database/{databaseId}/assets/{assetId}/workflows/{workflowId}/executions` - GET
+-   `/database/{databaseId}/assets/{assetId}/workflows/executions` - GET
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   -   `Workflow` (databaseId, workflowId) - GET (api: GET)
+-   `/database/{databaseId}/assets/{assetId}/workflows/executions/{workflowId}` - GET
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
+-   -   `Workflow` (databaseId, workflowId) - GET (api: GET)
+-   `/database/{databaseId}/assets/{assetId}/metadata` - GET/PUT/POST/DELETE
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
+-   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   `/database/{databaseId}/pipelines` - GET
 -   -   `Pipeline` (databaseId, pipelineId, pipelineType, pipelineExecutionType) - GET (api: GET)
 -   `/database/{databaseId}/workflows` - GET
@@ -241,16 +296,8 @@ Additionally it shows which object authorization checks it does for a particular
 -   `/assets` - GET/PUT
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
--   `/assets/uploadAssetWorkflow` - POST
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: POST)
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
 -   `/ingest-asset` - POST
 -   -   `Asset` (assetId, assetName databaseId) - PUT (api: POST)
--   `/metadata/{databaseId}/{assetId}` - GET/PUT/POST/DELETE
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - PUT (api: PUT)
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - POST (api: POST)
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - DELETE (api: DELETE)
 -   `/metadataschema/{databaseId}` - GET/PUT/POST
 -   -   `MetadataSchema` (databaseId, field) - GET (api: GET)
 -   -   `MetadataSchema` (databaseId, field) - POST (api: PUT)
@@ -290,13 +337,15 @@ Additionally it shows which object authorization checks it does for a particular
 -   -   `TagType` (tagTypeName) - PUT (api: PUT)
 -   `/tag-types/{tagTypeId}` - DELETE
 -   -   `TagType` (tagTypeName) - DELETE (api: DELETE)
+-   `/uploads` - POST
+-   -   `Asset` (assetId, assetName, assetType, databaseId, tags) - POST (api: POST)
+-   `/uploads/{uploadId}/complete` - POST
+-   -   `Asset` (assetId, assetName, assetType, databaseId, tags) - POST (api: POST)
 -   `/user-roles` - GET/PUT/POST/DELETE
 -   -   `UserRole` (roleName, userId) - GET (api: GET)
 -   -   `UserRole` (roleName, userId) - POST (api: POST)
 -   -   `UserRole` (roleName, userId) - PUT (api: PUT)
 -   -   `UserRole` (roleName, userId) - DELETE (api: DELETE)
--   `/auxiliaryPreviewAssets/stream/{proxy+}` - GET
--   -   `Asset` (assetId, assetName databaseId, assetType, tags) - GET (api: GET)
 -   `/workflows` - GET/PUT
 -   -   `Pipeline` (databaseId, pipelineId, pipelineType, pipelineExecutionType) - GET (api: PUT)
 -   -   `Workflow` (databaseId, workflowId) - GET (api: GET)
@@ -305,11 +354,9 @@ Additionally it shows which object authorization checks it does for a particular
 ### Constraint Statement Criteria Operators
 
 Criteria operators and values are implemented with a REGEX evaluation statement. This means that inputs should be a valid REGEX format. Values are auto-escaped as part of the input to the policy.
-Criteria operators and values are implemented with a REGEX evaluation statement. This means that inputs should be a valid REGEX format. Values are auto-escaped as part of the input to the policy.
 
 Below are the REGEX statements that are evaluated with each operator for the given criteria `criterion[value]` value.
 
-Note: The last two are used for metadata field evaluations that are not yet fully implemented for checks. These use `criterion[field]` to specify the metadata field to evaluate.
 Note: The last two are used for metadata field evaluations that are not yet fully implemented for checks. These use `criterion[field]` to specify the metadata field to evaluate.
 
 -   Equals [`equals`] (value input)

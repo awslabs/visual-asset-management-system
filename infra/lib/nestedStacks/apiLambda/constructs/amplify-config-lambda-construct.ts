@@ -3,16 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as apigatewayv2 from "@aws-cdk/aws-apigatewayv2-alpha";
-import * as apigwIntegrations from "@aws-cdk/aws-apigatewayv2-integrations-alpha";
-import * as apigwAuthorizers from "@aws-cdk/aws-apigatewayv2-authorizers-alpha";
+import * as apigatewayv2 from "aws-cdk-lib/aws-apigatewayv2";
+import * as apigwIntegrations from "aws-cdk-lib/aws-apigatewayv2-integrations";
+import * as apigwAuthorizers from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as cdk from "aws-cdk-lib";
 import { LAMBDA_NODE_RUNTIME } from "../../../../config/config";
 import { Construct } from "constructs";
-import { IHttpRouteAuthorizer } from "@aws-cdk/aws-apigatewayv2-alpha";
+import { IHttpRouteAuthorizer } from "aws-cdk-lib/aws-apigatewayv2";
 import { Service } from "../../../helper/service-helper";
 import { authResources } from "../../auth/authBuilder-nestedStack";
+import * as Config from "../../../../config/config";
 
 /**
  * Additional configuration needed to use federated identities
@@ -38,18 +39,6 @@ export interface AmplifyConfigFederatedIdentityProps {
 
 interface InlineLambdaProps {
     /**
-     * The Cognito UserPoolId to authenticate users in the front-end
-     */
-    userPoolId: string;
-    /**
-     * The Cognito AppClientId to authenticate users in the front-end
-     */
-    appClientId: string;
-    /**
-     * The Cognito IdentityPoolId to authenticate users in the front-end
-     */
-    identityPoolId: string;
-    /**
      * The ApiGatewayV2 HttpApi to attach the lambda
      */
     api: string;
@@ -57,14 +46,59 @@ interface InlineLambdaProps {
      * region
      */
     region: string;
+
+    /**
+     * The Cognito UserPoolId to authenticate users in the front-end
+     */
+    cognitoUserPoolId: string;
+    /**
+     * The Cognito AppClientId to authenticate users in the front-end
+     */
+    cognitoAppClientId: string;
+    /**
+     * The Cognito IdentityPoolId to authenticate users in the front-end
+     */
+    cognitoIdentityPoolId: string;
+
     /**
      * Additional configuration needed for federated auth
      */
-    federatedConfig?: AmplifyConfigFederatedIdentityProps;
+    cognitoFederatedConfig?: AmplifyConfigFederatedIdentityProps;
+
     /**
-     * External OATH IDP URL Configuration
+     * External OAUTH IDP URL Configuration
      */
-    externalOathIdpURL?: string;
+    externalOAuthIdpURL?: string;
+
+    /**
+     * External OAUTH IDP ClientID Configuration
+     */
+    externalOAuthIdpClientId?: string;
+
+    /**
+     * External OAUTH IDP Scope Configuration
+     */
+    externalOAuthIdpScope?: string;
+
+    /**
+     * External OAUTH IDP Scope attribute for MFA Configuration
+     */
+    externalOAuthIdpScopeMfa?: string;
+
+    /**
+     * External OAUTH IDP Token Endpoint Configuration
+     */
+    externalOAuthIdpTokenEndpoint?: string;
+
+    /**
+     * External OAUTH IDP Authorization Endpoint Configuration
+     */
+    externalOAuthIdpAuthorizationEndpoint?: string;
+
+    /**
+     * External OAUTH IDP Discovery Endpoint Configuration
+     */
+    externalOAuthIdpDiscoveryEndpoint?: string;
 
     /**
      * Name of deployed stack
@@ -75,9 +109,19 @@ interface InlineLambdaProps {
      * Content Security Policy to apply (generally for ALB deployment where CSP is not injected)
      */
     contentSecurityPolicy?: string;
+
+    /**
+     * HTML banner message to be displayed at the top of all web UI pages
+     */
+    bannerHtmlMessage?: string;
 }
 
 export interface AmplifyConfigLambdaConstructProps extends cdk.StackProps {
+    /**
+     * Main Configuration Provider
+     */
+    config: Config.Config;
+
     /**
      * The AuthResources Provider
      */
@@ -97,14 +141,10 @@ export interface AmplifyConfigLambdaConstructProps extends cdk.StackProps {
     /**
      * Additional configuration needed for federated auth
      */
-    federatedConfig?: AmplifyConfigFederatedIdentityProps;
-    /**
-     * External OATH IDP URL Configuration
-     */
-    externalOathIdpURL?: string;
+    cognitoFederatedConfig?: AmplifyConfigFederatedIdentityProps;
 
     /**
-     * Content Security Policy to apply (generally for ALB deployment where CSP is not injected)
+     * Content Security Policy to apply at the react level [none headers passed from static webpage service] (generally not used as alreayd provided in Cloudfront and ALB deployment)
      */
     contentSecurityPolicy?: string;
 }
@@ -126,14 +166,41 @@ export class AmplifyConfigLambdaConstruct extends Construct {
             code: lambda.Code.fromInline(
                 this.getJavascriptInlineFunction({
                     region: props.region,
-                    userPoolId: props.authResources.cognito.userPoolId,
-                    appClientId: props.authResources.cognito.webClientId,
-                    identityPoolId: props.authResources.cognito.identityPoolId,
                     api: props.apiUrl || "us-east-1",
-                    federatedConfig: props.federatedConfig,
-                    externalOathIdpURL: props.externalOathIdpURL || "undefined",
+                    cognitoUserPoolId: props.config.app.authProvider.useCognito.enabled
+                        ? props.authResources.cognito.userPoolId
+                        : "undefined",
+                    cognitoAppClientId: props.config.app.authProvider.useCognito.enabled
+                        ? props.authResources.cognito.webClientId
+                        : "undefined",
+                    cognitoIdentityPoolId: props.config.app.authProvider.useCognito.enabled
+                        ? props.authResources.cognito.identityPoolId
+                        : "undefined",
+                    cognitoFederatedConfig: props.cognitoFederatedConfig,
+                    externalOAuthIdpURL:
+                        props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl ||
+                        "undefined",
+                    externalOAuthIdpClientId:
+                        props.config.app.authProvider.useExternalOAuthIdp.idpAuthClientId ||
+                        "undefined",
+                    externalOAuthIdpScope:
+                        props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope ||
+                        "undefined",
+                    externalOAuthIdpScopeMfa:
+                        props.config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScopeMfa ||
+                        "undefined",
+                    externalOAuthIdpTokenEndpoint:
+                        props.config.app.authProvider.useExternalOAuthIdp
+                            .idpAuthProviderTokenEndpoint || "undefined",
+                    externalOAuthIdpAuthorizationEndpoint:
+                        props.config.app.authProvider.useExternalOAuthIdp
+                            .idpAuthProviderAuthorizationEndpoint || "undefined",
+                    externalOAuthIdpDiscoveryEndpoint:
+                        props.config.app.authProvider.useExternalOAuthIdp
+                            .idpAuthProviderDiscoveryEndpoint || "undefined",
                     stackName: props.stackName!,
-                    contentSecurityPolicy: props.contentSecurityPolicy || "",
+                    contentSecurityPolicy: "",
+                    bannerHtmlMessage: props.config.app.webUi.optionalBannerHtmlMessage || "",
                 })
             ),
             timeout: cdk.Duration.seconds(15),

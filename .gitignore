@@ -31,7 +31,7 @@ tramp
 
 # cask packages
 .cask/
-dist/
+# dist/
 
 # Flycheck
 flycheck_*.el
@@ -144,7 +144,7 @@ fabric.properties
 .LSOverride
 
 # Icon must end with two \r
-Icon
+# Icon
 
 
 # Thumbnails
@@ -213,6 +213,8 @@ build/Release
 
 # Dependency directories
 node_modules/
+web/node_modules/
+infra/node_modules/
 jspm_packages/
 
 # Snowpack dependency directory (https://snowpack.dev/)
@@ -262,7 +264,7 @@ out
 
 # Nuxt.js build / generate output
 .nuxt
-dist
+# dist
 
 # Gatsby files
 .cache/
@@ -338,3 +340,5 @@ report
 
 # ENV
 venv/
+
+Combined.pem

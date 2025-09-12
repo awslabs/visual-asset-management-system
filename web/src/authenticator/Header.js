@@ -5,25 +5,10 @@
  */
 
 import loginBgImageSrc from "../resources/img/login_bg.png";
-import { Cache } from "aws-amplify";
-import React, { useState } from "react";
 
 export function Header() {
-    const config = Cache.getItem("config");
-    const contentSecurityPolicy = config.contentSecurityPolicy;
-
-    const [useContentSecurityPolicy] = useState(
-        contentSecurityPolicy !== undefined && contentSecurityPolicy !== ""
-    );
-
     return (
         <>
-            {" "}
-            {useContentSecurityPolicy && (
-                <head>
-                    <meta httpEquiv="Content-Security-Policy" content={contentSecurityPolicy} />
-                </head>
-            )}
             <div
                 style={{
                     position: "fixed",

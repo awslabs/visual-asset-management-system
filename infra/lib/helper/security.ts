@@ -13,6 +13,18 @@ import { Construct } from "constructs";
 import { Service } from "../helper/service-helper";
 import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
+import * as s3AssetBuckets from "./s3AssetBuckets";
+
+export function globalLambdaEnvironmentsAndPermissions(
+    lambdaFunction: lambda.Function,
+    config: Config.Config
+) {
+    if (config.app.authProvider.useCognito.enabled) {
+        lambdaFunction.addEnvironment("COGNITO_AUTH_ENABLED", "TRUE");
+    } else {
+        lambdaFunction.addEnvironment("COGNITO_AUTH_ENABLED", "FALSE");
+    }
+}
 
 export function requireTLSAndAdditionalPolicyAddToResourcePolicy(
     bucket: s3.IBucket,
@@ -102,6 +114,7 @@ export function kmsKeyPolicyStatementPrincipalGenerator(
             Service("LAMBDA").Principal,
             Service("STS").Principal,
         ],
+        resources: ["*"],
     });
 
     if (!config.app.useAlb.enabled) {
@@ -145,44 +158,38 @@ export function generateContentSecurityPolicy(
         "'self'",
         "blob:",
         authenticationDomain,
-        `https://${Service("COGNITO_IDP").Endpoint}/`,
-        `https://${Service("COGNITO_IDENTITY").Endpoint}/`,
         `https://${apiUrl}`,
-        //`https://${props.storageResources.s3.assetBucket.bucketRegionalDomainName}/`, //Virtual Host Format Connection
-        //`https://${props.storageResources.s3.assetBucket.bucketDomainName}/`, //Virtual Host Format Connection
-        `https://${Service("S3").PrincipalString}/${storageResources.s3.assetBucket.bucketName}/`, //Path Addressable Format Connection
-        `https://${Service("S3").Endpoint}/${storageResources.s3.assetBucket.bucketName}/`, //Path Addressable Format Connection
+        `https://${Service("S3").Endpoint}/`,
     ];
+
+    const scriptSrc = [
+        "'self'",
+        "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
+    ];
+
+    const imgMediaSrc = ["'self'", "blob:", "data:", `https://${Service("S3").Endpoint}/`];
+
+    //Add cognito
+    if (config.app.authProvider.useCognito.enabled) {
+        connectSrc.push(`https://${Service("COGNITO_IDP").Endpoint}/`);
+        connectSrc.push(`https://${Service("COGNITO_IDENTITY").Endpoint}/`);
+        scriptSrc.push(`https://${Service("COGNITO_IDP").Endpoint}/`);
+        scriptSrc.push(`https://${Service("COGNITO_IDENTITY").Endpoint}/`);
+    }
+
+    //Add unsafe eval when enabled
+    if (config.app.webUi.allowUnsafeEvalFeatures) {
+        scriptSrc.push(`'unsafe-eval'`);
+    }
 
     //Add GeoLocation service URL if feature turned on
     if (config.app.useLocationService.enabled) {
         connectSrc.push(`https://maps.${Service("GEO").Endpoint}/`);
     }
 
-    const scriptSrc = [
-        "'self'",
-        "blob:",
-        "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
-        authenticationDomain,
-        `https://${Service("COGNITO_IDP").Endpoint}/`,
-        `https://${Service("COGNITO_IDENTITY").Endpoint}/`,
-        `https://${apiUrl}`,
-        //`https://${props.storageResources.s3.assetBucket.bucketRegionalDomainName}/`, //Virtual Host Format Connection
-        `https://${Service("S3").PrincipalString}/${storageResources.s3.assetBucket.bucketName}/`, //Path Addressable Format Connection
-        `https://${Service("S3").Endpoint}/${storageResources.s3.assetBucket.bucketName}/`, //Path Addressable Format Connection
-    ];
-
-    const imgMediaSrc = [
-        "'self'",
-        "blob:",
-        "data:",
-        //`https://${props.storageResources.s3.assetBucket.bucketRegionalDomainName}/`, //Virtual Host Format Connection
-        `https://${Service("S3").PrincipalString}/${storageResources.s3.assetBucket.bucketName}/`, //Path Addressable Format Connection
-        `https://${Service("S3").Endpoint}/${storageResources.s3.assetBucket.bucketName}/`, //Path Addressable Format Connection
-    ];
-
     const csp =
-        `default-src 'none'; style-src 'self' 'unsafe-inline'; ` +
+        `base-uri 'none'` +
+        `default-src 'none'; style-src 'self' 'unsafe-inline'; upgrade-insecure-requests;` +
         `connect-src ${connectSrc.join(" ")}; ` +
         `script-src ${scriptSrc.join(" ")}; ` +
         `img-src ${imgMediaSrc.join(" ")}; ` +
@@ -196,7 +203,7 @@ export function generateContentSecurityPolicy(
 
 export function suppressCdkNagErrorsByGrantReadWrite(scope: Construct) {
     const reason =
-        "This lambda owns the data in this bucket and should have full access to control its assets.";
+        "This lambda needs access to the data in this bucket and should have full access to control its assets.";
     NagSuppressions.addResourceSuppressions(
         scope,
         [
@@ -222,4 +229,52 @@ export function suppressCdkNagErrorsByGrantReadWrite(scope: Construct) {
         ],
         true
     );
+}
+
+/**
+ * Grants read permissions to a lambda function for all asset buckets defined in s3AssetBuckets
+ * @param lambdaFunction The lambda function to grant permissions to
+ */
+export function grantReadPermissionsToAllAssetBuckets(lambdaFunction: lambda.Function): void {
+    const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
+
+    for (const record of bucketRecords) {
+        record.bucket.grantRead(lambdaFunction);
+    }
+
+    // // Add CDK Nag suppressions
+    // const reason = "Lambda needs read access to all asset buckets to perform its operations";
+    // NagSuppressions.addResourceSuppressions(
+    //     lambdaFunction,
+    //     [
+    //         {
+    //             id: "AwsSolutions-IAM5",
+    //             reason: reason,
+    //             appliesTo: [
+    //                 {
+    //                     regex: "/Action::s3:Get.*/g",
+    //                 },
+    //                 {
+    //                     regex: "/Action::s3:List.*/g",
+    //                 },
+    //             ],
+    //         },
+    //     ],
+    //     true
+    // );
+}
+
+/**
+ * Grants read/write permissions to a lambda function for all asset buckets defined in s3AssetBuckets
+ * @param lambdaFunction The lambda function to grant permissions to
+ */
+export function grantReadWritePermissionsToAllAssetBuckets(lambdaFunction: lambda.Function): void {
+    const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
+
+    for (const record of bucketRecords) {
+        record.bucket.grantReadWrite(lambdaFunction);
+    }
+
+    // Add CDK Nag suppressions
+    //suppressCdkNagErrorsByGrantReadWrite(lambdaFunction);
 }

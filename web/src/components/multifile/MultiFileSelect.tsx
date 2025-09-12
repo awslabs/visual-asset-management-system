@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState } from "react";
+import { useEffect, useReducer, useState, useMemo } from "react";
 import Container from "@cloudscape-design/components/container";
 import FormField from "@cloudscape-design/components/form-field";
 import { Button, SpaceBetween, Toggle } from "@cloudscape-design/components";
@@ -77,6 +77,21 @@ export function MultiFileSelect({ onChange }: { onChange: (state: FileInfo[]) =>
     useEffect(() => {
         onChange(getAllFiles(state));
     }, [state]);
+
+    // Calculate total files count
+    const totalFilesCount = useMemo(() => {
+        return (
+            state.files.length +
+            Object.keys(state.directories).reduce((acc, directory) => {
+                if (state.directories[directory]) {
+                    return acc + state.directories[directory].length;
+                } else {
+                    return acc;
+                }
+            }, 0)
+        );
+    }, [state.files, state.directories]);
+
     return (
         <Container>
             <FormField>
@@ -87,16 +102,7 @@ export function MultiFileSelect({ onChange }: { onChange: (state: FileInfo[]) =>
             <SpaceBetween size={"xs"} direction={"vertical"}>
                 <FolderUpload
                     label={""}
-                    description={`Total Files to upload: ${
-                        state.files.length +
-                        Object.keys(state.directories).reduce((acc, directory) => {
-                            if (state.directories[directory]) {
-                                return acc + state.directories[directory].length;
-                            } else {
-                                return acc;
-                            }
-                        }, 0)
-                    }`}
+                    description={`Total Files to upload: ${totalFilesCount}`}
                     multiFile={isMultiFile}
                     onSelect={async (directoryHandle: any, fileHandles: any[]) => {
                         if (directoryHandle) {
@@ -116,52 +122,8 @@ export function MultiFileSelect({ onChange }: { onChange: (state: FileInfo[]) =>
                             });
                         }
                     }}
-                ></FolderUpload>
-                <SpaceBetween size={"xs"} direction={"vertical"}>
-                    {state.directories &&
-                        Object.keys(state.directories)
-                            .filter((directory) => state.directories[directory])
-                            .map((directory) => {
-                                return (
-                                    <Button
-                                        variant={"primary"}
-                                        key={directory}
-                                        onClick={() =>
-                                            dispatch({
-                                                type: "REMOVE_DIRECTORY",
-                                                payload: {
-                                                    name: directory,
-                                                },
-                                            })
-                                        }
-                                    >
-                                        Remove Directory {directory} -{" "}
-                                        {state.directories[directory].length} Files
-                                    </Button>
-                                );
-                            })}
-                </SpaceBetween>
-                <SpaceBetween size={"xs"} direction={"vertical"}>
-                    {state.files &&
-                        state.files.map((file) => {
-                            return (
-                                <Button
-                                    variant={"primary"}
-                                    key={file}
-                                    onClick={() =>
-                                        dispatch({
-                                            type: "REMOVE_FILE",
-                                            payload: {
-                                                fileHandle: file.handle,
-                                            },
-                                        })
-                                    }
-                                >
-                                    Remove File {file.path}
-                                </Button>
-                            );
-                        })}
-                </SpaceBetween>
+                />
+                {/* Removed individual directory and file removal buttons */}
             </SpaceBetween>
         </Container>
     );

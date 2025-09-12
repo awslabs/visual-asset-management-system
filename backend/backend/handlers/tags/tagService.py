@@ -19,6 +19,8 @@ logger = safeLogger(service="TagService")
 dynamodb = boto3.resource('dynamodb')
 dynamodbClient = boto3.client('dynamodb')
 main_rest_response = STANDARD_JSON_RESPONSE
+deserializer = TypeDeserializer()
+paginator = dynamodbClient.get_paginator('scan')
 
 try:
     tag_db_table_name = os.environ["TAGS_STORAGE_TABLE_NAME"]
@@ -38,7 +40,7 @@ def delete_handler(response, pathParameters):
         response['statusCode'] = 400
         response['body'] = json.dumps({"message": message})
         return response
-    
+
     (valid, message) = validate({
         'tagName': {
             'value': tag_name,
@@ -60,11 +62,10 @@ def delete_handler(response, pathParameters):
         tag.update({
             "object__type": "tag"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", tag, "DELETE"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(tag, "DELETE"):
                 allowed = True
-                break
 
         if allowed:
             logger.info("Deleting Tag:", tag_name)
@@ -84,10 +85,48 @@ def delete_handler(response, pathParameters):
         response['message'] = "Record not found"
         return response
 
+def get_tag_types():
+
+    rawTagTypeItems = []
+    page_iteratorTagTypes = paginator.paginate(
+        TableName=tag_type_db_table_name,
+        PaginationConfig={
+            'MaxItems': 1000,
+            'PageSize': 1000,
+        }
+    ).build_full_result()
+    if(len(page_iteratorTagTypes["Items"]) > 0):
+        rawTagTypeItems.extend(page_iteratorTagTypes["Items"])
+        while("NextToken" in page_iteratorTagTypes):
+            page_iteratorTagTypes = paginator.paginate(
+                TableName=tag_type_db_table_name,
+                PaginationConfig={
+                    'MaxItems': 1000,
+                    'PageSize': 1000,
+                    'StartingToken': page_iteratorTagTypes["NextToken"]
+                }
+            ).build_full_result()
+            if(len(page_iteratorTagTypes["Items"]) > 0):
+                rawTagTypeItems.extend(page_iteratorTagTypes["Items"])
+
+    tagTypeResults = []
+    for tagTypeResult in rawTagTypeItems:
+        deserialized_document = {k: deserializer.deserialize(v) for k, v in tagTypeResult.items()}
+
+        tagType = {
+            "tagTypeName": deserialized_document["tagTypeName"],
+            "required": deserialized_document.get("required", "False"),
+        }
+
+        tagTypeResults.append(tagType)
+
+    return tagTypeResults
+
 
 def get_tags(query_params):
-    deserializer = TypeDeserializer()
-    paginator = dynamodbClient.get_paginator('scan')
+
+    #Get tag types for required tags designation
+    tagTypes = get_tag_types()
 
     page_iteratorTags = paginator.paginate(
         TableName=tag_db_table_name,
@@ -101,17 +140,25 @@ def get_tags(query_params):
     authorized_tags = {
         "Items":[]
         }
-    
+
     for tag in page_iteratorTags["Items"]:
         deserialized_document = {k: deserializer.deserialize(v) for k, v in tag.items()}
+
+        #For each tag type coming back from tags, add "[R]" to the end if it matches to a required tag type
+        for tagType in tagTypes:
+            if deserialized_document["tagTypeName"] == tagType["tagTypeName"]:
+                if tagType["required"] == "True":
+                    deserialized_document["tagTypeName"] = deserialized_document["tagTypeName"] + " [R]"
+                break
 
         # Add Casbin Enforcer to check if the current user has permissions to GET the Tag
         deserialized_document.update({
             "object__type": "tag"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", deserialized_document, "GET"):
+
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(deserialized_document, "GET"):
                 authorized_tags["Items"].append(deserialized_document)
 
     if 'NextToken' in page_iteratorTags:
@@ -141,8 +188,8 @@ def lambda_handler(event, context):
         claims_and_roles = request_to_claims(event)
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
 

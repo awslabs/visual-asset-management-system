@@ -7,24 +7,30 @@
     },
     "app": {
         "baseStackName": "prod",
-        "bucketMigrationStaging": {
-            "assetBucketName": null
+        "assetBuckets": {
+            "createNewBucket": true,
+            "defaultNewBucketSyncDatabaseId": "default",
+            "externalAssetBuckets": null
         },
+        "adminUserId": "administrator",
         "adminEmailAddress": "adminEmail@example.com",
         "useFips": true,
         "useWaf": true,
+        "addStackCloudTrailLogs": true,
         "useKmsCmkEncryption": {
             "enabled": true,
             "optionalExternalCmkArn": null
         },
         "govCloud": {
-            "enabled": true
+            "enabled": true,
+            "il6Compliant": false
         },
         "useGlobalVpc": {
             "enabled": true,
             "useForAllLambdas": true,
             "addVpcEndpoints": true,
             "optionalExternalVpcId": null,
+            "optionalExternalIsolatedSubnetIds": null,
             "optionalExternalPrivateSubnetIds": null,
             "optionalExternalPublicSubnetIds": null,
             "vpcCidrRange": "10.1.0.0/16"
@@ -46,32 +52,59 @@
         "useAlb": {
             "enabled": true,
             "usePublicSubnet": false,
+            "addAlbS3SpecialVpcEndpoint": true,
             "domainHost": "vams1.example.com",
             "certificateArn": "arn:aws-us-gov:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>",
             "optionalHostedZoneId": null
         },
         "pipelines": {
             "useConversion3dBasic": {
-                "enabled": false
+                "enabled": true
             },
             "usePreviewPcPotreeViewer": {
                 "enabled": false
             },
             "useGenAiMetadata3dLabeling": {
                 "enabled": false
+            },
+            "useRapidPipeline": {
+                "enabled": false,
+                "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>"
+            },
+            "useModelOps": {
+                "enabled": false,
+                "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>"
             }
         },
         "authProvider": {
-            "credTokenTimeoutSeconds": 3600,
+            "presignedUrlTimeoutSeconds": 86400,
             "useCognito": {
                 "enabled": true,
                 "useSaml": false,
-                "useUserPasswordAuthFlow": false
+                "useUserPasswordAuthFlow": false,
+                "credTokenTimeoutSeconds": 3600
             },
-            "useExternalOathIdp": {
+            "useExternalOAuthIdp": {
                 "enabled": false,
-                "idpAuthProviderUrl": null
+                "idpAuthProviderUrl": null,
+                "idpAuthClientId": null,
+                "idpAuthProviderScope": null,
+                "idpAuthProviderScopeMfa": null,
+                "idpAuthPrincipalDomain": null,
+                "idpAuthProviderTokenEndpoint": null,
+                "idpAuthProviderAuthorizationEndpoint": null,
+                "idpAuthProviderDiscoveryEndpoint": null,
+                "lambdaAuthorizorJWTIssuerUrl": null,
+                "lambdaAuthorizorJWTAudience": null
             }
+        },
+        "webUi": {
+            "optionalBannerHtmlMessage": "",
+            "allowUnsafeEvalFeatures": false
+        },
+        "api": {
+            "globalRateLimit": 50,
+            "globalBurstLimit": 100
         }
     }
 }

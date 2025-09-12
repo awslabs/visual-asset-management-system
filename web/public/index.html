@@ -30,18 +30,6 @@
             href="%PUBLIC_URL%/potree_libs/jstree/themes/mixed/style.css"
         />
         <meta name="msapplication-TileColor" content="#da532c" />
-        <meta name="theme-color" content="#ffffff" />
-        <script type="application/javascript">
-            window.addEventListener("error", function (e) {
-                // prevent React's listener from firing
-                if (e.message.startsWith("ResizeObserver loop completed with undelivered")) {
-                    e.stopImmediatePropagation();
-                    console.log("error caught", e);
-                    // prevent the browser's console error message
-                    e.preventDefault();
-                }
-            });
-        </script>
         <meta
             name="viewport"
             content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
@@ -69,7 +57,7 @@
       work correctly both with client-side routing and a non-root public URL.
       Learn how to configure a non-root public URL by running `npm run build`.
     -->
-        <title>VAMS Visual Asset Management System</title>
+        <title>VAMS - Visual Asset Management System</title>
     </head>
     <body>
         <noscript>You need to enable JavaScript to run this app.</noscript>

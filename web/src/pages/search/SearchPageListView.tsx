@@ -7,17 +7,20 @@ import {
     Box,
     Button,
     SpaceBetween,
-    Modal,
     Alert,
     Input,
     Grid,
     Select,
     FormField,
+    Modal,
 } from "@cloudscape-design/components";
+import AssetDeleteModal from "../../components/modals/AssetDeleteModal";
+import PreviewThumbnailCell from "./components/PreviewThumbnailCell";
+import FilePreviewThumbnailCell from "./components/FilePreviewThumbnailCell";
+import AssetPreviewModal from "../../components/filemanager/modals/AssetPreviewModal";
 import {
     changeFilter,
     changeRectype,
-    deleteSelected,
     paginateSearch,
     search,
     sortSearch,
@@ -26,11 +29,11 @@ import { INITIAL_STATE, SearchPageViewProps } from "./SearchPage";
 import Synonyms from "../../synonyms";
 import { EmptyState } from "../../common/common-components";
 import { useNavigate } from "react-router-dom";
-import DatabaseSelector from "../../components/selectors/DatabaseSelector";
 import { useEffect, useState } from "react";
-import { API } from "aws-amplify";
 import { fetchtagTypes } from "../../services/APIService";
+
 var tagTypes: any;
+//let databases: any;
 
 function columnRender(e: any, name: string, value: any) {
     if (name === "str_databaseid") {
@@ -52,8 +55,15 @@ function columnRender(e: any, name: string, value: any) {
         const tagsWithType = value.map((tag) => {
             if (tagTypes)
                 for (const tagType of tagTypes) {
+                    var tagTypeName = tagType.tagTypeName;
+
+                    //If tagType has required field add [R] to tag type name
+                    if (tagType && tagType.required === "True") {
+                        tagTypeName += " [R]";
+                    }
+
                     if (tagType.tags.includes(tag)) {
-                        return `${tag} (${tagType.tagTypeName})`;
+                        return `${tag} (${tagTypeName})`;
                     }
                 }
             return tag;
@@ -72,13 +82,40 @@ function columnRender(e: any, name: string, value: any) {
 function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
     // identify all the names of columns from state.result.hits.hits
     // create a column definition for each column
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [showPreviewModal, setShowPreviewModal] = useState(false);
+    const [previewAsset, setPreviewAsset] = useState<{
+        url?: string;
+        assetId?: string;
+        databaseId?: string;
+        previewKey?: string;
+        assetName?: string;
+    }>({});
 
     useEffect(() => {
         fetchtagTypes().then((res) => {
             tagTypes = res;
         });
     }, []);
+
     const navigate = useNavigate();
+
+    // Handler for opening the preview modal
+    const handleOpenPreview = (
+        previewUrl: string,
+        assetName: string,
+        previewKey: string,
+        item?: any
+    ) => {
+        setPreviewAsset({
+            url: previewUrl,
+            assetId: item?.str_assetid,
+            databaseId: item?.str_databaseid,
+            previewKey: previewKey,
+            assetName: assetName,
+        });
+        setShowPreviewModal(true);
+    };
 
     if (!state?.initialResult) {
         return <div>Loading..</div>;
@@ -86,7 +123,11 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
 
     const { columnNames } = state;
 
-    const columnDefinitions = columnNames?.map((name: string) => {
+    // Add preview column if showPreviewThumbnails is enabled
+    let enhancedColumnDefinitions = columnNames?.map((name: string) => {
+        // Custom headers based on record type
+        const isFileMode = state.filters._rectype.value === "s3object";
+
         if (name === "str_asset") {
             return {
                 id: name,
@@ -108,7 +149,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
         if (name === "str_assettype") {
             return {
                 id: name,
-                header: "Type",
+                header: isFileMode ? "Asset Type" : "Type",
                 cell: (e: any) => columnRender(e, name, e[name]),
                 sortingField: name,
                 isRowHeader: false,
@@ -117,7 +158,25 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
         if (name === "list_tags") {
             return {
                 id: name,
-                header: "Tags",
+                header: isFileMode ? "Asset Tags" : "Tags",
+                cell: (e: any) => columnRender(e, name, e[name]),
+                sortingField: name,
+                isRowHeader: false,
+            };
+        }
+        if (name === "str_key" && isFileMode) {
+            return {
+                id: name,
+                header: "File Path",
+                cell: (e: any) => columnRender(e, name, e[name]),
+                sortingField: name,
+                isRowHeader: false,
+            };
+        }
+        if (name === "str_description" && isFileMode) {
+            return {
+                id: name,
+                header: "Asset Description",
                 cell: (e: any) => columnRender(e, name, e[name]),
                 sortingField: name,
                 isRowHeader: false,
@@ -139,12 +198,96 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
         };
     });
 
+    // Rearrange columns for file mode if needed
+    if (state.filters._rectype.value === "s3object") {
+        // Rearrange columns for file mode - move Database before Key
+        // First, find the indices of the columns we want to rearrange
+        const databaseColumnIndex = enhancedColumnDefinitions.findIndex(
+            (col: TableProps.ColumnDefinition<string>) => col.id === "str_databaseid"
+        );
+        const keyColumnIndex = enhancedColumnDefinitions.findIndex(
+            (col: TableProps.ColumnDefinition<string>) => col.id === "str_key"
+        );
+
+        if (
+            databaseColumnIndex !== -1 &&
+            keyColumnIndex !== -1 &&
+            databaseColumnIndex > keyColumnIndex
+        ) {
+            // Remove the database column
+            const databaseColumn = enhancedColumnDefinitions.splice(databaseColumnIndex, 1)[0];
+            // Insert it before the key column
+            enhancedColumnDefinitions.splice(keyColumnIndex, 0, databaseColumn);
+        }
+    }
+
+    // Add preview column if showPreviewThumbnails is enabled
+    if (state.showPreviewThumbnails) {
+        // Different preview cell based on record type
+        if (state.filters._rectype.value === "asset") {
+            // Asset preview cell
+            enhancedColumnDefinitions = [
+                {
+                    id: "preview",
+                    header: "Preview",
+                    cell: (item: any) => (
+                        <PreviewThumbnailCell
+                            assetId={item.str_assetid}
+                            databaseId={item.str_databaseid}
+                            onOpenFullPreview={(url, assetName, previewKey) =>
+                                handleOpenPreview(url, assetName, previewKey, item)
+                            }
+                            assetName={item.str_assetname}
+                        />
+                    ),
+                    sortingField: "preview",
+                    isRowHeader: false,
+                },
+                ...enhancedColumnDefinitions,
+            ];
+        } else if (state.filters._rectype.value === "s3object") {
+            // File preview cell
+            enhancedColumnDefinitions = [
+                {
+                    id: "preview",
+                    header: "Preview",
+                    cell: (item: any) => (
+                        <FilePreviewThumbnailCell
+                            assetId={item.str_assetid}
+                            databaseId={item.str_databaseid}
+                            fileKey={item.str_key}
+                            fileName={item.str_key.split("/").pop() || item.str_key}
+                            fileSize={item.num_size}
+                            onOpenFullPreview={(url, fileName, previewKey) =>
+                                handleOpenPreview(url, fileName, previewKey, item)
+                            }
+                        />
+                    ),
+                    sortingField: "preview",
+                    isRowHeader: false,
+                },
+                ...enhancedColumnDefinitions,
+            ];
+        }
+
+        // Add preview to visible columns if not already there
+        if (
+            state.tablePreferences?.visibleContent &&
+            !state.tablePreferences.visibleContent.includes("preview")
+        ) {
+            state.tablePreferences.visibleContent = [
+                "preview",
+                ...state.tablePreferences.visibleContent,
+            ];
+        }
+    }
+
     const currentPage = 1 + Math.ceil(state?.pagination?.from / state?.tablePreferences?.pageSize);
     const pageCount = Math.ceil(
         state?.result?.hits?.total?.value / state?.tablePreferences?.pageSize
     );
 
-    if (!columnDefinitions) {
+    if (!enhancedColumnDefinitions) {
         return <div>Loading...</div>;
     }
 
@@ -155,7 +298,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                     empty={
                         <EmptyState
                             title="No matches"
-                            subtitle="We can’t find a match."
+                            subtitle="We can't find a match."
                             action={
                                 <Button
                                     onClick={() => {
@@ -170,7 +313,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                             }
                         />
                     }
-                    columnDefinitions={columnDefinitions}
+                    columnDefinitions={enhancedColumnDefinitions}
                     selectedItems={state?.selectedItems}
                     isItemDisabled={(item: any) => {
                         return state?.disableSelection || false;
@@ -233,13 +376,18 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                             onConfirm={({ detail }) => {
                                 console.log("detail", detail);
                                 dispatch({ type: "set-search-table-preferences", payload: detail });
+                                if (typeof detail.pageSize === "number") {
+                                    paginateSearch(0, detail.pageSize, { state, dispatch });
+                                } else {
+                                    console.error("Page size is undefined in preferences detail.");
+                                }
                             }}
                             visibleContentPreference={{
                                 title: "Columns",
                                 options: [
                                     {
                                         label: "All columns",
-                                        options: columnDefinitions
+                                        options: enhancedColumnDefinitions
                                             .map(
                                                 (
                                                     columnDefinition: TableProps.ColumnDefinition<string>
@@ -295,8 +443,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                                             state?.disableSelection
                                         }
                                         onClick={() => {
-                                            // deleteSelected({ state, dispatch });
-                                            dispatch({ type: "clicked-initial-delete" });
+                                            setShowDeleteModal(true);
                                         }}
                                     >
                                         Delete Selected
@@ -314,7 +461,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                         />
                     }
                     filter={
-                        false && (
+                        false && ( //Disable these for now
                             <Grid
                                 gridDefinition={[
                                     { colspan: { default: 7 } },
@@ -410,14 +557,26 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                                             placeholder="Database"
                                             options={[
                                                 { label: "All", value: "all" },
-                                                ...(state?.result?.aggregations?.str_databaseid?.buckets.map(
-                                                    (b: any) => {
-                                                        return {
-                                                            label: `${b.key} (${b.doc_count})`,
-                                                            value: b.key,
-                                                        };
-                                                    }
-                                                ) || []),
+                                                //List every database from "databases" variable and then map to result aggregation to display (doc_count) next to each
+                                                //We do this because opensearch has a max items it will return in a query which may not be everything across aggregated databases
+                                                //Without this, you wouldn't be able to search on other databases not listed due to trimmed results.
+                                                // ...(databases?.map((b: any) => {
+                                                //     var count = 0
+                                                //     //Map through result aggregation to find doc_count for each database
+                                                //     state?.result?.aggregations?.str_databaseid?.buckets.map(
+                                                //         (c: any) => {
+                                                //             if (c.key === b.databaseId) {
+                                                //                 count = c.doc_count
+                                                //             }
+                                                //         }
+                                                //     )
+
+                                                //     return {
+                                                //         label: `${b.databaseId} (Results: ${count} / Total: ${b.assetCount})`,
+                                                //         value: b.databaseId,
+                                                //     };
+
+                                                // }) || []),
                                             ]}
                                             onChange={({ detail }) =>
                                                 changeFilter(
@@ -437,45 +596,27 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                     }
                 />
             </SpaceBetween>
-            <Modal
-                visible={state?.showDeleteModal}
-                onDismiss={() => dispatch({ type: "clicked-cancel-delete" })}
-                header={`Delete ${
-                    state?.selectedItems?.length > 1 ? Synonyms.Assets : Synonyms.Asset
-                }`}
-                footer={
-                    <Box float="right">
-                        <SpaceBetween direction="horizontal" size="xs">
-                            <Button
-                                variant="link"
-                                onClick={() => dispatch({ type: "clicked-cancel-delete" })}
-                            >
-                                No
-                            </Button>
-                            <Button
-                                variant="primary"
-                                onClick={() => deleteSelected({ state, dispatch })}
-                            >
-                                Yes
-                            </Button>
-                        </SpaceBetween>
-                    </Box>
-                }
-            >
-                <SpaceBetween direction="vertical" size="xs">
-                    <Box variant="p">
-                        Do you want to delete{" "}
-                        {state?.selectedItems?.length > 1 ? (
-                            <b>
-                                {state?.selectedItems?.length} {Synonyms.Assets}
-                            </b>
-                        ) : (
-                            <b>{state?.selectedItems?.[0]?.str_assetname}</b>
-                        )}
-                        ?
-                    </Box>
-                </SpaceBetween>
-            </Modal>
+            <AssetDeleteModal
+                visible={showDeleteModal}
+                onDismiss={() => setShowDeleteModal(false)}
+                mode="asset"
+                selectedAssets={state?.selectedItems || []}
+                onSuccess={(operation) => {
+                    setShowDeleteModal(false);
+                    // Refresh the search results
+                    search({}, { state, dispatch });
+                }}
+            />
+
+            {/* Asset Preview Modal */}
+            <AssetPreviewModal
+                visible={showPreviewModal}
+                onDismiss={() => setShowPreviewModal(false)}
+                assetId={previewAsset.assetId || ""}
+                databaseId={previewAsset.databaseId || ""}
+                previewKey={previewAsset.previewKey}
+                assetName={previewAsset.assetName || ""}
+            />
         </>
     );
 }

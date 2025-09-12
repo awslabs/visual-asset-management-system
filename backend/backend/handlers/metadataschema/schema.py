@@ -13,6 +13,7 @@ from decimal import Decimal
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from common.constants import STANDARD_JSON_RESPONSE
+from models.common import VAMSGeneralErrorResponse
 from common.validators import validate
 from common.dynamodb import validate_pagination_info
 from boto3.dynamodb.conditions import Key
@@ -23,6 +24,12 @@ claims_and_roles = {}
 logger = safeLogger(service="MetadataSchema")
 dynamodb_client = boto3.client('dynamodb')
 
+# Load environment variables
+try:
+    db_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
+except Exception as e:
+    logger.exception("Failed loading environment variables")
+    raise e
 
 class DecimalEncoder(json.JSONEncoder):
     def default(self, o):
@@ -62,6 +69,19 @@ class MetadataSchema:
         self.dynamodb = dynamodb or boto3.resource('dynamodb')
         self.table = self.dynamodb.Table(table_name)
 
+    def verify_database_exists(self, database_id: str):
+        table = self.dynamodb.Table(db_table_name)
+        try:
+            response = table.get_item(Key={'databaseId': database_id})
+            if 'Item' not in response:
+                raise VAMSGeneralErrorResponse("Database does not exist")
+            return True
+        except Exception as e:
+            if isinstance(e, VAMSGeneralErrorResponse):
+                raise e
+            logger.exception(f"Error verifying database: {e}")
+            raise VAMSGeneralErrorResponse(f"Error verifying database.")
+
     @staticmethod
     def from_env():
         return MetadataSchema(os.environ["METADATA_SCHEMA_STORAGE_TABLE_NAME"])
@@ -73,11 +93,10 @@ class MetadataSchema:
 
         if "Item" in resp:
             metadataSchema.update({"object__type": "metadataSchema"})
-            for user_name in claims_and_roles["tokens"]:
-                casbin_enforcer = CasbinEnforcer(user_name)
-                if casbin_enforcer.enforce(f"user::{user_name}", metadataSchema, "GET"):
+            if len(claims_and_roles["tokens"]) > 0:
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if casbin_enforcer.enforce(metadataSchema, "GET"):
                     allowed = True
-                    break
             return resp["Item"] if allowed else None
         else:
             return None
@@ -87,9 +106,9 @@ class MetadataSchema:
         schema_object.update({"object__type": "metadataSchema"})
         allowed = False
 
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", schema_object, "POST"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(schema_object, "POST"):
                 allowed = True
 
         if allowed:
@@ -119,9 +138,9 @@ class MetadataSchema:
             'object__type': 'metadataSchema'
         }
         allowed = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", schema_object, "DELETE"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(schema_object, "DELETE"):
                 allowed = True
 
         if allowed:
@@ -158,11 +177,10 @@ class MetadataSchema:
                 metadataSchema.update({
                     "object__type": "metadataSchema"
                 })
-                for user_name in claims_and_roles["tokens"]:
-                    casbin_enforcer = CasbinEnforcer(user_name)
-                    if casbin_enforcer.enforce(f"user::{user_name}", metadataSchema, "GET"):
+                if len(claims_and_roles["tokens"]) > 0:
+                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                    if casbin_enforcer.enforce(metadataSchema, "GET"):
                         result["Items"].append(metadataSchema)
-                        break
 
             if "NextToken" in pageIterator:
                 result["NextToken"] = pageIterator["NextToken"]
@@ -188,12 +206,11 @@ class MetadataSchema:
                 metadataSchema.update({
                     "object__type": "metadataSchema"
                 })
-                for user_name in claims_and_roles["tokens"]:
-                    casbin_enforcer = CasbinEnforcer(user_name)
-                    if casbin_enforcer.enforce(f"user::{user_name}", deserialized_document, "GET"):
+                if len(claims_and_roles["tokens"]) > 0:
+                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                    if casbin_enforcer.enforce(deserialized_document, "GET"):
                         result["Items"].append(deserialized_document)
-                        break
-            
+
             if "NextToken" in pageIterator:
                 result["NextToken"] = pageIterator["NextToken"]
 
@@ -241,7 +258,7 @@ def lambda_handler(event: APIGatewayProxyEvent, context: LambdaContext,
             response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
             return response
-        
+
         queryParameters = event.get('queryStringParameters', {})
         validate_pagination_info(queryParameters)
 
@@ -249,9 +266,12 @@ def lambda_handler(event: APIGatewayProxyEvent, context: LambdaContext,
         databaseId = event.get("pathParameters", {}).get("databaseId")
         method = event['requestContext']['http']['method']
 
+        # Check if database even exists before proceeding
+        schema.verify_database_exists(databaseId)
+
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
 
@@ -260,14 +280,33 @@ def lambda_handler(event: APIGatewayProxyEvent, context: LambdaContext,
             resp = schema.get_all_schemas(databaseId, queryParameters)
             logger.info(resp)
             response['body'] = json.dumps({"message": resp}, cls=DecimalEncoder)
+            response['statusCode'] = 200
             return response
 
         # create/update
         elif (method == "POST" or method == "PUT") and method_allowed_on_api:
-            body = json.loads(event["body"])
+
+            # Parse request body
+            if not event.get('body'):
+                message = 'Request body is required'
+                response['body'] = json.dumps({"message": message})
+                response['statusCode'] = 400
+                logger.error(response)
+                return response
+
+            try:
+                body = json.loads(event['body'])
+            except json.JSONDecodeError as e:
+                logger.exception(f"Invalid JSON in request body: {e}")
+                response['statusCode'] = 400
+                response['body'] = json.dumps({"message": "Invalid JSON in request body"})
+                return response
+            
             if "field" not in body:
                 raise ValidationError(400, "Missing field in path on POST/PUT request")
+            
             resp = schema.update_schema(databaseId, body["field"], body)
+
             if resp == 403:
                 response['statusCode'] = 403
                 response['body'] = json.dumps({"message": "Not Authorized"})
@@ -288,11 +327,20 @@ def lambda_handler(event: APIGatewayProxyEvent, context: LambdaContext,
             return response
 
         response['body'] = json.dumps(response['body'], cls=DecimalEncoder)
+        response['statusCode'] = 200
         return response
     except ValidationError as e:
         response['statusCode'] = e.code
         response['body'] = json.dumps({
             "error": e.resp,
+            "requestid": event['requestContext']['requestId'],
+        })
+        return response
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        response['statusCode'] = 400
+        response['body'] = json.dumps({
+            "error": str(v),
             "requestid": event['requestContext']['requestId'],
         })
         return response

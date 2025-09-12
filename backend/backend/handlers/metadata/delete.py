@@ -4,7 +4,7 @@
 import json
 from common.validators import validate
 from handlers.auth import request_to_claims
-from handlers.metadata import build_response, ValidationError, table, validate_event
+from handlers.metadata import build_response, ValidationError, metadata_table, validate_event, normalize_s3_path
 from handlers.authz import CasbinEnforcer
 
 from common.dynamodb import get_asset_object_from_id
@@ -15,7 +15,7 @@ logger = safeLogger(service="DeleteMetadata")
 
 
 def delete_item(databaseId, assetId):
-    table.delete_item(
+    metadata_table.delete_item(
         Key={
             "databaseId": databaseId,
             "assetId": assetId,
@@ -38,11 +38,10 @@ def delete_item(databaseId, assetId):
     #     metadata.update({
     #         "object__type": "metadata"
     #     })
-    #     for user_name in claims_and_roles["tokens"]:
-    #         casbin_enforcer = CasbinEnforcer(user_name)
-    #         if casbin_enforcer.enforce(f"user::{user_name}", metadata, "DELETE"):
+    #     if len(claims_and_roles["tokens"]) > 0:
+    #         casbin_enforcer = CasbinEnforcer(claims_and_roles)
+    #         if casbin_enforcer.enforce(metadata, "DELETE"):
     #             allowed = True
-    #             break
     #
     #     if allowed:
     #         table.delete_item(
@@ -64,11 +63,10 @@ def lambda_handler(event, context):
     claims_and_roles = request_to_claims(event)
 
     method_allowed_on_api = False
-    for user_name in claims_and_roles["tokens"]:
-        casbin_enforcer = CasbinEnforcer(user_name)
+    if len(claims_and_roles["tokens"]) > 0:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if casbin_enforcer.enforceAPI(event):
             method_allowed_on_api = True
-            break
 
     try:
         if method_allowed_on_api:
@@ -76,18 +74,17 @@ def lambda_handler(event, context):
             databaseId = event['pathParameters']['databaseId']
             assetId = event['pathParameters']['assetId']
 
-            asset_of_metadata = get_asset_object_from_id(assetId)
+            asset_of_metadata = get_asset_object_from_id(databaseId, assetId)
             if asset_of_metadata:
                 allowed = False
                 # Add Casbin Enforcer to check if the current user has permissions to POST the asset:
                 asset_of_metadata.update({
                     "object__type": "asset"
                 })
-                for user_name in claims_and_roles["tokens"]:
-                    casbin_enforcer = CasbinEnforcer(user_name)
-                    if casbin_enforcer.enforce(f"user::{user_name}", asset_of_metadata, "POST"):
+                if len(claims_and_roles["tokens"]) > 0:
+                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                    if casbin_enforcer.enforce(asset_of_metadata, "POST"):
                         allowed = True
-                        break
 
                 if allowed:
                     delete_item(databaseId, assetId)

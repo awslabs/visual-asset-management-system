@@ -23,7 +23,7 @@ import {
 import { createContext, useContext, useState } from "react";
 import { generateUUID } from "../common/utils/utils";
 
-import { API, Storage } from "aws-amplify";
+import { API } from "aws-amplify";
 
 import ListDefinition from "../components/list/list-definitions/types/ListDefinition";
 import ColumnDefinition from "../components/list/list-definitions/types/ColumnDefinition";
@@ -514,60 +514,6 @@ class ProgressCallbackArgs {
     loaded!: number;
     total!: number;
 }
-
-// async function uploadAssetToS3(
-//     file: File,
-//     key: string,
-//     metadata: { [k: string]: string },
-//     progressCallback: (progress: ProgressCallbackArgs) => void
-// ) {
-//     console.log("upload", key, file);
-//     return Storage.put(key, file, { metadata, progressCallback });
-// }
-
-// function ControlledListFileUpload() {
-//     const { databaseId } = useParams();
-//     const [file, setFile] = useState<File[]>([]);
-
-//     const schemaKey = `metadataschema/${databaseId}/controlledlist.csv`;
-
-//     // form that takes a single file upload and places the file in s3 using Storage.put.
-//     // the file is then uploaded to the database's s3 bucket.
-
-//     return (
-//         <Form>
-//             <FormField label="File Upload">
-//                 <FileUpload
-//                     accept=".csv"
-//                     multiple={false}
-//                     value={file}
-//                     i18nStrings={{
-//                         uploadButtonText: (e) => (e ? "Choose files" : "Choose file"),
-//                         dropzoneText: (e) => (e ? "Drop files to upload" : "Drop file to upload"),
-//                         removeFileAriaLabel: (e) => `Remove file ${e + 1}`,
-//                         limitShowFewer: "Show fewer files",
-//                         limitShowMore: "Show more files",
-//                         errorIconAriaLabel: "Error",
-//                     }}
-//                     onChange={({ detail }) => {
-//                         setFile(detail.value);
-//                         uploadAssetToS3(
-//                             detail.value[0],
-//                             schemaKey,
-//                             {},
-//                             (progress: ProgressCallbackArgs) => {
-//                                 console.log("progress", progress);
-//                             }
-//                         ).then((result: any) => {
-//                             console.log("result", result);
-//                         });
-//                         console.log("file upload", detail);
-//                     }}
-//                 />
-//             </FormField>
-//         </Form>
-//     );
-// }
 
 export default function MetadataSchema() {
     const { databaseId } = useParams();

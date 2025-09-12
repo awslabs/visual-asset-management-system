@@ -70,11 +70,10 @@ def get_all_pipelines(queryParams, showDeleted=False):
         deserialized_document.update({
             "object__type": "pipeline"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", deserialized_document, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(deserialized_document, "GET"):
                 items.append(deserialized_document)
-                break
 
     result['Items'] = items
 
@@ -113,11 +112,10 @@ def get_pipelines(databaseId, query_params, showDeleted=False):
         item.update({
             "object__type": "pipeline"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", item, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(item, "GET"):
                 result['Items'].append(item)
-                break
 
     if "NextToken" in page_iterator:
         result["NextToken"] = page_iterator["NextToken"]
@@ -141,11 +139,10 @@ def get_pipeline(databaseId, pipelineId, showDeleted=False):
         pipeline.update({
             "object__type": "pipeline"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", pipeline, "GET"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(pipeline, "GET"):
                 allowed = True
-                break
 
     return {
         "statusCode": 200 if pipeline and allowed else 404,
@@ -161,7 +158,7 @@ def delete_pipeline(databaseId, pipelineId):
     table = dynamodb.Table(pipeline_database)
     if "#deleted" in databaseId:
         return response
-
+    
     db_response = table.get_item(Key={'databaseId': databaseId, 'pipelineId': pipelineId})
     pipeline = db_response.get("Item", {})
 
@@ -171,11 +168,10 @@ def delete_pipeline(databaseId, pipelineId):
         pipeline.update({
             "object__type": "pipeline"
         })
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
-            if casbin_enforcer.enforce(f"user::{user_name}", pipeline, "DELETE"):
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(pipeline, "DELETE"):
                 allowed = True
-                break
 
         if allowed:
             logger.info("Deleting pipeline: ")
@@ -218,7 +214,8 @@ def get_handler(event, response, pathParameters, queryParameters, showDeleted):
             (valid, message) = validate({
                 'databaseId': {
                     'value': pathParameters['databaseId'],
-                    'validator': 'ID'
+                    'validator': 'ID',
+                    'allowGlobalKeyword': True
                 },
             })
             if not valid:
@@ -251,7 +248,8 @@ def get_handler(event, response, pathParameters, queryParameters, showDeleted):
         (valid, message) = validate({
             'databaseId': {
                 'value': pathParameters['databaseId'],
-                'validator': 'ID'
+                'validator': 'ID',
+                'allowGlobalKeyword': True
             },
             'pipelineId': {
                 'value': pathParameters['pipelineId'],
@@ -276,7 +274,7 @@ def delete_handler(event, response, pathParameters, queryParameters):
     logger.info("Validating Parameters")
     for parameter in ['databaseId', 'pipelineId']:
         if parameter not in pathParameters:
-            message = f"No {parameter} in API Call"
+            message = "Missing required parameter in API Call"
             response['body'] = json.dumps({"message": message})
             response['statusCode'] = 400
             logger.error(response)
@@ -284,7 +282,8 @@ def delete_handler(event, response, pathParameters, queryParameters):
         (valid, message) = validate({
             parameter: {
                 'value': pathParameters[parameter],
-                'validator': 'ID'
+                'validator': 'ID',
+                'allowGlobalKeyword': True
             }
         })
         if not valid:
@@ -309,22 +308,41 @@ def lambda_handler(event, context):
     pathParameters = event.get('pathParameters', {})
     queryParameters = event.get('queryStringParameters', {})
 
-    showDeleted = False
-    if 'showDeleted' in queryParameters:
-        showDeleted = queryParameters['showDeleted']
+    # Enhanced parameter validation for query parameters
+    try:
+        # Validate showDeleted parameter if present
+        showDeleted = False
+        if 'showDeleted' in queryParameters:
+            show_deleted_value = queryParameters['showDeleted']
+            if isinstance(show_deleted_value, str):
+                if show_deleted_value.lower() in ['true', '1', 'yes']:
+                    showDeleted = True
+                elif show_deleted_value.lower() in ['false', '0', 'no']:
+                    showDeleted = False
+                else:
+                    response['statusCode'] = 400
+                    response['body'] = json.dumps({"message": "showDeleted parameter must be a valid boolean value (true/false)"})
+                    return response
+            else:
+                showDeleted = bool(show_deleted_value)
 
-    validate_pagination_info(queryParameters)
+        validate_pagination_info(queryParameters)
+
+    except Exception as e:
+        logger.exception(f"Error validating query parameters: {e}")
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": "Invalid query parameters"})
+        return response
 
     try:
         http_method = event['requestContext']['http']['method']
         logger.info(http_method)
 
         method_allowed_on_api = False
-        for user_name in claims_and_roles["tokens"]:
-            casbin_enforcer = CasbinEnforcer(user_name)
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-                break
 
         if http_method == 'GET' and method_allowed_on_api:
             return get_handler(event, response, pathParameters, queryParameters, showDeleted)

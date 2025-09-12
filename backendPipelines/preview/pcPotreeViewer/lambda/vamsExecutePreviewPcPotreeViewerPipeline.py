@@ -52,6 +52,22 @@ def lambda_handler(event, context):
     logger.info(event)
 
     try:
+        response = {
+            'statusCode': 200,
+            'body': '',
+            'headers': {
+                'Content-Type': 'application/json'
+            }
+        }
+
+        # Parse request body
+        if not event.get('body'):
+            message = 'Request body is required'
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            logger.error(response)
+            return response
+
         if isinstance(event['body'], str):
             data = json.loads(event['body'])
         else:
@@ -95,10 +111,12 @@ def lambda_handler(event, context):
 
         logger.info(data)
 
-        # Starts excution of pipeline 
-        execute_pipeline(data['inputS3AssetFilePath'], data['outputS3AssetFilesPath'], data['outputS3AssetPreviewPath']
-                                            , data['outputS3AssetMetadataPath'], data['inputOutputS3AssetAuxiliaryFilesPath']
-                                            , input_metadata, input_parameters, external_task_token)
+        inputOutputS3AssetAuxiliaryFilesPath = f"s3://{data['bucketAssetAuxiliary']}/{data['inputAssetFileKey']}/preview/PotreeViewer" #override to proper preview location output
+
+        # Starts excution of pipeline   
+        execute_pipeline(data['inputS3AssetFilePath'], '', '', '', inputOutputS3AssetAuxiliaryFilesPath
+                                            , input_metadata, input_parameters, external_task_token
+                                            , executing_userName, executing_requestContext)
 
         return {
             'statusCode': 200,

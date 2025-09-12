@@ -6,7 +6,7 @@
 import React, { useEffect } from "react";
 import { useState } from "react";
 import { SideNavigation, Spinner } from "@cloudscape-design/components";
-import { API } from "aws-amplify";
+import { webRoutes } from "../services/APIService";
 import config from "../config";
 import Synonyms from "../synonyms";
 
@@ -50,8 +50,7 @@ export function Navigation({
             items: [
                 { type: "link", text: Synonyms.Databases, href: "#/databases/" },
                 { type: "link", text: Synonyms.Assets, href: "#/assets/" },
-                { type: "link", text: `Upload ${Synonyms.Asset}`, href: "#/upload/" },
-                { type: "link", text: Synonyms.Comments, href: "#/comments/" },
+                { type: "link", text: `Create ${Synonyms.Asset}`, href: "#/upload/" },
             ],
         },
         // {
@@ -65,15 +64,18 @@ export function Navigation({
         //         { type: "link", text: "Columnar Viewer", href: "#/visualizers/column" },
         //     ],
         // },
-        {
-            type: "section",
-            text: "Transform",
-            items: [{ type: "link", text: "Pipelines", href: "#/pipelines/" }],
-        },
+        // {
+        //     type: "section",
+        //     text: "Transform",
+        //     items: [],
+        // },
         {
             type: "section",
             text: "Orchestrate & Automate",
-            items: [{ type: "link", text: "Workflows", href: "#/workflows/" }],
+            items: [
+                { type: "link", text: "Pipelines", href: "#/pipelines/" },
+                { type: "link", text: "Workflows", href: "#/workflows/" },
+            ],
         },
         {
             type: "divider",
@@ -134,28 +136,34 @@ export function Navigation({
             }
         }
         try {
-            API.post("api", `auth/routes`, {
-                body: {
-                    routes: allRoutes,
-                },
-            }).then((value) => {
-                for (let allowedRoute of value.allowedRoutes) {
-                    allowedRoutes.push("#" + allowedRoute.route__path);
-                }
-
-                for (let navigationItem of filteredNavItems) {
-                    if (navigationItem.items) {
-                        navigationItem.items = navigationItem.items.filter((item) => {
-                            return allowedRoutes.includes(item.href);
-                        });
+            webRoutes({ routes: allRoutes })
+                .then((value) => {
+                    if (value[0] === false) {
+                        throw new Error("webRoutes - " + value[1]);
                     }
-                }
-                filteredNavItems = filteredNavItems.filter((navigationItem) => {
-                    return navigationItem.items?.length > 0;
+
+                    for (let allowedRoute of value.allowedRoutes) {
+                        allowedRoutes.push("#" + allowedRoute.route__path);
+                    }
+
+                    for (let navigationItem of filteredNavItems) {
+                        if (navigationItem.items) {
+                            navigationItem.items = navigationItem.items.filter((item) => {
+                                return allowedRoutes.includes(item.href);
+                            });
+                        }
+                    }
+                    filteredNavItems = filteredNavItems.filter((navigationItem) => {
+                        return navigationItem.items?.length > 0;
+                    });
+                    setNavigationItems(filteredNavItems);
+                    setLoading(false);
+                })
+                .catch((error) => {
+                    console.error(error);
+                    setNavigationItems([]);
+                    setLoading(false);
                 });
-                setNavigationItems(filteredNavItems);
-                setLoading(false);
-            });
         } catch (e) {}
     }, []);
 

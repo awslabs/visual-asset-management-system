@@ -9,6 +9,9 @@ import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as path from "path";
+import * as sqs from "aws-cdk-lib/aws-sqs";
+import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
+import { SqsEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
 import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import * as cdk from "aws-cdk-lib";
 import { Duration, Stack, Names, NestedStack } from "aws-cdk-lib";
@@ -17,7 +20,7 @@ import {
     buildConstructPipelineFunction,
     buildOpenPipelineFunction,
     buildVamsExecutePcPotreeViewerPipelineFunction,
-    buildSnsExecutePcPotreeViewerPipelineFunction,
+    buildSqsExecutePcPotreeViewerPipelineFunction,
     buildPipelineEndFunction,
 } from "../lambdaBuilder/pcPotreeViewerFunctions";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
@@ -25,6 +28,7 @@ import { NagSuppressions } from "cdk-nag";
 import { CfnOutput } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as ServiceHelper from "../../../../../helper/service-helper";
+import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import { Service } from "../../../../../helper/service-helper";
 import * as Config from "../../../../../../config/config";
 import { generateUniqueNameHash } from "../../../../../helper/security";
@@ -74,16 +78,26 @@ export class PcPotreeViewerConstruct extends NestedStack {
          */
         const inputBucketPolicy = new iam.PolicyDocument({
             statements: [
-                new iam.PolicyStatement({
-                    actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-                    resources: [
-                        props.storageResources.s3.assetBucket.bucketArn,
-                        `${props.storageResources.s3.assetBucket.bucketArn}/*`,
-                    ],
-                }),
-                new iam.PolicyStatement({
-                    actions: ["s3:ListBucket"],
-                    resources: [props.storageResources.s3.assetBucket.bucketArn],
+                // Add permissions for all asset buckets from the global array
+                ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
+                    const prefix = record.prefix || "/";
+                    // Ensure the prefix ends with a slash for proper path construction
+                    const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+
+                    return new iam.PolicyStatement({
+                        effect: iam.Effect.ALLOW,
+                        actions: [
+                            "s3:PutObject",
+                            "s3:GetObject",
+                            "s3:ListBucket",
+                            "s3:DeleteObject",
+                            "s3:GetObjectVersion",
+                        ],
+                        resources: [
+                            record.bucket.bucketArn,
+                            `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                        ],
+                    });
                 }),
             ],
         });
@@ -252,7 +266,6 @@ export class PcPotreeViewerConstruct extends NestedStack {
         const pipelineEndFunction = buildPipelineEndFunction(
             this,
             props.lambdaCommonBaseLayer,
-            props.storageResources.s3.assetBucket,
             props.storageResources.s3.assetAuxiliaryBucket,
             props.config,
             props.vpc,
@@ -374,7 +387,6 @@ export class PcPotreeViewerConstruct extends NestedStack {
         const openPipelineFunction = buildOpenPipelineFunction(
             this,
             props.lambdaCommonBaseLayer,
-            props.storageResources.s3.assetBucket,
             props.storageResources.s3.assetAuxiliaryBucket,
             pipelineStateMachine,
             allowedInputFileExtensions,
@@ -389,7 +401,6 @@ export class PcPotreeViewerConstruct extends NestedStack {
             buildVamsExecutePcPotreeViewerPipelineFunction(
                 this,
                 props.lambdaCommonBaseLayer,
-                props.storageResources.s3.assetBucket,
                 props.storageResources.s3.assetAuxiliaryBucket,
                 openPipelineFunction,
                 props.config,
@@ -398,28 +409,70 @@ export class PcPotreeViewerConstruct extends NestedStack {
                 props.storageResources.encryption.kmsKey
             );
 
-        //Build Lambda SNS Execution Function (as an optional pipeline execution action)
-        const PcPotreeViewerPipelineSnsExecuteFunction =
-            buildSnsExecutePcPotreeViewerPipelineFunction(
+        //Add subscription for each bucket to kick-off lambda function of pipeline (as the main pipeline execution action)
+        const assetBucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
+        let index = 0;
+        for (const record of assetBucketRecords) {
+            const onS3ObjectCreatedQueue = new sqs.Queue(
                 this,
-                props.lambdaCommonBaseLayer,
-                props.storageResources.s3.assetBucket,
-                props.storageResources.s3.assetAuxiliaryBucket,
-                openPipelineFunction,
-                props.config,
-                props.vpc,
-                props.pipelineSubnets,
-                props.storageResources.encryption.kmsKey
+                "pcPotreePipelineS3EventCreated" + record.bucket,
+                {
+                    queueName: `${props.config.app.baseStackName}-pcPotreePipelineS3EventCreated-${index}`,
+                    visibilityTimeout: cdk.Duration.seconds(360), // Corresponding function's is 300.
+                    encryption: props.storageResources.encryption.kmsKey
+                        ? sqs.QueueEncryption.KMS
+                        : sqs.QueueEncryption.SQS_MANAGED,
+                    encryptionMasterKey: props.storageResources.encryption.kmsKey,
+                }
             );
+            onS3ObjectCreatedQueue.grantSendMessages(Service("SNS").Principal);
 
-        //Add subscription to kick-off lambda function of pipeline (as the main pipeline execution action)
-        props.storageResources.sns.assetBucketObjectCreatedTopic.addSubscription(
-            new LambdaSubscription(PcPotreeViewerPipelineSnsExecuteFunction, {
-                filterPolicy: {
-                    //Future TODO: If SNS Subscription String Filtering ever supports suffix matching, add a filter here for LAS/LAZ/PLY files to reduce calls to Lambda
+            //Set TLS HTTPS on SQS queue
+            const onS3ObjectCreatedQueueTopicPolicy = new iam.PolicyStatement({
+                effect: iam.Effect.DENY,
+                principals: [new iam.AnyPrincipal()],
+                actions: ["sqs:*"],
+                resources: [onS3ObjectCreatedQueue.queueArn],
+                conditions: {
+                    Bool: {
+                        "aws:SecureTransport": "false",
+                    },
                 },
-            })
-        );
+            });
+            onS3ObjectCreatedQueue.addToResourcePolicy(onS3ObjectCreatedQueueTopicPolicy);
+
+            //Build Lambda SNS Execution Function (as an optional pipeline execution action)
+            const PcPotreeViewerPipelineSqsExecuteFunction =
+                buildSqsExecutePcPotreeViewerPipelineFunction(
+                    this,
+                    props.lambdaCommonBaseLayer,
+                    props.storageResources.s3.assetAuxiliaryBucket,
+                    openPipelineFunction,
+                    record.bucket.bucketName,
+                    record.prefix,
+                    index,
+                    props.config,
+                    props.vpc,
+                    props.pipelineSubnets,
+                    props.storageResources.encryption.kmsKey
+                );
+
+            index = index + 1;
+
+            //Add event notifications for syncing
+            if (record.snsS3ObjectCreatedTopic) {
+                record.snsS3ObjectCreatedTopic.addSubscription(
+                    new SqsSubscription(onS3ObjectCreatedQueue)
+                );
+            }
+
+            // The functions poll the respective queues, which is populated by messages sent to the topic.
+            PcPotreeViewerPipelineSqsExecuteFunction.addEventSource(
+                new SqsEventSource(onS3ObjectCreatedQueue, {
+                    batchSize: 1, // Max configurable records w/o maxBatchingWindow.
+                })
+            );
+        }
 
         //Output VAMS Pipeline Execution Function name
         new CfnOutput(this, "PcPotreeViewerLambdaExecutionFunctionName", {
@@ -432,6 +485,17 @@ export class PcPotreeViewerConstruct extends NestedStack {
             PcPotreeViewerPipelineVamsExecuteFunction.functionName;
 
         //Nag Supressions
+        NagSuppressions.addResourceSuppressions(
+            this,
+            [
+                {
+                    id: "AwsSolutions-SQS3",
+                    reason: "Intended not to use DLQs for these types of SQS events. Re-drives should come from re-executing workflows.",
+                },
+            ],
+            true
+        );
+
         const reason =
             "Intended Solution. The pipeline lambda functions need appropriate access to S3.";
 
@@ -533,35 +597,35 @@ export class PcPotreeViewerConstruct extends NestedStack {
             true
         );
 
-        NagSuppressions.addResourceSuppressionsByPath(
-            Stack.of(this),
-            `/${this.toString()}/BatchFargatePipeline_PDAL/PipelineBatchComputeEnvironment/Resource-Service-Instance-Role/Resource`,
-            [
-                {
-                    id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for AWS Batch Compute Environment uses AWSBatchServiceRole",
-                    appliesTo: [
-                        "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSBatchServiceRole",
-                    ],
-                },
-            ],
-            true
-        );
+        // NagSuppressions.addResourceSuppressionsByPath(
+        //     Stack.of(this),
+        //     `/${this.toString()}/BatchFargatePipeline_PDAL/PipelineBatchComputeEnvironment/Resource-Service-Instance-Role/Resource`,
+        //     [
+        //         {
+        //             id: "AwsSolutions-IAM4",
+        //             reason: "The IAM role for AWS Batch Compute Environment uses AWSBatchServiceRole",
+        //             appliesTo: [
+        //                 "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSBatchServiceRole",
+        //             ],
+        //         },
+        //     ],
+        //     true
+        // );
 
-        NagSuppressions.addResourceSuppressionsByPath(
-            Stack.of(this),
-            `/${this.toString()}/BatchFargatePipeline_Potree/PipelineBatchComputeEnvironment/Resource-Service-Instance-Role/Resource`,
-            [
-                {
-                    id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for AWS Batch Compute Environment uses AWSBatchServiceRole",
-                    appliesTo: [
-                        "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSBatchServiceRole",
-                    ],
-                },
-            ],
-            true
-        );
+        // NagSuppressions.addResourceSuppressionsByPath(
+        //     Stack.of(this),
+        //     `/${this.toString()}/BatchFargatePipeline_Potree/PipelineBatchComputeEnvironment/Resource-Service-Instance-Role/Resource`,
+        //     [
+        //         {
+        //             id: "AwsSolutions-IAM4",
+        //             reason: "The IAM role for AWS Batch Compute Environment uses AWSBatchServiceRole",
+        //             appliesTo: [
+        //                 "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSBatchServiceRole",
+        //             ],
+        //         },
+        //     ],
+        //     true
+        // );
 
         NagSuppressions.addResourceSuppressionsByPath(
             Stack.of(this),

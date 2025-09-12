@@ -13,7 +13,10 @@ import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as kms from "aws-cdk-lib/aws-kms";
-import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../helper/security";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
+} from "../helper/security";
 
 export function buildMetadataSchemaService(
     scope: Construct,
@@ -45,13 +48,16 @@ export function buildMetadataSchemaService(
                 storageResources.dynamo.metadataSchemaStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
     storageResources.dynamo.databaseStorageTable.grantReadData(fn);
     storageResources.dynamo.metadataSchemaStorageTable.grantReadWriteData(fn);
     storageResources.dynamo.authEntitiesStorageTable.grantReadData(fn);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fn);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fn);
     kmsKeyLambdaPermissionAddToResourcePolicy(fn, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fn, config);
 
     return fn;
 }

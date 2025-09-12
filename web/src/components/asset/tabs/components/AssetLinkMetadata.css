@@ -1,0 +1,149 @@
+/*
+ * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* Ensure table cells with form controls have proper height and spacing */
+.asset-link-metadata-table td {
+    vertical-align: top;
+    padding: 12px 8px !important;
+    position: relative;
+}
+
+/* Ensure form controls in table cells have proper minimum height */
+.asset-link-metadata-table td > div {
+    min-height: 32px;
+    display: flex;
+    align-items: center;
+}
+
+/* Specific styling for Select components in metadata table */
+.asset-link-metadata-table td [data-testid*="select"],
+.asset-link-metadata-table td .awsui-select {
+    min-height: 32px;
+    width: 100%;
+}
+
+/* Specific styling for Input components in metadata table */
+.asset-link-metadata-table td [data-testid*="input"],
+.asset-link-metadata-table td .awsui-input {
+    min-height: 32px;
+    width: 100%;
+}
+
+/* Ensure XYZ input components have proper spacing */
+.asset-link-metadata-table td .xyz-input-container {
+    min-height: 32px;
+    width: 100%;
+}
+
+/* Button spacing in action cells */
+.asset-link-metadata-table td .awsui-space-between {
+    min-height: 32px;
+    align-items: center;
+}
+
+/* Ensure dropdown buttons have proper height */
+.asset-link-metadata-table td .awsui-button-dropdown {
+    min-height: 32px;
+}
+
+/* Override any table row height constraints */
+.asset-link-metadata-table tr {
+    min-height: 48px;
+}
+
+/* Ensure table cells don't compress form controls */
+.asset-link-metadata-table td {
+    min-height: 48px;
+    box-sizing: border-box;
+}
+
+/* Style for editing state rows to give more space */
+.asset-link-metadata-table tr.editing-row td {
+    padding: 16px 8px !important;
+    min-height: 56px;
+}
+
+/* Ensure proper spacing for form field containers */
+.asset-link-metadata-table .awsui-form-field {
+    margin-bottom: 0;
+}
+
+/* Fix for CloudScape components that might be compressed */
+.asset-link-metadata-table .awsui-select__dropdown-trigger,
+.asset-link-metadata-table .awsui-input__native-input {
+    min-height: 28px;
+    line-height: 28px;
+}
+
+/* Revert to simpler approach - just ensure table rows have enough height */
+.asset-link-metadata-table tr {
+    min-height: 60px !important;
+}
+
+.asset-link-metadata-table td {
+    vertical-align: middle !important;
+    padding: 16px 8px !important;
+}
+
+/* Fix dropdown z-index issues - ensure dropdowns appear above table rows */
+.asset-link-metadata-table .awsui-select__dropdown {
+    z-index: 9999 !important;
+    position: fixed !important;
+}
+
+/* Alternative approach for CloudScape Select dropdowns */
+.asset-link-metadata-table [data-testid*="select"] .awsui-select__dropdown,
+.asset-link-metadata-table .awsui-select .awsui-select__dropdown {
+    z-index: 9999 !important;
+    position: fixed !important;
+}
+
+/* Ensure the table container doesn't clip dropdowns */
+.asset-link-metadata-table {
+    overflow: visible !important;
+}
+
+/* Ensure table cells with dropdowns have proper stacking context */
+.asset-link-metadata-table td:has(.awsui-select) {
+    position: relative;
+    z-index: 1;
+}
+
+/* When a cell is in editing mode, increase its z-index */
+.asset-link-metadata-table td .awsui-select[aria-expanded="true"] {
+    z-index: 9998 !important;
+}
+
+/* Ensure dropdown trigger has proper z-index */
+.asset-link-metadata-table .awsui-select__dropdown-trigger {
+    z-index: 9997 !important;
+}
+
+/* CloudScape specific dropdown portal styling */
+.awsui-select__dropdown-portal {
+    z-index: 9999 !important;
+}
+
+/* Additional fallback for any dropdown menus */
+.asset-link-metadata-table .awsui-dropdown__content,
+.asset-link-metadata-table .awsui-dropdown__dropdown {
+    z-index: 9999 !important;
+    position: fixed !important;
+}
+
+/* Centered empty state */
+.asset-link-metadata-empty-state {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    padding: 2rem !important;
+    min-height: 200px !important;
+}
+
+.asset-link-metadata-empty-state > * {
+    text-align: center !important;
+}

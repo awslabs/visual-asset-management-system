@@ -40,19 +40,53 @@ function FolderUpload(props) {
         return fileHandles;
     };
     const handleDirectorySelection = async () => {
-        const directoryHandle = await showDirectoryPicker();
-        const fileHandles = await getFilesFromFileHandle(directoryHandle, directoryHandle.name);
-        console.log(fileHandles);
-        return { directoryHandle, fileHandles };
+        try {
+            const directoryHandle = await showDirectoryPicker();
+            const fileHandles = await getFilesFromFileHandle(directoryHandle, directoryHandle.name);
+            console.log(fileHandles);
+            return { directoryHandle, fileHandles };
+        } catch (err) {
+            // Check for user cancellation in multiple ways
+            const isUserCancellation =
+                err.name === "AbortError" ||
+                err.message?.includes("aborted") ||
+                err.message?.includes("cancelled") ||
+                err.message?.includes("canceled") ||
+                err.code === 20; // DOMException.ABORT_ERR
+
+            if (!isUserCancellation) {
+                console.error("Error selecting directory:", err);
+            } else {
+                console.log("User cancelled directory selection");
+            }
+            return { directoryHandle: null, fileHandles: [] };
+        }
     };
 
     const handleFileSelection = async () => {
-        const handles = await showOpenFilePicker({ multiple: true });
-        const fileHandles = [];
-        for (let i = 0; i < handles.length; i++) {
-            fileHandles.push({ path: handles[i].name, handle: handles[i] });
+        try {
+            const handles = await showOpenFilePicker({ multiple: true });
+            const fileHandles = [];
+            for (let i = 0; i < handles.length; i++) {
+                fileHandles.push({ path: handles[i].name, handle: handles[i] });
+            }
+            return { handles, fileHandles };
+        } catch (err) {
+            // Check for user cancellation in multiple ways
+            const isUserCancellation =
+                err.name === "AbortError" ||
+                err.message?.includes("aborted") ||
+                err.message?.includes("cancelled") ||
+                err.message?.includes("canceled") ||
+                err.code === 20; // DOMException.ABORT_ERR
+
+            if (!isUserCancellation) {
+                console.error("Error selecting files:", err);
+            } else {
+                console.log("User cancelled file selection");
+            }
+            return { handles: null, fileHandles: [] };
         }
-        return { handles, fileHandles };
     };
 
     return (
@@ -74,7 +108,9 @@ function FolderUpload(props) {
                             handleDirectorySelection().then((fileSelectionResult) => {
                                 console.log(fileSelectionResult);
                                 const { directoryHandle, fileHandles } = fileSelectionResult;
-                                handleFileListChange(directoryHandle, fileHandles);
+                                if (directoryHandle) {
+                                    handleFileListChange(directoryHandle, fileHandles);
+                                }
                             });
                         }}
                     >
@@ -88,8 +124,10 @@ function FolderUpload(props) {
                             onClick={(e) => {
                                 handleFileSelection().then((fileSelectionResult) => {
                                     console.log(fileSelectionResult);
-                                    const { directoryHandle, fileHandles } = fileSelectionResult;
-                                    handleFileListChange(directoryHandle, fileHandles);
+                                    const { handles, fileHandles } = fileSelectionResult;
+                                    if (handles && fileHandles.length > 0) {
+                                        handleFileListChange(null, fileHandles);
+                                    }
                                 });
                             }}
                         >

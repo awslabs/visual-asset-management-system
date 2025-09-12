@@ -1,6 +1,7 @@
 import {
     Box,
     Button,
+    Checkbox,
     Form,
     FormField,
     Input,
@@ -15,6 +16,7 @@ import OptionDefinition from "../../components/createupdate/form-definitions/typ
 interface TagTypeFields {
     tagTypeName: string;
     description: string;
+    required: string;
     selectedOptions: OptionDefinition[] | null;
 }
 
@@ -26,18 +28,18 @@ interface CreateTagTypeProps {
     initState: any;
 }
 
-// when a string is all lower case, return null, otherwise return the string "All lower case letters only"
+// when a string matches regex
 function validateNameLowercase(name: string) {
     if (name === undefined) return undefined;
-    return name.match(/^[a-z0-9_-]+$/) !== null
+    return name.match(/^[-_a-zA-Z0-9]{3,63}$/) !== null
         ? null
-        : "All lower case letters only. No special characters except '-' and '_'";
+        : "No special characters except '-' and '_'";
 }
 
-// when a string is between 4 and 64 characters, return null, otherwise return the string "Between 4 and 64 characters"
+// when a string is between 3 and 64 characters, return null, otherwise return the string "Between 4 and 64 characters"
 function validateNameLength(name: string) {
     if (name === undefined) return undefined;
-    return name.length >= 4 && name.length <= 64 ? null : "Name to be between 4 and 64 characters";
+    return name.length >= 3 && name.length <= 64 ? null : "Name to be between 3 and 64 characters";
 }
 
 // chain together the above three functions, when they return null, then return null
@@ -74,6 +76,7 @@ export default function CreateTagType({
     const tagtypeBody = {
         tagTypeName: formState.tagTypeName,
         description: formState.description,
+        required: formState.required,
     };
     const handleModalClose = () => {
         setShowModal(false);
@@ -82,12 +85,20 @@ export default function CreateTagType({
 
     const handleApiError = (err: any) => {
         if (err.response && err.response.status === 500) {
-            const errorMessage = err.response.data.message || "Duplicate Tag";
+            const errorMessage = err.response.data.message || "Duplicate Tag Type";
             setErrorMessage(errorMessage);
             setShowModal(true);
         }
     };
     const [nameError, setNameError] = useState<string | null>(null);
+
+    const [requiredError, setRequiredError] = useState<string | null>(null);
+
+    // The Tag Type checkbox requires a boolean to hold and display the checked or not checked state. Since interface is a string,
+    // created this, which initializes based on the string from formState.required
+    const [requiredTagTypeChecked, setRequiredTagTypeChecked] = useState(
+        formState.required === "True" ? true : false
+    );
 
     return (
         <Modal
@@ -138,7 +149,7 @@ export default function CreateTagType({
                                             console.log("create tag-type ", err);
                                             if (err.response && err.response.status === 500) {
                                                 const errorMessage =
-                                                    "Tag name " +
+                                                    "Tag type name " +
                                                     tagtypeBody.tagTypeName +
                                                     " already exists or is not valid";
                                                 setNameError(errorMessage);
@@ -247,6 +258,23 @@ export default function CreateTagType({
                             placeholder="Tag Type Description"
                             data-testid="tag-type-description"
                         />
+                    </FormField>
+
+                    <FormField label="Options">
+                        <Checkbox
+                            onChange={({ detail }) => {
+                                setRequiredTagTypeChecked(detail.checked); // update visual state boolean
+                                setFormState({
+                                    ...formState,
+                                    required: detail.checked ? "True" : "False",
+                                }); // update form state string
+                                setRequiredError("");
+                            }}
+                            checked={requiredTagTypeChecked}
+                            data-testid="required"
+                        >
+                            Require tag of this tag type on asset modification
+                        </Checkbox>
                     </FormField>
                 </SpaceBetween>
             </Form>

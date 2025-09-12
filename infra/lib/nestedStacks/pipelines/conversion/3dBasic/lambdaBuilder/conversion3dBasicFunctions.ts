@@ -14,14 +14,21 @@ import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../config/config";
 import * as Config from "../../../../../../config/config";
 import * as kms from "aws-cdk-lib/aws-kms";
-import { kmsKeyLambdaPermissionAddToResourcePolicy } from "../../../../../helper/security";
+import {
+    kmsKeyLambdaPermissionAddToResourcePolicy,
+    globalLambdaEnvironmentsAndPermissions,
+} from "../../../../../helper/security";
 import { generateUniqueNameHash } from "../../../../../helper/security";
+import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
+import {
+    grantReadWritePermissionsToAllAssetBuckets,
+    grantReadPermissionsToAllAssetBuckets,
+} from "../../../../../helper/security";
 import { suppressCdkNagErrorsByGrantReadWrite } from "../../../../../helper/security";
 
 export function buildVamsExecute3dBasicConversionPipelineFunction(
     scope: Construct,
-    assetBucket: s3.Bucket,
-    assetAuxiliaryBucket: s3.Bucket,
+    assetAuxiliaryBucket: s3.IBucket,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
@@ -52,9 +59,10 @@ export function buildVamsExecute3dBasicConversionPipelineFunction(
         environment: {},
     });
 
-    assetBucket.grantReadWrite(fun);
+    grantReadWritePermissionsToAllAssetBuckets(fun);
     assetAuxiliaryBucket.grantReadWrite(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;

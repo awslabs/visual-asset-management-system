@@ -9,7 +9,6 @@ import { fetchAllWorkflows, fetchDatabaseWorkflows } from "../services/APIServic
 import { WorkflowListDefinition } from "../components/list/list-definitions/WorkflowListDefinition";
 import ListPage from "./ListPage";
 import DatabaseSelectorWithModal from "../components/selectors/DatabaseSelectorWithModal";
-
 export default function Workflows(props) {
     const { databaseId } = useParams();
     const navigate = useNavigate();
@@ -45,6 +44,7 @@ export default function Workflows(props) {
                     open={openModal}
                     setOpen={setOpenModal}
                     onSelectorChange={handleSelectWorkflowDatabase}
+                    showGlobal={true}
                 />
             )}
         </>
