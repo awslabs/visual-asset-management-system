@@ -114,9 +114,10 @@ class TestSetupCommand:
         """Test setup command help."""
         result = cli_runner.invoke(cli, ['setup', '--help'])
         assert result.exit_code == 0
-        assert 'Setup VamsCLI with API Gateway URL' in result.output
+        assert 'Setup VamsCLI with VAMS base URL' in result.output
         assert '--force' in result.output
-        assert 'API_GATEWAY_URL' in result.output
+        assert 'BASE_URL' in result.output
+        assert 'CloudFront, ALB, API Gateway, or custom domain' in result.output
     
     def test_setup_missing_url(self, cli_runner):
         """Test setup command without URL."""
@@ -136,6 +137,7 @@ class TestSetupCommand:
             }
             mocks['api_client'].get_amplify_config.return_value = {
                 'region': 'us-west-2',
+                'api': 'https://2jf1k4c5lj.execute-api.us-west-2.amazonaws.com/',
                 'cognitoUserPoolId': 'us-west-2_test',
                 'cognitoAppClientId': 'test-client-id'
             }
@@ -171,6 +173,7 @@ class TestSetupCommand:
             }
             mocks['api_client'].get_amplify_config.return_value = {
                 'region': 'us-west-2',
+                'api': 'https://2jf1k4c5lj.execute-api.us-west-2.amazonaws.com/',
                 'cognitoUserPoolId': 'us-west-2_test',
                 'cognitoAppClientId': 'test-client-id'
             }
@@ -225,6 +228,7 @@ class TestSetupCommand:
             }
             mocks['api_client'].get_amplify_config.return_value = {
                 'region': 'us-west-2',
+                'api': 'https://2jf1k4c5lj.execute-api.us-west-2.amazonaws.com/',
                 'cognitoUserPoolId': 'us-west-2_test',
                 'cognitoAppClientId': 'test-client-id'
             }
@@ -259,6 +263,7 @@ class TestSetupCommand:
             }
             mocks['api_client'].get_amplify_config.return_value = {
                 'region': 'us-west-2',
+                'api': 'https://2jf1k4c5lj.execute-api.us-west-2.amazonaws.com/',
                 'cognitoUserPoolId': 'us-west-2_test',
                 'cognitoAppClientId': 'test-client-id'
             }
@@ -313,6 +318,7 @@ class TestSetupCommand:
             }
             mocks['api_client'].get_amplify_config.return_value = {
                 'region': 'us-west-2',
+                'api': 'https://2jf1k4c5lj.execute-api.us-west-2.amazonaws.com/',
                 'cognitoUserPoolId': 'us-west-2_test',
                 'cognitoAppClientId': 'test-client-id'
             }
@@ -347,6 +353,93 @@ class TestSetupCommand:
             assert result.exit_code == 1
             # Check that the original exception is preserved
             assert isinstance(result.exception, APIError)
+    
+    def test_setup_missing_api_field(self, cli_runner, cli_command_mocks):
+        """Test setup with amplify config missing 'api' field."""
+        with cli_command_mocks as mocks:
+            # Mock API client methods
+            mocks['api_client'].check_version.return_value = {
+                'match': True,
+                'cli_version': '1.0.0',
+                'api_version': '1.0.0'
+            }
+            # Mock amplify config without 'api' field
+            mocks['api_client'].get_amplify_config.return_value = {
+                'region': 'us-west-2',
+                'cognitoUserPoolId': 'us-west-2_test',
+                'cognitoAppClientId': 'test-client-id'
+                # Missing 'api' field
+            }
+            mocks['profile_manager'].has_config.return_value = False
+            
+            result = cli_runner.invoke(cli, [
+                'setup', 
+                'https://vams.example.com'
+            ])
+            
+            assert result.exit_code == 1
+            assert "No 'api' field found in amplify configuration response" in result.output
+            assert "Please verify the base URL points to a valid VAMS deployment" in result.output
+    
+    def test_setup_invalid_extracted_api_url(self, cli_runner, cli_command_mocks):
+        """Test setup with invalid API Gateway URL extracted from amplify config."""
+        with cli_command_mocks as mocks:
+            # Mock API client methods
+            mocks['api_client'].check_version.return_value = {
+                'match': True,
+                'cli_version': '1.0.0',
+                'api_version': '1.0.0'
+            }
+            # Mock amplify config with invalid 'api' field
+            mocks['api_client'].get_amplify_config.return_value = {
+                'region': 'us-west-2',
+                'api': 'invalid-url',  # Invalid URL
+                'cognitoUserPoolId': 'us-west-2_test',
+                'cognitoAppClientId': 'test-client-id'
+            }
+            mocks['profile_manager'].has_config.return_value = False
+            
+            result = cli_runner.invoke(cli, [
+                'setup', 
+                'https://vams.example.com'
+            ])
+            
+            assert result.exit_code == 1
+            assert "Invalid API Gateway URL extracted from amplify config: invalid-url" in result.output
+    
+    def test_setup_api_extraction_success(self, cli_runner, cli_command_mocks):
+        """Test successful setup with API Gateway URL extraction."""
+        with cli_command_mocks as mocks:
+            # Mock API client methods
+            mocks['api_client'].check_version.return_value = {
+                'match': True,
+                'cli_version': '1.0.0',
+                'api_version': '1.0.0'
+            }
+            mocks['api_client'].get_amplify_config.return_value = {
+                'region': 'us-west-2',
+                'api': 'https://2jf1k4c5lj.execute-api.us-west-2.amazonaws.com/',
+                'cognitoUserPoolId': 'us-west-2_test',
+                'cognitoAppClientId': 'test-client-id'
+            }
+            mocks['profile_manager'].has_config.return_value = False
+            
+            # Mock DateTime for setup timestamp
+            with patch('click.DateTime'):
+                result = cli_runner.invoke(cli, [
+                    'setup', 
+                    'https://vams.mycompany.com'
+                ])
+            
+            assert result.exit_code == 0
+            assert 'Setting up VamsCLI with base URL: https://vams.mycompany.com' in result.output
+            assert '✓ Extracted API Gateway URL: https://2jf1k4c5lj.execute-api.us-west-2.amazonaws.com' in result.output
+            assert 'Setup completed successfully!' in result.output
+            
+            # Verify the saved configuration includes both base_url and api_gateway_url
+            saved_config = mocks['profile_manager'].save_config.call_args[0][0]
+            assert saved_config['base_url'] == 'https://vams.mycompany.com'
+            assert saved_config['api_gateway_url'] == 'https://2jf1k4c5lj.execute-api.us-west-2.amazonaws.com'
 
 
 class TestAuthCommands:

@@ -25,13 +25,13 @@ vamscli --profile staging assets list
 
 ## Setup Commands
 
-### `vamscli setup <api-gateway-url>`
+### `vamscli setup <base-url>`
 
-Configure VamsCLI with your VAMS API Gateway URL for the specified profile.
+Configure VamsCLI with your VAMS base URL for the specified profile. Accepts any HTTP/HTTPS URL including CloudFront, ALB, API Gateway, or custom domains.
 
 **Arguments:**
 
--   `api_gateway_url`: VAMS API Gateway URL (required)
+-   `base_url`: VAMS base URL - any HTTP/HTTPS address (required)
 
 **Options:**
 
@@ -45,30 +45,41 @@ Configure VamsCLI with your VAMS API Gateway URL for the specified profile.
 **Examples:**
 
 ```bash
-# Setup default profile
-vamscli setup https://7bx3w05l79.execute-api.us-west-2.amazonaws.com
+# Setup with CloudFront distribution
+vamscli setup https://d1234567890.cloudfront.net
 
-# Setup specific profiles
-vamscli --profile production setup https://prod-api.example.com
-vamscli --profile development setup https://dev-api.example.com
+# Setup with custom domain
+vamscli setup https://vams.mycompany.com
+
+# Setup with ALB
+vamscli setup https://my-alb-123456789.us-west-2.elb.amazonaws.com
+
+# Setup with API Gateway directly
+vamscli setup https://abc123.execute-api.us-west-2.amazonaws.com
+
+# Setup specific profiles for different environments
+vamscli --profile production setup https://prod-vams.example.com
+vamscli --profile development setup https://dev-vams.example.com
 
 # Force overwrite existing configuration
-vamscli setup https://api.example.com --force
-vamscli --profile production setup https://new-prod-api.example.com --force
+vamscli setup https://vams.example.com --force
+vamscli --profile production setup https://new-prod-vams.example.com --force
 
 # Skip version mismatch confirmation (useful for automation)
-vamscli setup https://api.example.com --skip-version-check
-vamscli --profile production setup https://prod-api.example.com --skip-version-check
+vamscli setup https://vams.example.com --skip-version-check
+vamscli --profile production setup https://prod-vams.example.com --skip-version-check
 ```
 
 **What it does:**
 
-1. Validates the API Gateway URL format
-2. Checks API version compatibility
-3. Fetches Amplify configuration from `/api/amplify-config`
-4. Stores configuration locally for the specified profile
-5. Sets the profile as active when configuration is saved
-6. Clears existing authentication profiles (with `--force`)
+1. Validates the base URL format (accepts any HTTP/HTTPS URL)
+2. Checks API version compatibility using the base URL
+3. Fetches Amplify configuration from `<base-url>/api/amplify-config`
+4. Extracts the API Gateway URL from the "api" field in the response
+5. Validates the extracted API Gateway URL
+6. Stores both the original base URL and extracted API Gateway URL locally
+7. Sets the profile as active when configuration is saved
+8. Clears existing authentication profiles (with `--force`)
 
 **Profile-Specific Behavior:**
 
@@ -121,7 +132,7 @@ vamscli auth login --user-id john.doe@example.com --token-override "token123" --
 **Features:**
 
 -   **Cognito Authentication**: Handles MFA challenges automatically, supports password reset requirements
--   **Token Override**: Direct token usage for external authentication systems
+-   **Token Override**: Direct token usage for external authentication
 -   **Validation**: All tokens validated with login profile API
 -   **Feature Switches**: Automatically fetches enabled features after authentication
 -   **Secure Storage**: Tokens stored securely in profile-specific files
@@ -431,10 +442,10 @@ vamscli profile current
 ### Multi-Environment Setup
 
 ```bash
-# Setup different environments
-vamscli setup https://prod-api.example.com --profile production
-vamscli setup https://staging-api.example.com --profile staging
-vamscli setup https://dev-api.example.com --profile development
+# Setup different environments with flexible URLs
+vamscli --profile production setup https://prod-vams.example.com
+vamscli --profile staging setup https://staging-vams.example.com
+vamscli --profile development setup https://dev-vams.example.com
 
 # Authenticate to each environment
 vamscli auth login -u user@example.com --profile production
@@ -506,9 +517,9 @@ vamscli auth clear-override
 VamsCLI supports multiple profiles to manage different VAMS environments or user accounts on the same machine:
 
 ```bash
-# Setup different environments
-vamscli setup https://prod-api.example.com --profile production
-vamscli setup https://staging-api.example.com --profile staging
+# Setup different environments with flexible URLs
+vamscli --profile production setup https://prod-vams.example.com
+vamscli --profile staging setup https://staging-vams.example.com
 
 # Authenticate to each environment
 vamscli auth login -u user@example.com --profile production

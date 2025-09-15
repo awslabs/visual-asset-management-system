@@ -4,7 +4,7 @@ VamsCLI is a command-line interface for the Visual Asset Management System (VAMS
 
 ## Features
 
--   **Easy Setup**: Simple configuration with your API Gateway URL
+-   **Easy Setup**: Simple configuration with any VAMS base URL (CloudFront, ALB, API Gateway, or custom domain)
 -   **Secure Authentication**: AWS Cognito integration with MFA support and override token system
 -   **Feature Switches**: Automatic detection and management of backend-controlled feature flags
 -   **Asset Management**: Create, update, and manage assets with comprehensive metadata support
@@ -28,15 +28,24 @@ For detailed installation options, see the [Installation Guide](docs/INSTALLATIO
 
 ### 1. Setup
 
-Configure VamsCLI with your VAMS API Gateway URL:
+Configure VamsCLI with your VAMS base URL (supports any deployment type):
 
 ```bash
-# Setup default profile
-vamscli setup https://your-api-gateway-url.execute-api.region.amazonaws.com
+# Setup with CloudFront distribution
+vamscli setup https://d1234567890.cloudfront.net
+
+# Setup with custom domain
+vamscli setup https://vams.mycompany.com
+
+# Setup with ALB
+vamscli setup https://my-alb-123456789.us-west-2.elb.amazonaws.com
+
+# Setup with API Gateway directly
+vamscli setup https://abc123.execute-api.us-west-2.amazonaws.com
 
 # Setup specific profiles for different environments
-vamscli --profile production setup https://prod-api.example.com
-vamscli --profile staging setup https://staging-api.example.com
+vamscli --profile production setup https://prod-vams.example.com
+vamscli --profile staging setup https://staging-vams.example.com
 ```
 
 ### 2. Authentication
@@ -171,9 +180,9 @@ For complete command documentation, see the [Commands Documentation](docs/comman
 VamsCLI supports multiple profiles to manage different VAMS environments or user accounts on the same machine:
 
 ```bash
-# Setup different environments
-vamscli setup https://prod-api.example.com --profile production
-vamscli setup https://staging-api.example.com --profile staging
+# Setup different environments with flexible URLs
+vamscli --profile production setup https://prod-vams.example.com
+vamscli --profile staging setup https://staging-vams.example.com
 
 # Authenticate to each environment
 vamscli auth login -u user@example.com --profile production
