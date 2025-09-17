@@ -204,6 +204,7 @@ export class Metadata3dLabelingConstruct extends NestedStack {
             this,
             "BatchFargatePipeline_BlenderRenderer",
             {
+                config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
                 securityGroups: props.pipelineSecurityGroups,
@@ -417,8 +418,7 @@ export class Metadata3dLabelingConstruct extends NestedStack {
         //Output VAMS Pipeline Execution Function name
         new CfnOutput(this, "Metadata3dLabelingLambdaExecutionFunctionName", {
             value: Metadata3dLabelingPipelineExecuteFunction.functionName,
-            description: "The Metadata 3D Labeling Lambda Function Name to use in a VAMS Pipeline",
-            exportName: "Metadata3dLabelingLambdaExecutionFunctionName",
+            description: "The Metadata 3D Labeling Lambda Function Name to use in a VAMS Pipeline"
         });
         this.pipelineVamsLambdaFunctionName =
             Metadata3dLabelingPipelineExecuteFunction.functionName;

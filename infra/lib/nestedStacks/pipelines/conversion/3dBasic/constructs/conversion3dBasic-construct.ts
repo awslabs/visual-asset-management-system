@@ -67,8 +67,7 @@ export class Conversion3dBasicConstruct extends NestedStack {
         //Output VAMS Pipeline Execution Function name
         new CfnOutput(this, "Conversion3dBasicLambdaExecutionFunctionName", {
             value: pipelineConversion3dBasicLambdaFunction.functionName,
-            description: "The 3dBasic Conversion Lambda Function Name to use in a VAMS Pipeline",
-            exportName: "Conversion3dBasicLambdaExecutionFunctionName",
+            description: "The 3dBasic Conversion Lambda Function Name to use in a VAMS Pipeline"
         });
 
         this.pipelineVamsLambdaFunctionName = pipelineConversion3dBasicLambdaFunction.functionName;

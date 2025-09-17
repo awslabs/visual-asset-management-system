@@ -175,6 +175,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
             this,
             "BatchFargatePipeline_PDAL",
             {
+                config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
                 securityGroups: props.pipelineSecurityGroups,
@@ -203,6 +204,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
             this,
             "BatchFargatePipeline_Potree",
             {
+                config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
                 securityGroups: props.pipelineSecurityGroups,
@@ -478,8 +480,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
         new CfnOutput(this, "PcPotreeViewerLambdaExecutionFunctionName", {
             value: PcPotreeViewerPipelineVamsExecuteFunction.functionName,
             description:
-                "The Point Cloud Potree Viewer Pipeline Lambda Function Name to use in a VAMS Pipeline",
-            exportName: "PcPotreeViewerLambdaExecutionFunctionName",
+                "The Point Cloud Potree Viewer Pipeline Lambda Function Name to use in a VAMS Pipeline"
         });
         this.pipelineVamsLambdaFunctionName =
             PcPotreeViewerPipelineVamsExecuteFunction.functionName;
