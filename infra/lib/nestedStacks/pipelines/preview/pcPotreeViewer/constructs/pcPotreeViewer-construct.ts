@@ -480,7 +480,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
         new CfnOutput(this, "PcPotreeViewerLambdaExecutionFunctionName", {
             value: PcPotreeViewerPipelineVamsExecuteFunction.functionName,
             description:
-                "The Point Cloud Potree Viewer Pipeline Lambda Function Name to use in a VAMS Pipeline"
+                "The Point Cloud Potree Viewer Pipeline Lambda Function Name to use in a VAMS Pipeline",
         });
         this.pipelineVamsLambdaFunctionName =
             PcPotreeViewerPipelineVamsExecuteFunction.functionName;

@@ -418,7 +418,7 @@ export class Metadata3dLabelingConstruct extends NestedStack {
         //Output VAMS Pipeline Execution Function name
         new CfnOutput(this, "Metadata3dLabelingLambdaExecutionFunctionName", {
             value: Metadata3dLabelingPipelineExecuteFunction.functionName,
-            description: "The Metadata 3D Labeling Lambda Function Name to use in a VAMS Pipeline"
+            description: "The Metadata 3D Labeling Lambda Function Name to use in a VAMS Pipeline",
         });
         this.pipelineVamsLambdaFunctionName =
             Metadata3dLabelingPipelineExecuteFunction.functionName;

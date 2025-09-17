@@ -36,6 +36,10 @@ Additionally authorizer changes may require forced cache resets on API gateways 
 
 -   **UI** Scrolling issues on browsers with MacOS should now hopefulyl be fixed. This was due to an issue with Potree libraries being loaded globally before.
 
+### Chores
+
+-   Updated pipeline CDK export names and job definition names to be variable per the stack deploying it to further reduce conflicts of same stack deployments in the same region
+
 ## [2.2.0] (2025-09-31)
 
 This version includes significant enhancements to VAMS infrastructure, a complete overhaul of asset management APIs/Backend/UI, addition of supporting external IDP authentication, and various bug fixes. Key improvements include more flexible naming conventions, separation of assets and files, enhanced file management capabilities, new asset versioning, new use-case pipelines, global workflows/pipelines, and improved upload/download functionality.

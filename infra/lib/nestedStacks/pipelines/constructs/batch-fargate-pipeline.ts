@@ -62,12 +62,14 @@ export class BatchFargatePipelineConstruct extends Construct {
             }
         );
 
-        const batchJobName = props.batchJobDefinitionName + generateUniqueNameHash(
-                    props.config.env.coreStackName,
-                    props.config.env.account,
-                    props.batchJobDefinitionName,
-                    10
-                )
+        const batchJobName =
+            props.batchJobDefinitionName +
+            generateUniqueNameHash(
+                props.config.env.coreStackName,
+                props.config.env.account,
+                props.batchJobDefinitionName,
+                10
+            );
 
         this.batchJobDefinition = new batch.EcsJobDefinition(this, "PipelineBatchJobDefinition", {
             jobDefinitionName: batchJobName,

@@ -397,7 +397,7 @@ export class ModelOpsConstruct extends NestedStack {
         //Output VAMS Pipeline Execution Function name
         new CfnOutput(this, "ModelOpsLambdaExecutionFunctionName", {
             value: modelOpsExecuteFunction.functionName,
-            description: "The ModelOps Lambda Function Name to use in a VAMS Pipeline"
+            description: "The ModelOps Lambda Function Name to use in a VAMS Pipeline",
         });
 
         //Nag Supressions
