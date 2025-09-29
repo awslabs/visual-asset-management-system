@@ -69,22 +69,18 @@ export class LocationServiceNestedStack extends NestedStack {
         // new CfnOutput(this, "LocationServiceArn", {
         //     value: location.placeIndexArn,
         //     description: "Location Service Arn",
-        //     exportName: "LocationServiceArn",
         // });
         // new CfnOutput(this, "LocationServiceIndexName", {
         //     value: location.placeIndexName,
         //     description: "Location Service Index Name",
-        //     exportName: "LocationServiceIndexName",
         // });
         // new CfnOutput(this, "LocationServiceIndexArn", {
         //     value: location.placeIndexArn,
         //     description: "Location Service Index Arn",
-        //     exportName: "LocationServiceIndexArn",
         // });
         // new CfnOutput(this, "MapArn", {
         //     value: cfnMap.attrArn,
         //     description: "Map Arn",
-        //     exportName: "MapArn",
         // });
 
         this.map = cfnMap;

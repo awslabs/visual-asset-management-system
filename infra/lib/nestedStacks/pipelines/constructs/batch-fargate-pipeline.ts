@@ -7,11 +7,14 @@ import * as batch from "aws-cdk-lib/aws-batch";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as cdk from "aws-cdk-lib";
+import * as Config from "../../../../config/config";
 import { Construct } from "constructs";
 import { CfnJobDefinition } from "aws-cdk-lib/aws-batch";
+import { generateUniqueNameHash } from "../../../helper/security";
 import path = require("path");
 
 export interface BatchFargatePipelineConstructProps extends cdk.StackProps {
+    config: Config.Config;
     vpc: ec2.IVpc;
     subnets: ec2.ISubnet[];
     securityGroups: ec2.ISecurityGroup[];
@@ -59,8 +62,17 @@ export class BatchFargatePipelineConstruct extends Construct {
             }
         );
 
+        const batchJobName =
+            props.batchJobDefinitionName +
+            generateUniqueNameHash(
+                props.config.env.coreStackName,
+                props.config.env.account,
+                props.batchJobDefinitionName,
+                10
+            );
+
         this.batchJobDefinition = new batch.EcsJobDefinition(this, "PipelineBatchJobDefinition", {
-            jobDefinitionName: props.batchJobDefinitionName,
+            jobDefinitionName: batchJobName,
             retryAttempts: 1,
             container: new batch.EcsFargateContainerDefinition(this, "PipelineBatchContainer", {
                 cpu: 16,

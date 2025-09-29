@@ -209,6 +209,7 @@ export function kmsKeyPolicyStatementPrincipalGenerator(
             "kms:ListKeys",
             "kms:CreateGrant",
             "kms:ListAliases",
+            "kms:Encrypt",
         ],
         effect: iam.Effect.ALLOW,
         principals: [
@@ -221,9 +222,15 @@ export function kmsKeyPolicyStatementPrincipalGenerator(
             Service("LOGS").Principal,
             Service("LAMBDA").Principal,
             Service("STS").Principal,
+            Service("CLOUDFORMATION").Principal,
         ],
         resources: ["*"],
     });
+
+    // Add account root principal for custom resource Lambda roles and CloudFormation
+    policyStatement.addPrincipals(
+        new iam.AccountRootPrincipal()
+    );
 
     if (!config.app.useAlb.enabled) {
         policyStatement.addPrincipals(Service("CLOUDFRONT").Principal);

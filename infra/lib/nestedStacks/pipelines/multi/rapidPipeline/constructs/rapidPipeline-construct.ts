@@ -454,7 +454,6 @@ export class RapidPipelineConstruct extends NestedStack {
         new CfnOutput(this, "RapidPipelineLambdaExecutionFunctionName", {
             value: rapidPipelineExecuteFunction.functionName,
             description: "The RapidPipeline Lambda Function Name to use in a VAMS Pipeline",
-            exportName: "RapidPipelineLambdaExecutionFunctionName",
         });
 
         //Nag Supressions

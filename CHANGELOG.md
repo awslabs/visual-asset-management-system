@@ -46,6 +46,10 @@ Changes to BatchFargate CDK construct naming for use-case pipeline naming may re
 ### Chores
 
 -   Updated Cognito invitation and verification email messages to be more VAMS branded, show username where appropriate, and remove confusing period character directly after temporary passwords.
+-   Update KMS key policy to support Cloudformation principal better for CustomResources when modifying S3 or DynamoDB tables that have a KMS encryption key. This should fix errors with setting default auth constraints and roles during CDK deployment that sometimes cropped up. 
+-   Updated pipeline CDK export names and job definition names to be variable per the stack deploying it to further reduce conflicts of same stack deployments in the same region
+-   Enforce S3 bucket object ownership on static website bucket
+-   Update package dependencies and fixed any associated breaking changes
 
 ## [2.2.0] (2025-09-31)
 
