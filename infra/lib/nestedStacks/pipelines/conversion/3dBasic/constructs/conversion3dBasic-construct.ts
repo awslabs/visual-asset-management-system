@@ -13,7 +13,6 @@ import * as cdk from "aws-cdk-lib";
 import { Duration, Stack, Names, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { buildVamsExecute3dBasicConversionPipelineFunction } from "../lambdaBuilder/conversion3dBasicFunctions";
-import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
 import { NagSuppressions } from "cdk-nag";
 import { CfnOutput } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";

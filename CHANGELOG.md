@@ -12,6 +12,8 @@ All APIGateway authorizers were swapped for custom lambda authorizers to provide
 
 Additionally authorizer changes may require forced cache resets on API gateways if new authorizations are not follwoing new rules set. (https://docs.aws.amazon.com/cli/latest/reference/apigatewayv2/reset-authorizers-cache.html)
 
+Changes to BatchFargate CDK construct naming for use-case pipeline naming may require you to deploy CDK without batch pipelines and then again with to properly re-deploy them. Not doing this with existing deployed pipelines (Metadata 3D Labeling and PcPotree) will result in a CDK deployment error within ECS Fargate. This may also require you to update your VAMS pipeline/workflow lambda function names after re-deployment.
+
 ### Features
 
 -   **CLI** VAMS now has a CLI tool that can be used to automate VAMS operations. It includes operations so far for authentication, database, asset, assetLinks, assetLinkMetadata, metadata, metadataSchema, tags, TagTypes, search, featureSwitch, and files. More operations to match API functionality to come in future releases such as more admin functionalities of VAMS.
@@ -25,16 +27,25 @@ Additionally authorizer changes may require forced cache resets on API gateways 
     -   Added a text viewer for `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `ipynb`, and `.ini` extensions
     -   Added the CesiumJS viewer for `.json` tileset files which can load subsequent other files referenced in the asset (even if not selected for viewing directly). This is an initial/basic CesiumJS viewer implementation with default options as part of this release. Requires `allowUnsafeEvalFeatures` CDK `config.json` configuration flag to be turned on (off by default).
     -   3D Online viewer now has additional UI added to support basic extra functionality
+    -   3D Online Viewer once again will also support `.ply` file extensions for viewing (previously switched to PotreeViewer only)
 -   **UI** Added a draggable splitter in ViewAsset page between the file manager tree view and details panel
 -   Added a new API endpoint for asset file streaming (similar to asset preview auxiliary files) at `GET /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`
 -   Added .clineRules for CLINE AI workflows for AI-assisted development for VAMS backend API development, CDK development, and CLI development
 -   All HTTP APIGateway authorizers were swapped for custom lambda authorizers.
     -   New Lambda Layer specifically with libraries for the lambda authorizers
     -   New support for CDK configured IP range restrictions for API Gateway calls that are managed in the authorizer
+-   Added WXYZ, Boolean, Date, 4x4 Matrix, Geoshape, GeoPoint, LLA (Latitude Longitude, Altitude), and JSON asset link metadata value types.
+    -   **UI** Added additional `Matrix` static asset link type metadata field of type 4x4 Matrix.
+    -   **UI** Defaulted `rotation` static asset link metdata field to WXYZ field type (from XYZ)
 
 ### Bug Fixes
 
--   **UI** Scrolling issues on browsers with MacOS should now hopefulyl be fixed. This was due to an issue with Potree libraries being loaded globally before.
+-   **UI** Scrolling issues on browsers with MacOS should now hopefully be fixed. This was due to an issue with Potree libraries being loaded globally before.
+-   Updated BatchFargate CDK construct names to be unique for the stack (see breaking changes)
+
+### Chores
+
+-   Updated Cognito invitation and verification email messages to be more VAMS branded, show username where appropriate, and remove confusing period character directly after temporary passwords.
 
 ## [2.2.0] (2025-09-31)
 

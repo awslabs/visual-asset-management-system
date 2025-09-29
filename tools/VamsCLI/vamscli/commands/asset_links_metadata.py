@@ -2,7 +2,9 @@
 
 import json
 import click
-from typing import Dict, Any, Optional
+import geojson
+from typing import Dict, Any, Optional, List
+from datetime import datetime
 
 from ..utils.api_client import APIClient
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
@@ -11,9 +13,16 @@ from ..utils.exceptions import (
 )
 
 
+
+
+
+
 def validate_metadata_type(metadata_type: str) -> str:
     """Validate metadata type and return normalized value."""
-    valid_types = ['string', 'number', 'boolean', 'date', 'xyz']
+    valid_types = [
+        'string', 'number', 'boolean', 'date', 'xyz', 'wxyz', 
+        'matrix4x4', 'geopoint', 'geojson', 'lla', 'json'
+    ]
     normalized_type = metadata_type.lower()
     
     if normalized_type not in valid_types:
@@ -27,7 +36,11 @@ def validate_metadata_type(metadata_type: str) -> str:
 
 def validate_metadata_value(value: str, metadata_type: str) -> str:
     """Validate metadata value based on type."""
-    if metadata_type == 'number':
+    if metadata_type == 'string':
+        # String type requires no additional validation
+        return value
+        
+    elif metadata_type == 'number':
         try:
             float(value)
         except ValueError:
@@ -38,11 +51,16 @@ def validate_metadata_value(value: str, metadata_type: str) -> str:
             raise click.BadParameter(f"Value '{value}' is not a valid boolean (true/false)")
     
     elif metadata_type == 'date':
-        from datetime import datetime
         try:
             datetime.fromisoformat(value.replace('Z', '+00:00'))
         except ValueError:
             raise click.BadParameter(f"Value '{value}' is not a valid ISO date format")
+    
+    elif metadata_type == 'json':
+        try:
+            json.loads(value)
+        except json.JSONDecodeError as e:
+            raise click.BadParameter(f"Value must be valid JSON: {e}")
     
     elif metadata_type == 'xyz':
         try:
@@ -60,6 +78,103 @@ def validate_metadata_value(value: str, metadata_type: str) -> str:
         
         except (json.JSONDecodeError, ValueError) as e:
             raise click.BadParameter(f"Invalid XYZ data: {e}")
+    
+    elif metadata_type == 'wxyz':
+        try:
+            wxyz_data = json.loads(value)
+            if not isinstance(wxyz_data, dict):
+                raise ValueError("WXYZ data must be a JSON object")
+            
+            required_keys = {'w', 'x', 'y', 'z'}
+            if not required_keys.issubset(wxyz_data.keys()):
+                raise ValueError(f"WXYZ data must contain 'w', 'x', 'y', and 'z' keys")
+            
+            for key in required_keys:
+                if not isinstance(wxyz_data[key], (int, float)):
+                    raise ValueError(f"WXYZ coordinate '{key}' must be a number")
+        
+        except (json.JSONDecodeError, ValueError) as e:
+            raise click.BadParameter(f"Invalid WXYZ data: {e}")
+    
+    elif metadata_type == 'matrix4x4':
+        try:
+            matrix_data = json.loads(value)
+            if not hasattr(matrix_data, '__len__') or not hasattr(matrix_data, '__getitem__'):
+                raise ValueError("MATRIX4X4 data must be a JSON array")
+            
+            # Validate 4x4 matrix structure
+            if len(matrix_data) != 4:
+                raise ValueError("MATRIX4X4 must be a 4x4 matrix (4 rows)")
+            
+            for i, row in enumerate(matrix_data):
+                if not hasattr(row, '__len__') or not hasattr(row, '__getitem__'):
+                    raise ValueError(f"MATRIX4X4 row {i} must be an array")
+                if len(row) != 4:
+                    raise ValueError(f"MATRIX4X4 row {i} must contain exactly 4 elements")
+                
+                for j, element in enumerate(row):
+                    if not isinstance(element, (int, float)):
+                        raise ValueError(f"MATRIX4X4 element at [{i}][{j}] must be a number")
+        
+        except (json.JSONDecodeError, ValueError) as e:
+            raise click.BadParameter(f"Invalid MATRIX4X4 data: {e}")
+    
+    elif metadata_type == 'geopoint':
+        try:
+
+            geojson_obj = geojson.loads(value)
+
+            # Additional check that type is "Point"
+            json_obj = json.loads(value)
+            if json_obj.get('type') != 'Point':
+                raise ValueError("GEOPOINT type must be 'Point'")
+        
+        except (json.JSONDecodeError, ValueError) as e:
+            if "GEOPOINT" in str(e):
+                raise click.BadParameter(f"Invalid GEOPOINT data: {e}")
+            raise click.BadParameter(f"GEOPOINT validation failed: {e}")
+    
+    elif metadata_type == 'geojson':
+        try:
+
+            geojson_obj = geojson.loads(value)
+            # geojson.loads() will raise an exception if it's not valid GeoJSON
+        
+        except (json.JSONDecodeError, ValueError) as e:
+            raise click.BadParameter(f"Invalid GeoJSON data: {e}")
+    
+    elif metadata_type == 'lla':
+        try:
+            lla_data = json.loads(value)
+            if not isinstance(lla_data, dict):
+                raise ValueError("LLA data must be a JSON object")
+            
+            # Check for required keys
+            required_keys = {'lat', 'long', 'alt'}
+            if not required_keys.issubset(lla_data.keys()):
+                raise ValueError("LLA data must contain 'lat', 'long', and 'alt' keys")
+            
+            # Validate latitude
+            lat = lla_data['lat']
+            if not isinstance(lat, (int, float)):
+                raise ValueError("LLA latitude must be a number")
+            if lat < -90 or lat > 90:
+                raise ValueError("LLA latitude must be between -90 and 90")
+            
+            # Validate longitude
+            long_val = lla_data['long']
+            if not isinstance(long_val, (int, float)):
+                raise ValueError("LLA longitude must be a number")
+            if long_val < -180 or long_val > 180:
+                raise ValueError("LLA longitude must be between -180 and 180")
+            
+            # Validate altitude
+            alt = lla_data['alt']
+            if not isinstance(alt, (int, float)):
+                raise ValueError("LLA altitude must be a number")
+        
+        except (json.JSONDecodeError, ValueError) as e:
+            raise click.BadParameter(f"Invalid LLA data: {e}")
     
     return value
 
@@ -160,7 +275,7 @@ def list(ctx: click.Context, asset_link_id: str, json_output: bool):
 @click.option('--key', '-k', required=False, help='Metadata key')
 @click.option('--value', '-v', required=False, help='Metadata value')
 @click.option('--type', '-t', 'metadata_type', default='string', 
-              help='Metadata type (string, number, boolean, date, xyz)')
+              help='Metadata type (string, number, boolean, date, xyz, wxyz, matrix4x4, geopoint, geojson, lla, json)')
 @click.option('--json-input', type=click.Path(),
               help='JSON file containing metadata fields')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
@@ -180,12 +295,49 @@ def create(ctx: click.Context, asset_link_id: str, key: Optional[str],
         number: Numeric values (integers or floats)
         boolean: Boolean values (true/false)
         date: ISO date format (e.g., 2023-12-01T10:30:00Z)
+        json: Any valid JSON object or array
         xyz: 3D coordinates as JSON (e.g., {"x": 1.5, "y": 2.0, "z": 0.5})
+        wxyz: Quaternion as JSON (e.g., {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0})
+        matrix4x4: 4x4 transformation matrix as JSON array
+        geopoint: GeoJSON Point (e.g., {"type": "Point", "coordinates": [-74.0060, 40.7128]})
+        geojson: Any valid GeoJSON object
+        lla: Latitude/Longitude/Altitude (e.g., {"lat": 40.7128, "long": -74.0060, "alt": 10.5})
     
     Examples:
+        # String metadata (default)
         vamscli asset-links-metadata create abc123-def456-ghi789 --key "description" --value "Connection between models"
+        
+        # Numeric metadata
         vamscli asset-links-metadata create abc123-def456-ghi789 --key "distance" --value "15.5" --type number
+        
+        # Boolean metadata
+        vamscli asset-links-metadata create abc123-def456-ghi789 --key "active" --value "true" --type boolean
+        
+        # Date metadata
+        vamscli asset-links-metadata create abc123-def456-ghi789 --key "created" --value "2023-12-01T10:30:00Z" --type date
+        
+        # JSON metadata
+        vamscli asset-links-metadata create abc123-def456-ghi789 --key "config" --value '{"enabled": true, "count": 5}' --type json
+        
+        # XYZ coordinates
         vamscli asset-links-metadata create abc123-def456-ghi789 --key "offset" --value '{"x": 1.5, "y": 2.0, "z": 0.5}' --type xyz
+        
+        # WXYZ quaternion
+        vamscli asset-links-metadata create abc123-def456-ghi789 --key "rotation" --value '{"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0}' --type wxyz
+        
+        # 4x4 transformation matrix
+        vamscli asset-links-metadata create abc123-def456-ghi789 --key "transform" --value '[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]' --type matrix4x4
+        
+        # GeoJSON Point
+        vamscli asset-links-metadata create abc123-def456-ghi789 --key "location" --value '{"type": "Point", "coordinates": [-74.0060, 40.7128]}' --type geopoint
+        
+        # GeoJSON Polygon
+        vamscli asset-links-metadata create abc123-def456-ghi789 --key "boundary" --value '{"type": "Polygon", "coordinates": [[[-74.1, 40.7], [-74.0, 40.7], [-74.0, 40.8], [-74.1, 40.8], [-74.1, 40.7]]]}' --type geojson
+        
+        # LLA coordinates
+        vamscli asset-links-metadata create abc123-def456-ghi789 --key "position" --value '{"lat": 40.7128, "long": -74.0060, "alt": 10.5}' --type lla
+        
+        # Using JSON input file
         vamscli asset-links-metadata create abc123-def456-ghi789 --json-input metadata.json
     """
     # Setup/auth already validated by decorator
@@ -271,7 +423,7 @@ def create(ctx: click.Context, asset_link_id: str, key: Optional[str],
 @click.argument('metadata_key', required=True)
 @click.option('--value', '-v', required=False, help='New metadata value')
 @click.option('--type', '-t', 'metadata_type', default='string',
-              help='Metadata type (string, number, boolean, date, xyz)')
+              help='Metadata type (string, number, boolean, date, xyz, wxyz, matrix4x4, geopoint, geojson, lla, json)')
 @click.option('--json-input', type=click.Path(),
               help='JSON file containing metadata fields')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')

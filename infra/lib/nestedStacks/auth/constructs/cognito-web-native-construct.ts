@@ -82,8 +82,10 @@ export class CognitoWebNativeConstructStack extends Construct {
         );
         globalLambdaEnvironmentsAndPermissions(preTokenGeneration, props.config);
 
-        const message =
-            "Hello, Thank you for registering with your instance of Visual Asset Management System! Your verification code is:  {####}  ";
+        const messageVerification =
+            "Hello, Thank you for registering with your instance of Visual Asset Management System! Your verification code is: {####}";
+        const messageInvitation =
+            "Hello, You have been registered to join the Visual Asset Management System! Your username is {username} and your temporary password is: {####}";
         const userPool = new cognito.UserPool(this, "UserPool", {
             selfSignUpEnabled: false,
             autoVerify: { email: true },
@@ -95,10 +97,14 @@ export class CognitoWebNativeConstructStack extends Construct {
             },
             accountRecovery: cognito.AccountRecovery.PHONE_WITHOUT_MFA_AND_EMAIL,
             userVerification: {
-                emailSubject: "Verify your email with Visual Asset Management System!",
-                emailBody: message,
+                emailSubject: "Visual Asset Management System - Email Verification",
+                emailBody: messageVerification,
                 emailStyle: cognito.VerificationEmailStyle.CODE,
-                smsMessage: message,
+                smsMessage: messageVerification,
+            },
+            userInvitation: {
+                emailSubject: "Visual Asset Management System - Registration",
+                emailBody: messageInvitation,
             },
             passwordPolicy: {
                 minLength: 8,

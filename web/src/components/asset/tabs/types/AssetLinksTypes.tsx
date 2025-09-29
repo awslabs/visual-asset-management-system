@@ -31,7 +31,18 @@ export interface AssetLinkMetadata {
     assetLinkId: string;
     metadataKey: string;
     metadataValue: string;
-    metadataValueType: "XYZ" | "String";
+    metadataValueType:
+        | "xyz"
+        | "wxyz"
+        | "string"
+        | "number"
+        | "matrix4x4"
+        | "geopoint"
+        | "geojson"
+        | "lla"
+        | "json"
+        | "date"
+        | "boolean";
 }
 
 export interface XYZValue {

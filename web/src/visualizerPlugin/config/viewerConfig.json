@@ -22,7 +22,8 @@
                 ".stl",
                 ".obj",
                 ".off",
-                ".wrl"
+                ".wrl",
+                ".ply"
             ],
             "supportsMultiFile": true,
             "canFullscreen": true,

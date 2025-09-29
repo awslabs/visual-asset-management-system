@@ -241,6 +241,156 @@ class TestAssetLinksMetadataCreateCommand:
                 'abc123-def456-ghi789-012345', expected_data
             )
     
+    def test_create_with_wxyz_type(self, cli_runner, asset_links_metadata_command_mocks):
+        """Test metadata creation with WXYZ quaternion type."""
+        with asset_links_metadata_command_mocks as mocks:
+            mocks['api_client'].create_asset_link_metadata.return_value = {
+                'message': 'Asset link metadata created successfully'
+            }
+            
+            wxyz_value = '{"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0}'
+            
+            result = cli_runner.invoke(cli, [
+                'asset-links-metadata', 'create', 'abc123-def456-ghi789-012345',
+                '--key', 'rotation',
+                '--value', wxyz_value,
+                '--type', 'wxyz'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Asset link metadata created successfully!' in result.output
+            assert 'Key: rotation' in result.output
+            assert 'Type: wxyz' in result.output
+            
+            expected_data = {
+                'metadataKey': 'rotation',
+                'metadataValue': wxyz_value,
+                'metadataValueType': 'wxyz'
+            }
+            mocks['api_client'].create_asset_link_metadata.assert_called_once_with(
+                'abc123-def456-ghi789-012345', expected_data
+            )
+    
+    def test_create_with_matrix4x4_type(self, cli_runner, asset_links_metadata_command_mocks):
+        """Test metadata creation with MATRIX4X4 type."""
+        with asset_links_metadata_command_mocks as mocks:
+            mocks['api_client'].create_asset_link_metadata.return_value = {
+                'message': 'Asset link metadata created successfully'
+            }
+            
+            matrix_value = '[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]'
+            
+            result = cli_runner.invoke(cli, [
+                'asset-links-metadata', 'create', 'abc123-def456-ghi789-012345',
+                '--key', 'transform',
+                '--value', matrix_value,
+                '--type', 'matrix4x4'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Asset link metadata created successfully!' in result.output
+            assert 'Key: transform' in result.output
+            assert 'Type: matrix4x4' in result.output
+            
+            expected_data = {
+                'metadataKey': 'transform',
+                'metadataValue': matrix_value,
+                'metadataValueType': 'matrix4x4'
+            }
+            mocks['api_client'].create_asset_link_metadata.assert_called_once_with(
+                'abc123-def456-ghi789-012345', expected_data
+            )
+    
+    def test_create_with_geopoint_type(self, cli_runner, asset_links_metadata_command_mocks):
+        """Test metadata creation with GEOPOINT type."""
+        with asset_links_metadata_command_mocks as mocks:
+            mocks['api_client'].create_asset_link_metadata.return_value = {
+                'message': 'Asset link metadata created successfully'
+            }
+            
+            geopoint_value = '{"type": "Point", "coordinates": [-74.0060, 40.7128]}'
+            
+            result = cli_runner.invoke(cli, [
+                'asset-links-metadata', 'create', 'abc123-def456-ghi789-012345',
+                '--key', 'location',
+                '--value', geopoint_value,
+                '--type', 'geopoint'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Asset link metadata created successfully!' in result.output
+            assert 'Key: location' in result.output
+            assert 'Type: geopoint' in result.output
+            
+            expected_data = {
+                'metadataKey': 'location',
+                'metadataValue': geopoint_value,
+                'metadataValueType': 'geopoint'
+            }
+            mocks['api_client'].create_asset_link_metadata.assert_called_once_with(
+                'abc123-def456-ghi789-012345', expected_data
+            )
+    
+    def test_create_with_lla_type(self, cli_runner, asset_links_metadata_command_mocks):
+        """Test metadata creation with LLA coordinate type."""
+        with asset_links_metadata_command_mocks as mocks:
+            mocks['api_client'].create_asset_link_metadata.return_value = {
+                'message': 'Asset link metadata created successfully'
+            }
+            
+            lla_value = '{"lat": 40.7128, "long": -74.0060, "alt": 10.5}'
+            
+            result = cli_runner.invoke(cli, [
+                'asset-links-metadata', 'create', 'abc123-def456-ghi789-012345',
+                '--key', 'position',
+                '--value', lla_value,
+                '--type', 'lla'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Asset link metadata created successfully!' in result.output
+            assert 'Key: position' in result.output
+            assert 'Type: lla' in result.output
+            
+            expected_data = {
+                'metadataKey': 'position',
+                'metadataValue': lla_value,
+                'metadataValueType': 'lla'
+            }
+            mocks['api_client'].create_asset_link_metadata.assert_called_once_with(
+                'abc123-def456-ghi789-012345', expected_data
+            )
+    
+    def test_create_with_json_type(self, cli_runner, asset_links_metadata_command_mocks):
+        """Test metadata creation with JSON type."""
+        with asset_links_metadata_command_mocks as mocks:
+            mocks['api_client'].create_asset_link_metadata.return_value = {
+                'message': 'Asset link metadata created successfully'
+            }
+            
+            json_value = '{"enabled": true, "count": 5, "tags": ["test", "metadata"]}'
+            
+            result = cli_runner.invoke(cli, [
+                'asset-links-metadata', 'create', 'abc123-def456-ghi789-012345',
+                '--key', 'config',
+                '--value', json_value,
+                '--type', 'json'
+            ])
+            
+            assert result.exit_code == 0
+            assert '✓ Asset link metadata created successfully!' in result.output
+            assert 'Key: config' in result.output
+            assert 'Type: json' in result.output
+            
+            expected_data = {
+                'metadataKey': 'config',
+                'metadataValue': json_value,
+                'metadataValueType': 'json'
+            }
+            mocks['api_client'].create_asset_link_metadata.assert_called_once_with(
+                'abc123-def456-ghi789-012345', expected_data
+            )
+    
     def test_create_json_input(self, cli_runner, asset_links_metadata_command_mocks):
         """Test metadata creation with JSON input."""
         with asset_links_metadata_command_mocks as mocks:
@@ -881,13 +1031,19 @@ class TestAssetLinksMetadataValidationFunctions:
         """Test metadata type validation function."""
         from vamscli.commands.asset_links_metadata import validate_metadata_type
         
-        # Valid types
+        # Valid types - all 11 supported types
         assert validate_metadata_type('string') == 'string'
         assert validate_metadata_type('STRING') == 'string'  # Case insensitive
         assert validate_metadata_type('number') == 'number'
         assert validate_metadata_type('boolean') == 'boolean'
         assert validate_metadata_type('date') == 'date'
+        assert validate_metadata_type('json') == 'json'
         assert validate_metadata_type('xyz') == 'xyz'
+        assert validate_metadata_type('wxyz') == 'wxyz'
+        assert validate_metadata_type('matrix4x4') == 'matrix4x4'
+        assert validate_metadata_type('geopoint') == 'geopoint'
+        assert validate_metadata_type('geojson') == 'geojson'
+        assert validate_metadata_type('lla') == 'lla'
         
         # Invalid type
         with pytest.raises(click.BadParameter):
@@ -924,6 +1080,14 @@ class TestAssetLinksMetadataValidationFunctions:
         with pytest.raises(click.BadParameter):
             validate_metadata_value('not-a-date', 'date')
         
+        # Valid JSON
+        json_value = '{"key": "value", "number": 42}'
+        assert validate_metadata_value(json_value, 'json') == json_value
+        
+        # Invalid JSON
+        with pytest.raises(click.BadParameter):
+            validate_metadata_value('invalid json', 'json')
+        
         # Valid XYZ
         xyz_value = '{"x": 1.5, "y": 2.0, "z": 0.5}'
         assert validate_metadata_value(xyz_value, 'xyz') == xyz_value
@@ -939,6 +1103,52 @@ class TestAssetLinksMetadataValidationFunctions:
         # Invalid XYZ - non-numeric coordinates
         with pytest.raises(click.BadParameter):
             validate_metadata_value('{"x": "not_number", "y": 2.0, "z": 0.5}', 'xyz')
+        
+        # Valid WXYZ
+        wxyz_value = '{"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0}'
+        assert validate_metadata_value(wxyz_value, 'wxyz') == wxyz_value
+        
+        # Invalid WXYZ - missing w coordinate
+        with pytest.raises(click.BadParameter):
+            validate_metadata_value('{"x": 0.0, "y": 0.0, "z": 0.0}', 'wxyz')
+        
+        # Valid MATRIX4X4
+        matrix_value = '[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]'
+        assert validate_metadata_value(matrix_value, 'matrix4x4') == matrix_value
+        
+        # Invalid MATRIX4X4 - wrong dimensions
+        with pytest.raises(click.BadParameter):
+            validate_metadata_value('[[1,0,0],[0,1,0],[0,0,1]]', 'matrix4x4')
+        
+        # Valid GEOPOINT
+        geopoint_value = '{"type": "Point", "coordinates": [-74.0060, 40.7128]}'
+        assert validate_metadata_value(geopoint_value, 'geopoint') == geopoint_value
+        
+        # Invalid GEOPOINT - wrong type
+        with pytest.raises(click.BadParameter):
+            validate_metadata_value('{"type": "Polygon", "coordinates": []}', 'geopoint')
+        
+        # Note: Coordinate range validation is handled by geojson library, not our validation
+        # The geojson library may or may not reject out-of-range coordinates depending on implementation
+        
+        # Valid GEOJSON
+        geojson_value = '{"type": "Polygon", "coordinates": [[[-74.1, 40.7], [-74.0, 40.7], [-74.0, 40.8], [-74.1, 40.8], [-74.1, 40.7]]]}'
+        assert validate_metadata_value(geojson_value, 'geojson') == geojson_value
+        
+        # Note: GeoJSON validation is handled entirely by the geojson library
+        # The library determines what constitutes valid/invalid GeoJSON
+        
+        # Valid LLA
+        lla_value = '{"lat": 40.7128, "long": -74.0060, "alt": 10.5}'
+        assert validate_metadata_value(lla_value, 'lla') == lla_value
+        
+        # Invalid LLA - latitude out of range
+        with pytest.raises(click.BadParameter):
+            validate_metadata_value('{"lat": 100, "long": -74.0060, "alt": 10.5}', 'lla')
+        
+        # Invalid LLA - missing altitude
+        with pytest.raises(click.BadParameter):
+            validate_metadata_value('{"lat": 40.7128, "long": -74.0060}', 'lla')
     
     def test_validate_number_type_edge_cases(self, cli_runner, asset_links_metadata_command_mocks):
         """Test create command with invalid number value."""
