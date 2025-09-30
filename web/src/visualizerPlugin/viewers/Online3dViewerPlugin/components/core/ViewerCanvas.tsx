@@ -11,6 +11,7 @@ export const ViewerCanvas: React.FC = () => {
     const viewerRef = useRef<any>(null);
     const modelLoadedRef = useRef<boolean>(false);
     const ovLibRef = useRef<any>(null);
+    const pendingFilesRef = useRef<string[]>([]); // Store files from container
     const { state, settings, cameraSettings, updateState, selection, setSelection } =
         useViewerContext();
 
@@ -56,15 +57,21 @@ export const ViewerCanvas: React.FC = () => {
                     console.log("Model loaded successfully in EmbeddedViewer");
                     const model = viewer.GetModel();
 
-                    // Get current state to preserve file information
-                    const currentModel = state.model;
+                    // Use files from ref (set by container) instead of state
+                    const preservedFiles = pendingFilesRef.current.length > 0 
+                        ? pendingFilesRef.current 
+                        : state.model?.files || state.model?.fileNames || [];
+
+                    console.log("ViewerCanvas onModelLoaded - preserving files:", preservedFiles);
+                    console.log("Files from ref:", pendingFilesRef.current);
+                    console.log("Files from state:", state.model?.files);
 
                     updateState({
                         model: {
                             loaded: true,
-                            files: currentModel?.files || ["Model"], // Keep existing file names from container
-                            urls: currentModel?.urls || [],
-                            fileNames: currentModel?.fileNames || ["Model"],
+                            files: preservedFiles, // Preserve actual file names from container
+                            urls: state.model?.urls || [],
+                            fileNames: preservedFiles, // Use same as files for consistency
                             ovModel: model, // Store the actual OV model
                             // Add methods that panels expect
                             MaterialCount: () => {
@@ -108,6 +115,51 @@ export const ViewerCanvas: React.FC = () => {
 
             viewerRef.current = viewer;
 
+            // Set up click event handler for mesh selection on the underlying viewer
+            const underlyingViewer = viewer.GetViewer();
+            if (underlyingViewer && (underlyingViewer as any).SetMouseClickHandler) {
+                (underlyingViewer as any).SetMouseClickHandler((button: number, mouseCoordinates: any) => {
+                    if (button === 1) { // Left click
+                        // Use GetMeshUserDataUnderMouse with IntersectionMode like the reference implementation
+                        const IntersectionMode = { MeshOnly: 1, MeshAndLine: 2 };
+                        const meshUserData = (underlyingViewer as any).GetMeshUserDataUnderMouse 
+                            ? (underlyingViewer as any).GetMeshUserDataUnderMouse(IntersectionMode.MeshAndLine, mouseCoordinates)
+                            : null;
+                        
+                        console.log("Viewer clicked, mesh user data:", meshUserData);
+                        
+                        if (meshUserData !== null && meshUserData !== undefined) {
+                            // Extract the mesh instance ID from the user data
+                            const meshInstanceId = meshUserData.originalMeshInstance?.id;
+                            console.log("Mesh clicked, mesh instance ID:", meshInstanceId);
+                            
+                            if (meshInstanceId) {
+                                // Convert MeshInstanceId to string format for UI compatibility
+                                // Check if it has a meshIndex property
+                                let selectionId = meshInstanceId;
+                                if (meshInstanceId.meshIndex !== undefined) {
+                                    selectionId = `mesh_${meshInstanceId.meshIndex}`;
+                                    console.log("Converted mesh ID to string format:", selectionId);
+                                }
+                                
+                                setSelection({
+                                    type: "Mesh",
+                                    meshInstanceId: selectionId,
+                                    materialIndex: undefined,
+                                });
+                            }
+                        } else {
+                            // Clear selection when clicking on empty space
+                            setSelection({
+                                type: null,
+                                meshInstanceId: undefined,
+                                materialIndex: undefined,
+                            });
+                        }
+                    }
+                });
+            }
+
             // Create a comprehensive viewer object that exposes all necessary methods
             const viewerWrapper = {
                 embeddedViewer: viewer,
@@ -133,7 +185,18 @@ export const ViewerCanvas: React.FC = () => {
                 viewerInitialized: false,
             });
         }
-    }, [state.viewerInitialized, settings, updateState]);
+    }, [state.viewerInitialized, settings, updateState, state.model]);
+
+    // Watch for file updates from container and store in ref
+    useEffect(() => {
+        if (state.model?.files && state.model.files.length > 0) {
+            console.log("Storing files in ref:", state.model.files);
+            pendingFilesRef.current = state.model.files;
+        } else if (state.model?.fileNames && state.model.fileNames.length > 0) {
+            console.log("Storing fileNames in ref:", state.model.fileNames);
+            pendingFilesRef.current = state.model.fileNames;
+        }
+    }, [state.model?.files, state.model?.fileNames]);
 
     // Load model into viewer - this is called from the container
     const loadModelIntoViewer = useCallback(

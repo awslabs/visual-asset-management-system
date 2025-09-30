@@ -13,29 +13,6 @@ export const Toolbar: React.FC = () => {
 
     const [measureToolActive, setMeasureToolActive] = useState(false);
 
-    const handleOpenFile = () => {
-        // Create a file input element
-        const input = document.createElement("input");
-        input.type = "file";
-        input.multiple = true;
-        input.accept = ".obj,.stl,.ply,.gltf,.glb,.3ds,.dae,.fbx,.ifc,.off,.3dm,.wrl,.3mf,.amf";
-        input.onchange = (e) => {
-            const files = (e.target as HTMLInputElement).files;
-            if (files && files.length > 0) {
-                // This would trigger model loading
-                console.log("Files selected:", files);
-            }
-        };
-        input.click();
-    };
-
-    const handleOpenUrl = () => {
-        const url = prompt("Enter model URL:");
-        if (url) {
-            console.log("Loading from URL:", url);
-            // This would trigger URL loading
-        }
-    };
 
     const getUnderlyingViewer = () => {
         if (state.viewer) {
@@ -136,24 +113,7 @@ export const Toolbar: React.FC = () => {
     return (
         <>
             <div className="ov-toolbar">
-                {/* File operations */}
-                <div
-                    className="ov_toolbar_button"
-                    onClick={handleOpenFile}
-                    title="Open from your device"
-                >
-                    <div className="ov_svg_icon">
-                        <i className="icon-open"></i>
-                    </div>
-                </div>
-
-                <div className="ov_toolbar_button" onClick={handleOpenUrl} title="Open from URL">
-                    <div className="ov_svg_icon">
-                        <i className="icon-open_url"></i>
-                    </div>
-                </div>
-
-                <div className="ov_toolbar_separator only_on_model"></div>
+                {/* File operations removed - no longer needed */}
 
                 {/* Model operations - only show when model is loaded */}
                 <div

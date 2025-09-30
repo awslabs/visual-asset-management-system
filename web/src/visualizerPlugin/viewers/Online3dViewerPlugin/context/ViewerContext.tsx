@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { createContext, useContext, useReducer, useCallback, ReactNode } from "react";
+import React, { createContext, useContext, useReducer, useCallback, useEffect, ReactNode } from "react";
 import {
     ViewerContextType,
     ViewerState,
@@ -139,44 +139,72 @@ export const ViewerProvider: React.FC<ViewerProviderProps> = ({ children }) => {
             // Trigger viewer updates based on selection
             if (state.viewerState.viewer && state.viewerState.model) {
                 try {
-                    const viewer = state.viewerState.viewer.GetViewer
-                        ? state.viewerState.viewer.GetViewer()
-                        : state.viewerState.viewer;
+                    // Get the underlying viewer - try multiple approaches
+                    let viewer = null;
+                    if (state.viewerState.viewer.GetViewer) {
+                        viewer = state.viewerState.viewer.GetViewer();
+                    } else if (state.viewerState.viewer.viewer) {
+                        viewer = state.viewerState.viewer.viewer;
+                    } else if (state.viewerState.viewer.embeddedViewer) {
+                        viewer = state.viewerState.viewer.embeddedViewer;
+                    } else {
+                        viewer = state.viewerState.viewer;
+                    }
 
                     if (selection.type === "Material" && selection.materialIndex !== undefined) {
                         // Update mesh highlighting for material selection
-                        if (viewer.SetMeshesHighlight) {
+                        if (viewer && viewer.SetMeshesHighlight) {
                             const highlightColor = { r: 142, g: 201, b: 240 }; // Light blue highlight
                             viewer.SetMeshesHighlight(highlightColor, (meshUserData: any) => {
-                                return (
-                                    meshUserData.originalMaterials?.indexOf(
-                                        selection.materialIndex
-                                    ) !== -1
-                                );
+                                // Check if mesh uses this material
+                                if (meshUserData.originalMaterials) {
+                                    return meshUserData.originalMaterials.indexOf(selection.materialIndex) !== -1;
+                                }
+                                // Fallback - check material property
+                                if (meshUserData.material !== undefined) {
+                                    return meshUserData.material === selection.materialIndex;
+                                }
+                                return false;
                             });
                             viewer.Render();
+                            console.log("Material selection highlighting applied:", selection.materialIndex);
                         }
                     } else if (selection.type === "Mesh" && selection.meshInstanceId) {
                         // Update mesh highlighting for mesh selection
-                        if (viewer.SetMeshesHighlight) {
+                        if (viewer && viewer.SetMeshesHighlight) {
                             const highlightColor = { r: 142, g: 201, b: 240 }; // Light blue highlight
                             viewer.SetMeshesHighlight(highlightColor, (meshUserData: any) => {
-                                // Simple string matching for mesh ID
-                                const meshIdStr = selection.meshInstanceId?.toString() || "";
-                                const meshUserDataIdStr =
-                                    meshUserData.originalMeshInstance?.id?.toString() || "";
-                                return (
-                                    meshIdStr === meshUserDataIdStr ||
-                                    meshUserDataIdStr.includes(meshIdStr)
-                                );
+                                // Try multiple ways to match mesh ID
+                                const targetId = selection.meshInstanceId;
+                                
+                                // Direct ID comparison
+                                if (meshUserData.originalMeshInstance?.id === targetId) {
+                                    return true;
+                                }
+                                
+                                // String comparison
+                                const meshIdStr = targetId?.toString() || "";
+                                const meshUserDataIdStr = meshUserData.originalMeshInstance?.id?.toString() || "";
+                                if (meshIdStr && meshUserDataIdStr && meshIdStr === meshUserDataIdStr) {
+                                    return true;
+                                }
+                                
+                                // Check if mesh user data itself has the ID
+                                if (meshUserData.id === targetId) {
+                                    return true;
+                                }
+                                
+                                return false;
                             });
                             viewer.Render();
+                            console.log("Mesh selection highlighting applied:", selection.meshInstanceId);
                         }
                     } else {
                         // Clear highlighting
-                        if (viewer.SetMeshesHighlight) {
+                        if (viewer && viewer.SetMeshesHighlight) {
                             viewer.SetMeshesHighlight(null, () => false);
                             viewer.Render();
+                            console.log("Selection highlighting cleared");
                         }
                     }
                 } catch (error) {
@@ -205,6 +233,124 @@ export const ViewerProvider: React.FC<ViewerProviderProps> = ({ children }) => {
     const setSelection = useCallback((selection: Selection) => {
         dispatch({ type: "SET_SELECTION", payload: selection });
     }, []);
+
+    // Handle selection highlighting in a separate effect
+    useEffect(() => {
+        if (state.viewerState.viewer && state.viewerState.model && state.selection.type) {
+            try {
+                // Get the underlying viewer
+                let viewer = null;
+                if (state.viewerState.viewer.GetViewer) {
+                    viewer = state.viewerState.viewer.GetViewer();
+                } else if (state.viewerState.viewer.viewer) {
+                    viewer = state.viewerState.viewer.viewer;
+                } else {
+                    viewer = state.viewerState.viewer;
+                }
+
+                if (state.selection.type === "Material" && state.selection.materialIndex !== undefined) {
+                    // Update mesh highlighting for material selection
+                    if (viewer && (viewer as any).SetMeshesHighlight) {
+                        const highlightColor = { r: 142, g: 201, b: 240 };
+                        (viewer as any).SetMeshesHighlight(highlightColor, (meshUserData: any) => {
+                            if (meshUserData.originalMaterials) {
+                                return meshUserData.originalMaterials.indexOf(state.selection.materialIndex) !== -1;
+                            }
+                            if (meshUserData.material !== undefined) {
+                                return meshUserData.material === state.selection.materialIndex;
+                            }
+                            return false;
+                        });
+                        (viewer as any).Render();
+                        console.log("Material selection highlighting applied:", state.selection.materialIndex);
+                    }
+                } else if (state.selection.type === "Mesh" && state.selection.meshInstanceId) {
+                    // Update mesh highlighting for mesh selection
+                    if (viewer && (viewer as any).SetMeshesHighlight) {
+                        const highlightColor = { r: 142, g: 201, b: 240 };
+                        console.log("Attempting to highlight mesh with ID:", state.selection.meshInstanceId);
+                        
+                        let matchFound = false;
+                        (viewer as any).SetMeshesHighlight(highlightColor, (meshUserData: any) => {
+                            const targetId = state.selection.meshInstanceId;
+                            
+                            // Log for debugging (only first mesh)
+                            if (!matchFound) {
+                                console.log("Checking mesh:", {
+                                    targetId,
+                                    targetIdType: typeof targetId,
+                                    meshUserData,
+                                    originalMeshInstanceId: meshUserData.originalMeshInstance?.id,
+                                    meshUserDataId: meshUserData.id
+                                });
+                            }
+                            
+                            // If targetId is a string like "mesh_0", extract the index and compare with mesh index
+                            if (typeof targetId === 'string' && targetId.startsWith('mesh_')) {
+                                const meshIndex = parseInt(targetId.replace('mesh_', ''));
+                                
+                                // Check if this mesh's index matches
+                                if (meshUserData.originalMeshInstance?.id?.meshIndex === meshIndex) {
+                                    matchFound = true;
+                                    console.log("Match found via meshIndex comparison");
+                                    return true;
+                                }
+                                
+                                // Try comparing with the mesh index directly
+                                if (meshUserData.meshIndex === meshIndex) {
+                                    matchFound = true;
+                                    console.log("Match found via meshUserData.meshIndex");
+                                    return true;
+                                }
+                            }
+                            
+                            // If targetId is a MeshInstanceId object, use IsEqual method
+                            if (targetId && typeof targetId === 'object' && (targetId as any).IsEqual) {
+                                if (meshUserData.originalMeshInstance?.id && (targetId as any).IsEqual(meshUserData.originalMeshInstance.id)) {
+                                    matchFound = true;
+                                    console.log("Match found via MeshInstanceId.IsEqual");
+                                    return true;
+                                }
+                            }
+                            
+                            // Direct object comparison
+                            if (meshUserData.originalMeshInstance?.id === targetId) {
+                                matchFound = true;
+                                console.log("Match found via direct object comparison");
+                                return true;
+                            }
+                            
+                            return false;
+                        });
+                        (viewer as any).Render();
+                        console.log("Mesh selection highlighting applied. Match found:", matchFound);
+                    }
+                }
+            } catch (error) {
+                console.warn("Error updating viewer selection:", error);
+            }
+        } else if (state.viewerState.viewer && !state.selection.type) {
+            // Clear highlighting when selection is cleared
+            try {
+                let viewer = null;
+                if (state.viewerState.viewer.GetViewer) {
+                    viewer = state.viewerState.viewer.GetViewer();
+                } else if (state.viewerState.viewer.viewer) {
+                    viewer = state.viewerState.viewer.viewer;
+                } else {
+                    viewer = state.viewerState.viewer;
+                }
+
+                if (viewer && (viewer as any).SetMeshesHighlight) {
+                    (viewer as any).SetMeshesHighlight(null, () => false);
+                    (viewer as any).Render();
+                    console.log("Selection highlighting cleared");
+                }
+            } catch (error) {
+                console.warn("Error clearing viewer selection:", error);
+            }
+        }
+    }, [state.selection, state.viewerState.viewer, state.viewerState.model]);
 
     // Model loading function
     const loadModel = useCallback(

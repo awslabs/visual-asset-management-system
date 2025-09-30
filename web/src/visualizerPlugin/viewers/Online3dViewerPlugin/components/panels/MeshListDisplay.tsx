@@ -158,10 +158,20 @@ export const MeshListDisplay: React.FC<MeshListDisplayProps> = ({
     };
 
     const handleMeshSelect = (meshId: string) => {
-        setSelection({
-            type: "Mesh",
-            meshInstanceId: meshId,
-        });
+        // Toggle selection if clicking on already selected mesh
+        if (selection?.type === "Mesh" && selection?.meshInstanceId === meshId) {
+            setSelection({
+                type: null,
+                materialIndex: undefined,
+                meshInstanceId: undefined,
+            });
+        } else {
+            setSelection({
+                type: "Mesh",
+                meshInstanceId: meshId,
+                materialIndex: undefined,
+            });
+        }
     };
 
     return (
@@ -169,7 +179,11 @@ export const MeshListDisplay: React.FC<MeshListDisplayProps> = ({
             {meshes.map((mesh) => (
                 <div
                     key={mesh.id}
-                    className="ov-mesh-item"
+                    className={`ov-mesh-item ${
+                        selection?.type === "Mesh" && selection?.meshInstanceId === mesh.id
+                            ? "selected"
+                            : ""
+                    }`}
                     onClick={() => handleMeshSelect(mesh.id)}
                 >
                     <div className="ov-mesh-controls">

@@ -9,10 +9,9 @@ import { MeshListDisplay } from "../panels/MeshListDisplay";
 
 interface NavigatorFilesProps {
     model: any;
-    onFileBrowseClick: () => void;
 }
 
-const NavigatorFiles: React.FC<NavigatorFilesProps> = ({ model, onFileBrowseClick }) => {
+const NavigatorFiles: React.FC<NavigatorFilesProps> = ({ model }) => {
     const { state } = useViewerContext();
     const [fileNames, setFileNames] = useState<string[]>([]);
 
@@ -21,40 +20,32 @@ const NavigatorFiles: React.FC<NavigatorFilesProps> = ({ model, onFileBrowseClic
         if (state.model && state.model.loaded) {
             const names: string[] = [];
 
-            // Try multiple sources for file names
-            const fileSources = [state.model.files, state.model.fileNames, state.model.urls];
-
-            for (const source of fileSources) {
-                if (source && Array.isArray(source) && source.length > 0) {
-                    for (const file of source) {
-                        if (typeof file === "string") {
-                            // If it's a URL, extract filename
-                            if (file.includes("/")) {
-                                const urlParts = file.split("/");
-                                const fileName = urlParts[urlParts.length - 1];
-                                // Remove query parameters if any
-                                const cleanFileName = fileName.split("?")[0];
-                                names.push(cleanFileName || file);
-                            } else {
-                                // It's already a filename
-                                names.push(file);
-                            }
-                        } else if (file && typeof file === "object" && file.name) {
-                            // File object
-                            names.push(file.name);
+            // Use fileNames first if available, then fall back to files
+            const sourceFiles = state.model.fileNames || state.model.files || [];
+            
+            console.log("NavigatorFiles: sourceFiles:", sourceFiles);
+            
+            if (Array.isArray(sourceFiles) && sourceFiles.length > 0) {
+                for (const file of sourceFiles) {
+                    console.log("NavigatorFiles: processing file:", file, "type:", typeof file);
+                    if (typeof file === "string") {
+                        // Extract filename from path or URL
+                        const fileName = file.split("/").pop()?.split("?")[0] || file;
+                        console.log("NavigatorFiles: extracted fileName:", fileName);
+                        if (fileName && fileName.trim() !== "") {
+                            names.push(fileName);
                         }
+                    } else if (file && typeof file === "object" && file.name) {
+                        names.push(file.name);
                     }
-                    break; // Use the first non-empty source
                 }
             }
 
-            // Remove duplicates and empty names
-            const uniqueNames = Array.from(new Set(names)).filter(
-                (name) => name && name.trim() !== ""
-            );
+            // Remove duplicates
+            const uniqueNames = Array.from(new Set(names));
             setFileNames(uniqueNames);
 
-            console.log("NavigatorFiles: Extracted file names:", uniqueNames);
+            console.log("NavigatorFiles: Final file names:", uniqueNames);
         } else {
             setFileNames([]);
         }
@@ -76,9 +67,6 @@ const NavigatorFiles: React.FC<NavigatorFilesProps> = ({ model, onFileBrowseClic
             ) : (
                 <div className="ov-empty-state">
                     <p>No files loaded</p>
-                    <div className="ov_button" onClick={onFileBrowseClick}>
-                        Browse Files
-                    </div>
                 </div>
             )}
         </div>
@@ -180,7 +168,7 @@ const NavigatorMaterials: React.FC<NavigatorMaterialsProps> = ({
                             <div
                                 key={material.index}
                                 className={`ov-material-item ${
-                                    selection?.type === "material" &&
+                                    selection?.type === "Material" &&
                                     selection?.materialIndex === material.index
                                         ? "selected"
                                         : ""
@@ -225,7 +213,11 @@ const NavigatorMaterials: React.FC<NavigatorMaterialsProps> = ({
     );
 };
 
-export const LeftPanel: React.FC = () => {
+interface LeftPanelProps {
+    contentWidth?: number;
+}
+
+export const LeftPanel: React.FC<LeftPanelProps> = ({ contentWidth = 280 }) => {
     const { state, selection, setSelection } = useViewerContext();
     const [activeTab, setActiveTab] = useState<"files" | "materials" | "meshes">("meshes");
     const [isVisible, setIsVisible] = useState(true);
@@ -247,30 +239,44 @@ export const LeftPanel: React.FC = () => {
 
     const handleMaterialSelected = useCallback(
         (materialIndex: number) => {
-            setSelection({
-                type: "Material",
-                materialIndex: materialIndex,
-                meshInstanceId: undefined,
-            });
+            // Toggle selection if clicking on already selected material
+            if (selection?.type === "Material" && selection?.materialIndex === materialIndex) {
+                setSelection({
+                    type: null,
+                    materialIndex: undefined,
+                    meshInstanceId: undefined,
+                });
+            } else {
+                setSelection({
+                    type: "Material",
+                    materialIndex: materialIndex,
+                    meshInstanceId: undefined,
+                });
+            }
         },
-        [setSelection]
+        [setSelection, selection]
     );
 
     const handleMeshSelected = useCallback(
         (meshId: any) => {
-            setSelection({
-                type: "Mesh",
-                materialIndex: undefined,
-                meshInstanceId: meshId,
-            });
+            // Toggle selection if clicking on already selected mesh
+            if (selection?.type === "Mesh" && selection?.meshInstanceId === meshId) {
+                setSelection({
+                    type: null,
+                    materialIndex: undefined,
+                    meshInstanceId: undefined,
+                });
+            } else {
+                setSelection({
+                    type: "Mesh",
+                    materialIndex: undefined,
+                    meshInstanceId: meshId,
+                });
+            }
         },
-        [setSelection]
+        [setSelection, selection]
     );
 
-    const handleFileBrowseClick = useCallback(() => {
-        // This would trigger file browser - for now just log
-        console.log("File browse clicked");
-    }, []);
 
     if (!isVisible) {
         return (
@@ -326,7 +332,7 @@ export const LeftPanel: React.FC = () => {
 
             <div className="ov_panel_set_content">
                 {activeTab === "files" && (
-                    <NavigatorFiles model={state.model} onFileBrowseClick={handleFileBrowseClick} />
+                    <NavigatorFiles model={state.model} />
                 )}
 
                 {activeTab === "materials" && (
