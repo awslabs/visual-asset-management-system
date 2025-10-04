@@ -21,6 +21,12 @@ import {
 import "./AssetLinkMetadata.css";
 import { AssetLinkMetadata as AssetLinkMetadataType, TreeNodeItem } from "../types/AssetLinksTypes";
 import { XYZInput } from "./XYZInput";
+import { WXYZInput } from "./WXYZInput";
+import { Matrix4x4Input } from "./Matrix4x4Input";
+import { LLAInput } from "./LLAInput";
+import { JSONTextInput } from "./JSONTextInput";
+import { DateInput } from "./DateInput";
+import { BooleanInput } from "./BooleanInput";
 import {
     fetchAssetLinkMetadata,
     createAssetLinkMetadata,
@@ -39,12 +45,30 @@ interface AssetLinkMetadataProps {
 interface MetadataRow extends AssetLinkMetadataType {
     isEditing: boolean;
     editValue: string;
-    editType: "XYZ" | "String";
+    editType:
+        | "xyz"
+        | "wxyz"
+        | "string"
+        | "number"
+        | "matrix4x4"
+        | "geopoint"
+        | "geojson"
+        | "lla"
+        | "json"
+        | "date"
+        | "boolean";
     hasChanges: boolean;
     isNew: boolean;
 }
 
-const HARDCODED_KEYS = ["Translation", "Rotation", "Scale"];
+const HARDCODED_FIELDS = [
+    { key: "Translation", defaultType: "xyz" as const },
+    { key: "Rotation", defaultType: "wxyz" as const },
+    { key: "Scale", defaultType: "xyz" as const },
+    { key: "Matrix", defaultType: "matrix4x4" as const },
+];
+
+const HARDCODED_KEYS = HARDCODED_FIELDS.map((field) => field.key);
 
 export const AssetLinkMetadata: React.FC<AssetLinkMetadataProps> = ({
     assetLinkId,
@@ -77,27 +101,30 @@ export const AssetLinkMetadata: React.FC<AssetLinkMetadataProps> = ({
             const rows: MetadataRow[] = [];
 
             // Add hardcoded rows first
-            HARDCODED_KEYS.forEach((key) => {
-                const existing = existingMetadata.find((m) => m.metadataKey === key);
-                console.log(`Processing hardcoded key ${key}:`, existing);
+            HARDCODED_FIELDS.forEach((field) => {
+                const existing = existingMetadata.find((m) => m.metadataKey === field.key);
+                console.log(`Processing hardcoded key ${field.key}:`, existing);
 
                 const hasValue =
                     existing && existing.metadataValue && existing.metadataValue.trim() !== "";
 
+                const defaultType = existing?.metadataValueType || field.defaultType;
+
                 rows.push({
                     assetLinkId,
-                    metadataKey: key,
+                    metadataKey: field.key,
                     metadataValue: existing?.metadataValue || "",
-                    metadataValueType: "XYZ",
+                    metadataValueType: defaultType,
                     isEditing: false,
                     editValue: existing?.metadataValue || "",
-                    editType: "XYZ",
+                    editType: defaultType,
                     hasChanges: false,
                     isNew: !hasValue, // Only consider it new if there's no value or empty value
                 });
 
-                console.log(`Created row for ${key}:`, {
+                console.log(`Created row for ${field.key}:`, {
                     metadataValue: existing?.metadataValue || "",
+                    defaultType,
                     isNew: !hasValue,
                     hasValue,
                 });
@@ -331,14 +358,28 @@ export const AssetLinkMetadata: React.FC<AssetLinkMetadataProps> = ({
         );
     };
 
-    const handleTypeChange = (index: number, type: "XYZ" | "String") => {
+    const handleTypeChange = (
+        index: number,
+        type:
+            | "xyz"
+            | "wxyz"
+            | "string"
+            | "number"
+            | "matrix4x4"
+            | "geopoint"
+            | "geojson"
+            | "lla"
+            | "json"
+            | "date"
+            | "boolean"
+    ) => {
         setMetadata((prev) =>
             prev.map((row, i) =>
                 i === index
                     ? {
                           ...row,
                           editType: type,
-                          editValue: "", // Fix Issue 2: Use empty string for both XYZ and String types
+                          editValue: "", // Clear value when changing type
                           hasChanges: true,
                       }
                     : row
@@ -350,8 +391,8 @@ export const AssetLinkMetadata: React.FC<AssetLinkMetadataProps> = ({
         const row = metadata[index];
         if (!row.hasChanges && !row.isNew) return;
 
-        // Validate XYZ values
-        if (row.editType === "XYZ" && row.editValue) {
+        // Validate xyz values
+        if (row.editType === "xyz" && row.editValue) {
             try {
                 JSON.parse(row.editValue);
             } catch {
@@ -600,10 +641,10 @@ export const AssetLinkMetadata: React.FC<AssetLinkMetadataProps> = ({
                 assetLinkId,
                 metadataKey: "",
                 metadataValue: "",
-                metadataValueType: "String",
+                metadataValueType: "string",
                 isEditing: true,
                 editValue: "",
-                editType: "String",
+                editType: "string",
                 hasChanges: true,
                 isNew: true,
             },
@@ -619,25 +660,113 @@ export const AssetLinkMetadata: React.FC<AssetLinkMetadataProps> = ({
     };
 
     const renderValueInput = (row: MetadataRow, index: number) => {
-        if (row.editType === "XYZ") {
-            return (
-                <XYZInput
-                    value={row.editValue}
-                    onChange={(value) => handleValueChange(index, value)}
-                    disabled={loading}
-                    ariaLabel={`${row.metadataKey} XYZ coordinates`}
-                />
-            );
-        } else {
-            return (
-                <Input
-                    value={row.editValue}
-                    onChange={({ detail }) => handleValueChange(index, detail.value)}
-                    placeholder="Enter value"
-                    disabled={loading}
-                    ariaLabel={`${row.metadataKey} value`}
-                />
-            );
+        switch (row.editType) {
+            case "xyz":
+                return (
+                    <XYZInput
+                        value={row.editValue}
+                        onChange={(value) => handleValueChange(index, value)}
+                        disabled={loading}
+                        ariaLabel={`${row.metadataKey} XYZ coordinates`}
+                    />
+                );
+            case "wxyz":
+                return (
+                    <WXYZInput
+                        value={row.editValue}
+                        onChange={(value) => handleValueChange(index, value)}
+                        disabled={loading}
+                        ariaLabel={`${row.metadataKey} WXYZ quaternion`}
+                    />
+                );
+            case "matrix4x4":
+                return (
+                    <Matrix4x4Input
+                        value={row.editValue}
+                        onChange={(value) => handleValueChange(index, value)}
+                        disabled={loading}
+                        ariaLabel={`${row.metadataKey} 4x4 matrix`}
+                    />
+                );
+            case "lla":
+                return (
+                    <LLAInput
+                        value={row.editValue}
+                        onChange={(value) => handleValueChange(index, value)}
+                        disabled={loading}
+                        ariaLabel={`${row.metadataKey} LLA coordinates`}
+                    />
+                );
+            case "geopoint":
+                return (
+                    <JSONTextInput
+                        type="GEOPOINT"
+                        value={row.editValue}
+                        onChange={(value) => handleValueChange(index, value)}
+                        disabled={loading}
+                        ariaLabel={`${row.metadataKey} GeoJSON Point`}
+                    />
+                );
+            case "geojson":
+                return (
+                    <JSONTextInput
+                        type="GEOJSON"
+                        value={row.editValue}
+                        onChange={(value) => handleValueChange(index, value)}
+                        disabled={loading}
+                        ariaLabel={`${row.metadataKey} GeoJSON object`}
+                    />
+                );
+            case "json":
+                return (
+                    <JSONTextInput
+                        type="JSON"
+                        value={row.editValue}
+                        onChange={(value) => handleValueChange(index, value)}
+                        disabled={loading}
+                        ariaLabel={`${row.metadataKey} JSON object`}
+                    />
+                );
+            case "date":
+                return (
+                    <DateInput
+                        value={row.editValue}
+                        onChange={(value) => handleValueChange(index, value)}
+                        disabled={loading}
+                        ariaLabel={`${row.metadataKey} date`}
+                    />
+                );
+            case "boolean":
+                return (
+                    <BooleanInput
+                        value={row.editValue}
+                        onChange={(value) => handleValueChange(index, value)}
+                        disabled={loading}
+                        ariaLabel={`${row.metadataKey} boolean value`}
+                    />
+                );
+            case "number":
+                return (
+                    <Input
+                        value={row.editValue}
+                        onChange={({ detail }) => handleValueChange(index, detail.value)}
+                        placeholder="Enter number"
+                        disabled={loading}
+                        type="number"
+                        step="any"
+                        ariaLabel={`${row.metadataKey} number value`}
+                    />
+                );
+            default:
+                return (
+                    <Input
+                        value={row.editValue}
+                        onChange={({ detail }) => handleValueChange(index, detail.value)}
+                        placeholder="Enter value"
+                        disabled={loading}
+                        ariaLabel={`${row.metadataKey} value`}
+                    />
+                );
         }
     };
 
@@ -685,12 +814,32 @@ export const AssetLinkMetadata: React.FC<AssetLinkMetadataProps> = ({
                             onChange={({ detail }) =>
                                 handleTypeChange(
                                     index,
-                                    detail.selectedOption.value as "XYZ" | "String"
+                                    detail.selectedOption.value as
+                                        | "xyz"
+                                        | "wxyz"
+                                        | "string"
+                                        | "number"
+                                        | "matrix4x4"
+                                        | "geopoint"
+                                        | "geojson"
+                                        | "lla"
+                                        | "json"
+                                        | "date"
+                                        | "boolean"
                                 )
                             }
                             options={[
-                                { label: "String", value: "String" },
-                                { label: "XYZ", value: "XYZ" },
+                                { label: "String", value: "string" },
+                                { label: "Number", value: "number" },
+                                { label: "Date", value: "date" },
+                                { label: "Boolean", value: "boolean" },
+                                { label: "XYZ", value: "xyz" },
+                                { label: "WXYZ", value: "wxyz" },
+                                { label: "Matrix 4x4", value: "matrix4x4" },
+                                { label: "LLA", value: "lla" },
+                                { label: "GeoPoint", value: "geopoint" },
+                                { label: "GeoJSON", value: "geojson" },
+                                { label: "JSON", value: "json" },
                             ]}
                             disabled={loading}
                             ariaLabel="Metadata type"
@@ -710,15 +859,61 @@ export const AssetLinkMetadata: React.FC<AssetLinkMetadataProps> = ({
                 if (item.isEditing) {
                     return renderValueInput(item, index);
                 } else {
-                    if (item.metadataValueType === "XYZ" && item.metadataValue) {
-                        try {
-                            const parsed = JSON.parse(item.metadataValue);
-                            return `X: ${parsed.x}, Y: ${parsed.y}, Z: ${parsed.z}`;
-                        } catch {
-                            return item.metadataValue;
-                        }
+                    // Format display based on metadata type
+                    if (!item.metadataValue) {
+                        return <em>Empty</em>;
                     }
-                    return item.metadataValue || <em>Empty</em>;
+
+                    try {
+                        switch (item.metadataValueType) {
+                            case "xyz": {
+                                const parsed = JSON.parse(item.metadataValue);
+                                return `X: ${parsed.x}, Y: ${parsed.y}, Z: ${parsed.z}`;
+                            }
+                            case "wxyz": {
+                                const parsed = JSON.parse(item.metadataValue);
+                                return `W: ${parsed.w}, X: ${parsed.x}, Y: ${parsed.y}, Z: ${parsed.z}`;
+                            }
+                            case "matrix4x4": {
+                                return "4x4 Matrix";
+                            }
+                            case "lla": {
+                                const parsed = JSON.parse(item.metadataValue);
+                                return `Lat: ${parsed.lat}, Long: ${parsed.long}, Alt: ${parsed.alt}`;
+                            }
+                            case "geopoint": {
+                                const parsed = JSON.parse(item.metadataValue);
+                                if (parsed.type === "Point" && parsed.coordinates) {
+                                    return `Point: [${parsed.coordinates[0]}, ${parsed.coordinates[1]}]`;
+                                }
+                                return "GeoJSON Point";
+                            }
+                            case "geojson": {
+                                const parsed = JSON.parse(item.metadataValue);
+                                return `GeoJSON ${parsed.type || "Object"}`;
+                            }
+                            case "json": {
+                                return "JSON Object";
+                            }
+                            case "date": {
+                                const date = new Date(item.metadataValue);
+                                return date.toLocaleDateString() + " " + date.toLocaleTimeString();
+                            }
+                            case "boolean": {
+                                return item.metadataValue.toLowerCase() === "true"
+                                    ? "True"
+                                    : "False";
+                            }
+                            case "number": {
+                                return item.metadataValue;
+                            }
+                            default:
+                                return item.metadataValue;
+                        }
+                    } catch {
+                        // If parsing fails, show raw value
+                        return item.metadataValue;
+                    }
                 }
             },
         },
@@ -855,9 +1050,12 @@ export const AssetLinkMetadata: React.FC<AssetLinkMetadataProps> = ({
                                 color="text-body-secondary"
                                 padding="s"
                             >
-                                <strong>Translation, Rotation, and Scale</strong> are always
-                                available for XYZ coordinate values. You can add custom metadata
-                                fields below.
+                                <strong>
+                                    Translation (XYZ), Rotation (WXYZ), Scale (XYZ), and Matrix
+                                    (4x4)
+                                </strong>{" "}
+                                are always available as fixed fields. You can add custom metadata
+                                fields with various data types below.
                             </Box>
                         }
                     />

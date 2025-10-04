@@ -178,7 +178,6 @@ export default function CreatePipeline({
         }));
     };
 
-
     const handleDatabaseChange = (e: any) => {
         setFormState((prev) => ({
             ...prev,
@@ -469,10 +468,14 @@ export default function CreatePipeline({
                                     data-testid="pipeline-desc"
                                 />
                             </FormField>
-                            <FormField 
+                            <FormField
                                 label="Asset Type"
                                 constraintText="Required. Specify the asset type (e.g., .all, .jpg, .png). The pipeline itself determines how this field is used. Does not restrict pipeline use as part of VAMS execution."
-                                errorText={formState.assetType.trim() === "" ? "Asset Type is required" : null}
+                                errorText={
+                                    formState.assetType.trim() === ""
+                                        ? "Asset Type is required"
+                                        : null
+                                }
                             >
                                 <Input
                                     value={formState.assetType}
@@ -484,10 +487,14 @@ export default function CreatePipeline({
                                     data-testid="inputFileType-input"
                                 />
                             </FormField>
-                            <FormField 
+                            <FormField
                                 label="Output Type"
                                 constraintText="Required. Specify the output type (e.g., .all, .jpg, .png). The pipeline itself determines how this field is used."
-                                errorText={formState.outputType.trim() === "" ? "Output Type is required" : null}
+                                errorText={
+                                    formState.outputType.trim() === ""
+                                        ? "Output Type is required"
+                                        : null
+                                }
                             >
                                 <Input
                                     value={formState.outputType}

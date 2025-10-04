@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState } from "react";
 import {
     FormField,
     Input,
@@ -15,8 +15,8 @@ import {
     Container,
     Grid,
     Icon,
-} from '@cloudscape-design/components';
-import { MetadataFilter } from '../types';
+} from "@cloudscape-design/components";
+import { MetadataFilter } from "../types";
 
 interface MetadataFiltersProps {
     metadataFilters: MetadataFilter[];
@@ -34,39 +34,39 @@ const MetadataFilters: React.FC<MetadataFiltersProps> = ({
     disabled = false,
 }) => {
     const [newFilter, setNewFilter] = useState<MetadataFilter>({
-        key: '',
-        value: '',
-        operator: '=',
-        type: 'string',
-        fieldType: 'str',
+        key: "",
+        value: "",
+        operator: "=",
+        type: "string",
+        fieldType: "str",
     });
 
     const operatorOptions = [
-        { label: 'Equals (=)', value: '=' },
-        { label: 'Not Equals (!=)', value: '!=' },
-        { label: 'Contains', value: 'contains' },
-        { label: 'Greater Than (>)', value: '>' },
-        { label: 'Greater Than or Equal (>=)', value: '>=' },
-        { label: 'Less Than (<)', value: '<' },
-        { label: 'Less Than or Equal (<=)', value: '<=' },
+        { label: "Equals (=)", value: "=" },
+        { label: "Not Equals (!=)", value: "!=" },
+        { label: "Contains", value: "contains" },
+        { label: "Greater Than (>)", value: ">" },
+        { label: "Greater Than or Equal (>=)", value: ">=" },
+        { label: "Less Than (<)", value: "<" },
+        { label: "Less Than or Equal (<=)", value: "<=" },
     ];
 
     const typeOptions = [
-        { label: 'Text', value: 'string' },
-        { label: 'Number', value: 'number' },
-        { label: 'Date', value: 'date' },
-        { label: 'Boolean', value: 'boolean' },
+        { label: "Text", value: "string" },
+        { label: "Number", value: "number" },
+        { label: "Date", value: "date" },
+        { label: "Boolean", value: "boolean" },
     ];
 
     const handleAddFilter = () => {
         if (newFilter.key.trim() && newFilter.value.trim()) {
             onAddFilter({ ...newFilter });
             setNewFilter({
-                key: '',
-                value: '',
-                operator: '=',
-                type: 'string',
-                fieldType: 'str',
+                key: "",
+                value: "",
+                operator: "=",
+                type: "string",
+                fieldType: "str",
             });
         }
     };
@@ -78,14 +78,14 @@ const MetadataFilters: React.FC<MetadataFiltersProps> = ({
 
     const getAvailableOperators = (type: string) => {
         switch (type) {
-            case 'number':
-            case 'date':
+            case "number":
+            case "date":
                 return operatorOptions;
-            case 'boolean':
-                return operatorOptions.filter(op => ['=', '!='].includes(op.value));
-            case 'string':
+            case "boolean":
+                return operatorOptions.filter((op) => ["=", "!="].includes(op.value));
+            case "string":
             default:
-                return operatorOptions.filter(op => !['>', '>=', '<', '<='].includes(op.value));
+                return operatorOptions.filter((op) => ![">", ">=", "<", "<="].includes(op.value));
         }
     };
 
@@ -96,29 +96,29 @@ const MetadataFilters: React.FC<MetadataFiltersProps> = ({
 
         const onChange = (newValue: string) => {
             if (isNewFilter) {
-                setNewFilter(prev => ({ ...prev, value: newValue }));
+                setNewFilter((prev) => ({ ...prev, value: newValue }));
             } else {
-                handleUpdateFilter(index!, 'value', newValue);
+                handleUpdateFilter(index!, "value", newValue);
             }
         };
 
         switch (type) {
-            case 'boolean':
+            case "boolean":
                 return (
                     <Select
                         selectedOption={
-                            value ? { label: value === 'true' ? 'True' : 'False', value } : null
+                            value ? { label: value === "true" ? "True" : "False", value } : null
                         }
                         options={[
-                            { label: 'True', value: 'true' },
-                            { label: 'False', value: 'false' },
+                            { label: "True", value: "true" },
+                            { label: "False", value: "false" },
                         ]}
-                        onChange={({ detail }) => onChange(detail.selectedOption?.value || '')}
+                        onChange={({ detail }) => onChange(detail.selectedOption?.value || "")}
                         placeholder="Select value"
                         disabled={disabled}
                     />
                 );
-            case 'date':
+            case "date":
                 return (
                     <Input
                         value={value}
@@ -127,7 +127,7 @@ const MetadataFilters: React.FC<MetadataFiltersProps> = ({
                         placeholder="YYYY-MM-DD"
                     />
                 );
-            case 'number':
+            case "number":
                 return (
                     <Input
                         type="number"
@@ -137,7 +137,7 @@ const MetadataFilters: React.FC<MetadataFiltersProps> = ({
                         disabled={disabled}
                     />
                 );
-            case 'string':
+            case "string":
             default:
                 return (
                     <Input
@@ -178,7 +178,9 @@ const MetadataFilters: React.FC<MetadataFiltersProps> = ({
                             <FormField label="Field Name">
                                 <Input
                                     value={filter.key}
-                                    onChange={(e) => handleUpdateFilter(index, 'key', e.detail.value)}
+                                    onChange={(e) =>
+                                        handleUpdateFilter(index, "key", e.detail.value)
+                                    }
                                     placeholder="metadata key"
                                     disabled={disabled}
                                 />
@@ -187,11 +189,15 @@ const MetadataFilters: React.FC<MetadataFiltersProps> = ({
                             <FormField label="Type">
                                 <Select
                                     selectedOption={
-                                        typeOptions.find(opt => opt.value === filter.type) || null
+                                        typeOptions.find((opt) => opt.value === filter.type) || null
                                     }
                                     options={typeOptions}
                                     onChange={({ detail }) =>
-                                        handleUpdateFilter(index, 'type', detail.selectedOption?.value || 'string')
+                                        handleUpdateFilter(
+                                            index,
+                                            "type",
+                                            detail.selectedOption?.value || "string"
+                                        )
                                     }
                                     disabled={disabled}
                                 />
@@ -201,20 +207,22 @@ const MetadataFilters: React.FC<MetadataFiltersProps> = ({
                                 <Select
                                     selectedOption={
                                         getAvailableOperators(filter.type).find(
-                                            opt => opt.value === filter.operator
+                                            (opt) => opt.value === filter.operator
                                         ) || null
                                     }
                                     options={getAvailableOperators(filter.type)}
                                     onChange={({ detail }) =>
-                                        handleUpdateFilter(index, 'operator', detail.selectedOption?.value || '=')
+                                        handleUpdateFilter(
+                                            index,
+                                            "operator",
+                                            detail.selectedOption?.value || "="
+                                        )
                                     }
                                     disabled={disabled}
                                 />
                             </FormField>
 
-                            <FormField label="Value">
-                                {renderValueInput(filter, index)}
-                            </FormField>
+                            <FormField label="Value">{renderValueInput(filter, index)}</FormField>
 
                             <FormField label=" ">
                                 <Button
@@ -246,7 +254,7 @@ const MetadataFilters: React.FC<MetadataFiltersProps> = ({
                                 <Input
                                     value={newFilter.key}
                                     onChange={(e) =>
-                                        setNewFilter(prev => ({ ...prev, key: e.detail.value }))
+                                        setNewFilter((prev) => ({ ...prev, key: e.detail.value }))
                                     }
                                     placeholder="e.g., author, category"
                                     disabled={disabled}
@@ -256,14 +264,15 @@ const MetadataFilters: React.FC<MetadataFiltersProps> = ({
                             <FormField label="Type">
                                 <Select
                                     selectedOption={
-                                        typeOptions.find(opt => opt.value === newFilter.type) || null
+                                        typeOptions.find((opt) => opt.value === newFilter.type) ||
+                                        null
                                     }
                                     options={typeOptions}
                                     onChange={({ detail }) =>
-                                        setNewFilter(prev => ({
+                                        setNewFilter((prev) => ({
                                             ...prev,
-                                            type: detail.selectedOption?.value as any || 'string',
-                                            operator: '=', // Reset operator when type changes
+                                            type: (detail.selectedOption?.value as any) || "string",
+                                            operator: "=", // Reset operator when type changes
                                         }))
                                     }
                                     disabled={disabled}
@@ -274,30 +283,30 @@ const MetadataFilters: React.FC<MetadataFiltersProps> = ({
                                 <Select
                                     selectedOption={
                                         getAvailableOperators(newFilter.type).find(
-                                            opt => opt.value === newFilter.operator
+                                            (opt) => opt.value === newFilter.operator
                                         ) || null
                                     }
                                     options={getAvailableOperators(newFilter.type)}
                                     onChange={({ detail }) =>
-                                        setNewFilter(prev => ({
+                                        setNewFilter((prev) => ({
                                             ...prev,
-                                            operator: detail.selectedOption?.value as any || '=',
+                                            operator: (detail.selectedOption?.value as any) || "=",
                                         }))
                                     }
                                     disabled={disabled}
                                 />
                             </FormField>
 
-                            <FormField label="Value">
-                                {renderValueInput(newFilter)}
-                            </FormField>
+                            <FormField label="Value">{renderValueInput(newFilter)}</FormField>
 
                             <FormField label=" ">
                                 <Button
                                     variant="primary"
                                     iconName="add-plus"
                                     onClick={handleAddFilter}
-                                    disabled={disabled || !newFilter.key.trim() || !newFilter.value.trim()}
+                                    disabled={
+                                        disabled || !newFilter.key.trim() || !newFilter.value.trim()
+                                    }
                                     ariaLabel="Add filter"
                                 >
                                     Add
@@ -310,8 +319,9 @@ const MetadataFilters: React.FC<MetadataFiltersProps> = ({
                 {metadataFilters.length === 0 && (
                     <Box textAlign="center" color="text-body-secondary">
                         <Icon name="search" size="big" />
-                        <Box variant="p" margin={{ top: 's' }}>
-                            No metadata filters added yet. Add filters above to search by custom metadata fields.
+                        <Box variant="p" margin={{ top: "s" }}>
+                            No metadata filters added yet. Add filters above to search by custom
+                            metadata fields.
                         </Box>
                     </Box>
                 )}

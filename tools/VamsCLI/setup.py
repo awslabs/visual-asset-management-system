@@ -38,6 +38,7 @@ setup(
         'aiohttp>=3.8.0',
         'aiofiles>=23.0.0',
         'botocore>=1.29.0',
+        'geojson>=3.2.0',
     ],
     extras_require={
         'dev': [

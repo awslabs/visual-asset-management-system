@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState } from "react";
 import {
     ExpandableSection,
     SpaceBetween,
@@ -13,8 +13,8 @@ import {
     Button,
     Box,
     Grid,
-} from '@cloudscape-design/components';
-import { MetadataFilter } from '../types';
+} from "@cloudscape-design/components";
+import { MetadataFilter } from "../types";
 
 interface MetadataSearchPanelProps {
     metadataFilters: MetadataFilter[];
@@ -35,29 +35,30 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
     onRemoveFilter,
     onUpdateFilter,
     disabled = false,
-    metadataSearchMode = 'both',
+    metadataSearchMode = "both",
     onSearchModeChange,
-    metadataOperator = 'OR',
+    metadataOperator = "OR",
     onOperatorChange,
     isMapView = false,
 }) => {
     // Helper function to check if a filter is a location filter (added by map view)
     const isLocationFilter = (filter: MetadataFilter) => {
         return (
-            (filter.key === 'location' && (filter.fieldType === 'gp' || filter.fieldType === 'gs')) ||
-            (filter.key === 'latitude' && filter.fieldType === 'str') ||
-            (filter.key === 'longitude' && filter.fieldType === 'str')
+            (filter.key === "location" &&
+                (filter.fieldType === "gp" || filter.fieldType === "gs")) ||
+            (filter.key === "latitude" && filter.fieldType === "str") ||
+            (filter.key === "longitude" && filter.fieldType === "str")
         );
     };
     const searchModeOptions = [
-        { label: 'Search Both (Field Names & Values)', value: 'both' },
-        { label: 'Search Field Names Only', value: 'key' },
-        { label: 'Search Field Values Only', value: 'value' },
+        { label: "Search Both (Field Names & Values)", value: "both" },
+        { label: "Search Field Names Only", value: "key" },
+        { label: "Search Field Values Only", value: "value" },
     ];
 
     const operatorOptions = [
-        { label: 'AND (All must match)', value: 'AND' },
-        { label: 'OR (Any can match)', value: 'OR' },
+        { label: "AND (All must match)", value: "AND" },
+        { label: "OR (Any can match)", value: "OR" },
     ];
 
     return (
@@ -76,7 +77,11 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                 {metadataFilters.length > 0 && (
                     <FormField
                         label="Metadata Mode"
-                        description={isMapView ? "Locked to 'Search Both' for map view" : "Choose where to search for your metadata terms"}
+                        description={
+                            isMapView
+                                ? "Locked to 'Search Both' for map view"
+                                : "Choose where to search for your metadata terms"
+                        }
                     >
                         <Select
                             selectedOption={
@@ -85,7 +90,7 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                             }
                             onChange={({ detail }) => {
                                 if (onSearchModeChange && !isMapView) {
-                                    onSearchModeChange(detail.selectedOption.value || 'both');
+                                    onSearchModeChange(detail.selectedOption.value || "both");
                                 }
                             }}
                             options={searchModeOptions}
@@ -98,7 +103,11 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                 {metadataFilters.length > 1 && (
                     <FormField
                         label="Combine Filters"
-                        description={isMapView ? "Locked to 'OR' for map view" : "Choose how to combine multiple metadata filters"}
+                        description={
+                            isMapView
+                                ? "Locked to 'OR' for map view"
+                                : "Choose how to combine multiple metadata filters"
+                        }
                     >
                         <Select
                             selectedOption={
@@ -107,7 +116,7 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                             }
                             onChange={({ detail }) => {
                                 if (onOperatorChange && !isMapView) {
-                                    onOperatorChange(detail.selectedOption.value || 'AND');
+                                    onOperatorChange(detail.selectedOption.value || "AND");
                                 }
                             }}
                             options={operatorOptions}
@@ -120,7 +129,7 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                 {metadataFilters.map((filter, index) => {
                     const isLocFilter = isLocationFilter(filter);
                     return (
-                        <Box key={index} padding={{ bottom: 's' }}>
+                        <Box key={index} padding={{ bottom: "s" }}>
                             <Grid
                                 gridDefinition={[
                                     { colspan: 3 },
@@ -136,29 +145,40 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                                             onUpdateFilter(index, { ...filter, key: detail.value })
                                         }
                                         placeholder="e.g., product"
-                                        disabled={disabled || metadataSearchMode === 'value' || isLocFilter}
+                                        disabled={
+                                            disabled ||
+                                            metadataSearchMode === "value" ||
+                                            isLocFilter
+                                        }
                                     />
                                 </FormField>
 
                                 <FormField label="Type">
                                     <Select
                                         selectedOption={{
-                                            label: filter.fieldType || 'str',
-                                            value: filter.fieldType || 'str',
+                                            label: filter.fieldType || "str",
+                                            value: filter.fieldType || "str",
                                         }}
                                         onChange={({ detail }) =>
-                                            onUpdateFilter(index, { ...filter, fieldType: detail.selectedOption.value as any })
+                                            onUpdateFilter(index, {
+                                                ...filter,
+                                                fieldType: detail.selectedOption.value as any,
+                                            })
                                         }
                                         options={[
-                                            { label: 'String', value: 'str' },
-                                            { label: 'Number', value: 'num' },
-                                            { label: 'Boolean', value: 'bool' },
-                                            { label: 'Date', value: 'date' },
-                                            { label: 'List', value: 'list' },
-                                            { label: 'Geo Point', value: 'gp' },
-                                            { label: 'Geo Shape', value: 'gs' },
+                                            { label: "String", value: "str" },
+                                            { label: "Number", value: "num" },
+                                            { label: "Boolean", value: "bool" },
+                                            { label: "Date", value: "date" },
+                                            { label: "List", value: "list" },
+                                            { label: "Geo Point", value: "gp" },
+                                            { label: "Geo Shape", value: "gs" },
                                         ]}
-                                        disabled={disabled || metadataSearchMode === 'value' || isLocFilter}
+                                        disabled={
+                                            disabled ||
+                                            metadataSearchMode === "value" ||
+                                            isLocFilter
+                                        }
                                     />
                                 </FormField>
 
@@ -166,10 +186,15 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                                     <Input
                                         value={filter.value}
                                         onChange={({ detail }) =>
-                                            onUpdateFilter(index, { ...filter, value: detail.value })
+                                            onUpdateFilter(index, {
+                                                ...filter,
+                                                value: detail.value,
+                                            })
                                         }
                                         placeholder="Enter value (use * for wildcard)"
-                                        disabled={disabled || metadataSearchMode === 'key' || isLocFilter}
+                                        disabled={
+                                            disabled || metadataSearchMode === "key" || isLocFilter
+                                        }
                                     />
                                 </FormField>
 
@@ -185,11 +210,7 @@ const MetadataSearchPanel: React.FC<MetadataSearchPanelProps> = ({
                     );
                 })}
 
-                <Button
-                    onClick={onAddFilter}
-                    disabled={disabled}
-                    iconName="add-plus"
-                >
+                <Button onClick={onAddFilter} disabled={disabled} iconName="add-plus">
                     Add Metadata Filter
                 </Button>
             </SpaceBetween>

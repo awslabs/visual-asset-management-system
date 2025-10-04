@@ -61,16 +61,21 @@ const ExplanationPopover: React.FC<{ explanation: SearchExplanation }> = ({ expl
                 </Box>
                 {explanation.matched_fields.length > 0 && (
                     <>
-                        <Box variant="h5">Matched Fields ({explanation.matched_fields.length}):</Box>
+                        <Box variant="h5">
+                            Matched Fields ({explanation.matched_fields.length}):
+                        </Box>
                         <Box>
-                            <ul style={{ margin: 0, paddingLeft: '20px' }}>
+                            <ul style={{ margin: 0, paddingLeft: "20px" }}>
                                 {explanation.matched_fields.slice(0, 5).map((field, idx) => (
                                     <li key={idx}>
-                                        <strong>{field}:</strong> {explanation.match_reasons[field] || 'Matched'}
+                                        <strong>{field}:</strong>{" "}
+                                        {explanation.match_reasons[field] || "Matched"}
                                     </li>
                                 ))}
                                 {explanation.matched_fields.length > 5 && (
-                                    <li>...and {explanation.matched_fields.length - 5} more fields</li>
+                                    <li>
+                                        ...and {explanation.matched_fields.length - 5} more fields
+                                    </li>
                                 )}
                             </ul>
                         </Box>
@@ -84,11 +89,13 @@ const ExplanationPopover: React.FC<{ explanation: SearchExplanation }> = ({ expl
 );
 
 // Helper component to render metadata popover
-const MetadataPopover: React.FC<{ metadata: Array<{name: string, type: string, value: any}> }> = ({ metadata }) => {
+const MetadataPopover: React.FC<{
+    metadata: Array<{ name: string; type: string; value: any }>;
+}> = ({ metadata }) => {
     if (metadata.length === 0) {
         return <span></span>;
     }
-    
+
     return (
         <Popover
             size="large"
@@ -99,10 +106,13 @@ const MetadataPopover: React.FC<{ metadata: Array<{name: string, type: string, v
                 <SpaceBetween size="s">
                     <Box variant="h4">Metadata Fields ({metadata.length})</Box>
                     <Box>
-                        <ul style={{ margin: 0, paddingLeft: '20px' }}>
+                        <ul style={{ margin: 0, paddingLeft: "20px" }}>
                             {metadata.map((field, idx) => (
                                 <li key={idx}>
-                                    <strong>{field.name} ({field.type}):</strong> {String(field.value)}
+                                    <strong>
+                                        {field.name} ({field.type}):
+                                    </strong>{" "}
+                                    {String(field.value)}
                                 </li>
                             ))}
                         </ul>
@@ -116,45 +126,45 @@ const MetadataPopover: React.FC<{ metadata: Array<{name: string, type: string, v
 };
 
 // Helper function to extract and format metadata fields with type information
-const extractMetadata = (item: any): Array<{name: string, type: string, value: any}> => {
-    const metadata: Array<{name: string, type: string, value: any}> = [];
-    
+const extractMetadata = (item: any): Array<{ name: string; type: string; value: any }> => {
+    const metadata: Array<{ name: string; type: string; value: any }> = [];
+
     // Type mapping for display
     const typeLabels: Record<string, string> = {
-        'str': 'String',
-        'num': 'Number',
-        'bool': 'Boolean',
-        'date': 'Date',
-        'list': 'List',
-        'gp': 'Geo Point',
-        'gs': 'Geo Shape',
+        str: "String",
+        num: "Number",
+        bool: "Boolean",
+        date: "Date",
+        list: "List",
+        gp: "Geo Point",
+        gs: "Geo Shape",
     };
-    
+
     // Find all MD_ fields
-    Object.keys(item).forEach(key => {
-        if (key.startsWith('MD_')) {
+    Object.keys(item).forEach((key) => {
+        if (key.startsWith("MD_")) {
             // Format: MD_<type>_<fieldname>
-            const parts = key.split('_');
+            const parts = key.split("_");
             if (parts.length >= 3) {
                 // parts[0] = 'MD', parts[1] = type, parts[2+] = field name
                 const fieldType = parts[1];
-                const fieldName = parts.slice(2).join('_');
+                const fieldName = parts.slice(2).join("_");
                 metadata.push({
                     name: fieldName,
                     type: typeLabels[fieldType] || fieldType,
-                    value: item[key]
+                    value: item[key],
                 });
             } else {
                 // Fallback: just remove MD_ prefix
                 metadata.push({
                     name: key.substring(3),
-                    type: 'Unknown',
-                    value: item[key]
+                    type: "Unknown",
+                    value: item[key],
                 });
             }
         }
     });
-    
+
     return metadata;
 };
 
@@ -174,7 +184,9 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
                         {value}
                     </Link>
                     {/* Only show explanation in asset mode, not file mode */}
-                    {e.explanation && !isFileMode && <ExplanationPopover explanation={e.explanation} />}
+                    {e.explanation && !isFileMode && (
+                        <ExplanationPopover explanation={e.explanation} />
+                    )}
                 </SpaceBetween>
             </Box>
         );
@@ -184,13 +196,16 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
             return (
                 <Box>
                     <SpaceBetween direction="horizontal" size="xs">
-                        <Link 
+                        <Link
                             href={`#/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`}
                             onFollow={(event) => {
                                 event.preventDefault();
-                                navigate(`/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`, {
-                                    state: { filePathToNavigate: value }
-                                });
+                                navigate(
+                                    `/databases/${e["str_databaseid"]}/assets/${e["str_assetid"]}`,
+                                    {
+                                        state: { filePathToNavigate: value },
+                                    }
+                                );
                             }}
                         >
                             {value}
@@ -247,10 +262,7 @@ function columnRender(e: any, name: string, value: any, navigate?: any, isFileMo
         } catch {
             return <Box>{value}</Box>;
         }
-    } else if (
-        name.indexOf("str") === 0 ||
-        name.indexOf("num_") === 0
-    ) {
+    } else if (name.indexOf("str") === 0 || name.indexOf("num_") === 0) {
         return <Box>{value}</Box>;
     }
 }
@@ -288,17 +300,19 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
         // Handle both old signature (item as 4th param) and new signature (downloadType as 4th param)
         let downloadType: "assetPreview" | "assetFile" = "assetPreview";
         let item: any = undefined;
-        
-        if (typeof downloadTypeOrItem === 'string' && 
-            (downloadTypeOrItem === 'assetPreview' || downloadTypeOrItem === 'assetFile')) {
+
+        if (
+            typeof downloadTypeOrItem === "string" &&
+            (downloadTypeOrItem === "assetPreview" || downloadTypeOrItem === "assetFile")
+        ) {
             // New signature: downloadType passed, item might be in 5th param
             downloadType = downloadTypeOrItem;
             item = itemData;
-        } else if (downloadTypeOrItem && typeof downloadTypeOrItem === 'object') {
+        } else if (downloadTypeOrItem && typeof downloadTypeOrItem === "object") {
             // Old signature: item passed as 4th param
             item = downloadTypeOrItem;
         }
-        
+
         setPreviewAsset({
             url: previewUrl,
             assetId: item?.str_assetid,
@@ -323,88 +337,97 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
     const isFileMode = state.filters._rectype.value === "file";
 
     // Filter out undefined/null column names and add preview column if showPreviewThumbnails is enabled
-    let enhancedColumnDefinitions = orderedColumnNames?.filter((name: string) => name)?.map((name: string) => {
-        // Custom headers based on record type
+    let enhancedColumnDefinitions = orderedColumnNames
+        ?.filter((name: string) => name)
+        ?.map((name: string) => {
+            // Custom headers based on record type
 
-        if (name === "str_asset") {
+            if (name === "str_asset") {
+                return {
+                    id: name,
+                    header: Synonyms.Asset,
+                    cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
+                    sortingField: name,
+                    isRowHeader: false,
+                };
+            }
+            if (name === "str_databaseid") {
+                return {
+                    id: name,
+                    header: Synonyms.Database,
+                    cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
+                    sortingField: name,
+                    isRowHeader: false,
+                };
+            }
+            if (name === "str_assettype") {
+                return {
+                    id: name,
+                    header: isFileMode ? "Asset Type" : "Type",
+                    cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
+                    sortingField: name,
+                    isRowHeader: false,
+                };
+            }
+            if (name === "list_tags") {
+                return {
+                    id: name,
+                    header: isFileMode ? "Asset Tags" : "Tags",
+                    cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
+                    sortingField: name,
+                    isRowHeader: false,
+                };
+            }
+            if (name === "str_key" && isFileMode) {
+                return {
+                    id: name,
+                    header: "File Path",
+                    cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
+                    sortingField: name,
+                    isRowHeader: false,
+                };
+            }
+            if (name === "str_description" && isFileMode) {
+                return {
+                    id: name,
+                    header: "Asset Description",
+                    cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
+                    sortingField: name,
+                    isRowHeader: false,
+                };
+            }
             return {
                 id: name,
-                header: Synonyms.Asset,
-                cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
-                sortingField: name,
+                header:
+                    name === "str_assetname"
+                        ? Synonyms.Asset
+                        : name === "metadata"
+                        ? "Metadata"
+                        : name
+                              .split("_")
+                              .slice(1)
+                              .map((s: string) => s.charAt(0).toUpperCase() + s.slice(1))
+                              .join(" "),
+                cell: (e: any) =>
+                    name === "metadata" ? (
+                        <MetadataPopover metadata={extractMetadata(e)} />
+                    ) : (
+                        columnRender(e, name, e[name], navigate, isFileMode)
+                    ),
+                sortingField: name === "metadata" ? undefined : name,
                 isRowHeader: false,
             };
-        }
-        if (name === "str_databaseid") {
-            return {
-                id: name,
-                header: Synonyms.Database,
-                cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
-                sortingField: name,
-                isRowHeader: false,
-            };
-        }
-        if (name === "str_assettype") {
-            return {
-                id: name,
-                header: isFileMode ? "Asset Type" : "Type",
-                cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
-                sortingField: name,
-                isRowHeader: false,
-            };
-        }
-        if (name === "list_tags") {
-            return {
-                id: name,
-                header: isFileMode ? "Asset Tags" : "Tags",
-                cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
-                sortingField: name,
-                isRowHeader: false,
-            };
-        }
-        if (name === "str_key" && isFileMode) {
-            return {
-                id: name,
-                header: "File Path",
-                cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
-                sortingField: name,
-                isRowHeader: false,
-            };
-        }
-        if (name === "str_description" && isFileMode) {
-            return {
-                id: name,
-                header: "Asset Description",
-                cell: (e: any) => columnRender(e, name, e[name], navigate, isFileMode),
-                sortingField: name,
-                isRowHeader: false,
-            };
-        }
-        return {
-            id: name,
-            header:
-                name === "str_assetname"
-                    ? Synonyms.Asset
-                    : name === "metadata"
-                    ? "Metadata"
-                    : name
-                          .split("_")
-                          .slice(1)
-                          .map((s: string) => s.charAt(0).toUpperCase() + s.slice(1))
-                          .join(" "),
-            cell: (e: any) => name === "metadata" ? <MetadataPopover metadata={extractMetadata(e)} /> : columnRender(e, name, e[name], navigate, isFileMode),
-            sortingField: name === "metadata" ? undefined : name,
-            isRowHeader: false,
-        };
-    });
+        });
 
     // No need to rearrange columns - they should already be in the correct order from preferences
 
     // Add or remove preview column based on showPreviewThumbnails toggle
     if (state.showPreviewThumbnails) {
         // Remove any existing preview columns first to avoid duplicates
-        enhancedColumnDefinitions = enhancedColumnDefinitions.filter((col: any) => col.id !== "preview");
-        
+        enhancedColumnDefinitions = enhancedColumnDefinitions.filter(
+            (col: any) => col.id !== "preview"
+        );
+
         // Different preview cell based on record type
         if (state.filters._rectype.value === "asset") {
             // Asset preview cell
@@ -464,8 +487,10 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
         }
     } else {
         // Remove preview column when toggle is off
-        enhancedColumnDefinitions = enhancedColumnDefinitions.filter((col: any) => col.id !== "preview");
-        
+        enhancedColumnDefinitions = enhancedColumnDefinitions.filter(
+            (col: any) => col.id !== "preview"
+        );
+
         // Remove preview from visible columns
         if (state.tablePreferences?.visibleContent) {
             state.tablePreferences.visibleContent = state.tablePreferences.visibleContent.filter(
@@ -478,13 +503,13 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
     const pageCount = Math.ceil(
         state?.result?.hits?.total?.value / state?.tablePreferences?.pageSize
     );
-    
-    console.log('[SearchPageListView] Pagination calculation:', {
+
+    console.log("[SearchPageListView] Pagination calculation:", {
         from: state?.pagination?.from,
         pageSize: state?.tablePreferences?.pageSize,
         currentPage,
         pageCount,
-        totalResults: state?.result?.hits?.total?.value
+        totalResults: state?.result?.hits?.total?.value,
     });
 
     if (!enhancedColumnDefinitions) {
@@ -492,12 +517,12 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
     }
 
     // Debug logging
-    console.log('SearchPageListView render:', {
+    console.log("SearchPageListView render:", {
         tableSort: state.tableSort,
         sortingField: state?.tableSort?.sortingField,
         sortingDescending: state?.tableSort?.sortingDescending,
         selectedItems: state?.selectedItems,
-        selectedCount: state?.selectedItems?.length
+        selectedCount: state?.selectedItems?.length,
     });
 
     return (
@@ -545,9 +570,13 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                         _id: hit._id,
                         explanation: hit.explanation,
                     }))}
-                    sortingColumn={state?.tableSort?.sortingField ? {
-                        sortingField: state?.tableSort?.sortingField,
-                    } : undefined}
+                    sortingColumn={
+                        state?.tableSort?.sortingField
+                            ? {
+                                  sortingField: state?.tableSort?.sortingField,
+                              }
+                            : undefined
+                    }
                     sortingDescending={!!state?.tableSort?.sortingDescending}
                     onSortingChange={({ detail }) => {
                         console.log("sorting change", detail);
@@ -558,7 +587,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                             if (sortingField.indexOf("str_") === 0) {
                                 sortingFieldIndex = sortingField + ".keyword";
                             }
-                            
+
                             const sort = [
                                 {
                                     field: sortingFieldIndex,
@@ -566,12 +595,12 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                                 },
                                 "_score",
                             ];
-                            
+
                             const tableSort = {
                                 sortingField,
                                 sortingDescending: detail.isDescending ?? false,
                             };
-                            
+
                             // Dispatch action - let the parent component handle the actual search
                             dispatch({
                                 type: "query-sort",
@@ -594,16 +623,16 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                                 dispatch({
                                     type: "query-paginate",
                                     pagination: {
-                                        from: (detail.currentPageIndex - 1) * state?.tablePreferences?.pageSize,
+                                        from:
+                                            (detail.currentPageIndex - 1) *
+                                            state?.tablePreferences?.pageSize,
                                         size: state?.tablePreferences?.pageSize,
                                     },
                                 });
                             }}
                         />
                     }
-                    preferences={
-                        null as any /* Hidden - preferences managed in sidebar */
-                    }
+                    preferences={null as any /* Hidden - preferences managed in sidebar */}
                     /* Commented out preferences gear icon - managed in sidebar instead
                     preferences={
                         <CollectionPreferences
@@ -663,7 +692,9 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                     */
                     header={
                         <Header
-                            children={state.filters._rectype.value === "file" ? "Files" : Synonyms.Assets}
+                            children={
+                                state.filters._rectype.value === "file" ? "Files" : Synonyms.Assets
+                            }
                             counter={
                                 state?.result?.hits?.total?.value
                                     ? state?.result?.hits?.total?.value +

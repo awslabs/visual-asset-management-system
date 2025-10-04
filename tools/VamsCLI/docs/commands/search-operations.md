@@ -4,28 +4,29 @@ This guide covers VamsCLI search commands for finding assets and files using the
 
 ## Prerequisites
 
-- VamsCLI must be configured with `vamscli setup <api-gateway-url>`
-- User must be authenticated with `vamscli auth login`
-- OpenSearch must be enabled (NOOPENSEARCH feature switch must not be present)
+-   VamsCLI must be configured with `vamscli setup <api-gateway-url>`
+-   User must be authenticated with `vamscli auth login`
+-   OpenSearch must be enabled (NOOPENSEARCH feature switch must not be present)
 
 ## Feature Dependency
 
 Search functionality requires OpenSearch to be enabled in your VAMS deployment. If the `NOOPENSEARCH` feature switch is enabled, search commands will be disabled and you should use alternative commands:
 
-- Use `vamscli assets list` instead of `vamscli search assets`
-- Use `vamscli database list-assets` for database-specific asset listing
+-   Use `vamscli assets list` instead of `vamscli search assets`
+-   Use `vamscli database list-assets` for database-specific asset listing
 
 ## Dual-Index Architecture
 
 VAMS uses a dual-index OpenSearch system with separate indexes for assets and files:
 
-- **Asset Index**: Optimized for asset metadata, descriptions, and properties
-- **File Index**: Optimized for file keys, extensions, and file-specific metadata
+-   **Asset Index**: Optimized for asset metadata, descriptions, and properties
+-   **File Index**: Optimized for file keys, extensions, and file-specific metadata
 
 This architecture provides:
-- Better query performance
-- More precise search results
-- Optimized field mappings per entity type
+
+-   Better query performance
+-   More precise search results
+-   Optimized field mappings per entity type
 
 ## Available Commands
 
@@ -116,23 +117,23 @@ vamscli search assets -q "model" --jsonOutput
 
 #### Parameters
 
-| Parameter | Description | Example |
-|-----------|-------------|---------|
-| `-d, --database` | Database ID to search within | `-d my-database` |
-| `-q, --query` | General text search query | `-q "training model"` |
-| `--metadata-query` | Metadata search query (field:value format) | `--metadata-query "MD_str_product:Training"` |
-| `--metadata-mode` | Metadata search mode (key/value/both) | `--metadata-mode value` |
-| `--include-metadata/--no-metadata` | Include metadata in general search | `--no-metadata` |
-| `--explain-results` | Include match explanations | `--explain-results` |
-| `--sort-field` | Field to sort by | `--sort-field str_assetname` |
-| `--sort-desc/--sort-asc` | Sort direction | `--sort-desc` |
-| `--from` | Pagination start offset | `--from 20` |
-| `--size` | Results per page (max 2000) | `--size 50` |
-| `--asset-type` | Filter by asset type | `--asset-type "3d-model"` |
-| `--tags` | Filter by tags (comma-separated) | `--tags "training,simulation"` |
-| `--include-archived` | Include archived assets | `--include-archived` |
-| `--output-format` | Output format (table/json/csv) | `--output-format csv` |
-| `--jsonOutput` | Raw API response as JSON | `--jsonOutput` |
+| Parameter                          | Description                                | Example                                      |
+| ---------------------------------- | ------------------------------------------ | -------------------------------------------- |
+| `-d, --database`                   | Database ID to search within               | `-d my-database`                             |
+| `-q, --query`                      | General text search query                  | `-q "training model"`                        |
+| `--metadata-query`                 | Metadata search query (field:value format) | `--metadata-query "MD_str_product:Training"` |
+| `--metadata-mode`                  | Metadata search mode (key/value/both)      | `--metadata-mode value`                      |
+| `--include-metadata/--no-metadata` | Include metadata in general search         | `--no-metadata`                              |
+| `--explain-results`                | Include match explanations                 | `--explain-results`                          |
+| `--sort-field`                     | Field to sort by                           | `--sort-field str_assetname`                 |
+| `--sort-desc/--sort-asc`           | Sort direction                             | `--sort-desc`                                |
+| `--from`                           | Pagination start offset                    | `--from 20`                                  |
+| `--size`                           | Results per page (max 2000)                | `--size 50`                                  |
+| `--asset-type`                     | Filter by asset type                       | `--asset-type "3d-model"`                    |
+| `--tags`                           | Filter by tags (comma-separated)           | `--tags "training,simulation"`               |
+| `--include-archived`               | Include archived assets                    | `--include-archived`                         |
+| `--output-format`                  | Output format (table/json/csv)             | `--output-format csv`                        |
+| `--jsonOutput`                     | Raw API response as JSON                   | `--jsonOutput`                               |
 
 ### `vamscli search files`
 
@@ -176,23 +177,23 @@ vamscli search files --file-ext "gltf" --include-archived
 
 #### Parameters
 
-| Parameter | Description | Example |
-|-----------|-------------|---------|
-| `-d, --database` | Database ID to search within | `-d my-database` |
-| `-q, --query` | General text search query | `-q "texture"` |
-| `--metadata-query` | Metadata search query | `--metadata-query "MD_str_format:GLTF"` |
-| `--metadata-mode` | Metadata search mode (key/value/both) | `--metadata-mode value` |
-| `--include-metadata/--no-metadata` | Include metadata in general search | `--no-metadata` |
-| `--explain-results` | Include match explanations | `--explain-results` |
-| `--sort-field` | Field to sort by | `--sort-field str_key` |
-| `--sort-desc/--sort-asc` | Sort direction | `--sort-asc` |
-| `--from` | Pagination start offset | `--from 0` |
-| `--size` | Results per page (max 2000) | `--size 100` |
-| `--file-ext` | Filter by file extension | `--file-ext "gltf"` |
-| `--tags` | Filter by tags (comma-separated) | `--tags "texture,ui"` |
-| `--include-archived` | Include archived files | `--include-archived` |
-| `--output-format` | Output format (table/json/csv) | `--output-format json` |
-| `--jsonOutput` | Raw API response as JSON | `--jsonOutput` |
+| Parameter                          | Description                           | Example                                 |
+| ---------------------------------- | ------------------------------------- | --------------------------------------- |
+| `-d, --database`                   | Database ID to search within          | `-d my-database`                        |
+| `-q, --query`                      | General text search query             | `-q "texture"`                          |
+| `--metadata-query`                 | Metadata search query                 | `--metadata-query "MD_str_format:GLTF"` |
+| `--metadata-mode`                  | Metadata search mode (key/value/both) | `--metadata-mode value`                 |
+| `--include-metadata/--no-metadata` | Include metadata in general search    | `--no-metadata`                         |
+| `--explain-results`                | Include match explanations            | `--explain-results`                     |
+| `--sort-field`                     | Field to sort by                      | `--sort-field str_key`                  |
+| `--sort-desc/--sort-asc`           | Sort direction                        | `--sort-asc`                            |
+| `--from`                           | Pagination start offset               | `--from 0`                              |
+| `--size`                           | Results per page (max 2000)           | `--size 100`                            |
+| `--file-ext`                       | Filter by file extension              | `--file-ext "gltf"`                     |
+| `--tags`                           | Filter by tags (comma-separated)      | `--tags "texture,ui"`                   |
+| `--include-archived`               | Include archived files                | `--include-archived`                    |
+| `--output-format`                  | Output format (table/json/csv)        | `--output-format json`                  |
+| `--jsonOutput`                     | Raw API response as JSON              | `--jsonOutput`                          |
 
 ### `vamscli search simple` (NEW)
 
@@ -271,23 +272,23 @@ vamscli search simple --metadata-key "product" --metadata-value "Training"
 
 #### Parameters
 
-| Parameter | Description | Example |
-|-----------|-------------|---------|
-| `-q, --query` | General keyword search | `-q "training"` |
-| `--asset-name` | Search by asset name | `--asset-name "model"` |
-| `--asset-id` | Search by asset ID | `--asset-id "asset-123"` |
-| `--asset-type` | Filter by asset type | `--asset-type "3d-model"` |
-| `--file-key` | Search by file key | `--file-key "model.gltf"` |
-| `--file-ext` | Filter by file extension | `--file-ext "gltf"` |
-| `-d, --database` | Filter by database ID | `-d my-database` |
-| `--tags` | Filter by tags (comma-separated) | `--tags "training,simulation"` |
-| `--metadata-key` | Search metadata field names | `--metadata-key "product"` |
-| `--metadata-value` | Search metadata field values | `--metadata-value "Training"` |
-| `--entity-types` | Filter by entity type (asset/file/both) | `--entity-types asset,file` |
-| `--include-archived` | Include archived items | `--include-archived` |
-| `--from` | Pagination offset | `--from 0` |
-| `--size` | Results per page (max 1000) | `--size 100` |
-| `--output-format` | Output format (table/json/csv) | `--output-format json` |
+| Parameter            | Description                             | Example                        |
+| -------------------- | --------------------------------------- | ------------------------------ |
+| `-q, --query`        | General keyword search                  | `-q "training"`                |
+| `--asset-name`       | Search by asset name                    | `--asset-name "model"`         |
+| `--asset-id`         | Search by asset ID                      | `--asset-id "asset-123"`       |
+| `--asset-type`       | Filter by asset type                    | `--asset-type "3d-model"`      |
+| `--file-key`         | Search by file key                      | `--file-key "model.gltf"`      |
+| `--file-ext`         | Filter by file extension                | `--file-ext "gltf"`            |
+| `-d, --database`     | Filter by database ID                   | `-d my-database`               |
+| `--tags`             | Filter by tags (comma-separated)        | `--tags "training,simulation"` |
+| `--metadata-key`     | Search metadata field names             | `--metadata-key "product"`     |
+| `--metadata-value`   | Search metadata field values            | `--metadata-value "Training"`  |
+| `--entity-types`     | Filter by entity type (asset/file/both) | `--entity-types asset,file`    |
+| `--include-archived` | Include archived items                  | `--include-archived`           |
+| `--from`             | Pagination offset                       | `--from 0`                     |
+| `--size`             | Results per page (max 1000)             | `--size 100`                   |
+| `--output-format`    | Output format (table/json/csv)          | `--output-format json`         |
 
 ### `vamscli search mapping`
 
@@ -310,10 +311,10 @@ The mapping command now returns information for both the asset index and file in
 
 #### Parameters
 
-| Parameter | Description | Example |
-|-----------|-------------|---------|
+| Parameter         | Description                    | Example               |
+| ----------------- | ------------------------------ | --------------------- |
 | `--output-format` | Output format (table/json/csv) | `--output-format csv` |
-| `--jsonOutput` | Raw mapping as JSON | `--jsonOutput` |
+| `--jsonOutput`    | Raw mapping as JSON            | `--jsonOutput`        |
 
 ## Search Field Types
 
@@ -321,37 +322,37 @@ The dual-index system contains various field types with specific prefixes:
 
 ### Common to Both Indexes
 
-- **str_*** - String fields (text search, exact match)
-- **num_*** - Numeric fields (range queries, sorting)
-- **date_*** - Date fields (date range queries)
-- **bool_*** - Boolean fields (true/false filtering)
-- **list_*** - List fields (array values like tags)
-- **MD_*** - Metadata fields (custom metadata)
+-   **str\_\*** - String fields (text search, exact match)
+-   **num\_\*** - Numeric fields (range queries, sorting)
+-   **date\_\*** - Date fields (date range queries)
+-   **bool\_\*** - Boolean fields (true/false filtering)
+-   **list\_\*** - List fields (array values like tags)
+-   **MD\_\*** - Metadata fields (custom metadata)
 
 ### Asset Index Fields
 
-- `str_assetname` - Asset name
-- `str_description` - Asset description
-- `str_databaseid` - Database identifier
-- `str_assettype` - Asset type
-- `str_assetid` - Asset ID
-- `list_tags` - Asset tags
-- `bool_isdistributable` - Distribution flag
-- `bool_archived` - Archive status
-- `MD_*` - Custom metadata fields
+-   `str_assetname` - Asset name
+-   `str_description` - Asset description
+-   `str_databaseid` - Database identifier
+-   `str_assettype` - Asset type
+-   `str_assetid` - Asset ID
+-   `list_tags` - Asset tags
+-   `bool_isdistributable` - Distribution flag
+-   `bool_archived` - Archive status
+-   `MD_*` - Custom metadata fields
 
 ### File Index Fields
 
-- `str_key` - S3 file key (full path)
-- `str_fileext` - File extension
-- `str_assetname` - Parent asset name
-- `str_databaseid` - Database identifier
-- `str_assetid` - Parent asset ID
-- `num_filesize` - File size in bytes
-- `date_lastmodified` - Last modification date
-- `list_tags` - File tags
-- `bool_archived` - Archive status
-- `MD_*` - Custom metadata fields
+-   `str_key` - S3 file key (full path)
+-   `str_fileext` - File extension
+-   `str_assetname` - Parent asset name
+-   `str_databaseid` - Database identifier
+-   `str_assetid` - Parent asset ID
+-   `num_filesize` - File size in bytes
+-   `date_lastmodified` - Last modification date
+-   `list_tags` - File tags
+-   `bool_archived` - Archive status
+-   `MD_*` - Custom metadata fields
 
 ## Metadata Search Syntax
 
@@ -388,10 +389,10 @@ The dual-index system contains various field types with specific prefixes:
 
 Metadata fields in OpenSearch use the `MD_` prefix followed by the type and name:
 
-- `MD_str_<name>` - String metadata
-- `MD_num_<name>` - Numeric metadata
-- `MD_date_<name>` - Date metadata
-- `MD_bool_<name>` - Boolean metadata
+-   `MD_str_<name>` - String metadata
+-   `MD_num_<name>` - Numeric metadata
+-   `MD_date_<name>` - Date metadata
+-   `MD_bool_<name>` - Boolean metadata
 
 Example: If you have metadata `{"product": "Training"}`, it's stored as `MD_str_product` in OpenSearch.
 
@@ -436,15 +437,15 @@ Asset: training-model-001
 
 ```json
 [
-  {
-    "indexType": "asset",
-    "assetName": "training-model-001",
-    "database": "vr-models-training",
-    "assetType": "3d-model",
-    "description": "Training model for VR simulation",
-    "tags": ["training", "simulation", "vr"],
-    "score": 0.95
-  }
+    {
+        "indexType": "asset",
+        "assetName": "training-model-001",
+        "database": "vr-models-training",
+        "assetType": "3d-model",
+        "description": "Training model for VR simulation",
+        "tags": ["training", "simulation", "vr"],
+        "score": 0.95
+    }
 ]
 ```
 
@@ -452,21 +453,21 @@ Asset: training-model-001
 
 ```json
 [
-  {
-    "indexType": "asset",
-    "assetName": "training-model-001",
-    "database": "vr-models-training",
-    "score": 0.95,
-    "explanation": {
-      "query_type": "combined",
-      "index_type": "asset",
-      "matched_fields": ["str_assetname", "MD_str_product"],
-      "match_reasons": {
-        "str_assetname": "Matched core asset field 'str_assetname'",
-        "MD_str_product": "Matched metadata field 'MD_str_product'"
-      }
+    {
+        "indexType": "asset",
+        "assetName": "training-model-001",
+        "database": "vr-models-training",
+        "score": 0.95,
+        "explanation": {
+            "query_type": "combined",
+            "index_type": "asset",
+            "matched_fields": ["str_assetname", "MD_str_product"],
+            "match_reasons": {
+                "str_assetname": "Matched core asset field 'str_assetname'",
+                "MD_str_product": "Matched metadata field 'MD_str_product'"
+            }
+        }
     }
-  }
 ]
 ```
 
@@ -592,11 +593,12 @@ vamscli search assets \
 ## Troubleshooting
 
 For common search issues and solutions, see:
-- [Search Issues Troubleshooting](../troubleshooting/search-issues.md)
+
+-   [Search Issues Troubleshooting](../troubleshooting/search-issues.md)
 
 ## Next Steps
 
-- [Asset Management Commands](asset-management.md) - Managing assets after finding them
-- [File Operations Commands](file-operations.md) - Working with files found in search
-- [Metadata Management](metadata-management.md) - Working with asset/file metadata
-- [Global Options](global-options.md) - Profile and authentication options
+-   [Asset Management Commands](asset-management.md) - Managing assets after finding them
+-   [File Operations Commands](file-operations.md) - Working with files found in search
+-   [Metadata Management](metadata-management.md) - Working with asset/file metadata
+-   [Global Options](global-options.md) - Profile and authentication options

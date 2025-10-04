@@ -731,7 +731,7 @@ Create metadata for an asset link.
 
 -   `-k, --key`: Metadata key (required unless using --json-input)
 -   `-v, --value`: Metadata value (required unless using --json-input)
--   `-t, --type`: Metadata type - `string`, `number`, `boolean`, `date`, `xyz` (default: string)
+-   `-t, --type`: Metadata type - `string`, `number`, `boolean`, `date`, `xyz`, `wxyz`, `matrix4x4`, `geopoint`, `geojson`, `lla`, `json` (default: string)
 -   `--json-input`: JSON file containing metadata fields
 -   `--json-output`: Output raw JSON response
 
@@ -750,8 +750,26 @@ vamscli asset-links-metadata create abc123-def456-ghi789-012345 --key "is_primar
 # Create date metadata
 vamscli asset-links-metadata create abc123-def456-ghi789-012345 --key "created_date" --value "2023-12-01T10:30:00Z" --type date
 
+# Create JSON metadata
+vamscli asset-links-metadata create abc123-def456-ghi789-012345 --key "config" --value '{"enabled": true, "count": 5}' --type json
+
 # Create XYZ coordinate metadata
 vamscli asset-links-metadata create abc123-def456-ghi789-012345 --key "offset" --value '{"x": 1.5, "y": 2.0, "z": 0.5}' --type xyz
+
+# Create WXYZ quaternion metadata
+vamscli asset-links-metadata create abc123-def456-ghi789-012345 --key "rotation" --value '{"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0}' --type wxyz
+
+# Create 4x4 transformation matrix metadata
+vamscli asset-links-metadata create abc123-def456-ghi789-012345 --key "transform" --value '[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]' --type matrix4x4
+
+# Create GeoJSON Point metadata
+vamscli asset-links-metadata create abc123-def456-ghi789-012345 --key "location" --value '{"type": "Point", "coordinates": [-74.0060, 40.7128]}' --type geopoint
+
+# Create GeoJSON Polygon metadata
+vamscli asset-links-metadata create abc123-def456-ghi789-012345 --key "boundary" --value '{"type": "Polygon", "coordinates": [[[-74.1, 40.7], [-74.0, 40.7], [-74.0, 40.8], [-74.1, 40.8], [-74.1, 40.7]]]}' --type geojson
+
+# Create LLA coordinate metadata
+vamscli asset-links-metadata create abc123-def456-ghi789-012345 --key "position" --value '{"lat": 40.7128, "long": -74.0060, "alt": 10.5}' --type lla
 
 # Create from JSON file
 vamscli asset-links-metadata create abc123-def456-ghi789-012345 --json-input metadata.json
@@ -776,7 +794,15 @@ vamscli asset-links-metadata create abc123-def456-ghi789-012345 --key "status" -
 -   **`number`**: Numeric values (integers or floats)
 -   **`boolean`**: Boolean values (true/false)
 -   **`date`**: ISO date format (e.g., 2023-12-01T10:30:00Z)
+-   **`json`**: Any valid JSON object or array
 -   **`xyz`**: 3D coordinates as JSON objects with x, y, z numeric values
+-   **`wxyz`**: Quaternion as JSON objects with w, x, y, z numeric values
+-   **`matrix4x4`**: 4x4 transformation matrix as JSON array
+-   **`geopoint`**: GeoJSON Point objects for geographic coordinates
+-   **`geojson`**: Any valid GeoJSON object (Point, Polygon, Feature, etc.)
+-   **`lla`**: Latitude/Longitude/Altitude coordinates as JSON objects
+
+**Coordinate and Matrix Formats:**
 
 **XYZ Coordinate Format:**
 
@@ -785,6 +811,47 @@ vamscli asset-links-metadata create abc123-def456-ghi789-012345 --key "status" -
     "x": 1.5,
     "y": 2.0,
     "z": 0.5
+}
+```
+
+**WXYZ Quaternion Format:**
+
+```json
+{
+    "w": 1.0,
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.0
+}
+```
+
+**MATRIX4X4 Format:**
+
+```json
+[
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+]
+```
+
+**GEOPOINT Format:**
+
+```json
+{
+    "type": "Point",
+    "coordinates": [-74.006, 40.7128]
+}
+```
+
+**LLA Coordinate Format:**
+
+```json
+{
+    "lat": 40.7128,
+    "long": -74.006,
+    "alt": 10.5
 }
 ```
 
@@ -800,7 +867,7 @@ Update existing metadata for an asset link.
 **Options:**
 
 -   `-v, --value`: New metadata value (required unless using --json-input)
--   `-t, --type`: Metadata type - `string`, `number`, `boolean`, `date`, `xyz` (default: string)
+-   `-t, --type`: Metadata type - `string`, `number`, `boolean`, `date`, `xyz`, `wxyz`, `matrix4x4`, `geopoint`, `geojson`, `lla`, `json` (default: string)
 -   `--json-input`: JSON file containing metadata fields
 -   `--json-output`: Output raw JSON response
 
@@ -813,8 +880,32 @@ vamscli asset-links-metadata update abc123-def456-ghi789-012345 description --va
 # Update numeric metadata
 vamscli asset-links-metadata update abc123-def456-ghi789-012345 distance --value "20.0" --type number
 
+# Update boolean metadata
+vamscli asset-links-metadata update abc123-def456-ghi789-012345 is_active --value "false" --type boolean
+
+# Update date metadata
+vamscli asset-links-metadata update abc123-def456-ghi789-012345 last_modified --value "2023-12-15T14:30:00Z" --type date
+
+# Update JSON metadata
+vamscli asset-links-metadata update abc123-def456-ghi789-012345 config --value '{"enabled": false, "priority": 1}' --type json
+
 # Update XYZ coordinates
 vamscli asset-links-metadata update abc123-def456-ghi789-012345 offset --value '{"x": 2.0, "y": 3.0, "z": 1.0}' --type xyz
+
+# Update WXYZ quaternion
+vamscli asset-links-metadata update abc123-def456-ghi789-012345 rotation --value '{"w": 0.707, "x": 0.707, "y": 0.0, "z": 0.0}' --type wxyz
+
+# Update 4x4 transformation matrix
+vamscli asset-links-metadata update abc123-def456-ghi789-012345 transform --value '[[2,0,0,5],[0,2,0,10],[0,0,2,15],[0,0,0,1]]' --type matrix4x4
+
+# Update GeoJSON Point location
+vamscli asset-links-metadata update abc123-def456-ghi789-012345 location --value '{"type": "Point", "coordinates": [-73.9857, 40.7484]}' --type geopoint
+
+# Update GeoJSON area boundary
+vamscli asset-links-metadata update abc123-def456-ghi789-012345 boundary --value '{"type": "Polygon", "coordinates": [[[-74.2, 40.6], [-74.0, 40.6], [-74.0, 40.8], [-74.2, 40.8], [-74.2, 40.6]]]}' --type geojson
+
+# Update LLA coordinates
+vamscli asset-links-metadata update abc123-def456-ghi789-012345 position --value '{"lat": 40.7484, "long": -73.9857, "alt": 15.2}' --type lla
 
 # Update from JSON file
 vamscli asset-links-metadata update abc123-def456-ghi789-012345 description --json-input updated_metadata.json

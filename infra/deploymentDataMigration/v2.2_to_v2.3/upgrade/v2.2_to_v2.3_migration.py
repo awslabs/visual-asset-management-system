@@ -5,14 +5,17 @@
 """
 Data Migration Script for VAMS v2.2 to v2.3
 
-This script performs OpenSearch dual-index migration by:
-1. Updating _os_reindex_date timestamp for all assets in DynamoDB
-2. Publishing S3 ObjectCreated events to SNS for all files
-3. Verifying the migration was successful by checking index document counts
-4. Generating detailed migration reports
+This script performs OpenSearch dual-index migration by directly updating
+the AssetsMetadata DynamoDB table. Updates to this table trigger DynamoDB
+Streams which automatically reindex assets and files in OpenSearch.
 
-The script uses the reusable reindex_utility module to perform the actual
-reindexing operations, making it simpler and more maintainable.
+Key Features:
+- Directly inserts/updates records in AssetsMetadata table
+- Preserves existing metadata attributes
+- Sets _asset_table_updated timestamp for tracking
+- Optional index clearing before migration
+- Verification of migration success
+- Detailed migration reports
 
 Usage:
     python v2.2_to_v2.3_migration.py --config v2.2_to_v2.3_migration_config.json
@@ -21,11 +24,13 @@ Usage:
 Requirements:
     - Python 3.6+
     - boto3
+    - opensearchpy (for index clearing)
+    - aws-requests-auth (for OpenSearch authentication)
     - AWS credentials with permissions to:
-      * DynamoDB: UpdateItem, Scan on asset and S3 buckets tables
+      * DynamoDB: GetItem, PutItem, Scan on asset, S3 buckets, and AssetsMetadata tables
       * S3: ListBucket, GetObject, HeadObject on asset buckets
-      * SNS: Publish on S3 object created topic
       * SSM: GetParameter for OpenSearch configuration
+      * OpenSearch: DeleteByQuery (if clearing indexes)
 """
 
 import argparse
@@ -58,14 +63,14 @@ logger = logging.getLogger(__name__)
 
 # Default configuration - can be overridden by config file or command line arguments
 CONFIG = {
-    # DynamoDB tables
+    # Source DynamoDB tables
     "asset_storage_table_name": "YOUR_ASSET_STORAGE_TABLE_NAME",
     "s3_asset_buckets_table_name": "YOUR_S3_ASSET_BUCKETS_TABLE_NAME",
     
-    # SNS topic for S3 object created events
-    "s3_object_created_sns_topic_arn": "YOUR_S3_OBJECT_CREATED_SNS_TOPIC_ARN",
+    # Target DynamoDB table
+    "assets_metadata_table_name": "YOUR_ASSETS_METADATA_TABLE_NAME",
     
-    # SSM parameters for OpenSearch configuration (for verification)
+    # SSM parameters for OpenSearch configuration (for verification and optional clearing)
     "opensearch_asset_index_ssm_param": "YOUR_OPENSEARCH_ASSET_INDEX_SSM_PARAM",
     "opensearch_file_index_ssm_param": "YOUR_OPENSEARCH_FILE_INDEX_SSM_PARAM",
     "opensearch_endpoint_ssm_param": "YOUR_OPENSEARCH_ENDPOINT_SSM_PARAM",
@@ -74,18 +79,19 @@ CONFIG = {
     "aws_profile": None,
     "aws_region": None,
     
-    # Reindex settings
+    # Migration settings
+    "clear_indexes_before_migration": False,
     "reindex_settings": {
         "asset_batch_size": 25,
-        "s3_batch_size": 100,
-        "max_workers": 10,
-        "sns_publish_delay": 0.05
+        "file_batch_size": 100,
+        "memory_batch_size": 1000,
+        "max_workers": 10
     },
     
-    # Migration settings
+    # Verification settings
     "log_level": "INFO",
     "dry_run": False,
-    "verification_wait_time": 300
+    "verification_wait_time": 120
 }
 
 def load_config_from_file(config_file):
@@ -214,7 +220,7 @@ def verify_migration(session, opensearch_asset_index, opensearch_file_index, ope
             aws_token=credentials.token,
             aws_host=host,
             aws_region=session.region_name,
-            aws_service='aoss' if os.environ.get('OPENSEARCH_TYPE', 'serverless') == 'serverless' else 'es'
+            aws_service='aoss'  # Use 'es' for managed OpenSearch
         )
         
         client = OpenSearch(
@@ -288,10 +294,14 @@ def main():
     parser.add_argument('--limit', type=int, help='Maximum number of assets/files to process (for testing)')
     parser.add_argument('--asset-storage-table', help='Name of the asset storage table')
     parser.add_argument('--s3-asset-buckets-table', help='Name of the S3 asset buckets table')
-    parser.add_argument('--sns-topic-arn', help='ARN of the SNS topic for S3 object created events')
+    parser.add_argument('--assets-metadata-table', help='Name of the AssetsMetadata table')
     parser.add_argument('--opensearch-asset-index-ssm', help='SSM parameter for asset index name')
     parser.add_argument('--opensearch-file-index-ssm', help='SSM parameter for file index name')
     parser.add_argument('--opensearch-endpoint-ssm', help='SSM parameter for OpenSearch endpoint')
+    parser.add_argument('--clear-indexes', action='store_true', help='Clear OpenSearch indexes before migration')
+    parser.add_argument('--asset-index-name', help='Asset index name (for clearing, overrides SSM)')
+    parser.add_argument('--file-index-name', help='File index name (for clearing, overrides SSM)')
+    parser.add_argument('--opensearch-endpoint', help='OpenSearch endpoint URL (for clearing, overrides SSM)')
     parser.add_argument('--dry-run', action='store_true', help='Perform a dry run without making changes')
     parser.add_argument('--config', help='Path to configuration file')
     parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], 
@@ -310,8 +320,8 @@ def main():
         CONFIG['asset_storage_table_name'] = args.asset_storage_table
     if args.s3_asset_buckets_table:
         CONFIG['s3_asset_buckets_table_name'] = args.s3_asset_buckets_table
-    if args.sns_topic_arn:
-        CONFIG['s3_object_created_sns_topic_arn'] = args.sns_topic_arn
+    if args.assets_metadata_table:
+        CONFIG['assets_metadata_table_name'] = args.assets_metadata_table
     if args.opensearch_asset_index_ssm:
         CONFIG['opensearch_asset_index_ssm_param'] = args.opensearch_asset_index_ssm
     if args.opensearch_file_index_ssm:
@@ -324,6 +334,8 @@ def main():
         CONFIG['aws_region'] = args.region
     if args.dry_run:
         CONFIG['dry_run'] = True
+    if args.clear_indexes:
+        CONFIG['clear_indexes_before_migration'] = True
     if args.log_level:
         CONFIG['log_level'] = args.log_level
         
@@ -334,7 +346,7 @@ def main():
     required_configs = [
         'asset_storage_table_name',
         's3_asset_buckets_table_name',
-        's3_object_created_sns_topic_arn'
+        'assets_metadata_table_name'
     ]
     
     for config_key in required_configs:
@@ -353,22 +365,26 @@ def main():
     logger.info("=" * 80)
     logger.info("VAMS v2.2 to v2.3 OpenSearch Dual-Index Migration")
     logger.info("=" * 80)
-    logger.info(f"Configuration: {json.dumps({k: v for k, v in CONFIG.items() if 'password' not in k.lower() and 'arn' not in k.lower()}, indent=2)}")
+    logger.info(f"Configuration: {json.dumps({k: v for k, v in CONFIG.items() if 'password' not in k.lower()}, indent=2)}")
     
     if CONFIG.get('dry_run', False):
         logger.info("DRY RUN MODE - No changes will be made")
     
-    # Get OpenSearch configuration from SSM (for verification)
-    opensearch_asset_index = None
-    opensearch_file_index = None
-    opensearch_endpoint = None
+    # Get OpenSearch configuration from SSM or command line
+    opensearch_asset_index = args.asset_index_name
+    opensearch_file_index = args.file_index_name
+    opensearch_endpoint = args.opensearch_endpoint
     
-    if not args.skip_verification:
+    if not args.skip_verification or CONFIG.get('clear_indexes_before_migration'):
         try:
-            logger.info("Loading OpenSearch configuration from SSM parameters")
-            opensearch_asset_index = get_ssm_parameter_value(ssm_client, CONFIG['opensearch_asset_index_ssm_param'])
-            opensearch_file_index = get_ssm_parameter_value(ssm_client, CONFIG['opensearch_file_index_ssm_param'])
-            opensearch_endpoint = get_ssm_parameter_value(ssm_client, CONFIG['opensearch_endpoint_ssm_param'])
+            logger.info("Loading OpenSearch configuration")
+            
+            if not opensearch_asset_index:
+                opensearch_asset_index = get_ssm_parameter_value(ssm_client, CONFIG['opensearch_asset_index_ssm_param'])
+            if not opensearch_file_index:
+                opensearch_file_index = get_ssm_parameter_value(ssm_client, CONFIG['opensearch_file_index_ssm_param'])
+            if not opensearch_endpoint:
+                opensearch_endpoint = get_ssm_parameter_value(ssm_client, CONFIG['opensearch_endpoint_ssm_param'])
             
             logger.info(f"OpenSearch configuration loaded:")
             logger.info(f"  Asset index: {opensearch_asset_index}")
@@ -376,7 +392,10 @@ def main():
             logger.info(f"  Endpoint: {opensearch_endpoint}")
             
         except Exception as e:
-            logger.warning(f"Could not load OpenSearch configuration from SSM: {e}")
+            logger.warning(f"Could not load OpenSearch configuration: {e}")
+            if CONFIG.get('clear_indexes_before_migration'):
+                logger.error("Cannot clear indexes without OpenSearch configuration")
+                return 1
             logger.warning("Verification will be skipped")
             args.skip_verification = True
     
@@ -392,26 +411,40 @@ def main():
             session=session,
             asset_table_name=CONFIG['asset_storage_table_name'],
             s3_buckets_table_name=CONFIG['s3_asset_buckets_table_name'],
-            sns_topic_arn=CONFIG['s3_object_created_sns_topic_arn'],
+            assets_metadata_table_name=CONFIG['assets_metadata_table_name'],
             asset_batch_size=reindex_settings.get('asset_batch_size', 25),
-            s3_batch_size=reindex_settings.get('s3_batch_size', 100),
-            max_workers=reindex_settings.get('max_workers', 10),
-            sns_publish_delay=reindex_settings.get('sns_publish_delay', 0.05)
+            file_batch_size=reindex_settings.get('file_batch_size', 100),
+            memory_batch_size=reindex_settings.get('memory_batch_size', 1000),
+            max_workers=reindex_settings.get('max_workers', 10)
         )
         
+        # Step 0: Clear indexes if requested (BEFORE migration)
+        clear_results = None
+        if CONFIG.get('clear_indexes_before_migration') and not CONFIG['dry_run']:
+            logger.info("Step 0: Clearing OpenSearch indexes before migration")
+            clear_results = utility.clear_opensearch_indexes(
+                asset_index=opensearch_asset_index,
+                file_index=opensearch_file_index,
+                endpoint=opensearch_endpoint
+            )
+            
+            if not clear_results.get('asset_index', {}).get('success') or \
+               not clear_results.get('file_index', {}).get('success'):
+                logger.warning("Index clearing completed with issues")
+        
         # Step 1: Reindex assets (MUST be done first)
-        logger.info("Step 1: Reindexing assets by updating _os_reindex_date timestamps")
+        logger.info("Step 1: Reindexing assets by updating AssetsMetadata table")
         asset_results = utility.reindex_assets(dry_run=CONFIG['dry_run'], limit=args.limit)
         
         # Step 2: Reindex S3 files (done after assets)
-        logger.info("Step 2: Reindexing S3 files by publishing ObjectCreated events to SNS")
-        file_results = utility.reindex_s3_files(dry_run=CONFIG['dry_run'], limit=args.limit)
+        logger.info("Step 2: Reindexing S3 files by updating AssetsMetadata table")
+        file_results = utility.reindex_files(dry_run=CONFIG['dry_run'], limit=args.limit)
         
-        # Step 3: Wait for indexing to complete (if not dry run)
+        # Step 3: Wait for DynamoDB Streams processing (if not dry run)
         verification_results = None
         if not CONFIG['dry_run'] and not args.skip_verification:
-            wait_time = CONFIG.get('verification_wait_time', 300)
-            logger.info(f"Step 3: Waiting {wait_time} seconds for async indexing operations to complete...")
+            wait_time = CONFIG.get('verification_wait_time', 120)
+            logger.info(f"Step 3: Waiting {wait_time} seconds for DynamoDB Streams processing...")
             time.sleep(wait_time)
             
             # Step 4: Verify migration
@@ -437,6 +470,7 @@ def main():
                 'duration_seconds': migration_duration,
                 'dry_run': CONFIG['dry_run']
             },
+            'index_clearing': clear_results,
             'asset_reindexing': asset_results,
             'file_reindexing': file_results,
             'verification': verification_results,
@@ -460,6 +494,12 @@ def main():
         logger.info("MIGRATION SUMMARY")
         logger.info("=" * 80)
         logger.info(f"Migration Duration: {migration_duration:.1f} seconds")
+        
+        if clear_results:
+            logger.info(f"Indexes Cleared:")
+            logger.info(f"  Asset index: {clear_results.get('asset_index', {}).get('deleted_count', 0)} documents")
+            logger.info(f"  File index: {clear_results.get('file_index', {}).get('deleted_count', 0)} documents")
+        
         logger.info(f"Assets Processed: {asset_results['success_count']}/{asset_results['total_count']} successful ({asset_results['failed_count']} failed)")
         logger.info(f"Files Processed: {file_results['success_count']}/{file_results['total_count']} successful ({file_results['failed_count']} failed)")
         

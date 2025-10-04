@@ -35,32 +35,32 @@ export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
             try {
                 // Create cache key for asset details
                 const assetCacheKey = `asset:${databaseId}:${assetId}`;
-                
+
                 // Check asset cache first BEFORE resetting state
                 const cachedAsset = cacheManager.getAsset(assetCacheKey);
-                
+
                 let assetPreviewKey: string;
-                let downloadType: 'assetPreview' | 'assetFile';
-                
+                let downloadType: "assetPreview" | "assetFile";
+
                 if (cachedAsset) {
                     // Use cached asset details
                     console.log(`[Cache HIT] Asset details for ${assetId}`);
                     assetPreviewKey = cachedAsset.previewKey;
                     downloadType = cachedAsset.downloadType;
-                    
+
                     // Check if cached asset has no preview
-                    if (!assetPreviewKey || assetPreviewKey === '') {
+                    if (!assetPreviewKey || assetPreviewKey === "") {
                         console.log(`[Cache HIT] Asset ${assetId} has no preview (cached)`);
                         setUrl(null);
                         setError(true);
                         setLoading(false);
                         return;
                     }
-                    
+
                     // Check preview cache
                     const previewCacheKey = `preview:${databaseId}:${assetId}:${assetPreviewKey}`;
                     const cachedPreview = cacheManager.getPreview(previewCacheKey);
-                    
+
                     if (cachedPreview) {
                         // Use cached preview image - set state directly without loading
                         console.log(`[Cache HIT] Preview image for ${assetId}`);
@@ -70,7 +70,7 @@ export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
                         setError(false);
                         return;
                     }
-                    
+
                     // Preview not cached, but we have asset details
                     setAssetPreviewKey(assetPreviewKey);
                 } else {
@@ -80,7 +80,11 @@ export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
                     setError(false);
                     // Cache miss - fetch asset details from API
                     console.log(`[Cache MISS] Asset details for ${assetId}`);
-                    const assetDetails = await fetchAsset({ databaseId, assetId, showArchived: false });
+                    const assetDetails = await fetchAsset({
+                        databaseId,
+                        assetId,
+                        showArchived: false,
+                    });
                     console.log(`[DEBUG] fetchAsset returned:`, assetDetails);
 
                     if (!assetDetails || typeof assetDetails === "string") {
@@ -100,21 +104,22 @@ export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
 
                     if (!assetPreviewKey) {
                         console.log(`No preview key found for asset ${assetId}`);
-                        
+
                         // Cache that this asset has no preview to avoid repeated API calls
                         cacheManager.setAsset(assetCacheKey, {
-                            previewKey: '', // Empty string indicates no preview
-                            downloadType: 'assetPreview',
+                            previewKey: "", // Empty string indicates no preview
+                            downloadType: "assetPreview",
                         });
-                        
+
                         setError(true);
                         setLoading(false);
                         return;
                     }
 
                     // Determine download type
-                    downloadType = assetDetails.previewFile === assetPreviewKey ? "assetFile" : "assetPreview";
-                    
+                    downloadType =
+                        assetDetails.previewFile === assetPreviewKey ? "assetFile" : "assetPreview";
+
                     console.log(`[DEBUG] About to call setAsset with key: ${assetCacheKey}`);
                     // Cache the asset details
                     cacheManager.setAsset(assetCacheKey, {
@@ -122,7 +127,7 @@ export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
                         downloadType: downloadType,
                     });
                     console.log(`[DEBUG] setAsset completed`);
-                    
+
                     setAssetPreviewKey(assetPreviewKey);
                 }
 
@@ -131,7 +136,7 @@ export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
                 // Check preview cache before downloading
                 const previewCacheKey = `preview:${databaseId}:${assetId}:${assetPreviewKey}`;
                 const cachedPreview = cacheManager.getPreview(previewCacheKey);
-                
+
                 if (cachedPreview) {
                     // Use cached preview image
                     console.log(`[Cache HIT] Preview image for ${assetId} (after asset fetch)`);
@@ -157,11 +162,19 @@ export const PreviewThumbnailCell: React.FC<PreviewThumbnailCellProps> = ({
                     } else {
                         const imageDataUrl = response[1];
                         setUrl(imageDataUrl);
-                        
+
                         // Cache the preview image
                         const imageSize = cacheManager.estimateDataUrlSize(imageDataUrl);
-                        cacheManager.setPreview(previewCacheKey, { dataUrl: imageDataUrl }, imageSize);
-                        console.log(`[Cache SET] Preview image for ${assetId} (${(imageSize / 1024).toFixed(2)} KB)`);
+                        cacheManager.setPreview(
+                            previewCacheKey,
+                            { dataUrl: imageDataUrl },
+                            imageSize
+                        );
+                        console.log(
+                            `[Cache SET] Preview image for ${assetId} (${(imageSize / 1024).toFixed(
+                                2
+                            )} KB)`
+                        );
                     }
                 } else {
                     setError(true);

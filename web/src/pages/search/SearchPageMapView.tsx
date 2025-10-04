@@ -4,10 +4,25 @@
  */
 
 import React, { useState, useEffect, useRef } from "react";
-import Map, { Marker, Popup, NavigationControl, MapRef, Source, Layer } from "react-map-gl/maplibre";
+import Map, {
+    Marker,
+    Popup,
+    NavigationControl,
+    MapRef,
+    Source,
+    Layer,
+} from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { SearchPageViewProps } from "./SearchPageTypes";
-import { Box, Button, Link, Pagination, SpaceBetween, Popover, Icon } from "@cloudscape-design/components";
+import {
+    Box,
+    Button,
+    Link,
+    Pagination,
+    SpaceBetween,
+    Popover,
+    Icon,
+} from "@cloudscape-design/components";
 import { Cache } from "aws-amplify";
 import { LngLatBoundsLike } from "maplibre-gl";
 import PreviewThumbnailCell from "../../components/search/SearchPreviewThumbnail/PreviewThumbnailCell";
@@ -15,14 +30,14 @@ import { SearchExplanation } from "../../components/search/types";
 
 interface LocationData {
     id: string;
-    type: 'point' | 'geojson';
+    type: "point" | "geojson";
     databaseId: string;
     assetId: string;
     assetName: string;
     description?: string;
     tags?: string[];
     explanation?: SearchExplanation;
-    metadata?: Array<{name: string, type: string, value: any}>;
+    metadata?: Array<{ name: string; type: string; value: any }>;
     // For points
     latitude?: number;
     longitude?: number;
@@ -51,16 +66,21 @@ const ExplanationPopover: React.FC<{ explanation: SearchExplanation }> = ({ expl
                 </Box>
                 {explanation.matched_fields.length > 0 && (
                     <>
-                        <Box variant="h5">Matched Fields ({explanation.matched_fields.length}):</Box>
+                        <Box variant="h5">
+                            Matched Fields ({explanation.matched_fields.length}):
+                        </Box>
                         <Box>
-                            <ul style={{ margin: 0, paddingLeft: '20px' }}>
+                            <ul style={{ margin: 0, paddingLeft: "20px" }}>
                                 {explanation.matched_fields.slice(0, 5).map((field, idx) => (
                                     <li key={idx}>
-                                        <strong>{field}:</strong> {explanation.match_reasons[field] || 'Matched'}
+                                        <strong>{field}:</strong>{" "}
+                                        {explanation.match_reasons[field] || "Matched"}
                                     </li>
                                 ))}
                                 {explanation.matched_fields.length > 5 && (
-                                    <li>...and {explanation.matched_fields.length - 5} more fields</li>
+                                    <li>
+                                        ...and {explanation.matched_fields.length - 5} more fields
+                                    </li>
                                 )}
                             </ul>
                         </Box>
@@ -74,11 +94,13 @@ const ExplanationPopover: React.FC<{ explanation: SearchExplanation }> = ({ expl
 );
 
 // Helper component to render metadata popover
-const MetadataPopover: React.FC<{ metadata: Array<{name: string, type: string, value: any}> }> = ({ metadata }) => {
+const MetadataPopover: React.FC<{
+    metadata: Array<{ name: string; type: string; value: any }>;
+}> = ({ metadata }) => {
     if (metadata.length === 0) {
         return null;
     }
-    
+
     return (
         <Popover
             size="large"
@@ -89,10 +111,13 @@ const MetadataPopover: React.FC<{ metadata: Array<{name: string, type: string, v
                 <SpaceBetween size="s">
                     <Box variant="h4">Metadata Fields ({metadata.length})</Box>
                     <Box>
-                        <ul style={{ margin: 0, paddingLeft: '20px' }}>
+                        <ul style={{ margin: 0, paddingLeft: "20px" }}>
                             {metadata.map((field, idx) => (
                                 <li key={idx}>
-                                    <strong>{field.name} ({field.type}):</strong> {String(field.value)}
+                                    <strong>
+                                        {field.name} ({field.type}):
+                                    </strong>{" "}
+                                    {String(field.value)}
                                 </li>
                             ))}
                         </ul>
@@ -106,45 +131,45 @@ const MetadataPopover: React.FC<{ metadata: Array<{name: string, type: string, v
 };
 
 // Helper function to extract and format metadata fields with type information
-const extractMetadata = (item: any): Array<{name: string, type: string, value: any}> => {
-    const metadata: Array<{name: string, type: string, value: any}> = [];
-    
+const extractMetadata = (item: any): Array<{ name: string; type: string; value: any }> => {
+    const metadata: Array<{ name: string; type: string; value: any }> = [];
+
     // Type mapping for display
     const typeLabels: Record<string, string> = {
-        'str': 'String',
-        'num': 'Number',
-        'bool': 'Boolean',
-        'date': 'Date',
-        'list': 'List',
-        'gp': 'Geo Point',
-        'gs': 'Geo Shape',
+        str: "String",
+        num: "Number",
+        bool: "Boolean",
+        date: "Date",
+        list: "List",
+        gp: "Geo Point",
+        gs: "Geo Shape",
     };
-    
+
     // Find all MD_ fields
-    Object.keys(item).forEach(key => {
-        if (key.startsWith('MD_')) {
+    Object.keys(item).forEach((key) => {
+        if (key.startsWith("MD_")) {
             // Format: MD_<type>_<fieldname>
-            const parts = key.split('_');
+            const parts = key.split("_");
             if (parts.length >= 3) {
                 // parts[0] = 'MD', parts[1] = type, parts[2+] = field name
                 const fieldType = parts[1];
-                const fieldName = parts.slice(2).join('_');
+                const fieldName = parts.slice(2).join("_");
                 metadata.push({
                     name: fieldName,
                     type: typeLabels[fieldType] || fieldType,
-                    value: item[key]
+                    value: item[key],
                 });
             } else {
                 // Fallback: just remove MD_ prefix
                 metadata.push({
                     name: key.substring(3),
-                    type: 'Unknown',
-                    value: item[key]
+                    type: "Unknown",
+                    value: item[key],
                 });
             }
         }
     });
-    
+
     return metadata;
 };
 
@@ -156,61 +181,82 @@ const extractLocationData = (item: any): Partial<LocationData> | null => {
     try {
         // Priority 1: Check for MD_gp_location or MD_gs_location (metadata geo fields)
         const geoData = item.MD_gp_location || item.MD_gs_location || item.gp_location;
-        
+
         if (geoData) {
             // Parse if string
-            const parsed = typeof geoData === 'string' ? JSON.parse(geoData) : geoData;
-            
+            const parsed = typeof geoData === "string" ? JSON.parse(geoData) : geoData;
+
             // If it's a GeoJSON Point, extract coordinates
-            if (parsed.type === 'Point' && Array.isArray(parsed.coordinates)) {
+            if (parsed.type === "Point" && Array.isArray(parsed.coordinates)) {
                 const [lon, lat] = parsed.coordinates;
-                if (typeof lat === 'number' && typeof lon === 'number' && !isNaN(lat) && !isNaN(lon)) {
-                    return { type: 'point', latitude: lat, longitude: lon };
+                if (
+                    typeof lat === "number" &&
+                    typeof lon === "number" &&
+                    !isNaN(lat) &&
+                    !isNaN(lon)
+                ) {
+                    return { type: "point", latitude: lat, longitude: lon };
                 }
             }
-            
+
             // If it's a Feature with Point geometry
-            if (parsed.type === 'Feature' && parsed.geometry?.type === 'Point') {
+            if (parsed.type === "Feature" && parsed.geometry?.type === "Point") {
                 const [lon, lat] = parsed.geometry.coordinates;
-                if (typeof lat === 'number' && typeof lon === 'number' && !isNaN(lat) && !isNaN(lon)) {
-                    return { type: 'point', latitude: lat, longitude: lon };
+                if (
+                    typeof lat === "number" &&
+                    typeof lon === "number" &&
+                    !isNaN(lat) &&
+                    !isNaN(lon)
+                ) {
+                    return { type: "point", latitude: lat, longitude: lon };
                 }
             }
-            
+
             // For any other GeoJSON (Polygon, MultiPolygon, etc.), pass it through
-            if (parsed.type === 'Feature' || parsed.type === 'Polygon' || parsed.type === 'MultiPolygon') {
-                return { type: 'geojson', geoJson: parsed };
+            if (
+                parsed.type === "Feature" ||
+                parsed.type === "Polygon" ||
+                parsed.type === "MultiPolygon"
+            ) {
+                return { type: "geojson", geoJson: parsed };
             }
-            
+
             // Handle legacy direct lat/lon object
-            if (typeof parsed.lat === 'number' && typeof parsed.lon === 'number') {
+            if (typeof parsed.lat === "number" && typeof parsed.lon === "number") {
                 if (!isNaN(parsed.lat) && !isNaN(parsed.lon)) {
-                    return { type: 'point', latitude: parsed.lat, longitude: parsed.lon };
+                    return { type: "point", latitude: parsed.lat, longitude: parsed.lon };
                 }
             }
         }
-        
+
         // Priority 2: Check for string/number latitude/longitude metadata fields
         let latValue: any;
         let lonValue: any;
-        
-        Object.keys(item).forEach(key => {
+
+        Object.keys(item).forEach((key) => {
             if (key.match(/MD_(str|num)_latitude/i)) latValue = item[key];
             if (key.match(/MD_(str|num)_longitude/i)) lonValue = item[key];
         });
-        
+
         if (latValue !== undefined && lonValue !== undefined) {
-            const lat = typeof latValue === 'number' ? latValue : parseFloat(latValue);
-            const lon = typeof lonValue === 'number' ? lonValue : parseFloat(lonValue);
-            
-            if (!isNaN(lat) && !isNaN(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
-                return { type: 'point', latitude: lat, longitude: lon };
+            const lat = typeof latValue === "number" ? latValue : parseFloat(latValue);
+            const lon = typeof lonValue === "number" ? lonValue : parseFloat(lonValue);
+
+            if (
+                !isNaN(lat) &&
+                !isNaN(lon) &&
+                lat >= -90 &&
+                lat <= 90 &&
+                lon >= -180 &&
+                lon <= 180
+            ) {
+                return { type: "point", latitude: lat, longitude: lon };
             }
         }
-        
+
         return null;
     } catch (error) {
-        console.warn('Error extracting location data:', error);
+        console.warn("Error extracting location data:", error);
         return null;
     }
 };
@@ -219,7 +265,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     const [selectedItem, setSelectedItem] = useState<LocationData | null>(null);
     const mapRef = useRef<MapRef>(null);
     const config = Cache.getItem("config");
-    
+
     // Get pagination info from state
     const pageSize = state.tablePreferences?.pageSize || 50;
     const currentPage = 1 + Math.floor((state.pagination?.from || 0) / pageSize);
@@ -252,7 +298,9 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
             }
         });
 
-        console.log(`[MapView] Extracted ${validData.length} items with location data from ${state.result.hits.hits.length} results`);
+        console.log(
+            `[MapView] Extracted ${validData.length} items with location data from ${state.result.hits.hits.length} results`
+        );
         return validData;
     }, [state.result]);
 
@@ -267,8 +315,8 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
             const allLats: number[] = [];
             const allLons: number[] = [];
 
-            locationData.forEach(item => {
-                if (item.type === 'point' && item.latitude && item.longitude) {
+            locationData.forEach((item) => {
+                if (item.type === "point" && item.latitude && item.longitude) {
                     allLats.push(item.latitude);
                     allLons.push(item.longitude);
                 }
@@ -297,7 +345,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     // Handle pagination
     const handlePageChange = (pageIndex: number) => {
         dispatch({
-            type: 'query-paginate',
+            type: "query-paginate",
             pagination: {
                 from: (pageIndex - 1) * pageSize,
                 size: pageSize,
@@ -321,7 +369,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     }
 
     // Calculate initial view state from first point
-    const firstPoint = locationData.find(item => item.type === 'point');
+    const firstPoint = locationData.find((item) => item.type === "point");
     const initialViewState = firstPoint
         ? {
               latitude: firstPoint.latitude!,
@@ -339,12 +387,11 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
             {/* Header with result count */}
             {state?.result?.hits?.total?.value ? (
                 <Box variant="h2">
-                    {locationData.length} of {state.result.hits.total.value} result{state.result.hits.total.value !== 1 ? 's' : ''} with location data
+                    {locationData.length} of {state.result.hits.total.value} result
+                    {state.result.hits.total.value !== 1 ? "s" : ""} with location data
                 </Box>
             ) : (
-                <Box variant="h2">
-                    No search results with location data
-                </Box>
+                <Box variant="h2">No search results with location data</Box>
             )}
 
             {/* Warning when no location data */}
@@ -368,7 +415,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                         ariaLabels={{
                             nextPageLabel: "Next page",
                             previousPageLabel: "Previous page",
-                            pageLabel: (pageNumber) => `Page ${pageNumber} of ${pageCount}`
+                            pageLabel: (pageNumber) => `Page ${pageNumber} of ${pageCount}`,
                         }}
                     />
                 </Box>
@@ -386,7 +433,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
 
                 {/* Render GeoJSON features (polygons, etc.) */}
                 {locationData
-                    .filter(item => item.type === 'geojson' && item.geoJson)
+                    .filter((item) => item.type === "geojson" && item.geoJson)
                     .map((item) => (
                         <Source
                             key={item.id}
@@ -398,16 +445,18 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                                 id={`geojson-fill-${item.id}`}
                                 type="fill"
                                 paint={{
-                                    'fill-color': selectedItem?.id === item.id ? '#0972d3' : '#d91515',
-                                    'fill-opacity': 0.3,
+                                    "fill-color":
+                                        selectedItem?.id === item.id ? "#0972d3" : "#d91515",
+                                    "fill-opacity": 0.3,
                                 }}
                             />
                             <Layer
                                 id={`geojson-outline-${item.id}`}
                                 type="line"
                                 paint={{
-                                    'line-color': selectedItem?.id === item.id ? '#0972d3' : '#d91515',
-                                    'line-width': 2,
+                                    "line-color":
+                                        selectedItem?.id === item.id ? "#0972d3" : "#d91515",
+                                    "line-width": 2,
                                 }}
                             />
                         </Source>
@@ -415,7 +464,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
 
                 {/* Render point markers */}
                 {locationData
-                    .filter(item => item.type === 'point')
+                    .filter((item) => item.type === "point")
                     .map((item) => (
                         <Marker
                             key={item.id}
@@ -447,7 +496,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                     ))}
 
                 {/* Popup for selected item */}
-                {selectedItem && selectedItem.type === 'point' && (
+                {selectedItem && selectedItem.type === "point" && (
                     <Popup
                         latitude={selectedItem.latitude!}
                         longitude={selectedItem.longitude!}
@@ -476,8 +525,15 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                                     <Box variant="awsui-key-label">Asset Name</Box>
                                     <SpaceBetween direction="horizontal" size="xs">
                                         <Box variant="h3">{selectedItem.assetName}</Box>
-                                        {selectedItem.explanation && <ExplanationPopover explanation={selectedItem.explanation} />}
-                                        {selectedItem.metadata && selectedItem.metadata.length > 0 && <MetadataPopover metadata={selectedItem.metadata} />}
+                                        {selectedItem.explanation && (
+                                            <ExplanationPopover
+                                                explanation={selectedItem.explanation}
+                                            />
+                                        )}
+                                        {selectedItem.metadata &&
+                                            selectedItem.metadata.length > 0 && (
+                                                <MetadataPopover metadata={selectedItem.metadata} />
+                                            )}
                                     </SpaceBetween>
                                 </Box>
 

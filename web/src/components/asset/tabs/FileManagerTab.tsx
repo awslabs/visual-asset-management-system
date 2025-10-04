@@ -30,8 +30,8 @@ export const FileManagerTab: React.FC<FileManagerTabProps> = ({
             {loading ? (
                 <LoadingSpinner text="Loading files..." />
             ) : (
-                <EnhancedFileManager 
-                    assetName={assetName} 
+                <EnhancedFileManager
+                    assetName={assetName}
                     assetFiles={assetFiles}
                     filePathToNavigate={filePathToNavigate}
                 />

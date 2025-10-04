@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from "react";
 import {
     Container,
     Header,
@@ -13,9 +13,9 @@ import {
     SpaceBetween,
     ExpandableSection,
     Box,
-} from '@cloudscape-design/components';
-import { SearchFilters } from '../types';
-import { fetchAllDatabases, fetchTags } from '../../../services/APIService';
+} from "@cloudscape-design/components";
+import { SearchFilters } from "../types";
+import { fetchAllDatabases, fetchTags } from "../../../services/APIService";
 
 interface BasicFiltersPanelProps {
     filters: SearchFilters;
@@ -23,7 +23,7 @@ interface BasicFiltersPanelProps {
     loading?: boolean;
     searchResult?: any;
     databaseLocked?: boolean;
-    recordType: 'asset' | 'file';
+    recordType: "asset" | "file";
 }
 
 const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
@@ -55,7 +55,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
 
     // Build database options with result counts
     const databaseOptions = [
-        { label: 'All Databases', value: 'all' },
+        { label: "All Databases", value: "all" },
         ...databases.map((db: any) => {
             let count = 0;
             // Map through result aggregation to find doc_count for each database
@@ -77,7 +77,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
 
     // Build asset type options from aggregations
     const assetTypeOptions = [
-        { label: 'All Types', value: 'all' },
+        { label: "All Types", value: "all" },
         ...(searchResult?.aggregations?.str_assettype?.buckets?.map((bucket: any) => ({
             label: `${bucket.key} (${bucket.doc_count})`,
             value: bucket.key,
@@ -86,9 +86,9 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
 
     // Build tag options from aggregations
     const tagOptions = [
-        { label: 'All Tags', value: 'all' },
+        { label: "All Tags", value: "all" },
         ...(searchResult?.aggregations?.list_tags?.buckets?.flatMap((tag: any) =>
-            tag.key.split(',').map((value: string) => ({
+            tag.key.split(",").map((value: string) => ({
                 label: `${value.trim()} (${tag.doc_count})`,
                 value: value.trim(),
             }))
@@ -106,14 +106,19 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                 {/* Database Filter */}
                 <FormField
                     label="Database"
-                    description={databaseLocked ? 'Locked by URL parameter' : undefined}
+                    description={databaseLocked ? "Locked by URL parameter" : undefined}
                 >
                     <Select
-                        selectedOption={filters.str_databaseid || { label: 'All Databases', value: 'all' }}
+                        selectedOption={
+                            filters.str_databaseid || { label: "All Databases", value: "all" }
+                        }
                         placeholder="Select database"
                         options={databaseOptions}
                         onChange={({ detail }) =>
-                            onFilterChange('str_databaseid', detail.selectedOption.value === 'all' ? null : detail.selectedOption)
+                            onFilterChange(
+                                "str_databaseid",
+                                detail.selectedOption.value === "all" ? null : detail.selectedOption
+                            )
                         }
                         disabled={loading || databaseLocked}
                         loadingText="Loading databases..."
@@ -121,14 +126,21 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                 </FormField>
 
                 {/* Asset Type Filter - Only show for assets */}
-                {recordType === 'asset' && (
+                {recordType === "asset" && (
                     <FormField label="Asset Type">
                         <Select
-                            selectedOption={filters.str_assettype || { label: 'All Types', value: 'all' }}
+                            selectedOption={
+                                filters.str_assettype || { label: "All Types", value: "all" }
+                            }
                             placeholder="Select type"
                             options={assetTypeOptions}
                             onChange={({ detail }) =>
-                                onFilterChange('str_assettype', detail.selectedOption.value === 'all' ? null : detail.selectedOption)
+                                onFilterChange(
+                                    "str_assettype",
+                                    detail.selectedOption.value === "all"
+                                        ? null
+                                        : detail.selectedOption
+                                )
                             }
                             disabled={loading}
                         />
@@ -136,20 +148,29 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                 )}
 
                 {/* File Type Filter - Only show for files */}
-                {recordType === 'file' && (
+                {recordType === "file" && (
                     <FormField label="File Type">
                         <Select
-                            selectedOption={filters.str_fileext || { label: 'All Types', value: 'all' }}
+                            selectedOption={
+                                filters.str_fileext || { label: "All Types", value: "all" }
+                            }
                             placeholder="Select file type"
                             options={[
-                                { label: 'All Types', value: 'all' },
-                                ...(searchResult?.aggregations?.str_fileext?.buckets?.map((bucket: any) => ({
-                                    label: `${bucket.key} (${bucket.doc_count})`,
-                                    value: bucket.key,
-                                })) || []),
+                                { label: "All Types", value: "all" },
+                                ...(searchResult?.aggregations?.str_fileext?.buckets?.map(
+                                    (bucket: any) => ({
+                                        label: `${bucket.key} (${bucket.doc_count})`,
+                                        value: bucket.key,
+                                    })
+                                ) || []),
                             ]}
                             onChange={({ detail }) =>
-                                onFilterChange('str_fileext', detail.selectedOption.value === 'all' ? null : detail.selectedOption)
+                                onFilterChange(
+                                    "str_fileext",
+                                    detail.selectedOption.value === "all"
+                                        ? null
+                                        : detail.selectedOption
+                                )
                             }
                             disabled={loading}
                         />
@@ -159,16 +180,18 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                 {/* Tags Filter */}
                 <FormField label="Tags">
                     <Select
-                        selectedOption={filters.list_tags || { label: 'All Tags', value: 'all' }}
+                        selectedOption={filters.list_tags || { label: "All Tags", value: "all" }}
                         placeholder="Select tag"
                         options={tagOptions}
                         onChange={({ detail }) =>
-                            onFilterChange('list_tags', detail.selectedOption.value === 'all' ? null : detail.selectedOption)
+                            onFilterChange(
+                                "list_tags",
+                                detail.selectedOption.value === "all" ? null : detail.selectedOption
+                            )
                         }
                         disabled={loading}
                     />
                 </FormField>
-
             </SpaceBetween>
         </ExpandableSection>
     );

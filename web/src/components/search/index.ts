@@ -4,24 +4,24 @@
  */
 
 // Main component
-export { default as SearchContainer } from './SearchContainer';
-export { default as ModernSearchContainer } from './ModernSearchContainer';
+export { default as SearchContainer } from "./SearchContainer";
+export { default as ModernSearchContainer } from "./ModernSearchContainer";
 
 // Types
-export * from './types';
+export * from "./types";
 
 // Hooks
-export { useSearchState } from './hooks/useSearchState';
-export { useSearchAPI } from './hooks/useSearchAPI';
-export { usePreferences } from './hooks/usePreferences';
-export { useToasts } from './hooks/useToasts';
+export { useSearchState } from "./hooks/useSearchState";
+export { useSearchAPI } from "./hooks/useSearchAPI";
+export { usePreferences } from "./hooks/usePreferences";
+export { useToasts } from "./hooks/useToasts";
 
 // Filter components
-export { default as BasicFilters } from './SearchFilters/BasicFilters';
-export { default as MetadataFilters } from './SearchFilters/MetadataFilters';
+export { default as BasicFilters } from "./SearchFilters/BasicFilters";
+export { default as MetadataFilters } from "./SearchFilters/MetadataFilters";
 
 // Result components
-export { default as CardView } from './SearchResults/CardView';
+export { default as CardView } from "./SearchResults/CardView";
 
 // Notification components
-export { default as ToastManager } from './SearchNotifications/ToastManager';
+export { default as ToastManager } from "./SearchNotifications/ToastManager";

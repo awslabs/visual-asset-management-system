@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from "react";
 import {
     FormField,
     Input,
@@ -13,10 +13,10 @@ import {
     Toggle,
     SpaceBetween,
     Box,
-} from '@cloudscape-design/components';
-import { SearchFilters } from '../types';
-import { fetchAllDatabases, fetchTags } from '../../../services/APIService';
-import Synonyms from '../../../synonyms';
+} from "@cloudscape-design/components";
+import { SearchFilters } from "../types";
+import { fetchAllDatabases, fetchTags } from "../../../services/APIService";
+import Synonyms from "../../../synonyms";
 
 interface BasicFiltersProps {
     query: string;
@@ -65,14 +65,14 @@ const BasicFilters: React.FC<BasicFiltersProps> = ({
     }, []);
 
     const handleKeyDown = (event: any) => {
-        if (event.detail.key === 'Enter') {
+        if (event.detail.key === "Enter") {
             onSearch();
         }
     };
 
     // Build database options with result counts
     const databaseOptions = [
-        { label: 'All', value: 'all' },
+        { label: "All", value: "all" },
         ...databases.map((db: any) => {
             let count = 0;
             // Map through result aggregation to find doc_count for each database
@@ -94,7 +94,7 @@ const BasicFilters: React.FC<BasicFiltersProps> = ({
 
     // Build asset type options from aggregations
     const assetTypeOptions = [
-        { label: 'All', value: 'all' },
+        { label: "All", value: "all" },
         ...(searchResult?.aggregations?.str_assettype?.buckets?.map((bucket: any) => ({
             label: `${bucket.key} (${bucket.doc_count})`,
             value: bucket.key,
@@ -103,9 +103,9 @@ const BasicFilters: React.FC<BasicFiltersProps> = ({
 
     // Build tag options from aggregations
     const tagOptions = [
-        { label: 'All', value: 'all' },
+        { label: "All", value: "all" },
         ...(searchResult?.aggregations?.list_tags?.buckets?.flatMap((tag: any) =>
-            tag.key.split(',').map((value: string) => ({
+            tag.key.split(",").map((value: string) => ({
                 label: `${value.trim()} (${tag.doc_count})`,
                 value: value.trim(),
             }))
@@ -114,19 +114,11 @@ const BasicFilters: React.FC<BasicFiltersProps> = ({
 
     return (
         <SpaceBetween direction="vertical" size="l">
-            <Grid
-                gridDefinition={[
-                    { colspan: { default: 6 } },
-                    { colspan: { default: 6 } },
-                ]}
-            >
+            <Grid gridDefinition={[{ colspan: { default: 6 } }, { colspan: { default: 6 } }]}>
                 {/* Keywords Section */}
                 <FormField label="Keywords">
                     <Grid
-                        gridDefinition={[
-                            { colspan: { default: 10 } },
-                            { colspan: { default: 2 } },
-                        ]}
+                        gridDefinition={[{ colspan: { default: 10 } }, { colspan: { default: 2 } }]}
                     >
                         <Input
                             placeholder="Search assets and files..."
@@ -136,11 +128,7 @@ const BasicFilters: React.FC<BasicFiltersProps> = ({
                             onKeyDown={handleKeyDown}
                             disabled={loading}
                         />
-                        <Button
-                            variant="primary"
-                            onClick={onSearch}
-                            loading={loading}
-                        >
+                        <Button variant="primary" onClick={onSearch} loading={loading}>
                             Search
                         </Button>
                     </Grid>
@@ -149,10 +137,7 @@ const BasicFilters: React.FC<BasicFiltersProps> = ({
                 {/* Filter Types Section */}
                 <Box>
                     <Grid
-                        gridDefinition={[
-                            { colspan: { default: 9 } },
-                            { colspan: { default: 3 } },
-                        ]}
+                        gridDefinition={[{ colspan: { default: 9 } }, { colspan: { default: 3 } }]}
                     >
                         <FormField label="Filter Types">
                             <Grid
@@ -168,15 +153,15 @@ const BasicFilters: React.FC<BasicFiltersProps> = ({
                                     selectedOption={
                                         filters._rectype || {
                                             label: Synonyms.Assets,
-                                            value: 'asset',
+                                            value: "asset",
                                         }
                                     }
                                     onChange={({ detail }) =>
-                                        onFilterChange('_rectype', detail.selectedOption)
+                                        onFilterChange("_rectype", detail.selectedOption)
                                     }
                                     options={[
-                                        { label: Synonyms.Assets, value: 'asset' },
-                                        { label: 'Files', value: 'file' },
+                                        { label: Synonyms.Assets, value: "asset" },
+                                        { label: "Files", value: "file" },
                                     ]}
                                     placeholder="Record Type"
                                     disabled={loading}
@@ -188,7 +173,7 @@ const BasicFilters: React.FC<BasicFiltersProps> = ({
                                     placeholder="Database"
                                     options={databaseOptions}
                                     onChange={({ detail }) =>
-                                        onFilterChange('str_databaseid', detail.selectedOption)
+                                        onFilterChange("str_databaseid", detail.selectedOption)
                                     }
                                     disabled={loading}
                                 />
@@ -199,7 +184,7 @@ const BasicFilters: React.FC<BasicFiltersProps> = ({
                                     placeholder="Type"
                                     options={assetTypeOptions}
                                     onChange={({ detail }) =>
-                                        onFilterChange('str_assettype', detail.selectedOption)
+                                        onFilterChange("str_assettype", detail.selectedOption)
                                     }
                                     disabled={loading}
                                 />
@@ -210,7 +195,7 @@ const BasicFilters: React.FC<BasicFiltersProps> = ({
                                     placeholder="Tags"
                                     options={tagOptions}
                                     onChange={({ detail }) =>
-                                        onFilterChange('list_tags', detail.selectedOption)
+                                        onFilterChange("list_tags", detail.selectedOption)
                                     }
                                     disabled={loading}
                                 />

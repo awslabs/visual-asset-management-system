@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useCallback } from 'react';
-import { SearchPreferences, DEFAULT_PREFERENCES, FilterPreset } from '../types';
+import { useState, useEffect, useCallback } from "react";
+import { SearchPreferences, DEFAULT_PREFERENCES, FilterPreset } from "../types";
 
-const PREFERENCES_COOKIE_KEY = 'vams-search-preferences';
+const PREFERENCES_COOKIE_KEY = "vams-search-preferences";
 const COOKIE_EXPIRY_DAYS = 365;
 
 /**
@@ -35,28 +35,31 @@ export const usePreferences = () => {
                 setPreferences(mergedPreferences);
             }
         } catch (error) {
-            console.warn('Failed to load search preferences from cookie:', error);
+            console.warn("Failed to load search preferences from cookie:", error);
             setPreferences(DEFAULT_PREFERENCES);
         } finally {
             setIsLoaded(true);
         }
     }, []);
 
-    const savePreferences = useCallback((newPreferences?: SearchPreferences) => {
-        const prefsToSave = newPreferences || preferences;
-        try {
-            const cookieValue = JSON.stringify(prefsToSave);
-            setCookie(PREFERENCES_COOKIE_KEY, cookieValue, COOKIE_EXPIRY_DAYS);
-            setHasUnsavedChanges(false);
-            return true;
-        } catch (error) {
-            console.error('Failed to save search preferences to cookie:', error);
-            return false;
-        }
-    }, [preferences]);
+    const savePreferences = useCallback(
+        (newPreferences?: SearchPreferences) => {
+            const prefsToSave = newPreferences || preferences;
+            try {
+                const cookieValue = JSON.stringify(prefsToSave);
+                setCookie(PREFERENCES_COOKIE_KEY, cookieValue, COOKIE_EXPIRY_DAYS);
+                setHasUnsavedChanges(false);
+                return true;
+            } catch (error) {
+                console.error("Failed to save search preferences to cookie:", error);
+                return false;
+            }
+        },
+        [preferences]
+    );
 
     const updatePreferences = useCallback((updates: Partial<SearchPreferences>) => {
-        setPreferences(prev => {
+        setPreferences((prev) => {
             const updated = { ...prev, ...updates };
             setHasUnsavedChanges(true);
             return updated;
@@ -69,35 +72,44 @@ export const usePreferences = () => {
         setHasUnsavedChanges(false);
     }, []);
 
-    const addFilterPreset = useCallback((name: string, filters: any, metadataFilters: any) => {
-        const newPreset: FilterPreset = {
-            id: `preset-${Date.now()}`,
-            name,
-            filters,
-            metadataFilters,
-            createdAt: new Date().toISOString(),
-        };
+    const addFilterPreset = useCallback(
+        (name: string, filters: any, metadataFilters: any) => {
+            const newPreset: FilterPreset = {
+                id: `preset-${Date.now()}`,
+                name,
+                filters,
+                metadataFilters,
+                createdAt: new Date().toISOString(),
+            };
 
-        updatePreferences({
-            filterPresets: [...preferences.filterPresets, newPreset],
-        });
+            updatePreferences({
+                filterPresets: [...preferences.filterPresets, newPreset],
+            });
 
-        return newPreset;
-    }, [preferences.filterPresets, updatePreferences]);
+            return newPreset;
+        },
+        [preferences.filterPresets, updatePreferences]
+    );
 
-    const removeFilterPreset = useCallback((presetId: string) => {
-        updatePreferences({
-            filterPresets: preferences.filterPresets.filter(preset => preset.id !== presetId),
-        });
-    }, [preferences.filterPresets, updatePreferences]);
+    const removeFilterPreset = useCallback(
+        (presetId: string) => {
+            updatePreferences({
+                filterPresets: preferences.filterPresets.filter((preset) => preset.id !== presetId),
+            });
+        },
+        [preferences.filterPresets, updatePreferences]
+    );
 
-    const updateFilterPreset = useCallback((presetId: string, updates: Partial<FilterPreset>) => {
-        updatePreferences({
-            filterPresets: preferences.filterPresets.map(preset =>
-                preset.id === presetId ? { ...preset, ...updates } : preset
-            ),
-        });
-    }, [preferences.filterPresets, updatePreferences]);
+    const updateFilterPreset = useCallback(
+        (presetId: string, updates: Partial<FilterPreset>) => {
+            updatePreferences({
+                filterPresets: preferences.filterPresets.map((preset) =>
+                    preset.id === presetId ? { ...preset, ...updates } : preset
+                ),
+            });
+        },
+        [preferences.filterPresets, updatePreferences]
+    );
 
     // Auto-save preferences when they change (debounced)
     useEffect(() => {
@@ -132,11 +144,11 @@ function setCookie(name: string, value: string, days: number) {
 }
 
 function getCookie(name: string): string | null {
-    const nameEQ = name + '=';
-    const ca = document.cookie.split(';');
+    const nameEQ = name + "=";
+    const ca = document.cookie.split(";");
     for (let i = 0; i < ca.length; i++) {
         let c = ca[i];
-        while (c.charAt(0) === ' ') c = c.substring(1, c.length);
+        while (c.charAt(0) === " ") c = c.substring(1, c.length);
         if (c.indexOf(nameEQ) === 0) return c.substring(nameEQ.length, c.length);
     }
     return null;

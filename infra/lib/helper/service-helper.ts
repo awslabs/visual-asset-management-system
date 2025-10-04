@@ -135,7 +135,7 @@ export function IAMArn(name: string) {
 
         geoapi: `arn:${region_info.RegionInfo.get(config.env.region).partition || ""}:geo:${
             config.env.region
-        }:${config.env.account}:api-key/${name}`
+        }:${config.env.account}:api-key/${name}`,
     };
 }
 

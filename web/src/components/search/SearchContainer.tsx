@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from 'react';
-import { Cache } from 'aws-amplify';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from "react";
+import { Cache } from "aws-amplify";
+import { useNavigate } from "react-router-dom";
 import {
     SpaceBetween,
     Container,
@@ -15,47 +15,47 @@ import {
     Box,
     Alert,
     SegmentedControl,
-} from '@cloudscape-design/components';
-import { featuresEnabled } from '../../common/constants/featuresEnabled';
-import { SearchContainerProps } from './types';
-import { useSearchState } from './hooks/useSearchState';
-import { useSearchAPI } from './hooks/useSearchAPI';
-import { usePreferences } from './hooks/usePreferences';
-import { useToasts } from './hooks/useToasts';
-import BasicFilters from './SearchFilters/BasicFilters';
-import MetadataFilters from './SearchFilters/MetadataFilters';
-import CardView from './SearchResults/CardView';
-import ToastManager from './SearchNotifications/ToastManager';
-import SearchPageListView from '../../pages/search/SearchPageListView';
-import SearchPageMapView from '../../pages/search/SearchPageMapView';
-import ListPage from '../../pages/ListPage';
-import { AssetListDefinition } from '../list/list-definitions/AssetListDefinition.js';
-import { fetchAllAssets, fetchDatabaseAssets } from '../../services/APIService';
-import Synonyms from '../../synonyms';
+} from "@cloudscape-design/components";
+import { featuresEnabled } from "../../common/constants/featuresEnabled";
+import { SearchContainerProps } from "./types";
+import { useSearchState } from "./hooks/useSearchState";
+import { useSearchAPI } from "./hooks/useSearchAPI";
+import { usePreferences } from "./hooks/usePreferences";
+import { useToasts } from "./hooks/useToasts";
+import BasicFilters from "./SearchFilters/BasicFilters";
+import MetadataFilters from "./SearchFilters/MetadataFilters";
+import CardView from "./SearchResults/CardView";
+import ToastManager from "./SearchNotifications/ToastManager";
+import SearchPageListView from "../../pages/search/SearchPageListView";
+import SearchPageMapView from "../../pages/search/SearchPageMapView";
+import ListPage from "../../pages/ListPage";
+import { AssetListDefinition } from "../list/list-definitions/AssetListDefinition.js";
+import { fetchAllAssets, fetchDatabaseAssets } from "../../services/APIService";
+import Synonyms from "../../synonyms";
 
 const SearchContainer: React.FC<SearchContainerProps> = ({
-    mode = 'full',
+    mode = "full",
     initialFilters,
-    initialQuery = '',
+    initialQuery = "",
     onSelectionChange,
-    allowedViews = ['table', 'card', 'map'],
+    allowedViews = ["table", "card", "map"],
     showPreferences = true,
     showBulkActions = true,
     maxHeight,
     databaseId,
     embedded,
 }) => {
-    const config = Cache.getItem('config');
+    const config = Cache.getItem("config");
     const navigate = useNavigate();
-    
+
     // Feature flags
     const [useNoOpenSearch] = useState(
         config.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH)
     );
     const [useMapView] = useState(
-        config.featuresEnabled?.includes(featuresEnabled.LOCATIONSERVICES) && 
-        !useNoOpenSearch &&
-        allowedViews.includes('map')
+        config.featuresEnabled?.includes(featuresEnabled.LOCATIONSERVICES) &&
+            !useNoOpenSearch &&
+            allowedViews.includes("map")
     );
 
     // Hooks
@@ -65,16 +65,16 @@ const SearchContainer: React.FC<SearchContainerProps> = ({
     const { toasts, showSuccess, showError, showWarning, removeToast } = useToasts();
 
     // Local state
-    const [currentView, setCurrentView] = useState<'table' | 'card' | 'map'>(() => {
+    const [currentView, setCurrentView] = useState<"table" | "card" | "map">(() => {
         // Filter out map view if not supported by preferences
-        const supportedViews = allowedViews.filter(view => 
-            view === 'table' || view === 'card' || (view === 'map' && useMapView)
+        const supportedViews = allowedViews.filter(
+            (view) => view === "table" || view === "card" || (view === "map" && useMapView)
         );
-        
+
         if (supportedViews.includes(preferences.viewMode as any)) {
-            return preferences.viewMode as 'table' | 'card' | 'map';
+            return preferences.viewMode as "table" | "card" | "map";
         }
-        return supportedViews[0] as 'table' | 'card' | 'map';
+        return supportedViews[0] as "table" | "card" | "map";
     });
     const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
     const [showPreviewModal, setShowPreviewModal] = useState(false);
@@ -114,11 +114,11 @@ const SearchContainer: React.FC<SearchContainerProps> = ({
             const searchQuery = searchState.buildSearchQuery();
             const result = await searchAPI.executeSearch(searchQuery, databaseId);
             searchState.setResult(result);
-            showSuccess('Search completed', `Found ${result.hits?.total?.value || 0} results`);
+            showSuccess("Search completed", `Found ${result.hits?.total?.value || 0} results`);
         } catch (error: any) {
-            console.error('Search error:', error);
-            searchState.setError(error.message || 'Search failed');
-            showError('Search failed', error.message || 'An error occurred while searching');
+            console.error("Search error:", error);
+            searchState.setError(error.message || "Search failed");
+            showError("Search failed", error.message || "An error occurred while searching");
         }
     };
 
@@ -128,7 +128,7 @@ const SearchContainer: React.FC<SearchContainerProps> = ({
             searchState.setSort(sortQuery);
             await handleSearch();
         } catch (error: any) {
-            showError('Sort failed', error.message);
+            showError("Sort failed", error.message);
         }
     };
 
@@ -137,7 +137,7 @@ const SearchContainer: React.FC<SearchContainerProps> = ({
             searchState.setPagination({ from, size: size || preferences.pageSize });
             await handleSearch();
         } catch (error: any) {
-            showError('Pagination failed', error.message);
+            showError("Pagination failed", error.message);
         }
     };
 
@@ -170,20 +170,22 @@ const SearchContainer: React.FC<SearchContainerProps> = ({
 
     const handleClearSearch = () => {
         searchState.clearSearch();
-        showSuccess('Search cleared', 'All filters and search terms have been cleared');
+        showSuccess("Search cleared", "All filters and search terms have been cleared");
     };
 
     const handleCreateAsset = () => {
         if (databaseId) {
             navigate(`/upload/${databaseId}`);
         } else {
-            navigate('/upload');
+            navigate("/upload");
         }
     };
 
     // Calculate pagination values
     const currentPage = 1 + Math.ceil(searchState.pagination.from / preferences.pageSize);
-    const pageCount = Math.ceil((searchState.result?.hits?.total?.value || 0) / preferences.pageSize);
+    const pageCount = Math.ceil(
+        (searchState.result?.hits?.total?.value || 0) / preferences.pageSize
+    );
 
     // Render fallback for NoOpenSearch mode
     if (useNoOpenSearch) {
@@ -211,14 +213,14 @@ const SearchContainer: React.FC<SearchContainerProps> = ({
         if (allowedViews.length <= 1) return null;
 
         const viewOptions = [];
-        if (allowedViews.includes('table')) {
-            viewOptions.push({ text: 'Table', id: 'table' });
+        if (allowedViews.includes("table")) {
+            viewOptions.push({ text: "Table", id: "table" });
         }
-        if (allowedViews.includes('card')) {
-            viewOptions.push({ text: 'Cards', id: 'card' });
+        if (allowedViews.includes("card")) {
+            viewOptions.push({ text: "Cards", id: "card" });
         }
-        if (allowedViews.includes('map') && useMapView) {
-            viewOptions.push({ text: 'Map', id: 'map' });
+        if (allowedViews.includes("map") && useMapView) {
+            viewOptions.push({ text: "Map", id: "map" });
         }
 
         return (
@@ -232,13 +234,14 @@ const SearchContainer: React.FC<SearchContainerProps> = ({
 
     // Render main content
     const renderContent = () => {
-        const items = searchState.result?.hits?.hits?.map((hit: any) => ({
-            ...hit._source,
-            _id: hit._id,
-        })) || [];
+        const items =
+            searchState.result?.hits?.hits?.map((hit: any) => ({
+                ...hit._source,
+                _id: hit._id,
+            })) || [];
 
         switch (currentView) {
-            case 'card':
+            case "card":
                 return (
                     <CardView
                         items={searchState.result?.hits?.hits || []}
@@ -247,11 +250,15 @@ const SearchContainer: React.FC<SearchContainerProps> = ({
                         loading={searchState.loading}
                         cardSize={preferences.cardSize}
                         showThumbnails={preferences.showThumbnails}
-                        recordType={searchState.filters._rectype?.value as 'asset' | 'file' || 'asset'}
+                        recordType={
+                            (searchState.filters._rectype?.value as "asset" | "file") || "asset"
+                        }
                         onOpenPreview={handleOpenPreview}
                         currentPageIndex={currentPage}
                         pagesCount={pageCount}
-                        onPageChange={(pageIndex) => handlePagination((pageIndex - 1) * preferences.pageSize)}
+                        onPageChange={(pageIndex) =>
+                            handlePagination((pageIndex - 1) * preferences.pageSize)
+                        }
                         onPreferencesChange={showPreferences ? handlePreferencesChange : undefined}
                         preferences={preferences}
                         onCreateAsset={showBulkActions ? handleCreateAsset : undefined}
@@ -260,7 +267,7 @@ const SearchContainer: React.FC<SearchContainerProps> = ({
                     />
                 );
 
-            case 'map':
+            case "map":
                 if (useMapView) {
                     return (
                         <SearchPageMapView
@@ -276,9 +283,10 @@ const SearchContainer: React.FC<SearchContainerProps> = ({
                             ...searchState,
                             tablePreferences: {
                                 pageSize: preferences.pageSize,
-                                visibleContent: searchState.filters._rectype?.value === 'asset'
-                                    ? preferences.assetTableColumns
-                                    : preferences.fileTableColumns,
+                                visibleContent:
+                                    searchState.filters._rectype?.value === "asset"
+                                        ? preferences.assetTableColumns
+                                        : preferences.fileTableColumns,
                             },
                             showPreviewThumbnails: preferences.showThumbnails,
                         }}
@@ -286,7 +294,7 @@ const SearchContainer: React.FC<SearchContainerProps> = ({
                     />
                 );
 
-            case 'table':
+            case "table":
             default:
                 return (
                     <SearchPageListView
@@ -294,9 +302,10 @@ const SearchContainer: React.FC<SearchContainerProps> = ({
                             ...searchState,
                             tablePreferences: {
                                 pageSize: preferences.pageSize,
-                                visibleContent: searchState.filters._rectype?.value === 'asset'
-                                    ? preferences.assetTableColumns
-                                    : preferences.fileTableColumns,
+                                visibleContent:
+                                    searchState.filters._rectype?.value === "asset"
+                                        ? preferences.assetTableColumns
+                                        : preferences.fileTableColumns,
                             },
                             showPreviewThumbnails: preferences.showThumbnails,
                         }}
@@ -306,18 +315,20 @@ const SearchContainer: React.FC<SearchContainerProps> = ({
         }
     };
 
-    const containerStyle = maxHeight ? { maxHeight, overflow: 'auto' } : {};
+    const containerStyle = maxHeight ? { maxHeight, overflow: "auto" } : {};
 
     return (
         <div style={containerStyle}>
             <ToastManager toasts={toasts} onDismiss={removeToast} />
-            
+
             <SpaceBetween direction="vertical" size="l">
                 {/* Header */}
                 {(!embedded || embedded.showHeader !== false) && (
                     <Header
-                        variant={mode === 'full' ? 'h1' : 'h2'}
-                        description={mode === 'full' ? 'Search and filter assets and files' : undefined}
+                        variant={mode === "full" ? "h1" : "h2"}
+                        description={
+                            mode === "full" ? "Search and filter assets and files" : undefined
+                        }
                         actions={
                             showPreferences && (
                                 <SpaceBetween direction="horizontal" size="s">
@@ -331,7 +342,8 @@ const SearchContainer: React.FC<SearchContainerProps> = ({
                             )
                         }
                     >
-                        {embedded?.title || (databaseId ? `${Synonyms.Assets} for ${databaseId}` : Synonyms.Assets)}
+                        {embedded?.title ||
+                            (databaseId ? `${Synonyms.Assets} for ${databaseId}` : Synonyms.Assets)}
                     </Header>
                 )}
 
@@ -368,7 +380,7 @@ const SearchContainer: React.FC<SearchContainerProps> = ({
                                 variant="link"
                                 onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
                             >
-                                {showAdvancedFilters ? 'Hide' : 'Show'} Advanced Filters
+                                {showAdvancedFilters ? "Hide" : "Show"} Advanced Filters
                             </Button>
                         </Box>
 
@@ -390,9 +402,7 @@ const SearchContainer: React.FC<SearchContainerProps> = ({
                         {/* Clear Filters */}
                         {searchState.hasActiveFilters() && (
                             <Box textAlign="center">
-                                <Button onClick={handleClearSearch}>
-                                    Clear All Filters
-                                </Button>
+                                <Button onClick={handleClearSearch}>Clear All Filters</Button>
                             </Box>
                         )}
                     </SpaceBetween>

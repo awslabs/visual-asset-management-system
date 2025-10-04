@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React from "react";
 import {
     ExpandableSection,
     FormField,
@@ -13,14 +13,14 @@ import {
     Box,
     Grid,
     Select,
-} from '@cloudscape-design/components';
-import { SearchFilters } from '../types';
+} from "@cloudscape-design/components";
+import { SearchFilters } from "../types";
 
 interface AdvancedFiltersPanelProps {
     filters: SearchFilters;
     onFilterChange: (key: string, value: any) => void;
     loading?: boolean;
-    recordType: 'asset' | 'file';
+    recordType: "asset" | "file";
 }
 
 const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
@@ -41,7 +41,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                 <FormField label="Archived Items">
                     <Toggle
                         onChange={({ detail }) =>
-                            onFilterChange('bool_archived', detail.checked ? { value: true } : null)
+                            onFilterChange("bool_archived", detail.checked ? { value: true } : null)
                         }
                         checked={!!filters.bool_archived}
                         disabled={loading}
@@ -54,7 +54,7 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                 <FormField label="Keyword Search Scope">
                     <Toggle
                         onChange={({ detail }) =>
-                            onFilterChange('includeMetadataInKeywordSearch', detail.checked)
+                            onFilterChange("includeMetadataInKeywordSearch", detail.checked)
                         }
                         checked={filters.includeMetadataInKeywordSearch !== false}
                         disabled={loading}
@@ -64,9 +64,9 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                 </FormField>
 
                 {/* Asset Relationship Filters - Only show for assets */}
-                {recordType === 'asset' && (
+                {recordType === "asset" && (
                     <>
-                        <FormField 
+                        <FormField
                             label="Asset Relationships"
                             description="Filter assets based on their relationships with other assets"
                         >
@@ -76,9 +76,11 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                     <Checkbox
                                         onChange={({ detail }) => {
                                             if (!detail.checked) {
-                                                onFilterChange('bool_has_asset_children', null);
+                                                onFilterChange("bool_has_asset_children", null);
                                             } else if (!filters.bool_has_asset_children) {
-                                                onFilterChange('bool_has_asset_children', { value: true });
+                                                onFilterChange("bool_has_asset_children", {
+                                                    value: true,
+                                                });
                                             }
                                         }}
                                         checked={!!filters.bool_has_asset_children}
@@ -90,17 +92,17 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                         <Select
                                             selectedOption={
                                                 filters.bool_has_asset_children.value === false
-                                                    ? { label: 'False', value: 'false' }
-                                                    : { label: 'True', value: 'true' }
+                                                    ? { label: "False", value: "false" }
+                                                    : { label: "True", value: "true" }
                                             }
                                             onChange={({ detail }) =>
-                                                onFilterChange('bool_has_asset_children', {
-                                                    value: detail.selectedOption.value === 'true'
+                                                onFilterChange("bool_has_asset_children", {
+                                                    value: detail.selectedOption.value === "true",
                                                 })
                                             }
                                             options={[
-                                                { label: 'True', value: 'true' },
-                                                { label: 'False', value: 'false' },
+                                                { label: "True", value: "true" },
+                                                { label: "False", value: "false" },
                                             ]}
                                             disabled={loading}
                                         />
@@ -112,9 +114,11 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                     <Checkbox
                                         onChange={({ detail }) => {
                                             if (!detail.checked) {
-                                                onFilterChange('bool_has_asset_parents', null);
+                                                onFilterChange("bool_has_asset_parents", null);
                                             } else if (!filters.bool_has_asset_parents) {
-                                                onFilterChange('bool_has_asset_parents', { value: true });
+                                                onFilterChange("bool_has_asset_parents", {
+                                                    value: true,
+                                                });
                                             }
                                         }}
                                         checked={!!filters.bool_has_asset_parents}
@@ -126,17 +130,17 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                         <Select
                                             selectedOption={
                                                 filters.bool_has_asset_parents.value === false
-                                                    ? { label: 'False', value: 'false' }
-                                                    : { label: 'True', value: 'true' }
+                                                    ? { label: "False", value: "false" }
+                                                    : { label: "True", value: "true" }
                                             }
                                             onChange={({ detail }) =>
-                                                onFilterChange('bool_has_asset_parents', {
-                                                    value: detail.selectedOption.value === 'true'
+                                                onFilterChange("bool_has_asset_parents", {
+                                                    value: detail.selectedOption.value === "true",
                                                 })
                                             }
                                             options={[
-                                                { label: 'True', value: 'true' },
-                                                { label: 'False', value: 'false' },
+                                                { label: "True", value: "true" },
+                                                { label: "False", value: "false" },
                                             ]}
                                             disabled={loading}
                                         />
@@ -148,9 +152,11 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                     <Checkbox
                                         onChange={({ detail }) => {
                                             if (!detail.checked) {
-                                                onFilterChange('bool_has_assets_related', null);
+                                                onFilterChange("bool_has_assets_related", null);
                                             } else if (!filters.bool_has_assets_related) {
-                                                onFilterChange('bool_has_assets_related', { value: true });
+                                                onFilterChange("bool_has_assets_related", {
+                                                    value: true,
+                                                });
                                             }
                                         }}
                                         checked={!!filters.bool_has_assets_related}
@@ -162,17 +168,17 @@ const AdvancedFiltersPanel: React.FC<AdvancedFiltersPanelProps> = ({
                                         <Select
                                             selectedOption={
                                                 filters.bool_has_assets_related.value === false
-                                                    ? { label: 'False', value: 'false' }
-                                                    : { label: 'True', value: 'true' }
+                                                    ? { label: "False", value: "false" }
+                                                    : { label: "True", value: "true" }
                                             }
                                             onChange={({ detail }) =>
-                                                onFilterChange('bool_has_assets_related', {
-                                                    value: detail.selectedOption.value === 'true'
+                                                onFilterChange("bool_has_assets_related", {
+                                                    value: detail.selectedOption.value === "true",
                                                 })
                                             }
                                             options={[
-                                                { label: 'True', value: 'true' },
-                                                { label: 'False', value: 'false' },
+                                                { label: "True", value: "true" },
+                                                { label: "False", value: "false" },
                                             ]}
                                             disabled={loading}
                                         />

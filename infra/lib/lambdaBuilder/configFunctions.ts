@@ -32,11 +32,13 @@ export function buildConfigService(
 ): lambda.Function {
     const name = "configService";
 
-    let urlFormat = ''
+    let urlFormat = "";
 
     //Only fill in if we have locaiton services enabled since this is not in all aws partitions
-    if(config.app.useLocationService.enabled) {
-        urlFormat = `https://maps.${Service.Service("GEO").Endpoint}/v2/styles/Standard/descriptor?key=<apiKey>`
+    if (config.app.useLocationService.enabled) {
+        urlFormat = `https://maps.${
+            Service.Service("GEO").Endpoint
+        }/v2/styles/Standard/descriptor?key=<apiKey>`;
     }
 
     const configService = new lambda.Function(scope, name, {
@@ -57,35 +59,31 @@ export function buildConfigService(
         environment: {
             APPFEATUREENABLED_STORAGE_TABLE_NAME: appFeatureEnabledStorageTable.tableName,
             LOCATION_SERVICE_API_KEY_ARN_SSM_PARAM: config.locationServiceApiKeyArnSSMParam,
-            LOCATION_SERVICE_URL_FORMAT: urlFormat
+            LOCATION_SERVICE_URL_FORMAT: urlFormat,
         },
     });
 
     appFeatureEnabledStorageTable.grantReadData(configService);
     kmsKeyLambdaPermissionAddToResourcePolicy(configService, kmsKey);
-    
+
     // Grant SSM read permissions for Location Service API Key parameter
     configService.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["ssm:GetParameter", "ssm:GetParameters"],
-            resources: [
-                Service.IAMArn("*" + config.name + "*").ssm,
-            ],
+            resources: [Service.IAMArn("*" + config.name + "*").ssm],
         })
     );
-    
+
     // Grant Location Services permissions to describe API keys
     configService.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["geo:DescribeKey"],
-            resources: [
-                Service.IAMArn("*").geoapi,
-            ],
+            resources: [Service.IAMArn("*").geoapi],
         })
     );
-    
+
     globalLambdaEnvironmentsAndPermissions(configService, config);
     return configService;
 }

@@ -12,6 +12,8 @@ All APIGateway authorizers were swapped for custom lambda authorizers to provide
 
 OpenSearch has new indexes and requires the data migration script or new re-indexing tool script to be run on existing assets and files to re-index open search with existing data.
 
+Changes to BatchFargate CDK construct naming for use-case pipeline naming may require you to deploy CDK without batch pipelines and then again with to properly re-deploy them. Not doing this with existing deployed pipelines (Metadata 3D Labeling and PcPotree) will result in a CDK deployment error within ECS Fargate. This may also require you to update your VAMS pipeline/workflow lambda function names after re-deployment.
+
 ### Features
 
 -   **CLI** VAMS now has a CLI tool that can be used to automate VAMS operations. It includes operations so far for authentication, database, asset, assetLinks, assetLinkMetadata, metadata, metadataSchema, tags, TagTypes, search, featureSwitch, and files. More operations to match API functionality to come in future releases such as more admin functionalities of VAMS.
@@ -25,10 +27,11 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
     -   Added a text viewer for `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `ipynb`, and `.ini` extensions
     -   Added the CesiumJS viewer for `.json` tileset files which can load subsequent other files referenced in the asset (even if not selected for viewing directly). This is an initial/basic CesiumJS viewer implementation with default options as part of this release. Requires `allowUnsafeEvalFeatures` CDK `config.json` configuration flag to be turned on (off by default).
     -   3D Online viewer now has additional UI added to support basic extra functionality
--   Overhauled the file and asset OpenSearch system, APIs, indexing, and user interfaces 
+    -   3D Online Viewer once again will also support `.ply` file extensions for viewing (previously switched to PotreeViewer only)
+-   Overhauled the file and asset OpenSearch system, APIs, indexing, and user interfaces
     -   Assets and files are now split into two separate OpenSearch indexes; the old index will remain and will not be deleted for auditing and/or migration purposes; this causes breaking changes that require a migration script to re-index all assets/files for search
     -   Asset link relationship data will now additionally be indexed (excluding asset link metadata for now)
-    -   **UI** Assets (now "Assets and Files") has a completely new search page with many new filtering capabilities and options. 
+    -   **UI** Assets (now "Assets and Files") has a completely new search page with many new filtering capabilities and options.
     -   **UI** Search map view will now allow for many more metadata fields to be used for adding map marker or area placement (any asset with `location` (GP/GS) and `longitude` (string or number) / `latitude` (string or number) combination metadata will show up)
     -   Search now has it's origional API of `/search` and a new `/search/simple` API for a simplified search input
     -   A new CDK tool section and migration scripts has been added to help with reindexing opensearch data at any time
@@ -40,15 +43,24 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
 -   All HTTP APIGateway authorizers were swapped for custom lambda authorizers.
     -   New Lambda Layer specifically with libraries for the lambda authorizers
     -   New support for CDK configured IP range restrictions for API Gateway calls that are managed in the authorizer
+-   Added WXYZ, Boolean, Date, 4x4 Matrix, Geoshape, GeoPoint, LLA (Latitude Longitude, Altitude), and JSON asset link metadata value types.
+    -   **UI** Added additional `Matrix` static asset link type metadata field of type 4x4 Matrix.
+    -   **UI** Defaulted `rotation` static asset link metdata field to WXYZ field type (from XYZ)
 -   **UI** Changed Pipeline Edit/Create to make Asset Type and Output Type a required string text field. This removes the last place that requires specific VAMS extensions to be preloaded. These fields usages are expected to be overhauled along with overall pipelines in a future release.
 
 ### Bug Fixes
 
 -   **UI** Scrolling issues on browsers with MacOS should now hopefully be fixed. This was due to an issue with Potree libraries being loaded globally before.
+-   Updated BatchFargate CDK construct names to be unique for the stack (see breaking changes)
 -   Fixed backend asset file operations and S3 indexing for files >5GB (introduced in v2.2)
 
 ### Chores
--   Updated Cognito invitation and verification email messages to be more VAMS branded, show username where appropriate, and remove confusing period character directly after temporary passwords. 
+
+-   Updated Cognito invitation and verification email messages to be more VAMS branded, show username where appropriate, and remove confusing period character directly after temporary passwords.
+-   Update KMS key policy to support Cloudformation principal better for CustomResources when modifying S3 or DynamoDB tables that have a KMS encryption key. This should fix errors with setting default auth constraints and roles during CDK deployment that sometimes cropped up.
+-   Updated pipeline CDK export names and job definition names to be variable per the stack deploying it to further reduce conflicts of same stack deployments in the same region
+-   Enforce S3 bucket object ownership on static website bucket
+-   Update package dependencies and fixed any associated breaking changes
 -   **UI** Updated ViewAsset page to support passing in a state with a file path to load (used from links from the new search page)
 
 ## [2.2.0] (2025-09-31)

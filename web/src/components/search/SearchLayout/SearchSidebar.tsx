@@ -3,28 +3,24 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
-import {
-    Box,
-    SpaceBetween,
-    Container,
-} from '@cloudscape-design/components';
-import ModeSelector from './ModeSelector';
-import BasicFiltersPanel from './BasicFiltersPanel';
-import AdvancedFiltersPanel from './AdvancedFiltersPanel';
-import MetadataSearchPanel from './MetadataSearchPanel';
-import PreferencesPanel from './PreferencesPanel';
-import { SearchFilters, MetadataFilter, SearchPreferences } from '../types';
+import React from "react";
+import { Box, SpaceBetween, Container } from "@cloudscape-design/components";
+import ModeSelector from "./ModeSelector";
+import BasicFiltersPanel from "./BasicFiltersPanel";
+import AdvancedFiltersPanel from "./AdvancedFiltersPanel";
+import MetadataSearchPanel from "./MetadataSearchPanel";
+import PreferencesPanel from "./PreferencesPanel";
+import { SearchFilters, MetadataFilter, SearchPreferences } from "../types";
 
 interface SearchSidebarProps {
     // Mode
-    recordType: 'asset' | 'file';
-    onRecordTypeChange: (type: 'asset' | 'file') => void;
-    
+    recordType: "asset" | "file";
+    onRecordTypeChange: (type: "asset" | "file") => void;
+
     // Filters
     filters: SearchFilters;
     onFilterChange: (key: string, value: any) => void;
-    
+
     // Metadata
     metadataFilters: MetadataFilter[];
     onAddMetadataFilter: () => void;
@@ -34,16 +30,16 @@ interface SearchSidebarProps {
     onMetadataSearchModeChange?: (mode: string) => void;
     metadataOperator?: string;
     onMetadataOperatorChange?: (operator: string) => void;
-    
+
     // Preferences
     preferences: SearchPreferences;
     onPreferencesChange: (prefs: Partial<SearchPreferences>) => void;
-    
+
     // State
     loading?: boolean;
     searchResult?: any;
     databaseLocked?: boolean;
-    
+
     // Display
     showThumbnails: boolean;
     onThumbnailToggle: () => void;
@@ -59,9 +55,9 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
     onAddMetadataFilter,
     onRemoveMetadataFilter,
     onUpdateMetadataFilter,
-    metadataSearchMode = 'both',
+    metadataSearchMode = "both",
     onMetadataSearchModeChange,
-    metadataOperator = 'AND',
+    metadataOperator = "AND",
     onMetadataOperatorChange,
     preferences,
     onPreferencesChange,
@@ -73,7 +69,7 @@ const SearchSidebar: React.FC<SearchSidebarProps> = ({
     isMapView = false,
 }) => {
     return (
-        <Box padding={{ vertical: 's', horizontal: 's' }}>
+        <Box padding={{ vertical: "s", horizontal: "s" }}>
             <SpaceBetween direction="vertical" size="m">
                 {/* Mode Selector - Prominent at top */}
                 <ModeSelector

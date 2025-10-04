@@ -6,14 +6,16 @@
 VAMS OpenSearch Reindexing Utility
 
 This utility script provides reusable functions for triggering OpenSearch reindexing
-by updating DynamoDB asset records and publishing S3 notification events to SNS.
+by directly updating the AssetsMetadata DynamoDB table. Updates to this table trigger
+DynamoDB Streams which automatically reindex assets and files in OpenSearch.
 
 Key Features:
-- Updates _os_reindex_date timestamp for all assets in DynamoDB
-- Generates S3 ObjectCreated notification events for all files
-- Publishes events to SNS topic for automatic reindexing
+- Directly inserts/updates records in AssetsMetadata table
+- Preserves existing metadata attributes
+- Sets _asset_table_updated timestamp for tracking
 - Supports batch processing for efficiency
 - Includes dry-run mode for testing
+- Optional index clearing functionality
 - Comprehensive error handling and progress tracking
 
 Usage:
@@ -23,18 +25,27 @@ Usage:
         session=boto3.Session(profile_name='my-profile'),
         asset_table_name='vams-AssetStorageTable',
         s3_buckets_table_name='vams-S3AssetBucketsTable',
-        sns_topic_arn='arn:aws:sns:region:account:vams-s3ObjectCreated'
+        assets_metadata_table_name='vams-AssetsMetadataTable'
     )
     
-    # Reindex assets first
+    # Optionally clear indexes first
+    utility.clear_opensearch_indexes(
+        asset_index='vams-assets',
+        file_index='vams-files',
+        endpoint='https://search-vams.us-east-1.es.amazonaws.com'
+    )
+    
+    # Reindex assets
     asset_results = utility.reindex_assets(dry_run=False)
     
-    # Then reindex S3 files
-    file_results = utility.reindex_s3_files(dry_run=False)
+    # Reindex files
+    file_results = utility.reindex_files(dry_run=False)
 
 Requirements:
     - Python 3.6+
     - boto3
+    - opensearchpy (for index clearing)
+    - aws-requests-auth (for OpenSearch authentication)
     - AWS credentials with appropriate permissions
 """
 
@@ -51,7 +62,8 @@ logger = logging.getLogger(__name__)
 
 class ReindexUtility:
     """
-    Utility class for triggering OpenSearch reindexing of VAMS assets and files.
+    Utility class for triggering OpenSearch reindexing of VAMS assets and files
+    by updating the AssetsMetadata DynamoDB table.
     """
     
     def __init__(
@@ -59,44 +71,141 @@ class ReindexUtility:
         session,
         asset_table_name: str,
         s3_buckets_table_name: str,
-        sns_topic_arn: str,
+        assets_metadata_table_name: str,
         asset_batch_size: int = 25,
-        s3_batch_size: int = 100,
-        max_workers: int = 10,
-        sns_publish_delay: float = 0.05
+        file_batch_size: int = 100,
+        memory_batch_size: int = 1000,
+        max_workers: int = 10
     ):
         """
         Initialize the reindex utility.
         
         Args:
             session: boto3.Session object
-            asset_table_name: Name of the DynamoDB asset storage table
-            s3_buckets_table_name: Name of the DynamoDB S3 buckets table
-            sns_topic_arn: ARN of the SNS topic for S3 object created events
+            asset_table_name: Name of the DynamoDB asset storage table (source)
+            s3_buckets_table_name: Name of the DynamoDB S3 buckets table (source)
+            assets_metadata_table_name: Name of the AssetsMetadata table (target)
             asset_batch_size: Number of assets to process in each DynamoDB batch (max 25)
-            s3_batch_size: Number of S3 objects to process in each batch
+            file_batch_size: Number of files to process in each batch
+            memory_batch_size: Number of items to load into memory before batch writing
             max_workers: Maximum number of concurrent workers
-            sns_publish_delay: Delay between SNS publishes to avoid throttling (seconds)
         """
         self.session = session
         self.asset_table_name = asset_table_name
         self.s3_buckets_table_name = s3_buckets_table_name
-        self.sns_topic_arn = sns_topic_arn
+        self.assets_metadata_table_name = assets_metadata_table_name
         self.asset_batch_size = min(asset_batch_size, 25)  # DynamoDB batch limit
-        self.s3_batch_size = s3_batch_size
+        self.file_batch_size = file_batch_size
+        self.memory_batch_size = memory_batch_size
         self.max_workers = max_workers
-        self.sns_publish_delay = sns_publish_delay
         
         # Initialize AWS clients
         self.dynamodb_client = session.client('dynamodb')
         self.dynamodb_resource = session.resource('dynamodb')
         self.s3_client = session.client('s3')
-        self.sns_client = session.client('sns')
         
         logger.info(f"ReindexUtility initialized:")
-        logger.info(f"  Asset table: {asset_table_name}")
-        logger.info(f"  S3 buckets table: {s3_buckets_table_name}")
-        logger.info(f"  SNS topic: {sns_topic_arn}")
+        logger.info(f"  Asset table (source): {asset_table_name}")
+        logger.info(f"  S3 buckets table (source): {s3_buckets_table_name}")
+        logger.info(f"  AssetsMetadata table (target): {assets_metadata_table_name}")
+    
+    def clear_opensearch_indexes(
+        self,
+        asset_index: str,
+        file_index: str,
+        endpoint: str
+    ) -> Dict:
+        """
+        Clear all documents from OpenSearch indexes without deleting the indexes.
+        
+        Args:
+            asset_index: Name of the asset index
+            file_index: Name of the file index
+            endpoint: OpenSearch endpoint URL
+            
+        Returns:
+            dict: Results with deleted document counts
+        """
+        logger.info("=" * 80)
+        logger.info("CLEARING OPENSEARCH INDEXES")
+        logger.info("=" * 80)
+        
+        results = {
+            'asset_index': {
+                'name': asset_index,
+                'deleted_count': 0,
+                'success': False
+            },
+            'file_index': {
+                'name': file_index,
+                'deleted_count': 0,
+                'success': False
+            }
+        }
+        
+        try:
+            from opensearchpy import OpenSearch, RequestsHttpConnection
+            from aws_requests_auth.aws_auth import AWSRequestsAuth
+            
+            # Create OpenSearch client
+            credentials = self.session.get_credentials()
+            host = endpoint.replace('https://', '').replace('http://', '')
+            
+            awsauth = AWSRequestsAuth(
+                aws_access_key=credentials.access_key,
+                aws_secret_access_key=credentials.secret_key,
+                aws_token=credentials.token,
+                aws_host=host,
+                aws_region=self.session.region_name,
+                aws_service='aoss'  # Use 'es' for managed OpenSearch
+            )
+            
+            client = OpenSearch(
+                hosts=[{'host': host, 'port': 443}],
+                http_auth=awsauth,
+                use_ssl=True,
+                verify_certs=True,
+                connection_class=RequestsHttpConnection
+            )
+            
+            # Clear asset index
+            logger.info(f"Clearing asset index: {asset_index}")
+            if client.indices.exists(index=asset_index):
+                response = client.delete_by_query(
+                    index=asset_index,
+                    body={"query": {"match_all": {}}}
+                )
+                results['asset_index']['deleted_count'] = response.get('deleted', 0)
+                results['asset_index']['success'] = True
+                logger.info(f"Deleted {results['asset_index']['deleted_count']} documents from {asset_index}")
+            else:
+                logger.warning(f"Asset index {asset_index} does not exist")
+            
+            # Clear file index
+            logger.info(f"Clearing file index: {file_index}")
+            if client.indices.exists(index=file_index):
+                response = client.delete_by_query(
+                    index=file_index,
+                    body={"query": {"match_all": {}}}
+                )
+                results['file_index']['deleted_count'] = response.get('deleted', 0)
+                results['file_index']['success'] = True
+                logger.info(f"Deleted {results['file_index']['deleted_count']} documents from {file_index}")
+            else:
+                logger.warning(f"File index {file_index} does not exist")
+            
+            logger.info("=" * 80)
+            logger.info("INDEX CLEARING COMPLETE")
+            logger.info(f"  Asset index: {results['asset_index']['deleted_count']} documents deleted")
+            logger.info(f"  File index: {results['file_index']['deleted_count']} documents deleted")
+            logger.info("=" * 80)
+            
+            return results
+            
+        except Exception as e:
+            logger.exception(f"Error clearing OpenSearch indexes: {e}")
+            results['error'] = str(e)
+            return results
     
     def reindex_assets(
         self,
@@ -104,11 +213,14 @@ class ReindexUtility:
         limit: Optional[int] = None
     ) -> Dict:
         """
-        Update _os_reindex_date timestamp for all assets to trigger reindexing.
+        Reindex assets by inserting/updating records in AssetsMetadata table.
         
-        This function scans the asset storage table and updates the _os_reindex_date
-        field with the current timestamp, which triggers the asset indexer to
-        reindex the asset in OpenSearch.
+        This function:
+        1. Scans the asset storage table for all assets
+        2. For each asset, fetches existing metadata record (if exists)
+        3. Preserves all existing attributes
+        4. Updates/inserts with _asset_table_updated timestamp
+        5. Batch writes to AssetsMetadata table
         
         Args:
             dry_run: If True, don't actually update records
@@ -146,27 +258,30 @@ class ReindexUtility:
                 results['end_time'] = datetime.utcnow().isoformat()
                 return results
             
-            # Update assets in batches
+            # Process assets in memory batches
             current_timestamp = datetime.now(timezone.utc).isoformat()
             
-            for i in range(0, len(assets), self.asset_batch_size):
-                batch = assets[i:i + self.asset_batch_size]
-                batch_num = (i // self.asset_batch_size) + 1
-                total_batches = (len(assets) + self.asset_batch_size - 1) // self.asset_batch_size
+            for i in range(0, len(assets), self.memory_batch_size):
+                memory_batch = assets[i:i + self.memory_batch_size]
+                batch_num = (i // self.memory_batch_size) + 1
+                total_batches = (len(assets) + self.memory_batch_size - 1) // self.memory_batch_size
                 
-                logger.info(f"Processing asset batch {batch_num}/{total_batches} ({len(batch)} assets)")
+                logger.info(f"Processing memory batch {batch_num}/{total_batches} ({len(memory_batch)} assets)")
                 
                 if dry_run:
-                    results['success_count'] += len(batch)
-                    logger.info(f"DRY RUN: Would update {len(batch)} assets")
+                    results['success_count'] += len(memory_batch)
+                    logger.info(f"DRY RUN: Would update {len(memory_batch)} assets")
                 else:
-                    batch_results = self._update_asset_batch(batch, current_timestamp)
+                    batch_results = self._update_assets_in_metadata_table(
+                        memory_batch,
+                        current_timestamp
+                    )
                     results['success_count'] += batch_results['success']
                     results['failed_count'] += batch_results['failed']
                     results['errors'].extend(batch_results['errors'])
                 
                 # Log progress
-                if (i + self.asset_batch_size) % 1000 == 0:
+                if (i + self.memory_batch_size) % 5000 == 0:
                     logger.info(f"Progress: {results['success_count']}/{results['total_count']} assets updated")
             
             results['end_time'] = datetime.utcnow().isoformat()
@@ -186,22 +301,25 @@ class ReindexUtility:
             results['errors'].append({'error': str(e), 'type': 'fatal'})
             return results
     
-    def reindex_s3_files(
+    def reindex_files(
         self,
         dry_run: bool = False,
         limit: Optional[int] = None
     ) -> Dict:
         """
-        Generate S3 ObjectCreated notification events for all files and publish to SNS.
+        Reindex files by inserting/updating records in AssetsMetadata table.
         
         This function:
-        1. Scans the S3 buckets table for bucket/prefix configurations
-        2. Lists all objects in each bucket/prefix combination
-        3. Constructs S3 ObjectCreated notification events
-        4. Publishes events to SNS topic for automatic file reindexing
+        1. Scans S3 buckets table for bucket configurations
+        2. Lists all S3 objects with asset metadata
+        3. For each file, fetches existing metadata record (if exists)
+        4. Formats assetId as /{assetId}/{relative/path/to/file}
+        5. Preserves all existing attributes
+        6. Updates/inserts with _asset_table_updated timestamp
+        7. Batch writes to AssetsMetadata table
         
         Args:
-            dry_run: If True, don't actually publish to SNS
+            dry_run: If True, don't actually update records
             limit: Optional limit on number of files to process (for testing)
             
         Returns:
@@ -212,7 +330,7 @@ class ReindexUtility:
         logger.info("=" * 80)
         
         if dry_run:
-            logger.info("DRY RUN MODE - No SNS messages will be published")
+            logger.info("DRY RUN MODE - No changes will be made")
         
         results = {
             'success_count': 0,
@@ -356,13 +474,84 @@ class ReindexUtility:
             logger.error(f"Error scanning S3 buckets table: {e}")
             raise
     
-    def _update_asset_batch(
+    def _batch_get_existing_records(
+        self,
+        keys: List[Tuple[str, str]]
+    ) -> Dict[str, Dict]:
+        """
+        Batch get existing metadata records from AssetsMetadata table.
+        
+        Args:
+            keys: List of (databaseId, assetId) tuples
+            
+        Returns:
+            dict: Dictionary mapping "databaseId#assetId" to record
+        """
+        if not keys:
+            return {}
+        
+        records = {}
+        
+        try:
+            # Process in batches of 100 (DynamoDB BatchGetItem limit)
+            batch_size = 100
+            for i in range(0, len(keys), batch_size):
+                batch_keys = keys[i:i + batch_size]
+                
+                # Build request items
+                request_items = {
+                    self.assets_metadata_table_name: {
+                        'Keys': [
+                            {'databaseId': db_id, 'assetId': asset_id}
+                            for db_id, asset_id in batch_keys
+                        ]
+                    }
+                }
+                
+                # Batch get with retry for unprocessed keys
+                response = self.dynamodb_client.batch_get_item(RequestItems=request_items)
+                
+                # Process responses
+                if self.assets_metadata_table_name in response.get('Responses', {}):
+                    for item in response['Responses'][self.assets_metadata_table_name]:
+                        # Convert from low-level format to high-level format
+                        from boto3.dynamodb.types import TypeDeserializer
+                        deserializer = TypeDeserializer()
+                        deserialized_item = {k: deserializer.deserialize(v) for k, v in item.items()}
+                        
+                        record_key = f"{deserialized_item['databaseId']}#{deserialized_item['assetId']}"
+                        records[record_key] = deserialized_item
+                
+                # Handle unprocessed keys
+                unprocessed = response.get('UnprocessedKeys', {})
+                while unprocessed:
+                    logger.warning(f"Retrying {len(unprocessed.get(self.assets_metadata_table_name, {}).get('Keys', []))} unprocessed keys")
+                    response = self.dynamodb_client.batch_get_item(RequestItems=unprocessed)
+                    
+                    if self.assets_metadata_table_name in response.get('Responses', {}):
+                        for item in response['Responses'][self.assets_metadata_table_name]:
+                            from boto3.dynamodb.types import TypeDeserializer
+                            deserializer = TypeDeserializer()
+                            deserialized_item = {k: deserializer.deserialize(v) for k, v in item.items()}
+                            
+                            record_key = f"{deserialized_item['databaseId']}#{deserialized_item['assetId']}"
+                            records[record_key] = deserialized_item
+                    
+                    unprocessed = response.get('UnprocessedKeys', {})
+            
+            return records
+            
+        except Exception as e:
+            logger.error(f"Error batch getting metadata records: {e}")
+            return {}
+    
+    def _update_assets_in_metadata_table(
         self,
         assets: List[Dict],
         timestamp: str
     ) -> Dict:
         """
-        Update a batch of assets with the reindex timestamp.
+        Update a batch of assets in the AssetsMetadata table.
         
         Args:
             assets: List of asset records to update
@@ -371,27 +560,55 @@ class ReindexUtility:
         Returns:
             dict: Results with success, failed counts and errors
         """
-        table = self.dynamodb_resource.Table(self.asset_table_name)
+        table = self.dynamodb_resource.Table(self.assets_metadata_table_name)
         results = {'success': 0, 'failed': 0, 'errors': []}
         
         try:
-            # Use batch_writer for efficient updates
-            with table.batch_writer() as batch:
-                for asset in assets:
-                    try:
-                        # Update the asset with reindex timestamp
-                        asset['_os_reindex_date'] = timestamp
-                        batch.put_item(Item=asset)
-                        results['success'] += 1
-                        
-                    except Exception as e:
-                        results['failed'] += 1
-                        error_msg = f"Failed to update asset {asset.get('assetId')}: {str(e)}"
-                        logger.error(error_msg)
-                        results['errors'].append({
-                            'assetId': asset.get('assetId'),
-                            'error': str(e)
-                        })
+            # Batch fetch existing records for efficiency
+            existing_records = self._batch_get_existing_records(
+                [(asset['databaseId'], asset['assetId']) for asset in assets]
+            )
+            
+            # Process in DynamoDB batch size chunks
+            for i in range(0, len(assets), self.asset_batch_size):
+                batch = assets[i:i + self.asset_batch_size]
+                
+                with table.batch_writer() as batch_writer:
+                    for asset in batch:
+                        try:
+                            database_id = asset['databaseId']
+                            asset_id = asset['assetId']
+                            
+                            # Get existing metadata record from batch fetch
+                            record_key = f"{database_id}#{asset_id}"
+                            existing_record = existing_records.get(record_key)
+                            
+                            # Merge with existing attributes
+                            if existing_record:
+                                # Preserve all existing attributes
+                                metadata_record = existing_record.copy()
+                            else:
+                                # Create new record with minimal keys
+                                metadata_record = {
+                                    'databaseId': database_id,
+                                    'assetId': asset_id
+                                }
+                            
+                            # Update timestamp
+                            metadata_record['_asset_table_updated'] = timestamp
+                            
+                            # Write to table
+                            batch_writer.put_item(Item=metadata_record)
+                            results['success'] += 1
+                            
+                        except Exception as e:
+                            results['failed'] += 1
+                            error_msg = f"Failed to update asset {asset.get('assetId')}: {str(e)}"
+                            logger.error(error_msg)
+                            results['errors'].append({
+                                'assetId': asset.get('assetId'),
+                                'error': str(e)
+                            })
             
             return results
             
@@ -409,12 +626,12 @@ class ReindexUtility:
         limit: Optional[int] = None
     ) -> Dict:
         """
-        Process all objects in a bucket and publish S3 notification events.
+        Process all objects in a bucket and update AssetsMetadata table.
         
         Args:
             bucket_name: Name of the S3 bucket
             base_prefix: Base prefix for assets in the bucket
-            dry_run: If True, don't publish to SNS
+            dry_run: If True, don't update records
             limit: Optional limit on number of files to process
             
         Returns:
@@ -429,6 +646,10 @@ class ReindexUtility:
         }
         
         try:
+            # Collect files in memory batches
+            files_batch = []
+            current_timestamp = datetime.now(timezone.utc).isoformat()
+            
             # List all objects in the bucket
             paginator = self.s3_client.get_paginator('list_objects_v2')
             
@@ -445,10 +666,8 @@ class ReindexUtility:
                     if limit and results['total'] >= limit:
                         break
                     
-                    results['total'] += 1
-                    
-                    # Get object metadata
                     try:
+                        # Get object metadata
                         head_response = self.s3_client.head_object(
                             Bucket=bucket_name,
                             Key=obj['Key']
@@ -461,33 +680,40 @@ class ReindexUtility:
                         # Only process files with asset metadata
                         if not asset_id or not database_id:
                             logger.debug(f"Skipping file without asset metadata: {obj['Key']}")
-                            results['total'] -= 1  # Don't count files without metadata
                             continue
                         
-                        # Create and publish S3 notification event
-                        if dry_run:
-                            results['success'] += 1
-                            logger.debug(f"DRY RUN: Would publish event for {obj['Key']}")
-                        else:
-                            event = self._create_s3_notification_event(
-                                bucket_name=bucket_name,
-                                object_key=obj['Key'],
-                                object_size=obj.get('Size', 0),
-                                etag=obj.get('ETag', '').strip('"'),
-                                event_time=obj.get('LastModified', datetime.now(timezone.utc)).isoformat()
-                            )
-                            
-                            if self._publish_to_sns(event):
-                                results['success'] += 1
+                        # Calculate relative path from base prefix
+                        relative_path = obj['Key']
+                        if base_prefix and obj['Key'].startswith(base_prefix):
+                            relative_path = obj['Key'][len(base_prefix):].lstrip('/')
+                        
+                        # Format assetId as /{assetId}/{relative/path}
+                        formatted_asset_id = f"/{asset_id}/{relative_path}"
+                        
+                        files_batch.append({
+                            'databaseId': database_id,
+                            'assetId': formatted_asset_id,
+                            'original_asset_id': asset_id,
+                            'relative_path': relative_path
+                        })
+                        
+                        results['total'] += 1
+                        
+                        # Process batch when it reaches memory_batch_size
+                        if len(files_batch) >= self.memory_batch_size:
+                            if dry_run:
+                                results['success'] += len(files_batch)
+                                logger.debug(f"DRY RUN: Would update {len(files_batch)} files")
                             else:
-                                results['failed'] += 1
-                                results['errors'].append({
-                                    'key': obj['Key'],
-                                    'error': 'Failed to publish to SNS'
-                                })
+                                batch_results = self._update_files_in_metadata_table(
+                                    files_batch,
+                                    current_timestamp
+                                )
+                                results['success'] += batch_results['success']
+                                results['failed'] += batch_results['failed']
+                                results['errors'].extend(batch_results['errors'])
                             
-                            # Add delay to avoid throttling
-                            time.sleep(self.sns_publish_delay)
+                            files_batch = []
                         
                     except Exception as e:
                         results['failed'] += 1
@@ -506,6 +732,20 @@ class ReindexUtility:
                 if limit and results['total'] >= limit:
                     break
             
+            # Process remaining files in batch
+            if files_batch:
+                if dry_run:
+                    results['success'] += len(files_batch)
+                    logger.debug(f"DRY RUN: Would update {len(files_batch)} files")
+                else:
+                    batch_results = self._update_files_in_metadata_table(
+                        files_batch,
+                        current_timestamp
+                    )
+                    results['success'] += batch_results['success']
+                    results['failed'] += batch_results['failed']
+                    results['errors'].extend(batch_results['errors'])
+            
             return results
             
         except Exception as e:
@@ -517,97 +757,79 @@ class ReindexUtility:
             })
             return results
     
-    def _create_s3_notification_event(
+    def _update_files_in_metadata_table(
         self,
-        bucket_name: str,
-        object_key: str,
-        object_size: int,
-        etag: str,
-        event_time: str
+        files: List[Dict],
+        timestamp: str
     ) -> Dict:
         """
-        Create an S3 ObjectCreated notification event.
-        
-        This creates an event that matches the AWS S3 event notification format,
-        which the file indexer Lambda function expects.
+        Update a batch of files in the AssetsMetadata table.
         
         Args:
-            bucket_name: Name of the S3 bucket
-            object_key: S3 object key
-            object_size: Size of the object in bytes
-            etag: ETag of the object
-            event_time: ISO format timestamp of the event
+            files: List of file records to update
+            timestamp: ISO format timestamp to set
             
         Returns:
-            dict: S3 notification event
+            dict: Results with success, failed counts and errors
         """
-        # Get AWS region from session
-        region = self.session.region_name or 'us-east-1'
+        table = self.dynamodb_resource.Table(self.assets_metadata_table_name)
+        results = {'success': 0, 'failed': 0, 'errors': []}
         
-        # Create event matching AWS S3 notification format
-        event = {
-            "Records": [
-                {
-                    "eventVersion": "2.1",
-                    "eventSource": "aws:s3",
-                    "awsRegion": region,
-                    "eventTime": event_time,
-                    "eventName": "ObjectCreated:Put",
-                    "userIdentity": {
-                        "principalId": "VAMS-REINDEX-UTILITY"
-                    },
-                    "requestParameters": {
-                        "sourceIPAddress": "127.0.0.1"
-                    },
-                    "responseElements": {
-                        "x-amz-request-id": "REINDEX",
-                        "x-amz-id-2": "REINDEX"
-                    },
-                    "s3": {
-                        "s3SchemaVersion": "1.0",
-                        "configurationId": "vams-reindex",
-                        "bucket": {
-                            "name": bucket_name,
-                            "ownerIdentity": {
-                                "principalId": "VAMS"
-                            },
-                            "arn": f"arn:aws:s3:::{bucket_name}"
-                        },
-                        "object": {
-                            "key": object_key,
-                            "size": object_size,
-                            "eTag": etag,
-                            "sequencer": "REINDEX"
-                        }
-                    }
-                }
-            ]
-        }
-        
-        return event
-    
-    def _publish_to_sns(self, event: Dict) -> bool:
-        """
-        Publish an S3 notification event to SNS.
-        
-        Args:
-            event: S3 notification event to publish
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
         try:
-            response = self.sns_client.publish(
-                TopicArn=self.sns_topic_arn,
-                Message=json.dumps(event),
-                Subject='S3 Notification - Reindex'
+            # Batch fetch existing records for efficiency
+            existing_records = self._batch_get_existing_records(
+                [(file_record['databaseId'], file_record['assetId']) for file_record in files]
             )
             
-            return response.get('MessageId') is not None
+            # Process in DynamoDB batch size chunks (max 25 for batch_writer)
+            batch_size = min(self.file_batch_size, 25)
+            for i in range(0, len(files), batch_size):
+                batch = files[i:i + batch_size]
+                
+                with table.batch_writer() as batch_writer:
+                    for file_record in batch:
+                        try:
+                            database_id = file_record['databaseId']
+                            asset_id = file_record['assetId']  # Already formatted
+                            
+                            # Get existing metadata record from batch fetch
+                            record_key = f"{database_id}#{asset_id}"
+                            existing_record = existing_records.get(record_key)
+                            
+                            # Merge with existing attributes
+                            if existing_record:
+                                # Preserve all existing attributes
+                                metadata_record = existing_record.copy()
+                            else:
+                                # Create new record with minimal keys
+                                metadata_record = {
+                                    'databaseId': database_id,
+                                    'assetId': asset_id
+                                }
+                            
+                            # Update timestamp
+                            metadata_record['_asset_table_updated'] = timestamp
+                            
+                            # Write to table
+                            batch_writer.put_item(Item=metadata_record)
+                            results['success'] += 1
+                            
+                        except Exception as e:
+                            results['failed'] += 1
+                            error_msg = f"Failed to update file {file_record.get('assetId')}: {str(e)}"
+                            logger.error(error_msg)
+                            results['errors'].append({
+                                'assetId': file_record.get('assetId'),
+                                'error': str(e)
+                            })
+            
+            return results
             
         except Exception as e:
-            logger.error(f"Error publishing to SNS: {e}")
-            return False
+            logger.error(f"Error in batch update: {e}")
+            results['failed'] = len(files) - results['success']
+            results['errors'].append({'error': str(e), 'type': 'batch_error'})
+            return results
 
 
 def main():
@@ -623,34 +845,55 @@ def main():
         epilog="""
 Examples:
   # Reindex assets only
-  python reindex_utility.py --profile my-profile --asset-table vams-Assets --operation assets
+  python reindex_utility.py --profile my-profile \\
+    --asset-table vams-Assets \\
+    --assets-metadata-table vams-AssetsMetadata \\
+    --operation assets
   
-  # Reindex S3 files only
-  python reindex_utility.py --profile my-profile --s3-buckets-table vams-S3Buckets \\
-    --sns-topic arn:aws:sns:us-east-1:123456789012:vams-s3ObjectCreated --operation files
+  # Reindex files only
+  python reindex_utility.py --profile my-profile \\
+    --s3-buckets-table vams-S3Buckets \\
+    --assets-metadata-table vams-AssetsMetadata \\
+    --operation files
   
   # Reindex both (assets first, then files)
-  python reindex_utility.py --profile my-profile --asset-table vams-Assets \\
+  python reindex_utility.py --profile my-profile \\
+    --asset-table vams-Assets \\
     --s3-buckets-table vams-S3Buckets \\
-    --sns-topic arn:aws:sns:us-east-1:123456789012:vams-s3ObjectCreated --operation both
+    --assets-metadata-table vams-AssetsMetadata \\
+    --operation both
+  
+  # Clear indexes first, then reindex
+  python reindex_utility.py --profile my-profile \\
+    --asset-table vams-Assets \\
+    --s3-buckets-table vams-S3Buckets \\
+    --assets-metadata-table vams-AssetsMetadata \\
+    --clear-indexes \\
+    --asset-index-name vams-assets \\
+    --file-index-name vams-files \\
+    --opensearch-endpoint https://search-vams.us-east-1.es.amazonaws.com
   
   # Dry run
-  python reindex_utility.py --profile my-profile --asset-table vams-Assets --dry-run
+  python reindex_utility.py --profile my-profile \\
+    --asset-table vams-Assets \\
+    --assets-metadata-table vams-AssetsMetadata \\
+    --dry-run
         """
     )
     
     parser.add_argument('--profile', help='AWS profile name')
     parser.add_argument('--region', help='AWS region')
-    parser.add_argument('--asset-table', help='Asset storage table name')
-    parser.add_argument('--s3-buckets-table', help='S3 buckets table name')
-    parser.add_argument('--sns-topic', help='SNS topic ARN for S3 notifications')
+    parser.add_argument('--limit', type=int, help='Maximum number of items to process (for testing)')
+    parser.add_argument('--asset-table', help='Name of the asset storage table')
+    parser.add_argument('--s3-buckets-table', help='Name of the S3 buckets table')
+    parser.add_argument('--assets-metadata-table', required=True, help='Name of the AssetsMetadata table')
     parser.add_argument('--operation', choices=['assets', 'files', 'both'], default='both',
                         help='Operation to perform (default: both)')
+    parser.add_argument('--clear-indexes', action='store_true', help='Clear OpenSearch indexes before reindexing')
+    parser.add_argument('--asset-index-name', help='Asset index name (required if clearing indexes)')
+    parser.add_argument('--file-index-name', help='File index name (required if clearing indexes)')
+    parser.add_argument('--opensearch-endpoint', help='OpenSearch endpoint URL (required if clearing indexes)')
     parser.add_argument('--dry-run', action='store_true', help='Perform dry run without making changes')
-    parser.add_argument('--limit', type=int, help='Limit number of items to process (for testing)')
-    parser.add_argument('--asset-batch-size', type=int, default=25, help='Asset batch size (default: 25)')
-    parser.add_argument('--s3-batch-size', type=int, default=100, help='S3 batch size (default: 100)')
-    parser.add_argument('--max-workers', type=int, default=10, help='Max concurrent workers (default: 10)')
     parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], default='INFO',
                         help='Logging level (default: INFO)')
     
@@ -667,11 +910,12 @@ Examples:
     if args.operation in ['assets', 'both'] and not args.asset_table:
         parser.error("--asset-table is required for assets operation")
     
-    if args.operation in ['files', 'both']:
-        if not args.s3_buckets_table:
-            parser.error("--s3-buckets-table is required for files operation")
-        if not args.sns_topic:
-            parser.error("--sns-topic is required for files operation")
+    if args.operation in ['files', 'both'] and not args.s3_buckets_table:
+        parser.error("--s3-buckets-table is required for files operation")
+    
+    if args.clear_indexes:
+        if not args.asset_index_name or not args.file_index_name or not args.opensearch_endpoint:
+            parser.error("--asset-index-name, --file-index-name, and --opensearch-endpoint are required when using --clear-indexes")
     
     # Create boto3 session
     import boto3
@@ -688,14 +932,24 @@ Examples:
         session=session,
         asset_table_name=args.asset_table or '',
         s3_buckets_table_name=args.s3_buckets_table or '',
-        sns_topic_arn=args.sns_topic or '',
-        asset_batch_size=args.asset_batch_size,
-        s3_batch_size=args.s3_batch_size,
-        max_workers=args.max_workers
+        assets_metadata_table_name=args.assets_metadata_table
     )
     
     # Execute operations
     try:
+        # Clear indexes if requested
+        if args.clear_indexes:
+            logger.info("Clearing OpenSearch indexes...")
+            clear_results = utility.clear_opensearch_indexes(
+                asset_index=args.asset_index_name,
+                file_index=args.file_index_name,
+                endpoint=args.opensearch_endpoint
+            )
+            
+            if not clear_results.get('asset_index', {}).get('success') or \
+               not clear_results.get('file_index', {}).get('success'):
+                logger.warning("Index clearing completed with issues")
+        
         if args.operation in ['assets', 'both']:
             logger.info("Starting asset reindexing...")
             asset_results = utility.reindex_assets(dry_run=args.dry_run, limit=args.limit)
@@ -706,13 +960,13 @@ Examples:
                 logger.info("Asset reindexing completed successfully")
         
         if args.operation in ['files', 'both']:
-            logger.info("Starting S3 file reindexing...")
-            file_results = utility.reindex_s3_files(dry_run=args.dry_run, limit=args.limit)
+            logger.info("Starting file reindexing...")
+            file_results = utility.reindex_files(dry_run=args.dry_run, limit=args.limit)
             
             if file_results['failed_count'] > 0:
-                logger.warning(f"S3 file reindexing completed with {file_results['failed_count']} failures")
+                logger.warning(f"File reindexing completed with {file_results['failed_count']} failures")
             else:
-                logger.info("S3 file reindexing completed successfully")
+                logger.info("File reindexing completed successfully")
         
         logger.info("Reindexing utility completed")
         return 0

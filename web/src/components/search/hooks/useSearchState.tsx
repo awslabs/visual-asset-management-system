@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useCallback, useReducer, useEffect } from 'react';
-import { SearchFilters, SearchQuery, SearchResponse, SearchResult, MetadataFilter } from '../types';
+import { useState, useCallback, useReducer, useEffect } from "react";
+import { SearchFilters, SearchQuery, SearchResponse, SearchResult, MetadataFilter } from "../types";
 
 interface SearchState {
     query: string;
@@ -28,29 +28,29 @@ interface SearchState {
 }
 
 type SearchAction =
-    | { type: 'SET_QUERY'; payload: string }
-    | { type: 'SET_FILTERS'; payload: SearchFilters }
-    | { type: 'SET_METADATA_FILTERS'; payload: MetadataFilter[] }
-    | { type: 'SET_SORT'; payload: any[] }
-    | { type: 'SET_TABLE_SORT'; payload: { sortingField?: string; sortingDescending?: boolean } }
-    | { type: 'SET_PAGINATION'; payload: { from: number; size?: number } }
-    | { type: 'SET_LOADING'; payload: boolean }
-    | { type: 'SET_ERROR'; payload: string | null }
-    | { type: 'SET_RESULT'; payload: SearchResponse }
-    | { type: 'SET_SELECTED_ITEMS'; payload: SearchResult[] }
-    | { type: 'CLEAR_SEARCH' }
-    | { type: 'RESET_PAGINATION' };
+    | { type: "SET_QUERY"; payload: string }
+    | { type: "SET_FILTERS"; payload: SearchFilters }
+    | { type: "SET_METADATA_FILTERS"; payload: MetadataFilter[] }
+    | { type: "SET_SORT"; payload: any[] }
+    | { type: "SET_TABLE_SORT"; payload: { sortingField?: string; sortingDescending?: boolean } }
+    | { type: "SET_PAGINATION"; payload: { from: number; size?: number } }
+    | { type: "SET_LOADING"; payload: boolean }
+    | { type: "SET_ERROR"; payload: string | null }
+    | { type: "SET_RESULT"; payload: SearchResponse }
+    | { type: "SET_SELECTED_ITEMS"; payload: SearchResult[] }
+    | { type: "CLEAR_SEARCH" }
+    | { type: "RESET_PAGINATION" };
 
 const initialState: SearchState = {
-    query: '',
+    query: "",
     filters: {
         _rectype: {
-            label: 'Assets',
-            value: 'asset',
+            label: "Assets",
+            value: "asset",
         },
     },
     metadataFilters: [],
-    sort: ['_score'],
+    sort: ["_score"],
     tableSort: {},
     pagination: {
         from: 0,
@@ -66,41 +66,41 @@ const initialState: SearchState = {
 
 function searchReducer(state: SearchState, action: SearchAction): SearchState {
     switch (action.type) {
-        case 'SET_QUERY':
+        case "SET_QUERY":
             return {
                 ...state,
                 query: action.payload,
                 pagination: { ...state.pagination, from: 0 }, // Reset pagination on query change
             };
 
-        case 'SET_FILTERS':
+        case "SET_FILTERS":
             return {
                 ...state,
                 filters: action.payload,
                 pagination: { ...state.pagination, from: 0 }, // Reset pagination on filter change
             };
 
-        case 'SET_METADATA_FILTERS':
+        case "SET_METADATA_FILTERS":
             return {
                 ...state,
                 metadataFilters: action.payload,
                 pagination: { ...state.pagination, from: 0 }, // Reset pagination on metadata filter change
             };
 
-        case 'SET_SORT':
+        case "SET_SORT":
             return {
                 ...state,
                 sort: action.payload,
                 pagination: { ...state.pagination, from: 0 }, // Reset pagination on sort change
             };
 
-        case 'SET_TABLE_SORT':
+        case "SET_TABLE_SORT":
             return {
                 ...state,
                 tableSort: action.payload,
             };
 
-        case 'SET_PAGINATION':
+        case "SET_PAGINATION":
             return {
                 ...state,
                 pagination: {
@@ -109,30 +109,33 @@ function searchReducer(state: SearchState, action: SearchAction): SearchState {
                 },
             };
 
-        case 'SET_LOADING':
+        case "SET_LOADING":
             return {
                 ...state,
                 loading: action.payload,
                 error: action.payload ? null : state.error, // Clear error when starting new request
             };
 
-        case 'SET_ERROR':
+        case "SET_ERROR":
             return {
                 ...state,
                 error: action.payload,
                 loading: false,
             };
 
-        case 'SET_RESULT':
+        case "SET_RESULT":
             // Extract column names from the first few results
-            const columnNames = action.payload?.hits?.hits?.length > 0
-                ? Array.from(new Set(
-                    action.payload.hits.hits
-                        .slice(0, 10) // Sample first 10 results
-                        .flatMap(hit => Object.keys(hit._source))
-                        .filter(key => key.indexOf('_') > 0) // Filter out internal fields
-                ))
-                : [];
+            const columnNames =
+                action.payload?.hits?.hits?.length > 0
+                    ? Array.from(
+                          new Set(
+                              action.payload.hits.hits
+                                  .slice(0, 10) // Sample first 10 results
+                                  .flatMap((hit) => Object.keys(hit._source))
+                                  .filter((key) => key.indexOf("_") > 0) // Filter out internal fields
+                          )
+                      )
+                    : [];
 
             return {
                 ...state,
@@ -144,19 +147,19 @@ function searchReducer(state: SearchState, action: SearchAction): SearchState {
                 initialResult: true,
             };
 
-        case 'SET_SELECTED_ITEMS':
+        case "SET_SELECTED_ITEMS":
             return {
                 ...state,
                 selectedItems: action.payload,
             };
 
-        case 'CLEAR_SEARCH':
+        case "CLEAR_SEARCH":
             return {
                 ...initialState,
                 filters: state.filters, // Keep current record type filter
             };
 
-        case 'RESET_PAGINATION':
+        case "RESET_PAGINATION":
             return {
                 ...state,
                 pagination: { ...state.pagination, from: 0 },
@@ -187,104 +190,122 @@ export const useSearchState = (initialFilters?: SearchFilters, databaseId?: stri
 
     // Action creators
     const setQuery = useCallback((query: string) => {
-        dispatch({ type: 'SET_QUERY', payload: query });
+        dispatch({ type: "SET_QUERY", payload: query });
     }, []);
 
     const setFilters = useCallback((filters: SearchFilters) => {
-        dispatch({ type: 'SET_FILTERS', payload: filters });
+        dispatch({ type: "SET_FILTERS", payload: filters });
     }, []);
 
-    const updateFilter = useCallback((key: string, value: any) => {
-        const updatedFilters = {
-            ...state.filters,
-            [key]: value,
-        };
-        dispatch({ type: 'SET_FILTERS', payload: updatedFilters });
-    }, [state.filters]);
+    const updateFilter = useCallback(
+        (key: string, value: any) => {
+            const updatedFilters = {
+                ...state.filters,
+                [key]: value,
+            };
+            dispatch({ type: "SET_FILTERS", payload: updatedFilters });
+        },
+        [state.filters]
+    );
 
-    const removeFilter = useCallback((key: string) => {
-        const updatedFilters = { ...state.filters };
-        delete updatedFilters[key];
-        dispatch({ type: 'SET_FILTERS', payload: updatedFilters });
-    }, [state.filters]);
+    const removeFilter = useCallback(
+        (key: string) => {
+            const updatedFilters = { ...state.filters };
+            delete updatedFilters[key];
+            dispatch({ type: "SET_FILTERS", payload: updatedFilters });
+        },
+        [state.filters]
+    );
 
     const setMetadataFilters = useCallback((metadataFilters: MetadataFilter[]) => {
-        dispatch({ type: 'SET_METADATA_FILTERS', payload: metadataFilters });
+        dispatch({ type: "SET_METADATA_FILTERS", payload: metadataFilters });
     }, []);
 
-    const addMetadataFilter = useCallback((filter: MetadataFilter) => {
-        const updatedFilters = [...state.metadataFilters, filter];
-        dispatch({ type: 'SET_METADATA_FILTERS', payload: updatedFilters });
-    }, [state.metadataFilters]);
+    const addMetadataFilter = useCallback(
+        (filter: MetadataFilter) => {
+            const updatedFilters = [...state.metadataFilters, filter];
+            dispatch({ type: "SET_METADATA_FILTERS", payload: updatedFilters });
+        },
+        [state.metadataFilters]
+    );
 
-    const removeMetadataFilter = useCallback((index: number) => {
-        const updatedFilters = state.metadataFilters.filter((_, i) => i !== index);
-        dispatch({ type: 'SET_METADATA_FILTERS', payload: updatedFilters });
-    }, [state.metadataFilters]);
+    const removeMetadataFilter = useCallback(
+        (index: number) => {
+            const updatedFilters = state.metadataFilters.filter((_, i) => i !== index);
+            dispatch({ type: "SET_METADATA_FILTERS", payload: updatedFilters });
+        },
+        [state.metadataFilters]
+    );
 
     const setSort = useCallback((sort: any[]) => {
-        dispatch({ type: 'SET_SORT', payload: sort });
+        dispatch({ type: "SET_SORT", payload: sort });
     }, []);
 
-    const setTableSort = useCallback((tableSort: { sortingField?: string; sortingDescending?: boolean }) => {
-        dispatch({ type: 'SET_TABLE_SORT', payload: tableSort });
-    }, []);
+    const setTableSort = useCallback(
+        (tableSort: { sortingField?: string; sortingDescending?: boolean }) => {
+            dispatch({ type: "SET_TABLE_SORT", payload: tableSort });
+        },
+        []
+    );
 
     const setPagination = useCallback((pagination: { from: number; size?: number }) => {
-        dispatch({ type: 'SET_PAGINATION', payload: pagination });
+        dispatch({ type: "SET_PAGINATION", payload: pagination });
     }, []);
 
     const setLoading = useCallback((loading: boolean) => {
-        dispatch({ type: 'SET_LOADING', payload: loading });
+        dispatch({ type: "SET_LOADING", payload: loading });
     }, []);
 
     const setError = useCallback((error: string | null) => {
-        dispatch({ type: 'SET_ERROR', payload: error });
+        dispatch({ type: "SET_ERROR", payload: error });
     }, []);
 
     const setResult = useCallback((result: SearchResponse) => {
-        dispatch({ type: 'SET_RESULT', payload: result });
+        dispatch({ type: "SET_RESULT", payload: result });
     }, []);
 
     const setSelectedItems = useCallback((items: SearchResult[]) => {
-        dispatch({ type: 'SET_SELECTED_ITEMS', payload: items });
+        dispatch({ type: "SET_SELECTED_ITEMS", payload: items });
     }, []);
 
     const clearSearch = useCallback(() => {
-        dispatch({ type: 'CLEAR_SEARCH' });
+        dispatch({ type: "CLEAR_SEARCH" });
     }, []);
 
     const resetPagination = useCallback(() => {
-        dispatch({ type: 'RESET_PAGINATION' });
+        dispatch({ type: "RESET_PAGINATION" });
     }, []);
 
     // Build search query object
-    const buildSearchQuery = useCallback((overridePagination?: { from: number; size: number }): SearchQuery => {
-        return {
-            query: state.query,
-            filters: state.filters,
-            metadataFilters: state.metadataFilters,
-            sort: state.sort,
-            pagination: overridePagination || state.pagination,
-        };
-    }, [state.query, state.filters, state.metadataFilters, state.sort, state.pagination]);
+    const buildSearchQuery = useCallback(
+        (overridePagination?: { from: number; size: number }): SearchQuery => {
+            return {
+                query: state.query,
+                filters: state.filters,
+                metadataFilters: state.metadataFilters,
+                sort: state.sort,
+                pagination: overridePagination || state.pagination,
+            };
+        },
+        [state.query, state.filters, state.metadataFilters, state.sort, state.pagination]
+    );
 
     // Check if search has active filters
     const hasActiveFilters = useCallback(() => {
         const hasQuery = state.query.trim().length > 0;
-        const hasFilters = Object.keys(state.filters).some(key => {
+        const hasFilters = Object.keys(state.filters).some((key) => {
             const filter = state.filters[key];
-            return filter && filter.value !== 'all' && filter.value !== '';
+            return filter && filter.value !== "all" && filter.value !== "";
         });
         const hasMetadataFilters = state.metadataFilters.length > 0;
-        
+
         return hasQuery || hasFilters || hasMetadataFilters;
     }, [state.query, state.filters, state.metadataFilters]);
 
     return {
         // State
         ...state,
-        
+
         // Actions
         setQuery,
         setFilters,
@@ -302,7 +323,7 @@ export const useSearchState = (initialFilters?: SearchFilters, databaseId?: stri
         setSelectedItems,
         clearSearch,
         resetPagination,
-        
+
         // Computed values
         buildSearchQuery,
         hasActiveFilters,

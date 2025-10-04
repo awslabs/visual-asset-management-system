@@ -18,7 +18,11 @@ import { fileManagerReducer } from "./utils/FileManagerReducer";
 import "./EnhancedFileManager.css";
 
 // Main Component
-export function EnhancedFileManager({ assetName, assetFiles = [], filePathToNavigate }: EnhancedFileManagerProps) {
+export function EnhancedFileManager({
+    assetName,
+    assetFiles = [],
+    filePathToNavigate,
+}: EnhancedFileManagerProps) {
     const { databaseId, assetId } = useParams();
     const { state: assetDetailState } = useContext(AssetDetailContext) as AssetDetailContextType;
 
@@ -77,7 +81,7 @@ export function EnhancedFileManager({ assetName, assetFiles = [], filePathToNavi
             if (filePathToNavigate) {
                 // Find the file in the tree by path
                 const targetFile = getRootByPath(fileTree, filePathToNavigate);
-                
+
                 if (targetFile) {
                     // Select the file
                     dispatch({ type: "SELECT_ITEM", payload: { item: targetFile } });
@@ -85,14 +89,14 @@ export function EnhancedFileManager({ assetName, assetFiles = [], filePathToNavi
                     // File not found - show non-blocking error
                     dispatch({
                         type: "SET_ERROR",
-                        payload: `File path "${filePathToNavigate}" does not exist in this asset.`
+                        payload: `File path "${filePathToNavigate}" does not exist in this asset.`,
                     });
-                    
+
                     // Clear error after 5 seconds
                     setTimeout(() => {
                         dispatch({ type: "CLEAR_ERROR", payload: null });
                     }, 5000);
-                    
+
                     // Still select root so user can browse
                     dispatch({ type: "SELECT_ITEM", payload: { item: fileTree } });
                 }
@@ -249,7 +253,7 @@ export function EnhancedFileManager({ assetName, assetFiles = [], filePathToNavi
                     {state.error}
                 </Alert>
             )}
-            
+
             <div className="enhanced-file-manager">
                 <ResizableSplitter
                     leftPanel={<DirectoryTree />}

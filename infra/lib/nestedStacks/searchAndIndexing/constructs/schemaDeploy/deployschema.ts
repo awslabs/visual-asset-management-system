@@ -166,9 +166,9 @@ const getDualIndexMappingSchema = (indexType: "asset" | "file") => {
             ],
             properties: {
                 _rectype: {
-                    type: "keyword"
-                }
-            } as any
+                    type: "keyword",
+                },
+            } as any,
         },
         settings: {
             number_of_shards: 1,
@@ -176,11 +176,11 @@ const getDualIndexMappingSchema = (indexType: "asset" | "file") => {
             analysis: {
                 analyzer: {
                     default: {
-                        type: "standard"
-                    }
-                }
-            }
-        }
+                        type: "standard",
+                    },
+                },
+            },
+        },
     };
 
     // Add index-specific properties - using multi-field mapping for maximum flexibility
@@ -203,7 +203,7 @@ const getDualIndexMappingSchema = (indexType: "asset" | "file") => {
             bool_has_asset_children: { type: "boolean" },
             bool_has_asset_parents: { type: "boolean" },
             bool_has_assets_related: { type: "boolean" },
-            bool_archived: { type: "boolean" }
+            bool_archived: { type: "boolean" },
         };
     } else if (indexType === "file") {
         (baseMapping.mappings.properties as any) = {
@@ -221,7 +221,7 @@ const getDualIndexMappingSchema = (indexType: "asset" | "file") => {
             date_lastmodified: { type: "date" },
             num_filesize: { type: "long" },
             bool_archived: { type: "boolean" },
-            list_tags: { type: "text", fields: { keyword: { type: "keyword" } } }
+            list_tags: { type: "text", fields: { keyword: { type: "keyword" } } },
         };
     }
 
@@ -248,14 +248,14 @@ export const handler: Handler = async function (event: any) {
     const endpointSSMParam = event?.ResourceProperties?.endpointSSMParam;
     const assetIndexNameSSMParam = event?.ResourceProperties?.assetIndexNameSSMParam;
     const fileIndexNameSSMParam = event?.ResourceProperties?.fileIndexNameSSMParam;
-    
+
     // Determine deployment type and extract endpoint
     const isServerless = event?.ResourceProperties?.collectionEndpoint !== undefined;
     const isProvisioned = event?.ResourceProperties?.domainEndpoint !== undefined;
-    
+
     let endpoint: string | undefined;
     let service: "aoss" | "es";
-    
+
     if (isServerless) {
         endpoint = event?.ResourceProperties?.collectionEndpoint;
         service = "aoss";
@@ -277,7 +277,7 @@ export const handler: Handler = async function (event: any) {
 
     // Set SSM parameters
     setEndpointSSM(endpointSSMParam, endpoint);
-    
+
     // Set index name parameters
     if (assetIndexNameSSMParam && assetIndexName) {
         setIndexNameSSM(assetIndexNameSSMParam, assetIndexName);
@@ -305,7 +305,7 @@ export const handler: Handler = async function (event: any) {
 
     // Create dual indexes
     const indexesToCreate = [];
-    
+
     if (assetIndexName) {
         indexesToCreate.push({ name: assetIndexName, type: "asset" });
     }
@@ -320,44 +320,46 @@ export const handler: Handler = async function (event: any) {
                 index: indexInfo.name,
             });
             console.log(`${indexInfo.name} exists_resp`, exists_resp);
-            
+
             if (exists_resp.body) {
                 console.log(`Index ${indexInfo.name} already exists, skipping creation`);
                 results.push({
                     index: indexInfo.name,
                     type: indexInfo.type,
                     status: "EXISTS",
-                    message: "Index already exists"
+                    message: "Index already exists",
                 });
                 continue;
             }
 
             // Create index with appropriate schema
             const indexSchema = getDualIndexMappingSchema(indexInfo.type as "asset" | "file");
-            
-            console.log(`Creating ${indexInfo.type} index ${indexInfo.name} with schema:`, JSON.stringify(indexSchema, null, 2));
-            
+
+            console.log(
+                `Creating ${indexInfo.type} index ${indexInfo.name} with schema:`,
+                JSON.stringify(indexSchema, null, 2)
+            );
+
             const index_resp = await client.indices.create({
                 index: indexInfo.name,
                 body: indexSchema as any,
             });
 
             console.log(`${indexInfo.name} index_resp`, index_resp);
-            
+
             results.push({
                 index: indexInfo.name,
                 type: indexInfo.type,
                 status: "CREATED",
-                message: "Index created successfully"
+                message: "Index created successfully",
             });
-            
         } catch (error) {
             console.error(`Error creating index ${indexInfo.name}:`, error);
             results.push({
                 index: indexInfo.name,
                 type: indexInfo.type,
                 status: "ERROR",
-                message: `Error creating index: ${error}`
+                message: `Error creating index: ${error}`,
             });
         }
     }
@@ -370,7 +372,7 @@ export const handler: Handler = async function (event: any) {
         Status: "SUCCESS",
         Reason: `Processed ${results.length} indexes`,
         Data: {
-            Results: results
-        }
+            Results: results,
+        },
     };
 };

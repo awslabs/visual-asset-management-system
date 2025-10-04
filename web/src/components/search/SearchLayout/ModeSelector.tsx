@@ -3,19 +3,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React from "react";
 import {
     FormField,
     SegmentedControl,
     Box,
     Toggle,
     SpaceBetween,
-} from '@cloudscape-design/components';
-import Synonyms from '../../../synonyms';
+} from "@cloudscape-design/components";
+import Synonyms from "../../../synonyms";
 
 interface ModeSelectorProps {
-    recordType: 'asset' | 'file';
-    onRecordTypeChange: (type: 'asset' | 'file') => void;
+    recordType: "asset" | "file";
+    onRecordTypeChange: (type: "asset" | "file") => void;
     showThumbnails: boolean;
     onThumbnailToggle: () => void;
     disabled?: boolean;
@@ -31,31 +31,35 @@ const ModeSelector: React.FC<ModeSelectorProps> = ({
     return (
         <Box>
             <FormField
-                label={<Box fontSize="heading-s" fontWeight="bold">Search Mode</Box>}
+                label={
+                    <Box fontSize="heading-s" fontWeight="bold">
+                        Search Mode
+                    </Box>
+                }
                 description="Select what type of records to search"
             >
                 <SpaceBetween direction="vertical" size="m">
-                    <fieldset disabled={disabled} style={{ border: 'none', padding: 0, margin: 0 }}>
+                    <fieldset disabled={disabled} style={{ border: "none", padding: 0, margin: 0 }}>
                         <SegmentedControl
                             selectedId={recordType}
-                            onChange={({ detail }) => 
-                                onRecordTypeChange(detail.selectedId as 'asset' | 'file')
+                            onChange={({ detail }) =>
+                                onRecordTypeChange(detail.selectedId as "asset" | "file")
                             }
                             options={[
                                 {
                                     text: Synonyms.Assets,
-                                    id: 'asset',
-                                    iconName: 'folder',
+                                    id: "asset",
+                                    iconName: "folder",
                                 },
                                 {
-                                    text: 'Files',
-                                    id: 'file',
-                                    iconName: 'file',
+                                    text: "Files",
+                                    id: "file",
+                                    iconName: "file",
                                 },
                             ]}
                         />
                     </fieldset>
-                    
+
                     <Toggle
                         onChange={onThumbnailToggle}
                         checked={showThumbnails}

@@ -57,7 +57,9 @@ export function buildSearchFunction(
             OPENSEARCH_ENDPOINT_SSM_PARAM: config.openSearchDomainEndpointSSMParam,
             OPENSEARCH_ASSET_INDEX_SSM_PARAM: config.openSearchAssetIndexNameSSMParam,
             OPENSEARCH_FILE_INDEX_SSM_PARAM: config.openSearchFileIndexNameSSMParam,
-            OPENSEARCH_TYPE: config.app.openSearch.useProvisioned.enabled ? "provisioned" : "serverless",
+            OPENSEARCH_TYPE: config.app.openSearch.useProvisioned.enabled
+                ? "provisioned"
+                : "serverless",
             OPENSEARCH_DISABLED:
                 !config.app.openSearch.useProvisioned.enabled &&
                 !config.app.openSearch.useServerless.enabled
@@ -121,10 +123,13 @@ export function buildFileIndexingFunction(
         environment: {
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             OPENSEARCH_FILE_INDEX_SSM_PARAM: config.openSearchFileIndexNameSSMParam,
             OPENSEARCH_ENDPOINT_SSM_PARAM: config.openSearchDomainEndpointSSMParam,
-            OPENSEARCH_TYPE: config.app.openSearch.useProvisioned.enabled ? "provisioned" : "serverless",
+            OPENSEARCH_TYPE: config.app.openSearch.useProvisioned.enabled
+                ? "provisioned"
+                : "serverless",
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
@@ -191,12 +196,17 @@ export function buildAssetIndexingFunction(
         environment: {
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-            ASSET_LINKS_STORAGE_TABLE_V2_NAME: storageResources.dynamo.assetLinksStorageTableV2.tableName,
-            ASSET_VERSIONS_STORAGE_TABLE_NAME: storageResources.dynamo.assetVersionsStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            ASSET_LINKS_STORAGE_TABLE_V2_NAME:
+                storageResources.dynamo.assetLinksStorageTableV2.tableName,
+            ASSET_VERSIONS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.assetVersionsStorageTable.tableName,
             OPENSEARCH_ASSET_INDEX_SSM_PARAM: config.openSearchAssetIndexNameSSMParam,
             OPENSEARCH_ENDPOINT_SSM_PARAM: config.openSearchDomainEndpointSSMParam,
-            OPENSEARCH_TYPE: config.app.openSearch.useProvisioned.enabled ? "provisioned" : "serverless",
+            OPENSEARCH_TYPE: config.app.openSearch.useProvisioned.enabled
+                ? "provisioned"
+                : "serverless",
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
@@ -233,7 +243,6 @@ export function buildAssetIndexingFunction(
 
     return fun;
 }
-
 
 export function buildSqsBucketSyncFunction(
     scope: Construct,

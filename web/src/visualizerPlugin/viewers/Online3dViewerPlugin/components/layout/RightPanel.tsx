@@ -7,7 +7,11 @@ import React, { useState, useCallback } from "react";
 import { useViewerContext } from "../../context/ViewerContext";
 import { ModelDetailsDisplay } from "../panels/ModelDetailsDisplay";
 
-export const RightPanel: React.FC = () => {
+interface RightPanelProps {
+    contentWidth?: number;
+}
+
+export const RightPanel: React.FC<RightPanelProps> = ({ contentWidth = 280 }) => {
     const { state, settings, updateSettings, selection } = useViewerContext();
     const [activeTab, setActiveTab] = useState<"details" | "settings">("details");
     const [isVisible, setIsVisible] = useState(true);
@@ -139,8 +143,8 @@ export const RightPanel: React.FC = () => {
             if (viewer) {
                 try {
                     if (viewer.SetEnvironmentMapSettings) {
-                        // Create environment map settings
-                        const envMapPath = `assets/envmaps/${envMapName}/`;
+                        // Create environment map settings with correct path
+                        const envMapPath = `/online3dviewer/assets/envmaps/${envMapName}/`;
                         const envMapTextures = [
                             envMapPath + "posx.jpg",
                             envMapPath + "negx.jpg",
@@ -165,6 +169,7 @@ export const RightPanel: React.FC = () => {
 
                         viewer.SetEnvironmentMapSettings(environmentSettings);
                         viewer.Render();
+                        console.log("Environment map updated:", envMapName, envMapTextures);
                     }
                 } catch (error) {
                     console.error("Error setting environment map:", error);
@@ -255,8 +260,11 @@ export const RightPanel: React.FC = () => {
                                             <option value="fishermans_bastion">
                                                 Fisherman's Bastion
                                             </option>
-                                            <option value="studio">Studio</option>
-                                            <option value="outdoor">Outdoor</option>
+                                            <option value="citadella">Citadella</option>
+                                            <option value="ice_river">Ice River</option>
+                                            <option value="maskonaive">Maskonaive</option>
+                                            <option value="park">Park</option>
+                                            <option value="teide">Teide</option>
                                         </select>
                                     </div>
                                 </div>
@@ -269,11 +277,61 @@ export const RightPanel: React.FC = () => {
                                         <input
                                             type="checkbox"
                                             checked={settings.backgroundIsEnvMap}
-                                            onChange={(e) =>
+                                            onChange={(e) => {
+                                                const newBackgroundIsEnvMap = e.target.checked;
                                                 updateSettings({
-                                                    backgroundIsEnvMap: e.target.checked,
-                                                })
-                                            }
+                                                    backgroundIsEnvMap: newBackgroundIsEnvMap,
+                                                });
+
+                                                // Apply to viewer immediately
+                                                const viewer = getUnderlyingViewer();
+                                                const OV = getOVLibrary();
+
+                                                if (viewer && OV) {
+                                                    try {
+                                                        const envMapPath = `/online3dviewer/assets/envmaps/${settings.environmentMapName}/`;
+                                                        const envMapTextures = [
+                                                            envMapPath + "posx.jpg",
+                                                            envMapPath + "negx.jpg",
+                                                            envMapPath + "posy.jpg",
+                                                            envMapPath + "negy.jpg",
+                                                            envMapPath + "posz.jpg",
+                                                            envMapPath + "negz.jpg",
+                                                        ];
+
+                                                        let environmentSettings;
+                                                        if (OV.EnvironmentSettings) {
+                                                            environmentSettings =
+                                                                new OV.EnvironmentSettings(
+                                                                    envMapTextures,
+                                                                    newBackgroundIsEnvMap
+                                                                );
+                                                        } else {
+                                                            environmentSettings = {
+                                                                textures: envMapTextures,
+                                                                backgroundIsEnvMap:
+                                                                    newBackgroundIsEnvMap,
+                                                            };
+                                                        }
+
+                                                        if (viewer.SetEnvironmentMapSettings) {
+                                                            viewer.SetEnvironmentMapSettings(
+                                                                environmentSettings
+                                                            );
+                                                            viewer.Render();
+                                                            console.log(
+                                                                "Environment background toggled:",
+                                                                newBackgroundIsEnvMap
+                                                            );
+                                                        }
+                                                    } catch (error) {
+                                                        console.error(
+                                                            "Error toggling environment background:",
+                                                            error
+                                                        );
+                                                    }
+                                                }
+                                            }}
                                         />
                                     </div>
                                 </div>

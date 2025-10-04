@@ -4,6 +4,7 @@
  */
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
+import * as THREE from "three";
 import { useViewerContext } from "../../context/ViewerContext";
 
 interface MeasureToolProps {
@@ -46,114 +47,122 @@ export const MeasureTool: React.FC<MeasureToolProps> = ({ isActive, onToggle }) 
 
     const getOVLibrary = useCallback(() => {
         if (state.viewer && state.viewer.OV) {
+            console.log("OV library found in state.viewer.OV");
             return state.viewer.OV;
         }
-        if (window.OV) {
-            return window.OV;
+        if ((window as any).OV) {
+            console.log("OV library found in window.OV");
+            return (window as any).OV;
         }
+        console.error("OV library not found in state.viewer.OV or window.OV");
+        console.log("state.viewer:", state.viewer);
+        console.log("window.OV:", (window as any).OV);
         return null;
     }, [state.viewer]);
 
-    const createMaterial = useCallback(() => {
-        const OV = getOVLibrary();
-        if (OV && OV.THREE) {
-            return new OV.THREE.LineBasicMaterial({
-                color: 0x263238,
-                depthTest: false,
-            });
-        }
-        return null;
-    }, [getOVLibrary]);
+    const getFaceWorldNormal = useCallback((intersection: any) => {
+        const normalMatrix = new THREE.Matrix4();
+        intersection.object.updateWorldMatrix(true, false);
+        normalMatrix.extractRotation(intersection.object.matrixWorld);
+        const faceNormal = intersection.face.normal.clone();
+        faceNormal.applyMatrix4(normalMatrix);
+        return faceNormal;
+    }, []);
 
-    const createLineFromPoints = useCallback(
-        (points: any[], material: any) => {
-            const OV = getOVLibrary();
-            if (OV && OV.THREE) {
-                const geometry = new OV.THREE.BufferGeometry().setFromPoints(points);
-                return new OV.THREE.Line(geometry, material);
-            }
-            return null;
-        },
-        [getOVLibrary]
-    );
+    const createMaterial = useCallback(() => {
+        return new THREE.LineBasicMaterial({
+            color: 0xff0000, // Red color
+            depthTest: false,
+        });
+    }, []);
+
+    const createLineFromPoints = useCallback((points: any[], material: any) => {
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        return new THREE.Line(geometry, material);
+    }, []);
 
     const createMarker = useCallback(
         (intersection: any, radius: number) => {
-            const OV = getOVLibrary();
-            if (!OV || !OV.THREE) return null;
+            try {
+                console.log("Creating marker with radius:", radius);
 
-            const markerObject = new OV.THREE.Object3D();
-            const material = createMaterial();
+                const markerObject = new THREE.Object3D();
+                const material = createMaterial();
 
-            if (!material) return null;
+                if (!material) {
+                    console.error("Failed to create material");
+                    return null;
+                }
 
-            // Create circle curve
-            const circleCurve = new OV.THREE.EllipseCurve(
-                0.0,
-                0.0,
-                radius,
-                radius,
-                0.0,
-                2.0 * Math.PI,
-                false,
-                0.0
-            );
-            const circlePoints = circleCurve.getPoints(50);
-            markerObject.add(createLineFromPoints(circlePoints, material));
+                console.log("Material created successfully");
 
-            // Create cross lines
-            const crossLine1 = [
-                new OV.THREE.Vector3(-radius, 0.0, 0.0),
-                new OV.THREE.Vector3(radius, 0.0, 0.0),
-            ];
-            const crossLine2 = [
-                new OV.THREE.Vector3(0.0, -radius, 0.0),
-                new OV.THREE.Vector3(0.0, radius, 0.0),
-            ];
+                // Create circle curve
+                const circleCurve = new THREE.EllipseCurve(
+                    0.0,
+                    0.0,
+                    radius,
+                    radius,
+                    0.0,
+                    2.0 * Math.PI,
+                    false,
+                    0.0
+                );
+                const circlePoints = circleCurve.getPoints(50);
+                const circleLine = createLineFromPoints(circlePoints, material);
+                if (circleLine) {
+                    markerObject.add(circleLine);
+                    console.log("Circle line added");
+                }
 
-            markerObject.add(createLineFromPoints(crossLine1, material));
-            markerObject.add(createLineFromPoints(crossLine2, material));
+                // Create cross lines
+                const crossLine1 = [
+                    new THREE.Vector3(-radius, 0.0, 0.0),
+                    new THREE.Vector3(radius, 0.0, 0.0),
+                ];
+                const crossLine2 = [
+                    new THREE.Vector3(0.0, -radius, 0.0),
+                    new THREE.Vector3(0.0, radius, 0.0),
+                ];
 
-            // Position the marker
-            const faceNormal = getFaceWorldNormal(intersection);
-            markerObject.updateMatrixWorld(true);
-            markerObject.position.set(0.0, 0.0, 0.0);
-            markerObject.lookAt(faceNormal);
-            markerObject.position.set(
-                intersection.point.x,
-                intersection.point.y,
-                intersection.point.z
-            );
+                const cross1 = createLineFromPoints(crossLine1, material);
+                const cross2 = createLineFromPoints(crossLine2, material);
 
-            return {
-                intersection,
-                markerObject,
-            };
+                if (cross1) {
+                    markerObject.add(cross1);
+                    console.log("Cross line 1 added");
+                }
+                if (cross2) {
+                    markerObject.add(cross2);
+                    console.log("Cross line 2 added");
+                }
+
+                // Position the marker
+                const faceNormal = getFaceWorldNormal(intersection);
+                markerObject.updateMatrixWorld(true);
+                markerObject.position.set(0.0, 0.0, 0.0);
+                markerObject.lookAt(faceNormal);
+                markerObject.position.set(
+                    intersection.point.x,
+                    intersection.point.y,
+                    intersection.point.z
+                );
+
+                console.log("Marker positioned at:", intersection.point);
+
+                return {
+                    intersection,
+                    markerObject,
+                };
+            } catch (error) {
+                console.error("Error in createMarker:", error);
+                return null;
+            }
         },
-        [getOVLibrary, createMaterial, createLineFromPoints]
-    );
-
-    const getFaceWorldNormal = useCallback(
-        (intersection: any) => {
-            const OV = getOVLibrary();
-            if (!OV || !OV.THREE) return new (window as any).THREE.Vector3(0, 1, 0);
-
-            const normalMatrix = new OV.THREE.Matrix4();
-            intersection.object.updateWorldMatrix(true, false);
-            normalMatrix.extractRotation(intersection.object.matrixWorld);
-            const faceNormal = intersection.face.normal.clone();
-            faceNormal.applyMatrix4(normalMatrix);
-            return faceNormal;
-        },
-        [getOVLibrary]
+        [createMaterial, createLineFromPoints, getFaceWorldNormal]
     );
 
     const calculateMarkerValues = useCallback(
         (aMarker: Marker, bMarker: Marker): MeasureValues => {
-            const OV = getOVLibrary();
-            if (!OV || !OV.THREE)
-                return { pointsDistance: null, parallelFacesDistance: null, facesAngle: null };
-
             const aIntersection = aMarker.intersection;
             const bIntersection = bMarker.intersection;
 
@@ -169,7 +178,7 @@ export const MeasureTool: React.FC<MeasureToolProps> = ({ isActive, onToggle }) 
                 Math.abs(facesAngle) < BigEps || Math.abs(facesAngle - Math.PI) < BigEps;
 
             if (isParallel) {
-                const aPlane = new OV.THREE.Plane().setFromNormalAndCoplanarPoint(
+                const aPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(
                     aNormal,
                     aIntersection.point
                 );
@@ -182,13 +191,18 @@ export const MeasureTool: React.FC<MeasureToolProps> = ({ isActive, onToggle }) 
                 facesAngle,
             };
         },
-        [getOVLibrary, getFaceWorldNormal]
+        [getFaceWorldNormal]
     );
 
     const addMarker = useCallback(
         (intersection: any) => {
             const viewer = getUnderlyingViewer();
-            if (!viewer) return;
+            if (!viewer) {
+                console.error("No viewer available for addMarker");
+                return;
+            }
+
+            console.log("Adding marker for intersection:", intersection);
 
             // Get bounding sphere for marker size
             let radius = 0.1; // Default radius
@@ -196,23 +210,33 @@ export const MeasureTool: React.FC<MeasureToolProps> = ({ isActive, onToggle }) 
                 const boundingSphere = viewer.GetBoundingSphere(() => true);
                 if (boundingSphere) {
                     radius = boundingSphere.radius / 20.0;
+                    console.log("Calculated marker radius:", radius);
                 }
             } catch (error) {
-                console.warn("Could not get bounding sphere for marker size");
+                console.warn("Could not get bounding sphere for marker size, using default");
             }
 
             const marker = createMarker(intersection, radius);
-            if (!marker) return;
+            if (!marker) {
+                console.error("Failed to create marker");
+                return;
+            }
+
+            console.log("Marker created successfully:", marker);
 
             // Add marker to viewer
             try {
                 viewer.AddExtraObject(marker.markerObject);
+                viewer.Render();
+                console.log("Marker added to viewer and rendered");
             } catch (error) {
-                console.warn("Could not add marker to viewer");
+                console.error("Could not add marker to viewer:", error);
+                return;
             }
 
             setMarkers((prevMarkers) => {
                 const newMarkers = [...prevMarkers, marker];
+                console.log(`Now have ${newMarkers.length} markers`);
 
                 // If we have 2 markers, add connection line
                 if (newMarkers.length === 2) {
@@ -224,8 +248,10 @@ export const MeasureTool: React.FC<MeasureToolProps> = ({ isActive, onToggle }) 
                         if (connectionLine) {
                             try {
                                 viewer.AddExtraObject(connectionLine);
+                                viewer.Render();
+                                console.log("Connection line added");
                             } catch (error) {
-                                console.warn("Could not add connection line to viewer");
+                                console.error("Could not add connection line to viewer:", error);
                             }
                         }
                     }
@@ -233,6 +259,7 @@ export const MeasureTool: React.FC<MeasureToolProps> = ({ isActive, onToggle }) 
                     // Calculate measurements
                     const values = calculateMarkerValues(newMarkers[0], newMarkers[1]);
                     setMeasureValues(values);
+                    console.log("Measurement values calculated:", values);
                 }
 
                 return newMarkers;
@@ -287,10 +314,35 @@ export const MeasureTool: React.FC<MeasureToolProps> = ({ isActive, onToggle }) 
                 // Get intersection - try different methods
                 let intersection = null;
 
-                // Try the most common method first
+                // Try the most common method first - use proper intersection mode
                 if (viewer.GetMeshIntersectionUnderMouse) {
                     try {
-                        intersection = viewer.GetMeshIntersectionUnderMouse(1, mouseCoordinates); // 1 = MeshOnly
+                        // Try to get the IntersectionMode constant from OV library
+                        const OV = getOVLibrary();
+                        let intersectionMode = 1; // Default fallback
+
+                        if (
+                            OV &&
+                            OV.IntersectionMode &&
+                            OV.IntersectionMode.MeshOnly !== undefined
+                        ) {
+                            intersectionMode = OV.IntersectionMode.MeshOnly;
+                        } else if (
+                            window.OV &&
+                            window.OV.IntersectionMode &&
+                            window.OV.IntersectionMode.MeshOnly !== undefined
+                        ) {
+                            intersectionMode = window.OV.IntersectionMode.MeshOnly;
+                        }
+
+                        intersection = viewer.GetMeshIntersectionUnderMouse(
+                            intersectionMode,
+                            mouseCoordinates
+                        );
+                        console.log(
+                            "Intersection found using GetMeshIntersectionUnderMouse with mode:",
+                            intersectionMode
+                        );
                     } catch (error) {
                         console.warn("GetMeshIntersectionUnderMouse failed:", error);
                     }
@@ -300,6 +352,7 @@ export const MeasureTool: React.FC<MeasureToolProps> = ({ isActive, onToggle }) 
                 if (!intersection && viewer.GetIntersectionUnderMouse) {
                     try {
                         intersection = viewer.GetIntersectionUnderMouse(mouseCoordinates);
+                        console.log("Intersection found using GetIntersectionUnderMouse");
                     } catch (error) {
                         console.warn("GetIntersectionUnderMouse failed:", error);
                     }
@@ -344,7 +397,24 @@ export const MeasureTool: React.FC<MeasureToolProps> = ({ isActive, onToggle }) 
             try {
                 let intersection = null;
                 if (viewer.GetMeshIntersectionUnderMouse) {
-                    intersection = viewer.GetMeshIntersectionUnderMouse(1, mouseCoordinates);
+                    // Use the same intersection mode logic as in handleClick
+                    const OV = getOVLibrary();
+                    let intersectionMode = 1; // Default fallback
+
+                    if (OV && OV.IntersectionMode && OV.IntersectionMode.MeshOnly !== undefined) {
+                        intersectionMode = OV.IntersectionMode.MeshOnly;
+                    } else if (
+                        window.OV &&
+                        window.OV.IntersectionMode &&
+                        window.OV.IntersectionMode.MeshOnly !== undefined
+                    ) {
+                        intersectionMode = window.OV.IntersectionMode.MeshOnly;
+                    }
+
+                    intersection = viewer.GetMeshIntersectionUnderMouse(
+                        intersectionMode,
+                        mouseCoordinates
+                    );
                 }
 
                 if (!intersection) {

@@ -4,14 +4,14 @@
  */
 
 //npm install simple-git fs-extra
-const { simpleGit, SimpleGit, SimpleGitOptions } = require("simple-git");
-const { execSync } = require("child_process");
+//const { simpleGit, SimpleGit, SimpleGitOptions } = require("simple-git");
+//const { execSync } = require("child_process");
 const fs = require("fs-extra");
 
 // Configurations
-const gitRepoSourceDestDir = "./customInstalls/online3dviewer/source"; //Relative to base web directory where yarn/npm is run
-const gitRepoUrl = "https://github.com/kovacsv/Online3DViewer.git";
-const gitRepoCommitHash = "f4260cc7be355b3cfe0fa6cb421d2864bc396133";
+//const gitRepoSourceDestDir = "./customInstalls/online3dviewer/source"; //Relative to base web directory where yarn/npm is run
+//const gitRepoUrl = "https://github.com/kovacsv/Online3DViewer.git";
+//const gitRepoCommitHash = "f4260cc7be355b3cfe0fa6cb421d2864bc396133";
 const nodeModulesDestDir = "./node_modules/online-3d-viewer"; //Relative to base web directory where yarn/npm is run
 //const pluginSourceDestDir = "./src/visualizerPlugin/viewers/Online3dViewerPlugin/source"; //Relative to base web directory where yarn/npm is run
 const publicDestinationDir = "./public/online3dviewer"; //Relative to base web directory where yarn/npm is run

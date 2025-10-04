@@ -23,6 +23,7 @@
         "@turf/turf": "^6.5.0",
         "@types/mapbox__mapbox-gl-draw": "^1.4.0",
         "@types/styled-components": "^5.1.21",
+        "@types/three": "^0.180.0",
         "@types/wicg-file-system-access": "2020.9.6",
         "arraybuffer-to-buffer": "^0.0.7",
         "aws-amplify": "5.3.27",

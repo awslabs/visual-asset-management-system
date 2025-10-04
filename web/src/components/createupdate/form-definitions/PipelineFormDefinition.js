@@ -169,7 +169,8 @@ export const PipelineFormDefinition = new FormDefinition({
         new ControlDefinition({
             label: "Asset Type",
             id: "assetType",
-            constraintText: "Required. Specify the asset type (e.g., .all, .jpg, .png). The pipeline itself determines how this field is used. Does not restrict pipeline use as part of VAMS execution.",
+            constraintText:
+                "Required. Specify the asset type (e.g., .all, .jpg, .png). The pipeline itself determines how this field is used. Does not restrict pipeline use as part of VAMS execution.",
             elementDefinition: new ElementDefinition({
                 formElement: Input,
                 elementProps: {
@@ -182,7 +183,8 @@ export const PipelineFormDefinition = new FormDefinition({
         new ControlDefinition({
             label: "Output Type",
             id: "outputType",
-            constraintText: "Required. Specify the output type (e.g., .all, .jpg, .png). The pipeline itself determines how this field is used.",
+            constraintText:
+                "Required. Specify the output type (e.g., .all, .jpg, .png). The pipeline itself determines how this field is used.",
             elementDefinition: new ElementDefinition({
                 formElement: Input,
                 elementProps: {

@@ -84,7 +84,7 @@ export class CognitoWebNativeConstructStack extends Construct {
 
         const messageVerification =
             "Hello, Thank you for registering with your instance of Visual Asset Management System! Your verification code is: {####}";
-        const messageInvitation = 
+        const messageInvitation =
             "Hello, You have been registered to join the Visual Asset Management System! Your username is {username} and your temporary password is: {####}";
         const userPool = new cognito.UserPool(this, "UserPool", {
             selfSignUpEnabled: false,

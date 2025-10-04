@@ -742,7 +742,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
                 type: dynamodb.AttributeType.STRING,
             },
             stream: dynamodb.StreamViewType.NEW_IMAGE,
-        },
+        }
     );
 
     const assetFileVersionsStorageTable = new dynamodb.Table(

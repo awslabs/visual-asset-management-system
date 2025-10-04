@@ -24,13 +24,11 @@ export class LocationServiceNestedStack extends NestedStack {
 
         // Create Location Services API Key
         const apiKey = new aws_location.CfnAPIKey(this, "LocationServiceApiKey", {
-            keyName: `vams-location-api-key-`+props.config.name + "-" + props.config.app.baseStackName,
+            keyName:
+                `vams-location-api-key-` + props.config.name + "-" + props.config.app.baseStackName,
             noExpiry: true,
             restrictions: {
-                allowActions: [
-                    "geo-maps:GetTile",
-                    "geo-maps:GetStaticMap",
-                ],
+                allowActions: ["geo-maps:GetTile", "geo-maps:GetStaticMap"],
                 allowResources: [Service.IAMArn("*").geomap],
             },
             description: "API Key for VAMS Location Services Maps",
@@ -66,6 +64,5 @@ export class LocationServiceNestedStack extends NestedStack {
                 true
             );
         }
-
     }
 }

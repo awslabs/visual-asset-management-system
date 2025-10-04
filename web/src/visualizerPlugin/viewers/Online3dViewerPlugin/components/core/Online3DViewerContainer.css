@@ -616,17 +616,20 @@ div.ov_property_table div.ov_property_table_button {
     display: flex;
     flex: 1;
     align-items: stretch;
+    position: relative;
 }
+
+/* Remove these - not needed with resizable wrappers */
 
 /* Panel layout for React - horizontal layout */
 .ov-left-panel,
 .ov-right-panel {
-    width: 280px;
     background-color: var(--ov_background_color);
     display: flex;
     flex-direction: row;
     flex-shrink: 0;
     height: 100%;
+    width: 100%;
 }
 
 /* Ensure panels inherit the correct layout */
@@ -797,9 +800,9 @@ div.ov_property_table div.ov_property_table_button {
     width: 49%;
     padding-right: 2%;
     float: left;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-    overflow: hidden;
+    white-space: normal;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
     box-sizing: border-box;
 }
 
@@ -807,9 +810,9 @@ div.ov_property_table div.ov_property_table_button {
     width: 49%;
     text-align: left;
     float: left;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-    overflow: hidden;
+    white-space: normal;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
     box-sizing: border-box;
 }
 
@@ -1262,12 +1265,17 @@ div.ov_property_table div.ov_property_table_button {
     flex: 0 0 45%;
     font-weight: 500;
     color: var(--ov_foreground_color);
+    word-wrap: break-word;
+    overflow-wrap: break-word;
 }
 
 .ov_property_table_value {
     flex: 1;
     color: var(--ov_light_icon_color);
     text-align: right;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    white-space: normal;
 }
 
 .ov_property_table_button {
@@ -1292,4 +1300,33 @@ div.ov_property_table div.ov_property_table_button {
 
 [data-theme="dark"] .ov_property_table_row.ingroup {
     border-left-color: var(--ov_border_color_dark);
+}
+
+/* Resize handle styles for react-resizable-panels */
+.resize-handle-vertical {
+    width: 4px;
+    background-color: var(--ov_border_color);
+    cursor: col-resize;
+    transition: background-color 0.2s ease;
+    position: relative;
+}
+
+.resize-handle-vertical:hover {
+    background-color: var(--ov_button_color);
+}
+
+.resize-handle-vertical:active {
+    background-color: var(--ov_button_hover_color);
+}
+
+[data-theme="dark"] .resize-handle-vertical {
+    background-color: var(--ov_border_color_dark);
+}
+
+[data-theme="dark"] .resize-handle-vertical:hover {
+    background-color: var(--ov_button_color_dark);
+}
+
+[data-theme="dark"] .resize-handle-vertical:active {
+    background-color: var(--ov_button_hover_color_dark);
 }

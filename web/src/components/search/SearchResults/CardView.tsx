@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React from "react";
 import {
     Cards,
     Box,
@@ -16,63 +16,65 @@ import {
     CollectionPreferences,
     Popover,
     Icon,
-} from '@cloudscape-design/components';
-import { SearchResult, FIELD_MAPPINGS, SearchExplanation } from '../types';
-import PreviewThumbnailCell from '../SearchPreviewThumbnail/PreviewThumbnailCell';
-import FilePreviewThumbnailCell from '../SearchPreviewThumbnail/FilePreviewThumbnailCell';
-import Synonyms from '../../../synonyms';
-import { formatFileSizeForDisplay } from '../../../common/utils/fileSize';
+} from "@cloudscape-design/components";
+import { SearchResult, FIELD_MAPPINGS, SearchExplanation } from "../types";
+import PreviewThumbnailCell from "../SearchPreviewThumbnail/PreviewThumbnailCell";
+import FilePreviewThumbnailCell from "../SearchPreviewThumbnail/FilePreviewThumbnailCell";
+import Synonyms from "../../../synonyms";
+import { formatFileSizeForDisplay } from "../../../common/utils/fileSize";
 
 // Helper function to extract and format metadata fields with type information
-const extractMetadata = (item: SearchResult): Array<{name: string, type: string, value: any}> => {
-    const metadata: Array<{name: string, type: string, value: any}> = [];
+const extractMetadata = (item: SearchResult): Array<{ name: string; type: string; value: any }> => {
+    const metadata: Array<{ name: string; type: string; value: any }> = [];
     const source = item._source;
-    
+
     // Type mapping for display
     const typeLabels: Record<string, string> = {
-        'str': 'String',
-        'num': 'Number',
-        'bool': 'Boolean',
-        'date': 'Date',
-        'list': 'List',
-        'gp': 'Geo Point',
-        'gs': 'Geo Shape',
+        str: "String",
+        num: "Number",
+        bool: "Boolean",
+        date: "Date",
+        list: "List",
+        gp: "Geo Point",
+        gs: "Geo Shape",
     };
-    
+
     // Find all MD_ fields
-    Object.keys(source).forEach(key => {
-        if (key.startsWith('MD_')) {
+    Object.keys(source).forEach((key) => {
+        if (key.startsWith("MD_")) {
             // Format: MD_<type>_<fieldname>
-            const parts = key.split('_');
+            const parts = key.split("_");
             if (parts.length >= 3) {
                 // parts[0] = 'MD', parts[1] = type, parts[2+] = field name
                 const fieldType = parts[1];
-                const fieldName = parts.slice(2).join('_');
+                const fieldName = parts.slice(2).join("_");
                 metadata.push({
                     name: fieldName,
                     type: typeLabels[fieldType] || fieldType,
-                    value: source[key]
+                    value: source[key],
                 });
             } else {
                 // Fallback: just remove MD_ prefix
                 metadata.push({
                     name: key.substring(3),
-                    type: 'Unknown',
-                    value: source[key]
+                    type: "Unknown",
+                    value: source[key],
                 });
             }
         }
     });
-    
+
     return metadata;
 };
 
 // Helper component to render metadata popover
-const MetadataPopover: React.FC<{ metadata: Array<{name: string, type: string, value: any}> }> = ({ metadata }) => {
+const MetadataPopover: React.FC<{
+    metadata: Array<{ name: string; type: string; value: any }>;
+}> = ({ metadata }) => {
     if (metadata.length === 0) {
         return null;
     }
-    
+
     return (
         <Box>
             <SpaceBetween direction="horizontal" size="xs">
@@ -88,10 +90,13 @@ const MetadataPopover: React.FC<{ metadata: Array<{name: string, type: string, v
                         <SpaceBetween size="s">
                             <Box variant="h4">Metadata Fields ({metadata.length})</Box>
                             <Box>
-                                <ul style={{ margin: 0, paddingLeft: '20px' }}>
+                                <ul style={{ margin: 0, paddingLeft: "20px" }}>
                                     {metadata.map((field, idx) => (
                                         <li key={idx}>
-                                            <strong>{field.name} ({field.type}):</strong> {String(field.value)}
+                                            <strong>
+                                                {field.name} ({field.type}):
+                                            </strong>{" "}
+                                            {String(field.value)}
                                         </li>
                                     ))}
                                 </ul>
@@ -127,16 +132,21 @@ const ExplanationPopover: React.FC<{ explanation: SearchExplanation }> = ({ expl
                 </Box>
                 {explanation.matched_fields.length > 0 && (
                     <>
-                        <Box variant="h5">Matched Fields ({explanation.matched_fields.length}):</Box>
+                        <Box variant="h5">
+                            Matched Fields ({explanation.matched_fields.length}):
+                        </Box>
                         <Box>
-                            <ul style={{ margin: 0, paddingLeft: '20px' }}>
+                            <ul style={{ margin: 0, paddingLeft: "20px" }}>
                                 {explanation.matched_fields.slice(0, 5).map((field, idx) => (
                                     <li key={idx}>
-                                        <strong>{field}:</strong> {explanation.match_reasons[field] || 'Matched'}
+                                        <strong>{field}:</strong>{" "}
+                                        {explanation.match_reasons[field] || "Matched"}
                                     </li>
                                 ))}
                                 {explanation.matched_fields.length > 5 && (
-                                    <li>...and {explanation.matched_fields.length - 5} more fields</li>
+                                    <li>
+                                        ...and {explanation.matched_fields.length - 5} more fields
+                                    </li>
                                 )}
                             </ul>
                         </Box>
@@ -154,9 +164,9 @@ interface CardViewProps {
     selectedItems: SearchResult[];
     onSelectionChange: (items: SearchResult[]) => void;
     loading: boolean;
-    cardSize: 'small' | 'medium' | 'large';
+    cardSize: "small" | "medium" | "large";
     showThumbnails: boolean;
-    recordType: 'asset' | 'file';
+    recordType: "asset" | "file";
     onOpenPreview?: (url: string, name: string, previewKey: string, item?: any) => void;
     // Pagination props
     currentPageIndex: number;
@@ -190,12 +200,12 @@ const CardView: React.FC<CardViewProps> = ({
     totalItems,
 }) => {
     const formatFieldValue = (key: string, value: any) => {
-        if (!value) return '-';
+        if (!value) return "-";
 
         const fieldMapping = FIELD_MAPPINGS[key];
-        
+
         switch (fieldMapping?.type) {
-            case 'array':
+            case "array":
                 if (Array.isArray(value)) {
                     return value.map((item, index) => (
                         <Badge key={index} color="blue">
@@ -204,10 +214,10 @@ const CardView: React.FC<CardViewProps> = ({
                     ));
                 }
                 return value;
-            case 'date':
+            case "date":
                 return new Date(value).toLocaleDateString();
-            case 'number':
-                if (key === 'num_filesize' || key === 'num_size') {
+            case "number":
+                if (key === "num_filesize" || key === "num_size") {
                     // Format file size using utility
                     return formatFileSizeForDisplay(value);
                 }
@@ -219,7 +229,7 @@ const CardView: React.FC<CardViewProps> = ({
 
     const renderCardContent = (item: SearchResult) => {
         const source = item._source;
-        const isAsset = recordType === 'asset';
+        const isAsset = recordType === "asset";
 
         return (
             <SpaceBetween direction="vertical" size="s">
@@ -228,17 +238,17 @@ const CardView: React.FC<CardViewProps> = ({
                     <Box>
                         {isAsset ? (
                             <PreviewThumbnailCell
-                                assetId={source.str_assetid || ''}
-                                databaseId={source.str_databaseid || ''}
+                                assetId={source.str_assetid || ""}
+                                databaseId={source.str_databaseid || ""}
                                 onOpenFullPreview={onOpenPreview || (() => {})}
-                                assetName={source.str_assetname || ''}
+                                assetName={source.str_assetname || ""}
                             />
                         ) : (
                             <FilePreviewThumbnailCell
-                                assetId={source.str_assetid || ''}
-                                databaseId={source.str_databaseid || ''}
-                                fileKey={source.str_key || ''}
-                                fileName={source.str_key?.split('/').pop() || source.str_key || ''}
+                                assetId={source.str_assetid || ""}
+                                databaseId={source.str_databaseid || ""}
+                                fileKey={source.str_key || ""}
+                                fileName={source.str_key?.split("/").pop() || source.str_key || ""}
                                 fileSize={source.num_filesize || source.num_size}
                                 onOpenFullPreview={onOpenPreview || (() => {})}
                             />
@@ -255,7 +265,7 @@ const CardView: React.FC<CardViewProps> = ({
                                 href={`#/databases/${source.str_databaseid}/assets/${source.str_assetid}`}
                                 fontSize="heading-s"
                             >
-                                {source.str_assetname || 'Unnamed Asset'}
+                                {source.str_assetname || "Unnamed Asset"}
                             </Link>
                         </Box>
                     )}
@@ -319,41 +329,55 @@ const CardView: React.FC<CardViewProps> = ({
                     {/* File Size (for files) */}
                     {!isAsset && (source.num_filesize || source.num_size) && (
                         <Box color="text-body-secondary" fontSize="body-s">
-                            <strong>Size:</strong> {formatFieldValue('num_filesize', source.num_filesize || source.num_size)}
+                            <strong>Size:</strong>{" "}
+                            {formatFieldValue(
+                                "num_filesize",
+                                source.num_filesize || source.num_size
+                            )}
                         </Box>
                     )}
 
                     {/* Tags (for files, show below size) */}
-                    {!isAsset && source.list_tags && Array.isArray(source.list_tags) && source.list_tags.length > 0 && (
-                        <Box>
-                            <SpaceBetween direction="horizontal" size="xs">
-                                {source.list_tags.slice(0, 3).map((tag, index) => (
-                                    <Badge key={index} color="blue">
-                                        {tag}
-                                    </Badge>
-                                ))}
-                                {source.list_tags.length > 3 && (
-                                    <Badge color="grey">+{source.list_tags.length - 3} more</Badge>
-                                )}
-                            </SpaceBetween>
-                        </Box>
-                    )}
+                    {!isAsset &&
+                        source.list_tags &&
+                        Array.isArray(source.list_tags) &&
+                        source.list_tags.length > 0 && (
+                            <Box>
+                                <SpaceBetween direction="horizontal" size="xs">
+                                    {source.list_tags.slice(0, 3).map((tag, index) => (
+                                        <Badge key={index} color="blue">
+                                            {tag}
+                                        </Badge>
+                                    ))}
+                                    {source.list_tags.length > 3 && (
+                                        <Badge color="grey">
+                                            +{source.list_tags.length - 3} more
+                                        </Badge>
+                                    )}
+                                </SpaceBetween>
+                            </Box>
+                        )}
 
                     {/* Tags (for assets, show in original position) */}
-                    {isAsset && source.list_tags && Array.isArray(source.list_tags) && source.list_tags.length > 0 && (
-                        <Box>
-                            <SpaceBetween direction="horizontal" size="xs">
-                                {source.list_tags.slice(0, 3).map((tag, index) => (
-                                    <Badge key={index} color="blue">
-                                        {tag}
-                                    </Badge>
-                                ))}
-                                {source.list_tags.length > 3 && (
-                                    <Badge color="grey">+{source.list_tags.length - 3} more</Badge>
-                                )}
-                            </SpaceBetween>
-                        </Box>
-                    )}
+                    {isAsset &&
+                        source.list_tags &&
+                        Array.isArray(source.list_tags) &&
+                        source.list_tags.length > 0 && (
+                            <Box>
+                                <SpaceBetween direction="horizontal" size="xs">
+                                    {source.list_tags.slice(0, 3).map((tag, index) => (
+                                        <Badge key={index} color="blue">
+                                            {tag}
+                                        </Badge>
+                                    ))}
+                                    {source.list_tags.length > 3 && (
+                                        <Badge color="grey">
+                                            +{source.list_tags.length - 3} more
+                                        </Badge>
+                                    )}
+                                </SpaceBetween>
+                            </Box>
+                        )}
 
                     {/* Metadata Info */}
                     <MetadataPopover metadata={extractMetadata(item)} />
@@ -362,11 +386,11 @@ const CardView: React.FC<CardViewProps> = ({
                     {(source.date_created || source.str_createdby) && (
                         <Box color="text-body-secondary" fontSize="body-s">
                             {source.date_created && (
-                                <>Created: {formatFieldValue('date_created', source.date_created)}</>
+                                <>
+                                    Created: {formatFieldValue("date_created", source.date_created)}
+                                </>
                             )}
-                            {source.str_createdby && (
-                                <> by {source.str_createdby}</>
-                            )}
+                            {source.str_createdby && <> by {source.str_createdby}</>}
                         </Box>
                     )}
                 </SpaceBetween>
@@ -375,9 +399,9 @@ const CardView: React.FC<CardViewProps> = ({
     };
 
     const cardSizeMap = {
-        small: { minWidth: '200px', maxWidth: '250px' },
-        medium: { minWidth: '280px', maxWidth: '320px' },
-        large: { minWidth: '350px', maxWidth: '400px' },
+        small: { minWidth: "200px", maxWidth: "250px" },
+        medium: { minWidth: "280px", maxWidth: "320px" },
+        large: { minWidth: "350px", maxWidth: "400px" },
     };
 
     return (
@@ -385,10 +409,11 @@ const CardView: React.FC<CardViewProps> = ({
             cardDefinition={{
                 header: (item: SearchResult) => {
                     const source = item._source;
-                    const headerText = recordType === 'asset' 
-                        ? source.str_assetname || 'Unnamed Asset'
-                        : source.str_key?.split('/').pop() || 'Unnamed File';
-                    
+                    const headerText =
+                        recordType === "asset"
+                            ? source.str_assetname || "Unnamed Asset"
+                            : source.str_key?.split("/").pop() || "Unnamed File";
+
                     // Show explanation icon if available
                     if (item.explanation) {
                         return (
@@ -398,7 +423,7 @@ const CardView: React.FC<CardViewProps> = ({
                             </SpaceBetween>
                         );
                     }
-                    
+
                     return headerText;
                 },
                 sections: [
@@ -408,15 +433,15 @@ const CardView: React.FC<CardViewProps> = ({
                 ],
             }}
             cardsPerRow={[
-                { cards: cardSize === 'large' ? 2 : cardSize === 'medium' ? 3 : 4 },
-                { minWidth: 500, cards: cardSize === 'large' ? 3 : cardSize === 'medium' ? 4 : 5 },
-                { minWidth: 800, cards: cardSize === 'large' ? 4 : cardSize === 'medium' ? 5 : 6 },
+                { cards: cardSize === "large" ? 2 : cardSize === "medium" ? 3 : 4 },
+                { minWidth: 500, cards: cardSize === "large" ? 3 : cardSize === "medium" ? 4 : 5 },
+                { minWidth: 800, cards: cardSize === "large" ? 4 : cardSize === "medium" ? 5 : 6 },
             ]}
             items={items}
             loading={loading}
             loadingText="Loading results..."
             selectedItems={selectedItems}
-            selectionType={recordType === 'asset' ? 'multi' : undefined}
+            selectionType={recordType === "asset" ? "multi" : undefined}
             onSelectionChange={({ detail }) => onSelectionChange(detail.selectedItems)}
             trackBy="_id"
             empty={
@@ -424,7 +449,7 @@ const CardView: React.FC<CardViewProps> = ({
                     <Box variant="strong" textAlign="center" color="inherit">
                         No matches
                     </Box>
-                    <Box variant="p" padding={{ bottom: 's' }} color="inherit">
+                    <Box variant="p" padding={{ bottom: "s" }} color="inherit">
                         We can't find a match.
                     </Box>
                     <Button onClick={() => window.location.reload()}>Clear filter</Button>
@@ -432,10 +457,10 @@ const CardView: React.FC<CardViewProps> = ({
             }
             header={
                 <Header
-                    counter={totalItems ? `(${totalItems})` : ''}
+                    counter={totalItems ? `(${totalItems})` : ""}
                     actions={
                         <SpaceBetween direction="horizontal" size="xs">
-                            {recordType === 'asset' && (
+                            {recordType === "asset" && (
                                 <Button
                                     disabled={selectedItems.length === 0}
                                     onClick={onDeleteSelected}
@@ -451,7 +476,7 @@ const CardView: React.FC<CardViewProps> = ({
                         </SpaceBetween>
                     }
                 >
-                    {recordType === 'asset' ? Synonyms.Assets : 'Files'}
+                    {recordType === "asset" ? Synonyms.Assets : "Files"}
                 </Header>
             }
             pagination={
@@ -470,25 +495,25 @@ const CardView: React.FC<CardViewProps> = ({
                         preferences={preferences}
                         onConfirm={({ detail }) => onPreferencesChange(detail)}
                         pageSizePreference={{
-                            title: 'Page size',
+                            title: "Page size",
                             options: [
-                                { value: 10, label: '10 resources' },
-                                { value: 25, label: '25 resources' },
-                                { value: 50, label: '50 resources' },
-                                { value: 100, label: '100 resources' },
+                                { value: 10, label: "10 resources" },
+                                { value: 25, label: "25 resources" },
+                                { value: 50, label: "50 resources" },
+                                { value: 100, label: "100 resources" },
                             ],
                         }}
                         wrapLinesPreference={{
-                            label: 'Wrap lines',
-                            description: 'Check to see all the text and wrap the lines',
+                            label: "Wrap lines",
+                            description: "Check to see all the text and wrap the lines",
                         }}
                         stripedRowsPreference={{
-                            label: 'Striped rows',
-                            description: 'Check to add alternating shaded rows',
+                            label: "Striped rows",
+                            description: "Check to add alternating shaded rows",
                         }}
                         contentDensityPreference={{
-                            label: 'Compact mode',
-                            description: 'Check to display content in a denser, more compact mode',
+                            label: "Compact mode",
+                            description: "Check to display content in a denser, more compact mode",
                         }}
                     />
                 )

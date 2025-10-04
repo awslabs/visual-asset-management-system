@@ -41,7 +41,7 @@ export default function ViewAsset() {
     const { databaseId, assetId } = useParams();
     const navigate = useNavigate();
     const location = useLocation();
-    
+
     // Extract file path from navigation state if provided
     const filePathToNavigate = (location.state as any)?.filePathToNavigate;
 

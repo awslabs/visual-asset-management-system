@@ -3,15 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
-import {
-    Box,
-    Button,
-    Input,
-    SpaceBetween,
-    Header,
-    Badge,
-} from '@cloudscape-design/components';
+import React from "react";
+import { Box, Button, Input, SpaceBetween, Header, Badge } from "@cloudscape-design/components";
 
 interface SearchTopBarProps {
     query: string;
@@ -33,17 +26,17 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
     loading = false,
     resultCount,
     hasActiveFilters = false,
-    title = 'Search',
+    title = "Search",
     description,
 }) => {
     const handleKeyDown = (event: any) => {
-        if (event.detail.key === 'Enter') {
+        if (event.detail.key === "Enter") {
             onSearch();
         }
     };
 
     return (
-        <Box padding={{ vertical: 'm', horizontal: 'l' }}>
+        <Box padding={{ vertical: "m", horizontal: "l" }}>
             <SpaceBetween direction="vertical" size="m">
                 {/* Header with actions */}
                 <Header
@@ -51,19 +44,14 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
                     description={description}
                     actions={
                         hasActiveFilters && (
-                            <Button
-                                onClick={onClearAll}
-                                disabled={loading}
-                            >
+                            <Button onClick={onClearAll} disabled={loading}>
                                 Clear All Filters
                             </Button>
                         )
                     }
                     info={
                         resultCount !== undefined && (
-                            <Badge color="blue">
-                                {resultCount.toLocaleString()} results
-                            </Badge>
+                            <Badge color="blue">{resultCount.toLocaleString()} results</Badge>
                         )
                     }
                 >
@@ -71,7 +59,7 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
                 </Header>
 
                 {/* Search input */}
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                <div style={{ display: "flex", gap: "8px", alignItems: "flex-start" }}>
                     <div style={{ flex: 1 }}>
                         <Input
                             placeholder="Search by keywords..."

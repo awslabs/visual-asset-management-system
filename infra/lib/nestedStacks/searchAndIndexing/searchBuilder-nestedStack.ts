@@ -76,7 +76,7 @@ export function searchBuilder(
         method: apigwv2.HttpMethod.GET,
         api: api,
     });
-    
+
     // Add simple search endpoint
     attachFunctionToApi(scope, searchFun, {
         routePath: "/search/simple",
@@ -130,7 +130,8 @@ export function searchBuilder(
                     batchSize: 100,
                 }
             );
-            const cfnEsmFileMetadata = esmFileMetadata.node.defaultChild as lambda.CfnEventSourceMapping;
+            const cfnEsmFileMetadata = esmFileMetadata.node
+                .defaultChild as lambda.CfnEventSourceMapping;
             cfnEsmFileMetadata.addPropertyDeletionOverride("Tags");
 
             // Asset indexer - asset table stream
@@ -144,7 +145,8 @@ export function searchBuilder(
                     batchSize: 100,
                 }
             );
-            const cfnEsmAssetTable = esmAssetTable.node.defaultChild as lambda.CfnEventSourceMapping;
+            const cfnEsmAssetTable = esmAssetTable.node
+                .defaultChild as lambda.CfnEventSourceMapping;
             cfnEsmAssetTable.addPropertyDeletionOverride("Tags");
 
             // Asset indexer - metadata table stream (for asset-level metadata)
@@ -158,7 +160,8 @@ export function searchBuilder(
                     batchSize: 100,
                 }
             );
-            const cfnEsmAssetMetadata = esmAssetMetadata.node.defaultChild as lambda.CfnEventSourceMapping;
+            const cfnEsmAssetMetadata = esmAssetMetadata.node
+                .defaultChild as lambda.CfnEventSourceMapping;
             cfnEsmAssetMetadata.addPropertyDeletionOverride("Tags");
 
             // Asset indexer - asset links table stream
@@ -172,7 +175,8 @@ export function searchBuilder(
                     batchSize: 100,
                 }
             );
-            const cfnEsmAssetLinks = esmAssetLinks.node.defaultChild as lambda.CfnEventSourceMapping;
+            const cfnEsmAssetLinks = esmAssetLinks.node
+                .defaultChild as lambda.CfnEventSourceMapping;
             cfnEsmAssetLinks.addPropertyDeletionOverride("Tags");
         } else {
             // File indexer - metadata table stream (for file-level metadata)
@@ -198,9 +202,12 @@ export function searchBuilder(
 
             // Asset indexer - asset links table stream
             assetIndexingFunction.addEventSource(
-                new eventsources.DynamoEventSource(storageResources.dynamo.assetLinksStorageTableV2, {
-                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                })
+                new eventsources.DynamoEventSource(
+                    storageResources.dynamo.assetLinksStorageTableV2,
+                    {
+                        startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                    }
+                )
             );
         }
 
@@ -272,7 +279,8 @@ export function searchBuilder(
                     batchSize: 100,
                 }
             );
-            const cfnEsmFileMetadata = esmFileMetadata.node.defaultChild as lambda.CfnEventSourceMapping;
+            const cfnEsmFileMetadata = esmFileMetadata.node
+                .defaultChild as lambda.CfnEventSourceMapping;
             cfnEsmFileMetadata.addPropertyDeletionOverride("Tags");
 
             // Asset indexer - asset table stream
@@ -286,7 +294,8 @@ export function searchBuilder(
                     batchSize: 100,
                 }
             );
-            const cfnEsmAssetTable = esmAssetTable.node.defaultChild as lambda.CfnEventSourceMapping;
+            const cfnEsmAssetTable = esmAssetTable.node
+                .defaultChild as lambda.CfnEventSourceMapping;
             cfnEsmAssetTable.addPropertyDeletionOverride("Tags");
 
             // Asset indexer - metadata table stream (for asset-level metadata)
@@ -300,7 +309,8 @@ export function searchBuilder(
                     batchSize: 100,
                 }
             );
-            const cfnEsmAssetMetadata = esmAssetMetadata.node.defaultChild as lambda.CfnEventSourceMapping;
+            const cfnEsmAssetMetadata = esmAssetMetadata.node
+                .defaultChild as lambda.CfnEventSourceMapping;
             cfnEsmAssetMetadata.addPropertyDeletionOverride("Tags");
 
             // Asset indexer - asset links table stream
@@ -314,7 +324,8 @@ export function searchBuilder(
                     batchSize: 100,
                 }
             );
-            const cfnEsmAssetLinks = esmAssetLinks.node.defaultChild as lambda.CfnEventSourceMapping;
+            const cfnEsmAssetLinks = esmAssetLinks.node
+                .defaultChild as lambda.CfnEventSourceMapping;
             cfnEsmAssetLinks.addPropertyDeletionOverride("Tags");
         } else {
             // File indexer - metadata table stream (for file-level metadata)
@@ -340,9 +351,12 @@ export function searchBuilder(
 
             // Asset indexer - asset links table stream
             assetIndexingFunction.addEventSource(
-                new eventsources.DynamoEventSource(storageResources.dynamo.assetLinksStorageTableV2, {
-                    startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-                })
+                new eventsources.DynamoEventSource(
+                    storageResources.dynamo.assetLinksStorageTableV2,
+                    {
+                        startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                    }
+                )
             );
         }
 

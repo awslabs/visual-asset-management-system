@@ -10,8 +10,8 @@ import { ViewerProvider, useViewerContext } from "../../context/ViewerContext";
 import { ViewerCanvas } from "./ViewerCanvas";
 import { Header } from "../layout/Header";
 import { Toolbar } from "../layout/Toolbar";
-import { LeftPanel } from "../layout/LeftPanel";
-import { RightPanel } from "../layout/RightPanel";
+import { ResizableLeftPanel } from "../layout/ResizableLeftPanel";
+import { ResizableRightPanel } from "../layout/ResizableRightPanel";
 import { LoadingOverlay } from "./LoadingOverlay";
 import "./Online3DViewerContainer.css";
 
@@ -169,7 +169,6 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
                 updateState({
                     isLoading: false,
                 });
-
             } catch (error) {
                 console.error("Error loading model into viewer:", error);
                 updateState({
@@ -210,16 +209,13 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
             {/* Toolbar */}
             <Toolbar />
 
-            {/* Main content area */}
+            {/* Main content area with resizable panels */}
             <div className="ov-main">
-                {/* Left panel (Navigator) */}
-                <LeftPanel />
-
-                {/* 3D Viewer */}
-                <ViewerCanvas />
-
-                {/* Right panel (Sidebar) */}
-                <RightPanel />
+                <ResizableLeftPanel />
+                <div style={{ flex: 1, display: "flex", minWidth: 0 }}>
+                    <ViewerCanvas />
+                </div>
+                <ResizableRightPanel />
             </div>
 
             {/* Loading overlay */}
