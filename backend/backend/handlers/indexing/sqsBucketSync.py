@@ -27,6 +27,7 @@ from common.validators import validate
 dynamodb = boto3.resource('dynamodb')
 sns_client = boto3.client('sns')
 s3_client = boto3.client('s3')
+s3_resource = boto3.resource('s3')
 lambda_client = boto3.client('lambda')
 dynamodb_client = boto3.client('dynamodb')
 logger = safeLogger(service_name="sqsBucketSync")
@@ -553,12 +554,17 @@ def update_s3_metadata(bucket_name: str, object_key: str, database_id: str, asse
         # Copy the object to itself with updated metadata
         metadata = {**current_metadata, 'databaseid': database_id, 'assetid': asset_id}
         
-        s3_client.copy_object(
-            Bucket=bucket_name,
-            CopySource={'Bucket': bucket_name, 'Key': object_key},
-            Key=object_key,
-            Metadata=metadata,
-            MetadataDirective='REPLACE'
+        # Use boto3 resource copy() which automatically handles multipart for large files
+        copy_source = {
+            'Bucket': bucket_name,
+            'Key': object_key
+        }
+        s3_resource.Object(bucket_name, object_key).copy(
+            copy_source,
+            ExtraArgs={
+                'Metadata': metadata,
+                'MetadataDirective': 'REPLACE'
+            }
         )
         
         logger.info(f"Updated metadata for {object_key}")
@@ -870,7 +876,7 @@ def process_s3_record(record: Dict) -> Tuple[bool, str]:
         return True, f"Successfully processed {object_key}"
     except Exception as e:
         logger.exception(f"Error processing S3 record: {e}")
-        return False, f"Error processing S3 record.}"
+        return False, f"Error processing S3 record."
 
 def on_storage_event_created(event):
     """

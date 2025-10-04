@@ -395,14 +395,41 @@ def send_subscription_email(database_id, asset_id):
     except Exception as e:
         logger.exception(f"Error invoking send_email Lambda function: {e}")
 
-def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key):
-    """Copy an object from one S3 location to another"""
+def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id, asset_id):
+    """Copy an object from one S3 location to another with replaced metadata
+    
+    Args:
+        source_bucket: Source S3 bucket name
+        source_key: Source S3 object key
+        dest_bucket: Destination S3 bucket name
+        dest_key: Destination S3 object key
+        database_id: Database ID to set in metadata
+        asset_id: Asset ID to set in metadata
+        
+    Returns:
+        True if successful, False otherwise
+    """
     try:
-        # Use s3_resource for managed transfer to handle large files
+        # Use s3_resource.copy with ExtraArgs for metadata replacement
+        # This handles large files with managed transfer
+        copy_source = {
+            'Bucket': source_bucket,
+            'Key': source_key
+        }
+        
+        extra_args = {
+            'MetadataDirective': 'REPLACE',
+            'Metadata': {
+                "databaseid": database_id,
+                "assetid": asset_id
+            }
+        }
+        
         s3_resource.meta.client.copy(
-            CopySource={'Bucket': source_bucket, 'Key': source_key},
+            CopySource=copy_source,
             Bucket=dest_bucket,
-            Key=dest_key
+            Key=dest_key,
+            ExtraArgs=extra_args
         )
         return True
     except Exception as e:
@@ -1100,7 +1127,9 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             bucket_name, 
             file_detail['temp_s3_key'], 
             bucket_name, 
-            file_detail['final_s3_key']
+            file_detail['final_s3_key'],
+            databaseId,
+            assetId
         )
         
         if not copy_success:
@@ -1612,7 +1641,9 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, cl
             bucket_name, 
             file_detail['temp_s3_key'], 
             bucket_name, 
-            file_detail['final_s3_key']
+            file_detail['final_s3_key'],
+            databaseId,
+            assetId
         )
         
         if not copy_success:

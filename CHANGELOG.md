@@ -8,9 +8,9 @@ This version includes significant enhancements to VAMS to include a new CLI tool
 
 ### ⚠ BREAKING CHANGES
 
-All APIGateway authorizers were swapped for custom lambda authorizers to provide more flexibility in implementing additional functionality. This may cause issues with your organization so please review with your security teams.
+All APIGateway authorizers were swapped for custom lambda authorizers to provide more flexibility in implementing additional functionality. This may cause issues with your organization so please review with your security teams. Authorizer changes may require forced cache resets on API gateways if new authorizations are not follwoing new rules set. (https://docs.aws.amazon.com/cli/latest/reference/apigatewayv2/reset-authorizers-cache.html)
 
-Additionally authorizer changes may require forced cache resets on API gateways if new authorizations are not follwoing new rules set. (https://docs.aws.amazon.com/cli/latest/reference/apigatewayv2/reset-authorizers-cache.html)
+OpenSearch has new indexes and requires the data migration script or new re-indexing tool script to be run on existing assets and files to re-index open search with existing data.
 
 ### Features
 
@@ -25,16 +25,31 @@ Additionally authorizer changes may require forced cache resets on API gateways 
     -   Added a text viewer for `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `ipynb`, and `.ini` extensions
     -   Added the CesiumJS viewer for `.json` tileset files which can load subsequent other files referenced in the asset (even if not selected for viewing directly). This is an initial/basic CesiumJS viewer implementation with default options as part of this release. Requires `allowUnsafeEvalFeatures` CDK `config.json` configuration flag to be turned on (off by default).
     -   3D Online viewer now has additional UI added to support basic extra functionality
+-   Overhauled the file and asset OpenSearch system, APIs, indexing, and user interfaces 
+    -   Assets and files are now split into two separate OpenSearch indexes; the old index will remain and will not be deleted for auditing and/or migration purposes; this causes breaking changes that require a migration script to re-index all assets/files for search
+    -   Asset link relationship data will now additionally be indexed (excluding asset link metadata for now)
+    -   **UI** Assets (now "Assets and Files") has a completely new search page with many new filtering capabilities and options. 
+    -   **UI** Search map view will now allow for many more metadata fields to be used for adding map marker or area placement (any asset with `location` (GP/GS) and `longitude` (string or number) / `latitude` (string or number) combination metadata will show up)
+    -   Search now has it's origional API of `/search` and a new `/search/simple` API for a simplified search input
+    -   A new CDK tool section and migration scripts has been added to help with reindexing opensearch data at any time
+-   Maps on the backend and UI frontend is updated to use the new location service APIKey method and removes the older raster map and place functionality
+    -   Note: This removes the last place that cognito identities are used which means the locaiton service functionality can now be used for external IDP solutions
 -   **UI** Added a draggable splitter in ViewAsset page between the file manager tree view and details panel
 -   Added a new API endpoint for asset file streaming (similar to asset preview auxiliary files) at `GET /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`
 -   Added .clineRules for CLINE AI workflows for AI-assisted development for VAMS backend API development, CDK development, and CLI development
 -   All HTTP APIGateway authorizers were swapped for custom lambda authorizers.
     -   New Lambda Layer specifically with libraries for the lambda authorizers
     -   New support for CDK configured IP range restrictions for API Gateway calls that are managed in the authorizer
+-   **UI** Changed Pipeline Edit/Create to make Asset Type and Output Type a required string text field. This removes the last place that requires specific VAMS extensions to be preloaded. These fields usages are expected to be overhauled along with overall pipelines in a future release.
 
 ### Bug Fixes
 
--   **UI** Scrolling issues on browsers with MacOS should now hopefulyl be fixed. This was due to an issue with Potree libraries being loaded globally before.
+-   **UI** Scrolling issues on browsers with MacOS should now hopefully be fixed. This was due to an issue with Potree libraries being loaded globally before.
+-   Fixed backend asset file operations and S3 indexing for files >5GB (introduced in v2.2)
+
+### Chores
+-   Updated Cognito invitation and verification email messages to be more VAMS branded, show username where appropriate, and remove confusing period character directly after temporary passwords. 
+-   **UI** Updated ViewAsset page to support passing in a state with a file path to load (used from links from the new search page)
 
 ## [2.2.0] (2025-09-31)
 

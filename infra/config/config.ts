@@ -110,12 +110,19 @@ export function getConfig(app: cdk.App): Config {
             false)
     );
 
-    //OpenSearch Variables
-    config.openSearchIndexName = "assets1236";
-    config.openSearchIndexNameSSMParam =
-        "/" + [config.name + "-" + config.app.baseStackName, "aos", "indexName"].join("/");
+    //OpenSearch Variables - Dual Index Configuration
+    config.openSearchAssetIndexName = "vams-assets-v1";
+    config.openSearchFileIndexName = "vams-files-v1";
+    config.openSearchAssetIndexNameSSMParam =
+        "/" + [config.name + "-" + config.app.baseStackName, "aos", "assetIndexName"].join("/");
+    config.openSearchFileIndexNameSSMParam =
+        "/" + [config.name + "-" + config.app.baseStackName, "aos", "fileIndexName"].join("/");
     config.openSearchDomainEndpointSSMParam =
         "/" + [config.name + "-" + config.app.baseStackName, "aos", "endPoint"].join("/");
+
+    //Location Service Variables
+    config.locationServiceApiKeyArnSSMParam =
+        "/" + [config.name + "-" + config.app.baseStackName, "location", "apiKeyArn"].join("/");
 
     //Fill in some basic values to false if blank
     //Note: usually added for backwards compatabibility of an old config file that hasn't had the newest elements added
@@ -686,7 +693,10 @@ export interface Config extends ConfigPublic {
     enableCdkNag: boolean;
     dockerDefaultPlatform: string;
     s3AdditionalBucketPolicyJSON: any | undefined;
-    openSearchIndexName: string;
-    openSearchIndexNameSSMParam: string;
+    openSearchAssetIndexName: string; // Asset index name
+    openSearchFileIndexName: string; // File index name
+    openSearchAssetIndexNameSSMParam: string;
+    openSearchFileIndexNameSSMParam: string;
     openSearchDomainEndpointSSMParam: string;
+    locationServiceApiKeyArnSSMParam: string; // Location Service API key SSM parameter
 }

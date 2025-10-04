@@ -16,7 +16,7 @@ from ..constants import (
     API_CREATE_ASSET_VERSION, API_REVERT_ASSET_VERSION, API_GET_ASSET_VERSIONS, API_GET_ASSET_VERSION,
     API_ASSET_LINKS, API_ASSET_LINKS_SINGLE, API_ASSET_LINKS_UPDATE, API_ASSET_LINKS_DELETE, API_ASSET_LINKS_FOR_ASSET,
     API_ASSET_LINKS_METADATA, API_ASSET_LINKS_METADATA_KEY, API_METADATA, API_METADATA_SCHEMA,
-    API_SEARCH, API_SEARCH_MAPPING
+    API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_MAPPING
 )
 from ..version import get_version
 from .exceptions import (
@@ -2527,10 +2527,22 @@ class APIClient:
 
     def search_query(self, search_params: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Execute search query using the /search POST endpoint.
+        Execute complex search query using the /search POST endpoint.
         
         Args:
-            search_params: Search parameters including tokens, operation, query, filters, etc.
+            search_params: Search parameters matching SearchRequestModel format:
+                - query: General text search
+                - entityTypes: List of entity types to search (["asset"], ["file"], or both)
+                - metadataQuery: Separate metadata search query
+                - metadataSearchMode: "key", "value", or "both"
+                - includeMetadataInSearch: Include metadata in general search
+                - explainResults: Include match explanations
+                - filters: Additional query filters
+                - sort: Sort configuration
+                - from_: Pagination offset
+                - size: Results per page
+                - includeArchived: Include archived items
+                - aggregations: Include aggregations
         
         Returns:
             API response data with search results
@@ -2565,12 +2577,66 @@ class APIClient:
         except Exception as e:
             raise APIError(f"Failed to execute search query: {e}")
 
+    def search_simple(self, search_params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute simple search query using the /search/simple POST endpoint.
+        
+        Args:
+            search_params: Simple search parameters matching SimpleSearchRequestModel format:
+                - query: General keyword search
+                - assetName: Search by asset name
+                - assetId: Search by asset ID
+                - assetType: Filter by asset type
+                - fileKey: Search by file key
+                - fileExtension: Filter by file extension
+                - databaseId: Filter by database ID
+                - tags: Filter by tags
+                - metadataKey: Search metadata field names
+                - metadataValue: Search metadata field values
+                - entityTypes: Filter by entity type (["asset"], ["file"], or both)
+                - includeArchived: Include archived items
+                - from_: Pagination offset
+                - size: Results per page
+        
+        Returns:
+            API response data with search results
+        
+        Raises:
+            AuthenticationError: When authentication fails
+            APIError: When API call fails or search is disabled
+        """
+        try:
+            response = self.post(API_SEARCH_SIMPLE, data=search_params, include_auth=True)
+            return response.json()
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise APIError(f"Invalid search parameters: {error_message}")
+                
+            elif e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                if 'not available' in error_message.lower() or 'opensearch' in error_message.lower():
+                    raise APIError(f"Search is not available: {error_message}")
+                else:
+                    raise APIError(f"Search endpoint not found: {error_message}")
+                    
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Simple search query failed: {e}")
+                
+        except Exception as e:
+            raise APIError(f"Failed to execute simple search query: {e}")
+
     def get_search_mapping(self) -> Dict[str, Any]:
         """
         Get search index mapping using the /search GET endpoint.
         
         Returns:
-            API response data with search field mapping
+            API response data with dual-index search field mapping
         
         Raises:
             AuthenticationError: When authentication fails

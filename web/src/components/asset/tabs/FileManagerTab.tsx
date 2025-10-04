@@ -16,19 +16,25 @@ interface FileManagerTabProps {
     databaseId: string;
     loading: boolean;
     onExecuteWorkflow: () => void; // Keeping prop for compatibility, but not using it
+    filePathToNavigate?: string; // Optional file path to navigate to
 }
 
 export const FileManagerTab: React.FC<FileManagerTabProps> = ({
     assetName,
     assetFiles,
     loading,
+    filePathToNavigate,
 }) => {
     return (
         <ErrorBoundary componentName="File Manager">
             {loading ? (
                 <LoadingSpinner text="Loading files..." />
             ) : (
-                <EnhancedFileManager assetName={assetName} assetFiles={assetFiles} />
+                <EnhancedFileManager 
+                    assetName={assetName} 
+                    assetFiles={assetFiles}
+                    filePathToNavigate={filePathToNavigate}
+                />
             )}
         </ErrorBoundary>
     );

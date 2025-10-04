@@ -123,6 +123,11 @@ interface Config {
     stackName: string;
 
     /**
+     * Amazon Location Service API URL for maps (includes embedded API key)
+     */
+    locationServiceApiUrl?: string;
+
+    /**
      * Content Security Policy to apply (generally for ALB deployment where CSP is not injected)
      */
     contentSecurityPolicy?: string;
@@ -191,31 +196,6 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
                     },
                 },
             ],
-        },
-        geo: {
-            AmazonLocationService: {
-                maps: {
-                    items: {
-                        [`vams-map-raster-${config.region}-${config.stackName}`]: {
-                            // REQUIRED - Amazon Location Service Map resource name
-                            style: "RasterEsriImagery", // REQUIRED - String representing the style of map resource
-                        },
-                        [`vams-map-streets-${config.region}-${config.stackName}`]: {
-                            style: "VectorEsriStreets",
-                        },
-                    },
-                    default: `vams-map-raster-${config.region}-${config.stackName}`, // REQUIRED - Amazon Location Service Map resource name to set as default
-                },
-                // search_indices: {
-                //     items: ['vams-index'], // REQUIRED - Amazon Location Service Place Index name
-                //     default: 'vams-index', // REQUIRED - Amazon Location Service Place Index name to set as default
-                // },
-                // geofenceCollections: {
-                //     items: ['XXXXXXXXX', 'XXXXXXXXX'], // REQUIRED - Amazon Location Service Geofence Collection name
-                //     default: 'XXXXXXXXX', // REQUIRED - Amazon Location Service Geofence Collection name to set as default
-                // },
-                region: config.region, // REQUIRED - Amazon Location Service Region
-            },
         },
     });
 
@@ -512,11 +492,12 @@ const Auth: React.FC<AuthProps> = (props) => {
     //Both Effect
     //Once logged in, get/set other configuration and profile information
     useEffect(() => {
-        //Secure Config Fetch
-        if (config && !config.featuresEnabled && isLoggedIn) {
+        //Secure Config Fetch - fetch if either featuresEnabled OR locationServiceApiUrl is missing
+        if (config && (!config.featuresEnabled || !config.locationServiceApiUrl) && isLoggedIn) {
             getSecureConfig()
                 .then((value) => {
                     config.featuresEnabled = value.featuresEnabled;
+                    config.locationServiceApiUrl = value.locationServiceApiUrl;
                     Cache.setItem("config", config);
                     setConfig(config);
                 })

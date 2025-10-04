@@ -70,6 +70,7 @@ API_METADATA_SCHEMA = "/metadataschema/{databaseId}"
 
 # Search API Endpoints
 API_SEARCH = "/search"
+API_SEARCH_SIMPLE = "/search/simple"
 API_SEARCH_MAPPING = "/search"
 
 # Upload Configuration

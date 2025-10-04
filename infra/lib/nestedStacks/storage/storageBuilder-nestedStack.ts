@@ -701,6 +701,7 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
             name: "assetLinkId",
             type: dynamodb.AttributeType.STRING,
         },
+        stream: dynamodb.StreamViewType.NEW_IMAGE,
     });
 
     assetLinksStorageTableV2.addGlobalSecondaryIndex({
@@ -740,7 +741,8 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
                 name: "metadataKey",
                 type: dynamodb.AttributeType.STRING,
             },
-        }
+            stream: dynamodb.StreamViewType.NEW_IMAGE,
+        },
     );
 
     const assetFileVersionsStorageTable = new dynamodb.Table(

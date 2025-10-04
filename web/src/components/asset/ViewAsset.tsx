@@ -13,7 +13,7 @@ import {
     SpaceBetween,
     AlertProps,
 } from "@cloudscape-design/components";
-import { useNavigate, useParams } from "react-router";
+import { useNavigate, useParams, useLocation } from "react-router";
 import { Cache, API } from "aws-amplify";
 import { AssetDetailContext, assetDetailReducer } from "../../context/AssetDetailContext";
 import { AssetDetail } from "../../pages/AssetUpload/AssetUpload";
@@ -40,6 +40,10 @@ fetchtagTypes().then((res) => {
 export default function ViewAsset() {
     const { databaseId, assetId } = useParams();
     const navigate = useNavigate();
+    const location = useLocation();
+    
+    // Extract file path from navigation state if provided
+    const filePathToNavigate = (location.state as any)?.filePathToNavigate;
 
     // State
     const [state, dispatch] = useReducer(assetDetailReducer, {
@@ -281,6 +285,7 @@ export default function ViewAsset() {
                                     loadingFiles={loadingAssetFiles}
                                     onExecuteWorkflow={handleExecuteWorkflow}
                                     onWorkflowExecuted={refreshWorkflowTab}
+                                    filePathToNavigate={filePathToNavigate}
                                 />
 
                                 {/* Metadata */}

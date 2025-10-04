@@ -183,19 +183,24 @@ def update_s3_object_metadata(key, asset_id, database_id, upload_id, bucket_name
         # Get current object metadata
         head_response = s3c.head_object(Bucket=bucket_name, Key=key)
         content_type = head_response.get('ContentType', 'application/octet-stream')
+        current_metadata = head_response.get('Metadata', {})
         
-        # Copy object to itself with new metadata
-        s3c.copy_object(
-            CopySource={'Bucket': bucket_name, 'Key': key},
-            Bucket=bucket_name,
-            Key=key,
-            ContentType=content_type,
-            Metadata={
-                'databaseid': database_id,
-                'assetid': asset_id,
-                'uploadid': upload_id
-            },
-            MetadataDirective='REPLACE'
+        # Merge existing metadata with new metadata
+        metadata = {**current_metadata, 'databaseid': database_id, 'assetid': asset_id, 'uploadid': upload_id}
+        
+        # Use boto3 resource copy() which automatically handles multipart for large files
+        s3_resource = boto3.resource('s3')
+        copy_source = {
+            'Bucket': bucket_name,
+            'Key': key
+        }
+        s3_resource.Object(bucket_name, key).copy(
+            copy_source,
+            ExtraArgs={
+                'ContentType': content_type,
+                'Metadata': metadata,
+                'MetadataDirective': 'REPLACE'
+            }
         )
         
         return True

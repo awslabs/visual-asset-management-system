@@ -128,6 +128,14 @@ export function IAMArn(name: string) {
         loggroup: `arn:${region_info.RegionInfo.get(config.env.region).partition || ""}:logs:${
             config.env.region
         }:${config.env.account}:log-group:${name}`,
+
+        geomap: `arn:${region_info.RegionInfo.get(config.env.region).partition || ""}:geo-maps:${
+            config.env.region
+        }::provider/default`,
+
+        geoapi: `arn:${region_info.RegionInfo.get(config.env.region).partition || ""}:geo:${
+            config.env.region
+        }:${config.env.account}:api-key/${name}`
     };
 }
 

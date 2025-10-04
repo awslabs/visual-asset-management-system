@@ -5,105 +5,67 @@
 
 import * as cdk from "aws-cdk-lib";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as ssm from "aws-cdk-lib/aws-ssm";
 import { aws_location, Stack, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
+import * as Service from "../../helper/service-helper";
+import { NagSuppressions } from "cdk-nag";
+import * as Config from "../../../config/config";
 
-type LocationServiceConstructProps = cdk.StackProps;
+interface LocationServiceConstructProps extends cdk.StackProps {
+    config: Config.Config;
+}
 
 export class LocationServiceNestedStack extends NestedStack {
-    map: aws_location.CfnMap;
-    mapStreets: aws_location.CfnMap;
+    apiKey?: aws_location.CfnAPIKey;
 
     constructor(scope: Construct, id: string, props: LocationServiceConstructProps) {
         super(scope, id);
 
-        // const ssmLocationServiceArn = new ssm.StringParameter(this, "ssmLocationServiceArn", {
-        //     parameterName: `/${props.region}/location-service/arn`,
-        //     stringValue: props.role.roleArn,
-        //     type: ssm.ParameterType.STRING,
-        //     allowedPattern: ".*",
-        //     description: "Location Service Arn",
-        // });
-
-        // const location = new loc.PlaceIndex(scope, "PlaceIndex", {
-        //     // placeIndexName: 'MyPlaceIndex', // optional, defaults to a generated name
-        //     // dataSource: location.DataSource.HERE, // optional, defaults to Esri
-        // });
-
-        // location.grant(role);
-        // location.grantSearch(role);
-
-        const cfnMap = new aws_location.CfnMap(scope, "MyCfnMapRaster", {
-            configuration: {
-                style: "RasterEsriImagery",
+        // Create Location Services API Key
+        const apiKey = new aws_location.CfnAPIKey(this, "LocationServiceApiKey", {
+            keyName: `vams-location-api-key-`+props.config.name + "-" + props.config.app.baseStackName,
+            noExpiry: true,
+            restrictions: {
+                allowActions: [
+                    "geo-maps:GetTile",
+                    "geo-maps:GetStaticMap",
+                ],
+                allowResources: [Service.IAMArn("*").geomap],
             },
-            mapName: `vams-map-raster-${Stack.of(scope).region}-${Stack.of(scope).stackName}`,
-        });
-        const cfnMap_streets = new aws_location.CfnMap(scope, "MyCfnMapStreets", {
-            configuration: {
-                style: "VectorEsriStreets",
-            },
-            mapName: `vams-map-streets-${Stack.of(scope).region}-${Stack.of(scope).stackName}`,
+            description: "API Key for VAMS Location Services Maps",
         });
 
-        // const cfnIndex = new aws_location.CfnPlaceIndex(scope, "MyCfnPlaceIndex", {
-        //     dataSource: "Esri",
-        //     indexName: "vams-index",
-        // });
+        // Store API Key in SSM Parameter Store
+        const apiKeySSMParameter = new ssm.StringParameter(this, "LocationServiceApiKeyARNSSM", {
+            parameterName: props.config.locationServiceApiKeyArnSSMParam,
+            stringValue: apiKey.attrKeyArn,
+            description: "Location Service API Key ARN for VAMS",
+            tier: ssm.ParameterTier.STANDARD,
+        });
 
-        // role.addToPolicy(
-        //     new iam.PolicyStatement({
-        //         effect: iam.Effect.ALLOW,
-        //         actions: [
-        //             "geo:SearchPlaceIndexForPosition",
-        //             "geo:SearchPlaceIndexForText",
-        //             "geo:SearchPlaceIndexForSuggestions",
-        //             "geo:GetPlace",
-        //         ],
-        //         resources: [cfnIndex.attrArn],
-        //     })
-        // );
+        // Add dependency to ensure API key is created before SSM parameter
+        apiKeySSMParameter.node.addDependency(apiKey);
 
-        // make cfn outputs
+        this.apiKey = apiKey;
 
-        // new CfnOutput(this, "LocationServiceArn", {
-        //     value: location.placeIndexArn,
-        //     description: "Location Service Arn",
-        //     exportName: "LocationServiceArn",
-        // });
-        // new CfnOutput(this, "LocationServiceIndexName", {
-        //     value: location.placeIndexName,
-        //     description: "Location Service Index Name",
-        //     exportName: "LocationServiceIndexName",
-        // });
-        // new CfnOutput(this, "LocationServiceIndexArn", {
-        //     value: location.placeIndexArn,
-        //     description: "Location Service Index Arn",
-        //     exportName: "LocationServiceIndexArn",
-        // });
-        // new CfnOutput(this, "MapArn", {
-        //     value: cfnMap.attrArn,
-        //     description: "Map Arn",
-        //     exportName: "MapArn",
-        // });
-
-        this.map = cfnMap;
-        this.mapStreets = cfnMap_streets;
-        // this.location = location;
+        // Add CDK Nag suppressions
+        this.addNagSuppressions();
     }
 
-    public addMapPermissionsToRole(role: iam.Role): void {
-        role.addToPolicy(
-            new iam.PolicyStatement({
-                effect: iam.Effect.ALLOW,
-                actions: [
-                    "geo:GetMapTile",
-                    "geo:GetMapSprites",
-                    "geo:GetMapGlyphs",
-                    "geo:GetMapStyleDescriptor",
+    private addNagSuppressions(): void {
+        if (this.apiKey) {
+            NagSuppressions.addResourceSuppressions(
+                this.apiKey,
+                [
+                    {
+                        id: "AwsSolutions-GEO1",
+                        reason: "API Key is restricted to specific map resources and actions as required for VAMS Location Services functionality. The key is stored securely in SSM Parameter Store.",
+                    },
                 ],
-                resources: [this.map.attrArn, this.mapStreets.attrArn],
-            })
-        );
+                true
+            );
+        }
+
     }
 }

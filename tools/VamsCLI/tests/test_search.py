@@ -1,4 +1,4 @@
-"""Test search functionality."""
+"""Test search functionality - Dual-Index OpenSearch Support."""
 
 import json
 import pytest
@@ -49,7 +49,9 @@ class TestSearchAssetsCommand:
         assert '--database' in result.output
         assert '--asset-type' in result.output
         assert '--tags' in result.output
-        assert '--property-filters' in result.output
+        assert '--metadata-query' in result.output
+        assert '--metadata-mode' in result.output
+        assert '--explain-results' in result.output
         assert '--output-format' in result.output
     
     @patch('vamscli.commands.search.is_feature_enabled')
@@ -59,11 +61,12 @@ class TestSearchAssetsCommand:
             # Mock feature check (search enabled)
             mock_is_feature_enabled.return_value = False
             
-            # Mock search results
+            # Mock search results with dual-index format
             mock_search_result = {
                 "hits": {
                     "hits": [
                         {
+                            "_index_type": "asset",
                             "_source": {
                                 "str_assetname": "test-asset-001",
                                 "str_databaseid": "test-db",
@@ -82,12 +85,54 @@ class TestSearchAssetsCommand:
             result = cli_runner.invoke(cli, ['search', 'assets', '-q', 'test'])
             
             assert result.exit_code == 0
-            assert 'Search Results (1 found)' in result.output
-            assert 'test-asset-001' in result.output
+            assert 'Found 1 assets' in result.output
             assert 'Search completed. Found 1 assets' in result.output
             
-            # Verify API call
+            # Verify API call with new format
             mocks['api_client'].search_query.assert_called_once()
+            call_args = mocks['api_client'].search_query.call_args[0][0]
+            assert call_args['entityTypes'] == ['asset']
+            assert call_args['query'] == 'test'
+    
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_assets_with_metadata_query(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
+        """Test asset search with metadata query."""
+        with search_command_mocks as mocks:
+            # Mock feature check (search enabled)
+            mock_is_feature_enabled.return_value = False
+            
+            mock_search_result = {
+                "hits": {
+                    "hits": [
+                        {
+                            "_index_type": "asset",
+                            "_source": {
+                                "str_assetname": "metadata-asset",
+                                "str_databaseid": "test-db",
+                                "MD_str_product": "Training"
+                            },
+                            "_score": 0.95
+                        }
+                    ],
+                    "total": {"value": 1}
+                }
+            }
+            mocks['api_client'].search_query.return_value = mock_search_result
+            
+            result = cli_runner.invoke(cli, [
+                'search', 'assets', 
+                '--metadata-query', 'MD_str_product:Training',
+                '--metadata-mode', 'both'
+            ])
+            
+            assert result.exit_code == 0
+            assert 'Search completed. Found 1 assets' in result.output
+            
+            # Verify API call includes metadata parameters
+            mocks['api_client'].search_query.assert_called_once()
+            call_args = mocks['api_client'].search_query.call_args[0][0]
+            assert call_args['metadataQuery'] == 'MD_str_product:Training'
+            assert call_args['metadataSearchMode'] == 'both'
     
     @patch('vamscli.commands.search.is_feature_enabled')
     def test_assets_with_filters(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
@@ -100,11 +145,11 @@ class TestSearchAssetsCommand:
                 "hits": {
                     "hits": [
                         {
+                            "_index_type": "asset",
                             "_source": {
                                 "str_assetname": "filtered-asset",
                                 "str_databaseid": "test-db",
                                 "str_assettype": "3d-model",
-                                "str_description": "Filtered asset",
                                 "list_tags": ["test", "model"]
                             },
                             "_score": 0.95
@@ -132,8 +177,51 @@ class TestSearchAssetsCommand:
             mocks['api_client'].search_query.assert_called_once()
             call_args = mocks['api_client'].search_query.call_args[0][0]
             assert call_args['query'] == 'test'
-            assert call_args['operation'] == 'AND'
-            assert call_args['sort'][0]['str_assetname.raw']['order'] == 'desc'
+            assert call_args['entityTypes'] == ['asset']
+            assert call_args['sort'] == [{'field': 'str_assetname', 'order': 'desc'}]
+            assert len(call_args['filters']) == 3  # database, asset_type, and tags filters
+    
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_assets_with_explain_results(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
+        """Test asset search with explain results option."""
+        with search_command_mocks as mocks:
+            # Mock feature check (search enabled)
+            mock_is_feature_enabled.return_value = False
+            
+            mock_search_result = {
+                "hits": {
+                    "hits": [
+                        {
+                            "_index_type": "asset",
+                            "_source": {
+                                "str_assetname": "explained-asset",
+                                "str_databaseid": "test-db"
+                            },
+                            "_score": 0.95,
+                            "explanation": {
+                                "query_type": "general",
+                                "index_type": "asset",
+                                "matched_fields": ["str_assetname"]
+                            }
+                        }
+                    ],
+                    "total": {"value": 1}
+                }
+            }
+            mocks['api_client'].search_query.return_value = mock_search_result
+            
+            result = cli_runner.invoke(cli, [
+                'search', 'assets', 
+                '-q', 'test',
+                '--explain-results'
+            ])
+            
+            assert result.exit_code == 0
+            
+            # Verify explainResults parameter
+            mocks['api_client'].search_query.assert_called_once()
+            call_args = mocks['api_client'].search_query.call_args[0][0]
+            assert call_args['explainResults'] is True
     
     @patch('vamscli.commands.search.is_feature_enabled')
     def test_assets_json_output(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
@@ -146,6 +234,7 @@ class TestSearchAssetsCommand:
                 "hits": {
                     "hits": [
                         {
+                            "_index_type": "asset",
                             "_source": {
                                 "str_assetname": "test-asset",
                                 "str_databaseid": "test-db",
@@ -165,155 +254,13 @@ class TestSearchAssetsCommand:
             
             assert result.exit_code == 0
             
-            # Check that JSON output is present and contains expected data
-            assert '[' in result.output, f"No JSON array found in output: {result.output}"
+            # Check that JSON output contains expected data
+            # With --output-format json, the command outputs the raw API response
+            assert '{' in result.output
+            assert '"hits"' in result.output
+            assert '_index_type' in result.output
+            assert 'asset' in result.output
             assert 'test-asset' in result.output
-            assert 'test-db' in result.output
-            assert 'assetName' in result.output
-            assert 'database' in result.output
-    
-    @patch('vamscli.commands.search.is_feature_enabled')
-    def test_assets_csv_output(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
-        """Test asset search with CSV output format."""
-        with search_command_mocks as mocks:
-            # Mock feature check (search enabled)
-            mock_is_feature_enabled.return_value = False
-            
-            mock_search_result = {
-                "hits": {
-                    "hits": [
-                        {
-                            "_source": {
-                                "str_assetname": "test-asset",
-                                "str_databaseid": "test-db",
-                                "str_assettype": "3d-model",
-                                "str_description": "Test description",
-                                "list_tags": ["test", "model"]
-                            },
-                            "_score": 0.95
-                        }
-                    ],
-                    "total": {"value": 1}
-                }
-            }
-            mocks['api_client'].search_query.return_value = mock_search_result
-            
-            result = cli_runner.invoke(cli, ['search', 'assets', '-q', 'test', '--output-format', 'csv'])
-            
-            assert result.exit_code == 0
-            assert 'Asset Name,Database,Type,Description,Tags,Score' in result.output
-            assert 'test-asset,test-db,3d-model' in result.output
-    
-    @patch('vamscli.commands.search.is_feature_enabled')
-    def test_assets_legacy_json_output(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
-        """Test asset search with legacy JSON output."""
-        with search_command_mocks as mocks:
-            # Mock feature check (search enabled)
-            mock_is_feature_enabled.return_value = False
-            
-            mock_search_result = {
-                "hits": {
-                    "hits": [
-                        {
-                            "_source": {
-                                "str_assetname": "test-asset",
-                                "str_databaseid": "test-db"
-                            },
-                            "_score": 0.95
-                        }
-                    ],
-                    "total": {"value": 1}
-                }
-            }
-            mocks['api_client'].search_query.return_value = mock_search_result
-            
-            result = cli_runner.invoke(cli, ['search', 'assets', '-q', 'test', '--jsonOutput'])
-            
-            assert result.exit_code == 0
-            
-            # Parse JSON output - should be raw API response
-            json_output = json.loads(result.output)
-            assert 'hits' in json_output
-            assert json_output['hits']['total']['value'] == 1
-    
-    @patch('vamscli.commands.search.is_feature_enabled')
-    def test_assets_json_input(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
-        """Test asset search with JSON input file."""
-        with search_command_mocks as mocks:
-            # Mock feature check (search enabled)
-            mock_is_feature_enabled.return_value = False
-            
-            mock_search_result = {
-                "hits": {
-                    "hits": [
-                        {
-                            "_source": {
-                                "str_assetname": "json-asset",
-                                "str_databaseid": "json-db"
-                            },
-                            "_score": 0.95
-                        }
-                    ],
-                    "total": {"value": 1}
-                }
-            }
-            mocks['api_client'].search_query.return_value = mock_search_result
-            
-            json_data = {
-                'query': 'test model',
-                'database': 'test-db',
-                'operation': 'AND'
-            }
-            
-            with patch('builtins.open', mock_open(read_data=json.dumps(json_data))):
-                result = cli_runner.invoke(cli, ['search', 'assets', '--jsonInput', 'search_params.json'])
-            
-            assert result.exit_code == 0
-            assert 'Search completed. Found 1 assets' in result.output
-            
-            # Verify API was called with correct parameters
-            mocks['api_client'].search_query.assert_called_once()
-            call_args = mocks['api_client'].search_query.call_args[0][0]
-            assert call_args['query'] == 'test model'
-            assert call_args['operation'] == 'AND'
-    
-    @patch('vamscli.commands.search.is_feature_enabled')
-    def test_assets_property_filters(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
-        """Test asset search with property filters."""
-        with search_command_mocks as mocks:
-            # Mock feature check (search enabled)
-            mock_is_feature_enabled.return_value = False
-            
-            mock_search_result = {
-                "hits": {
-                    "hits": [
-                        {
-                            "_source": {
-                                "str_assetname": "filtered-asset",
-                                "str_description": "training"
-                            },
-                            "_score": 0.95
-                        }
-                    ],
-                    "total": {"value": 1}
-                }
-            }
-            mocks['api_client'].search_query.return_value = mock_search_result
-            
-            property_filters = '[{"propertyKey":"str_description","operator":"=","value":"training"}]'
-            result = cli_runner.invoke(cli, [
-                'search', 'assets', 
-                '--property-filters', property_filters
-            ])
-            
-            assert result.exit_code == 0
-            assert 'Search completed. Found 1 assets' in result.output
-            
-            # Verify API was called with property filters
-            mocks['api_client'].search_query.assert_called_once()
-            call_args = mocks['api_client'].search_query.call_args[0][0]
-            assert len(call_args['tokens']) == 1
-            assert call_args['tokens'][0]['propertyKey'] == 'str_description'
     
     @patch('vamscli.commands.search.is_feature_enabled')
     def test_assets_no_results(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
@@ -331,47 +278,8 @@ class TestSearchAssetsCommand:
             result = cli_runner.invoke(cli, ['search', 'assets', '-q', 'nonexistent'])
             
             assert result.exit_code == 0
-            assert 'No assets found' in result.output
+            assert 'Found 0 assets' in result.output
             assert 'Search completed. Found 0 assets' in result.output
-    
-    @patch('vamscli.commands.search.is_feature_enabled')
-    def test_assets_pagination(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
-        """Test search with pagination parameters."""
-        with search_command_mocks as mocks:
-            # Mock feature check (search enabled)
-            mock_is_feature_enabled.return_value = False
-            
-            mock_search_result = {
-                "hits": {
-                    "hits": [
-                        {
-                            "_source": {
-                                "str_assetname": "paginated-asset",
-                                "str_databaseid": "test-db"
-                            },
-                            "_score": 0.95
-                        }
-                    ],
-                    "total": {"value": 1}
-                }
-            }
-            mocks['api_client'].search_query.return_value = mock_search_result
-            
-            result = cli_runner.invoke(cli, [
-                'search', 'assets', 
-                '-q', 'test',
-                '--from', '10',
-                '--size', '50'
-            ])
-            
-            assert result.exit_code == 0
-            assert 'Search completed. Found 1 assets' in result.output
-            
-            # Verify pagination parameters
-            mocks['api_client'].search_query.assert_called_once()
-            call_args = mocks['api_client'].search_query.call_args[0][0]
-            assert call_args['from'] == 10
-            assert call_args['size'] == 50
     
     @patch('vamscli.commands.search.is_feature_enabled')
     def test_assets_search_disabled_error(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
@@ -394,84 +302,6 @@ class TestSearchAssetsCommand:
             assert result.exit_code == 1
             # Global exception handler catches SetupRequiredError
             assert isinstance(result.exception, SetupRequiredError)
-    
-    @patch('vamscli.commands.search.is_feature_enabled')
-    def test_assets_sort_validation(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
-        """Test search sort option validation."""
-        with search_command_mocks as mocks:
-            # Mock feature check (search enabled)
-            mock_is_feature_enabled.return_value = False
-            
-            # Test conflicting sort options
-            result = cli_runner.invoke(cli, [
-                'search', 'assets', 
-                '-q', 'test',
-                '--sort-desc',
-                '--sort-asc'
-            ])
-            
-            assert result.exit_code == 1
-            assert 'Cannot specify both --sort-desc and --sort-asc' in result.output
-    
-    @patch('vamscli.commands.search.is_feature_enabled')
-    def test_assets_invalid_property_filters(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
-        """Test search with invalid property filters."""
-        with search_command_mocks as mocks:
-            # Mock feature check (search enabled)
-            mock_is_feature_enabled.return_value = False
-            
-            # Test invalid JSON
-            result = cli_runner.invoke(cli, [
-                'search', 'assets', 
-                '--property-filters', 'invalid json'
-            ])
-            
-            assert result.exit_code == 1
-            assert 'Invalid Parameters' in result.output
-    
-    @patch('vamscli.commands.search.is_feature_enabled')
-    def test_assets_api_error(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
-        """Test search API error handling."""
-        with search_command_mocks as mocks:
-            # Mock feature check (search enabled)
-            mock_is_feature_enabled.return_value = False
-            
-            # Mock API client with error
-            mocks['api_client'].search_query.side_effect = APIError("Search service unavailable")
-            
-            result = cli_runner.invoke(cli, ['search', 'assets', '-q', 'test'])
-            
-            assert result.exit_code == 1
-            # Global exception handler catches APIError
-            assert isinstance(result.exception, APIError)
-    
-    @patch('vamscli.commands.search.is_feature_enabled')
-    def test_assets_json_input_file_not_found(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
-        """Test search with missing JSON input file."""
-        with search_command_mocks as mocks:
-            # Mock feature check (search enabled)
-            mock_is_feature_enabled.return_value = False
-            
-            with patch('builtins.open', side_effect=FileNotFoundError("File not found")):
-                result = cli_runner.invoke(cli, ['search', 'assets', '--jsonInput', 'missing.json'])
-            
-            assert result.exit_code == 1
-            assert 'Invalid Parameters' in result.output
-            assert 'not found' in result.output
-    
-    @patch('vamscli.commands.search.is_feature_enabled')
-    def test_assets_json_input_invalid_json(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
-        """Test search with invalid JSON input file."""
-        with search_command_mocks as mocks:
-            # Mock feature check (search enabled)
-            mock_is_feature_enabled.return_value = False
-            
-            with patch('builtins.open', mock_open(read_data='invalid json')):
-                result = cli_runner.invoke(cli, ['search', 'assets', '--jsonInput', 'invalid.json'])
-            
-            assert result.exit_code == 1
-            assert 'Invalid Parameters' in result.output
-            assert 'Invalid JSON' in result.output
 
 
 class TestSearchFilesCommand:
@@ -483,9 +313,9 @@ class TestSearchFilesCommand:
         assert result.exit_code == 0
         assert 'Search files using OpenSearch' in result.output
         assert '--file-ext' in result.output
-        assert '--asset-type' in result.output
         assert '--query' in result.output
         assert '--database' in result.output
+        assert '--metadata-query' in result.output
     
     @patch('vamscli.commands.search.is_feature_enabled')
     def test_files_success(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
@@ -494,18 +324,18 @@ class TestSearchFilesCommand:
             # Mock feature check (search enabled)
             mock_is_feature_enabled.return_value = False
             
-            # Mock file search results
+            # Mock file search results with dual-index format
             mock_search_result = {
                 "hits": {
                     "hits": [
                         {
+                            "_index_type": "file",
                             "_source": {
-                                "str_filename": "model.gltf",
+                                "str_key": "test-asset-001/model.gltf",
                                 "str_assetname": "test-asset-001",
                                 "str_databaseid": "test-db",
-                                "str_key": "test-asset-001/model.gltf",
                                 "str_fileext": "gltf",
-                                "num_size": 2048000
+                                "num_filesize": 2048000
                             },
                             "_score": 0.92
                         }
@@ -518,9 +348,13 @@ class TestSearchFilesCommand:
             result = cli_runner.invoke(cli, ['search', 'files', '--file-ext', 'gltf'])
             
             assert result.exit_code == 0
-            assert 'Search Results (1 found)' in result.output
-            assert 'model.gltf' in result.output
+            assert 'Found 1 files' in result.output
             assert 'Search completed. Found 1 files' in result.output
+            
+            # Verify API call with new format
+            mocks['api_client'].search_query.assert_called_once()
+            call_args = mocks['api_client'].search_query.call_args[0][0]
+            assert call_args['entityTypes'] == ['file']
     
     @patch('vamscli.commands.search.is_feature_enabled')
     def test_files_with_filters(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
@@ -533,8 +367,9 @@ class TestSearchFilesCommand:
                 "hits": {
                     "hits": [
                         {
+                            "_index_type": "file",
                             "_source": {
-                                "str_filename": "texture.png",
+                                "str_key": "test-asset/texture.png",
                                 "str_assetname": "test-asset",
                                 "str_databaseid": "test-db",
                                 "str_fileext": "png"
@@ -551,8 +386,7 @@ class TestSearchFilesCommand:
                 'search', 'files', 
                 '-q', 'texture',
                 '-d', 'test-db',
-                '--file-ext', 'png',
-                '--asset-type', '3d-model'
+                '--file-ext', 'png'
             ])
             
             assert result.exit_code == 0
@@ -562,10 +396,74 @@ class TestSearchFilesCommand:
             mocks['api_client'].search_query.assert_called_once()
             call_args = mocks['api_client'].search_query.call_args[0][0]
             assert call_args['query'] == 'texture'
+            assert call_args['entityTypes'] == ['file']
+            assert len(call_args['filters']) == 2  # database and file_ext filters
+    
+    def test_files_no_setup(self, cli_runner, search_no_setup_mocks):
+        """Test files command without setup."""
+        with search_no_setup_mocks as mocks:
+            result = cli_runner.invoke(cli, ['search', 'files', '--file-ext', 'gltf'])
+            
+            assert result.exit_code == 1
+            # Global exception handler catches SetupRequiredError
+            assert isinstance(result.exception, SetupRequiredError)
+
+
+class TestSearchSimpleCommand:
+    """Test search simple command."""
+    
+    def test_simple_help(self, cli_runner):
+        """Test simple command help."""
+        result = cli_runner.invoke(cli, ['search', 'simple', '--help'])
+        assert result.exit_code == 0
+        assert 'Simple search with user-friendly parameters' in result.output
+        assert '--asset-name' in result.output
+        assert '--asset-id' in result.output
+        assert '--file-key' in result.output
+        assert '--file-ext' in result.output
+        assert '--metadata-key' in result.output
+        assert '--metadata-value' in result.output
+        assert '--entity-types' in result.output
     
     @patch('vamscli.commands.search.is_feature_enabled')
-    def test_files_csv_output(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
-        """Test file search with CSV output format."""
+    def test_simple_success(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
+        """Test successful simple search."""
+        with search_command_mocks as mocks:
+            # Mock feature check (search enabled)
+            mock_is_feature_enabled.return_value = False
+            
+            # Mock simple search results
+            mock_search_result = {
+                "hits": {
+                    "hits": [
+                        {
+                            "_index_type": "asset",
+                            "_source": {
+                                "str_assetname": "training-model",
+                                "str_databaseid": "test-db"
+                            },
+                            "_score": 0.95
+                        }
+                    ],
+                    "total": {"value": 1}
+                }
+            }
+            mocks['api_client'].search_simple.return_value = mock_search_result
+            
+            result = cli_runner.invoke(cli, ['search', 'simple', '-q', 'training'])
+            
+            assert result.exit_code == 0
+            assert 'Found 1 results' in result.output
+            assert 'Search completed. Found 1 results' in result.output
+            
+            # Verify API call
+            mocks['api_client'].search_simple.assert_called_once()
+            call_args = mocks['api_client'].search_simple.call_args[0][0]
+            assert call_args['query'] == 'training'
+    
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_simple_with_asset_filters(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
+        """Test simple search with asset-specific filters."""
         with search_command_mocks as mocks:
             # Mock feature check (search enabled)
             mock_is_feature_enabled.return_value = False
@@ -574,13 +472,53 @@ class TestSearchFilesCommand:
                 "hits": {
                     "hits": [
                         {
+                            "_index_type": "asset",
                             "_source": {
-                                "str_filename": "model.gltf",
-                                "str_assetname": "test-asset",
-                                "str_databaseid": "test-db",
-                                "str_key": "test-asset/model.gltf",
-                                "str_fileext": "gltf",
-                                "num_size": 2048000
+                                "str_assetname": "specific-asset",
+                                "str_assetid": "asset-123",
+                                "str_assettype": "3d-model"
+                            },
+                            "_score": 0.95
+                        }
+                    ],
+                    "total": {"value": 1}
+                }
+            }
+            mocks['api_client'].search_simple.return_value = mock_search_result
+            
+            result = cli_runner.invoke(cli, [
+                'search', 'simple', 
+                '--asset-name', 'specific',
+                '--asset-id', 'asset-123',
+                '--asset-type', '3d-model',
+                '--entity-types', 'asset'
+            ])
+            
+            assert result.exit_code == 0
+            
+            # Verify API call with SimpleSearchRequestModel parameters
+            mocks['api_client'].search_simple.assert_called_once()
+            call_args = mocks['api_client'].search_simple.call_args[0][0]
+            assert call_args['assetName'] == 'specific'
+            assert call_args['assetId'] == 'asset-123'
+            assert call_args['assetType'] == '3d-model'
+            assert call_args['entityTypes'] == ['asset']
+    
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_simple_with_file_filters(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
+        """Test simple search with file-specific filters."""
+        with search_command_mocks as mocks:
+            # Mock feature check (search enabled)
+            mock_is_feature_enabled.return_value = False
+            
+            mock_search_result = {
+                "hits": {
+                    "hits": [
+                        {
+                            "_index_type": "file",
+                            "_source": {
+                                "str_key": "asset/model.gltf",
+                                "str_fileext": "gltf"
                             },
                             "_score": 0.92
                         }
@@ -588,18 +526,66 @@ class TestSearchFilesCommand:
                     "total": {"value": 1}
                 }
             }
-            mocks['api_client'].search_query.return_value = mock_search_result
+            mocks['api_client'].search_simple.return_value = mock_search_result
             
-            result = cli_runner.invoke(cli, ['search', 'files', '--file-ext', 'gltf', '--output-format', 'csv'])
+            result = cli_runner.invoke(cli, [
+                'search', 'simple', 
+                '--file-key', 'model',
+                '--file-ext', 'gltf',
+                '--entity-types', 'file'
+            ])
             
             assert result.exit_code == 0
-            assert 'File Name,Asset,Database,Path,Size (MB),Type,Score' in result.output
-            assert 'model.gltf,test-asset,test-db' in result.output
+            
+            # Verify API call
+            mocks['api_client'].search_simple.assert_called_once()
+            call_args = mocks['api_client'].search_simple.call_args[0][0]
+            assert call_args['fileKey'] == 'model'
+            assert call_args['fileExtension'] == 'gltf'
+            assert call_args['entityTypes'] == ['file']
     
-    def test_files_no_setup(self, cli_runner, search_no_setup_mocks):
-        """Test files command without setup."""
+    @patch('vamscli.commands.search.is_feature_enabled')
+    def test_simple_with_metadata_filters(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
+        """Test simple search with metadata filters."""
+        with search_command_mocks as mocks:
+            # Mock feature check (search enabled)
+            mock_is_feature_enabled.return_value = False
+            
+            mock_search_result = {
+                "hits": {
+                    "hits": [
+                        {
+                            "_index_type": "asset",
+                            "_source": {
+                                "str_assetname": "metadata-asset",
+                                "MD_str_product": "Training"
+                            },
+                            "_score": 0.95
+                        }
+                    ],
+                    "total": {"value": 1}
+                }
+            }
+            mocks['api_client'].search_simple.return_value = mock_search_result
+            
+            result = cli_runner.invoke(cli, [
+                'search', 'simple', 
+                '--metadata-key', 'product',
+                '--metadata-value', 'Training'
+            ])
+            
+            assert result.exit_code == 0
+            
+            # Verify API call
+            mocks['api_client'].search_simple.assert_called_once()
+            call_args = mocks['api_client'].search_simple.call_args[0][0]
+            assert call_args['metadataKey'] == 'product'
+            assert call_args['metadataValue'] == 'Training'
+    
+    def test_simple_no_setup(self, cli_runner, search_no_setup_mocks):
+        """Test simple command without setup."""
         with search_no_setup_mocks as mocks:
-            result = cli_runner.invoke(cli, ['search', 'files', '--file-ext', 'gltf'])
+            result = cli_runner.invoke(cli, ['search', 'simple', '-q', 'test'])
             
             assert result.exit_code == 1
             # Global exception handler catches SetupRequiredError
@@ -614,6 +600,7 @@ class TestSearchMappingCommand:
         result = cli_runner.invoke(cli, ['search', 'mapping', '--help'])
         assert result.exit_code == 0
         assert 'Get search index mapping' in result.output
+        assert 'dual-index system' in result.output
         assert '--output-format' in result.output
         assert '--jsonOutput' in result.output
     
@@ -624,17 +611,26 @@ class TestSearchMappingCommand:
             # Mock feature check (search enabled)
             mock_is_feature_enabled.return_value = False
             
-            # Mock search mapping
+            # Mock dual-index search mapping
             mock_search_mapping = {
                 "mappings": {
-                    "properties": {
-                        "str_assetname": {"type": "text"},
-                        "str_description": {"type": "text"},
-                        "str_databaseid": {"type": "keyword"},
-                        "str_assettype": {"type": "keyword"},
-                        "list_tags": {"type": "keyword"},
-                        "num_size": {"type": "long"},
-                        "date_created": {"type": "date"}
+                    "asset_index": {
+                        "mappings": {
+                            "properties": {
+                                "str_assetname": {"type": "text"},
+                                "str_description": {"type": "text"},
+                                "str_assettype": {"type": "keyword"}
+                            }
+                        }
+                    },
+                    "file_index": {
+                        "mappings": {
+                            "properties": {
+                                "str_key": {"type": "text"},
+                                "str_fileext": {"type": "keyword"},
+                                "num_filesize": {"type": "long"}
+                            }
+                        }
                     }
                 }
             }
@@ -643,33 +639,8 @@ class TestSearchMappingCommand:
             result = cli_runner.invoke(cli, ['search', 'mapping'])
             
             assert result.exit_code == 0
-            assert 'Available Search Fields' in result.output
-            assert 'String Fields' in result.output
-            assert 'str_assetname' in result.output
-            assert 'Retrieved mapping for 7 search fields' in result.output
-    
-    @patch('vamscli.commands.search.is_feature_enabled')
-    def test_mapping_csv_output(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
-        """Test search mapping with CSV output."""
-        with search_command_mocks as mocks:
-            # Mock feature check (search enabled)
-            mock_is_feature_enabled.return_value = False
-            
-            mock_search_mapping = {
-                "mappings": {
-                    "properties": {
-                        "str_assetname": {"type": "text"},
-                        "num_size": {"type": "long"}
-                    }
-                }
-            }
-            mocks['api_client'].get_search_mapping.return_value = mock_search_mapping
-            
-            result = cli_runner.invoke(cli, ['search', 'mapping', '--output-format', 'csv'])
-            
-            assert result.exit_code == 0
-            assert 'Field Name,Field Type,Display Name' in result.output
-            assert 'str_assetname,text,Str Assetname' in result.output
+            assert 'Search mapping retrieved successfully' in result.output
+            assert 'Retrieved search index mappings' in result.output
     
     @patch('vamscli.commands.search.is_feature_enabled')
     def test_mapping_json_output(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
@@ -680,8 +651,12 @@ class TestSearchMappingCommand:
             
             mock_search_mapping = {
                 "mappings": {
-                    "properties": {
-                        "str_assetname": {"type": "text"}
+                    "asset_index": {
+                        "mappings": {
+                            "properties": {
+                                "str_assetname": {"type": "text"}
+                            }
+                        }
                     }
                 }
             }
@@ -694,7 +669,7 @@ class TestSearchMappingCommand:
             # Parse JSON output
             json_output = json.loads(result.output)
             assert 'mappings' in json_output
-            assert 'properties' in json_output['mappings']
+            assert 'asset_index' in json_output['mappings']
     
     def test_mapping_no_setup(self, cli_runner, search_no_setup_mocks):
         """Test mapping command without setup."""
@@ -706,6 +681,79 @@ class TestSearchMappingCommand:
             assert isinstance(result.exception, SetupRequiredError)
 
 
+class TestSearchUtilities:
+    """Test search utility functions."""
+    
+    def test_parse_tags_list(self):
+        """Test tag list parsing."""
+        from vamscli.commands.search import _parse_tags_list
+        
+        # Test normal case
+        result = _parse_tags_list("tag1,tag2,tag3")
+        assert result == ["tag1", "tag2", "tag3"]
+        
+        # Test with spaces
+        result = _parse_tags_list("tag1, tag2 , tag3")
+        assert result == ["tag1", "tag2", "tag3"]
+        
+        # Test empty string
+        result = _parse_tags_list("")
+        assert result == []
+        
+        # Test None
+        result = _parse_tags_list(None)
+        assert result == []
+    
+    def test_parse_entity_types_valid(self):
+        """Test valid entity type parsing."""
+        from vamscli.commands.search import _parse_entity_types
+        
+        # Test single type
+        result = _parse_entity_types("asset")
+        assert result == ["asset"]
+        
+        # Test multiple types
+        result = _parse_entity_types("asset,file")
+        assert result == ["asset", "file"]
+        
+        # Test with spaces
+        result = _parse_entity_types("asset , file")
+        assert result == ["asset", "file"]
+        
+        # Test empty string
+        result = _parse_entity_types("")
+        assert result == []
+    
+    def test_parse_entity_types_invalid(self):
+        """Test invalid entity type parsing."""
+        from vamscli.commands.search import _parse_entity_types
+        from vamscli.utils.exceptions import InvalidSearchParametersError
+        
+        # Test invalid type
+        with pytest.raises(InvalidSearchParametersError, match="Invalid entity types"):
+            _parse_entity_types("invalid")
+        
+        # Test mixed valid and invalid
+        with pytest.raises(InvalidSearchParametersError, match="Invalid entity types"):
+            _parse_entity_types("asset,invalid,file")
+    
+    def test_build_sort_config(self):
+        """Test sort configuration building."""
+        from vamscli.commands.search import _build_sort_config
+        
+        # Test with field and descending
+        result = _build_sort_config("str_assetname", True)
+        assert result == [{"field": "str_assetname", "order": "desc"}]
+        
+        # Test with field and ascending
+        result = _build_sort_config("str_assetname", False)
+        assert result == [{"field": "str_assetname", "order": "asc"}]
+        
+        # Test without field (default to score)
+        result = _build_sort_config(None, False)
+        assert result == ["_score"]
+
+
 class TestSearchCommandsIntegration:
     """Test integration scenarios for search commands."""
     
@@ -713,7 +761,7 @@ class TestSearchCommandsIntegration:
         """Test search group help."""
         result = cli_runner.invoke(cli, ['search', '--help'])
         assert result.exit_code == 0
-        assert 'Search assets and files using OpenSearch' in result.output
+        assert 'Search assets and files using OpenSearch dual-index system' in result.output
         assert 'NOOPENSEARCH feature is enabled' in result.output
     
     @patch('vamscli.commands.search.is_feature_enabled')
@@ -758,271 +806,6 @@ class TestSearchCommandsIntegration:
             
             assert result.exit_code == 1
             assert 'Search Mapping Error' in result.output
-
-
-class TestSearchUtilities:
-    """Test search utility functions."""
-    
-    def test_parse_tags_list(self):
-        """Test tag list parsing."""
-        from vamscli.commands.search import _parse_tags_list
-        
-        # Test normal case
-        result = _parse_tags_list("tag1,tag2,tag3")
-        assert result == ["tag1", "tag2", "tag3"]
-        
-        # Test with spaces
-        result = _parse_tags_list("tag1, tag2 , tag3")
-        assert result == ["tag1", "tag2", "tag3"]
-        
-        # Test empty string
-        result = _parse_tags_list("")
-        assert result == []
-        
-        # Test None
-        result = _parse_tags_list(None)
-        assert result == []
-    
-    def test_parse_property_filters_valid(self):
-        """Test valid property filter parsing."""
-        from vamscli.commands.search import _parse_property_filters
-        
-        filters_json = '[{"propertyKey":"str_description","operator":"=","value":"test"}]'
-        result = _parse_property_filters(filters_json)
-        
-        assert len(result) == 1
-        assert result[0]['propertyKey'] == 'str_description'
-        assert result[0]['operator'] == '='
-        assert result[0]['value'] == 'test'
-    
-    def test_parse_property_filters_invalid(self):
-        """Test invalid property filter parsing."""
-        from vamscli.commands.search import _parse_property_filters
-        from vamscli.utils.exceptions import InvalidSearchParametersError
-        
-        # Test invalid JSON
-        with pytest.raises(InvalidSearchParametersError, match="Invalid JSON"):
-            _parse_property_filters('invalid json')
-        
-        # Test non-array JSON
-        with pytest.raises(InvalidSearchParametersError, match="must be a JSON array"):
-            _parse_property_filters('{"not": "array"}')
-        
-        # Test missing required fields
-        with pytest.raises(InvalidSearchParametersError, match="missing required field"):
-            _parse_property_filters('[{"propertyKey":"test"}]')
-    
-    def test_build_search_request_asset(self):
-        """Test building search request for assets."""
-        from vamscli.commands.search import _build_search_request
-        
-        result = _build_search_request(
-            search_type="asset",
-            query="test query",
-            database="test-db",
-            operation="AND",
-            sort_field="str_assetname",
-            sort_desc=True,
-            from_offset=10,
-            size=50,
-            asset_type="3d-model",
-            tags=["test", "model"]
-        )
-        
-        assert result['query'] == 'test query'
-        assert result['operation'] == 'AND'
-        assert result['from'] == 10
-        assert result['size'] == 50
-        assert result['sort'][0]['str_assetname.raw']['order'] == 'desc'
-        
-        # Check filters
-        filter_queries = [f['query_string']['query'] for f in result['filters']]
-        assert any('_rectype:("asset")' in q for q in filter_queries)
-        assert any('str_databaseid:("test-db")' in q for q in filter_queries)
-        assert any('str_assettype:("3d-model")' in q for q in filter_queries)
-        assert any('list_tags:("test" OR "model")' in q for q in filter_queries)
-    
-    def test_build_search_request_file(self):
-        """Test building search request for files."""
-        from vamscli.commands.search import _build_search_request
-        
-        result = _build_search_request(
-            search_type="file",
-            query="texture",
-            file_ext="png",
-            sort_field="str_filename"
-        )
-        
-        assert result['query'] == 'texture'
-        assert result['sort'][0]['str_filename.raw']['order'] == 'asc'
-        
-        # Check filters
-        filter_queries = [f['query_string']['query'] for f in result['filters']]
-        assert any('_rectype:("s3object")' in q for q in filter_queries)
-        assert any('str_fileext:("png")' in q for q in filter_queries)
-    
-    def test_format_search_results_table_assets(self):
-        """Test formatting asset search results as table."""
-        from vamscli.commands.search import _format_search_results_table
-        
-        mock_results = {
-            "hits": {
-                "hits": [
-                    {
-                        "_source": {
-                            "str_assetname": "test-asset",
-                            "str_databaseid": "test-db",
-                            "str_assettype": "3d-model",
-                            "str_description": "Test description",
-                            "list_tags": ["test", "model"]
-                        },
-                        "_score": 0.95
-                    }
-                ],
-                "total": {"value": 1}
-            }
-        }
-        
-        result = _format_search_results_table(mock_results, "asset")
-        assert "Search Results (1 found)" in result
-        assert "Asset: test-asset" in result
-        assert "Database: test-db" in result
-        assert "Type: 3d-model" in result
-        assert "Tags: test, model" in result
-        assert "Score: 0.95" in result
-    
-    def test_format_search_results_table_files(self):
-        """Test formatting file search results as table."""
-        from vamscli.commands.search import _format_search_results_table
-        
-        mock_results = {
-            "hits": {
-                "hits": [
-                    {
-                        "_source": {
-                            "str_filename": "model.gltf",
-                            "str_assetname": "test-asset",
-                            "str_databaseid": "test-db",
-                            "str_key": "test-asset/model.gltf",
-                            "str_fileext": "gltf",
-                            "num_size": 2048000
-                        },
-                        "_score": 0.92
-                    }
-                ],
-                "total": {"value": 1}
-            }
-        }
-        
-        result = _format_search_results_table(mock_results, "file")
-        assert "Search Results (1 found)" in result
-        assert "File: model.gltf" in result
-        assert "Asset: test-asset" in result
-        assert "Path: test-asset/model.gltf" in result
-        assert "Size: 1.95 MB" in result
-        assert "Type: gltf" in result
-    
-    def test_format_search_results_csv_assets(self):
-        """Test formatting asset search results as CSV."""
-        from vamscli.commands.search import _format_search_results_csv
-        
-        mock_results = {
-            "hits": {
-                "hits": [
-                    {
-                        "_source": {
-                            "str_assetname": "test-asset",
-                            "str_databaseid": "test-db",
-                            "str_assettype": "3d-model",
-                            "str_description": "Test description",
-                            "list_tags": ["test", "model"]
-                        },
-                        "_score": 0.95
-                    }
-                ],
-                "total": {"value": 1}
-            }
-        }
-        
-        result = _format_search_results_csv(mock_results, "asset")
-        lines = [line.strip() for line in result.strip().split('\n')]
-        assert lines[0] == 'Asset Name,Database,Type,Description,Tags,Score'
-        assert 'test-asset,test-db,3d-model,Test description,"test, model",0.95' in lines[1]
-    
-    def test_format_search_results_json_assets(self):
-        """Test formatting asset search results as JSON."""
-        from vamscli.commands.search import _format_search_results_json
-        
-        mock_results = {
-            "hits": {
-                "hits": [
-                    {
-                        "_source": {
-                            "str_assetname": "test-asset",
-                            "str_databaseid": "test-db",
-                            "str_assettype": "3d-model",
-                            "str_description": "Test description",
-                            "list_tags": ["test", "model"]
-                        },
-                        "_score": 0.95
-                    }
-                ],
-                "total": {"value": 1}
-            }
-        }
-        
-        result = _format_search_results_json(mock_results, "asset")
-        json_data = json.loads(result)
-        
-        assert len(json_data) == 1
-        assert json_data[0]['assetName'] == 'test-asset'
-        assert json_data[0]['database'] == 'test-db'
-        assert json_data[0]['type'] == '3d-model'
-        assert json_data[0]['tags'] == ['test', 'model']
-        assert json_data[0]['score'] == 0.95
-    
-    def test_format_mapping_table(self):
-        """Test formatting search mapping as table."""
-        from vamscli.commands.search import _format_mapping_table
-        
-        mock_mapping = {
-            "mappings": {
-                "properties": {
-                    "str_assetname": {"type": "text"},
-                    "num_size": {"type": "long"},
-                    "date_created": {"type": "date"},
-                    "bool_active": {"type": "boolean"}
-                }
-            }
-        }
-        
-        result = _format_mapping_table(mock_mapping)
-        assert "Available Search Fields" in result
-        assert "String Fields:" in result
-        assert "Numeric Fields:" in result
-        assert "Date Fields:" in result
-        assert "Boolean Fields:" in result
-        assert "str_assetname" in result
-        assert "num_size" in result
-    
-    def test_format_mapping_csv(self):
-        """Test formatting search mapping as CSV."""
-        from vamscli.commands.search import _format_mapping_csv
-        
-        mock_mapping = {
-            "mappings": {
-                "properties": {
-                    "str_assetname": {"type": "text"},
-                    "num_size": {"type": "long"}
-                }
-            }
-        }
-        
-        result = _format_mapping_csv(mock_mapping)
-        lines = [line.strip() for line in result.strip().split('\n')]
-        assert lines[0] == 'Field Name,Field Type,Display Name'
-        assert 'num_size,long,Num Size' in result
-        assert 'str_assetname,text,Str Assetname' in result
 
 
 if __name__ == '__main__':

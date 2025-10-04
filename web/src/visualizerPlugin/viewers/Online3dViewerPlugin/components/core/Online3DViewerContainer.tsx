@@ -145,14 +145,14 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
                     isLoading: true,
                 });
 
-                // Clear any existing model first
-                if (state.viewer.embeddedViewer) {
-                    try {
-                        state.viewer.embeddedViewer.Clear();
-                    } catch (error) {
-                        console.warn("Could not clear existing model:", error);
-                    }
-                }
+                // // Clear any existing model first
+                // if (state.viewer.embeddedViewer) {
+                //     try {
+                //         state.viewer.embeddedViewer.Clear();
+                //     } catch (error) {
+                //         console.warn("Could not clear existing model:", error);
+                //     }
+                // }
 
                 // Use the EmbeddedViewer's LoadModelFromUrlList method
                 if (state.viewer.LoadModelFromUrlList) {
@@ -165,6 +165,11 @@ const Online3DViewerInner: React.FC<Online3DViewerProps> = ({
                     // Fallback - viewer should be the EmbeddedViewer itself
                     state.viewer.LoadModelFromUrlList(modelUrls);
                 }
+
+                updateState({
+                    isLoading: false,
+                });
+
             } catch (error) {
                 console.error("Error loading model into viewer:", error);
                 updateState({

@@ -15,6 +15,7 @@ interface AssetPreviewModalProps {
     databaseId: string;
     previewKey?: string;
     assetName: string;
+    downloadType?: "assetPreview" | "assetFile";
 }
 
 /**
@@ -28,6 +29,7 @@ export const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
     databaseId,
     previewKey,
     assetName,
+    downloadType = "assetPreview",
 }) => {
     const [url, setUrl] = useState<string | null>(null);
     const [loading, setLoading] = useState<boolean>(true);
@@ -57,7 +59,7 @@ export const AssetPreviewModal: React.FC<AssetPreviewModalProps> = ({
                         assetId,
                         key: previewKey,
                         versionId: "",
-                        downloadType: "assetPreview",
+                        downloadType: downloadType,
                     });
 
                     if (response !== false && Array.isArray(response)) {

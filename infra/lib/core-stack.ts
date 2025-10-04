@@ -336,14 +336,10 @@ export class CoreVAMSStack extends cdk.Stack {
             const locationServiceNestedStack = new LocationServiceNestedStack(
                 this,
                 "LocationService",
-                {}
+                {
+                    config: props.config,
+                }
             );
-
-            locationServiceNestedStack.addMapPermissionsToRole(
-                authBuilderNestedStack.authResources.roles.authenticatedRole
-            );
-
-            locationServiceNestedStack.node.addDependency(authBuilderNestedStack);
 
             this.enabledFeatures.push(VAMS_APP_FEATURES.LOCATIONSERVICES);
         }

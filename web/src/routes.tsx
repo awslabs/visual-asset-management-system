@@ -13,7 +13,7 @@ import Spinner from "@cloudscape-design/components/spinner";
 import { useNavigate } from "react-router";
 
 const Databases = React.lazy(() => import("./pages/Databases"));
-const SearchPage = React.lazy(() => import("./pages/search/SearchPage"));
+const SearchPage = React.lazy(() => import("./pages/search/NewSearchPage"));
 //const Assets = React.lazy(() => import("./pages/Assets")); //Deprecated
 const AssetUploadPage = React.lazy(() => import("./pages/AssetUpload/AssetUpload"));
 const ViewAsset = React.lazy(() => import("./components/asset/ViewAsset"));

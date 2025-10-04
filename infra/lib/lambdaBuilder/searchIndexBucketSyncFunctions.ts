@@ -54,24 +54,25 @@ export function buildSearchFunction(
                 : undefined,
 
         environment: {
-            AOS_ENDPOINT_PARAM: config.openSearchDomainEndpointSSMParam,
-            AOS_INDEX_NAME_PARAM: config.openSearchIndexNameSSMParam,
-            AOS_TYPE: config.app.openSearch.useProvisioned.enabled ? "es" : "aoss",
-            AOS_DISABLED:
+            OPENSEARCH_ENDPOINT_SSM_PARAM: config.openSearchDomainEndpointSSMParam,
+            OPENSEARCH_ASSET_INDEX_SSM_PARAM: config.openSearchAssetIndexNameSSMParam,
+            OPENSEARCH_FILE_INDEX_SSM_PARAM: config.openSearchFileIndexNameSSMParam,
+            OPENSEARCH_TYPE: config.app.openSearch.useProvisioned.enabled ? "provisioned" : "serverless",
+            OPENSEARCH_DISABLED:
                 !config.app.openSearch.useProvisioned.enabled &&
                 !config.app.openSearch.useServerless.enabled
                     ? "true"
                     : "false",
             AUTH_ENTITIES_TABLE: storageResources.dynamo.authEntitiesStorageTable.tableName,
             DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
             USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
-    // add access to read the parameter store param aosEndpoint
+    // add access to read the parameter store param for OpenSearch endpoint
     fun.role?.addToPrincipalPolicy(
         new cdk.aws_iam.PolicyStatement({
             actions: ["ssm:GetParameter"],
@@ -90,18 +91,18 @@ export function buildSearchFunction(
     return fun;
 }
 
-export function buildIndexingFunction(
+export function buildFileIndexingFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
-    handlerType: "a" | "m",
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const fun = new lambda.Function(scope, "idx" + handlerType, {
+    const name = "fileIndexer";
+    const fun = new lambda.Function(scope, name, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
-        handler: `handlers.indexing.streams.lambda_handler_${handlerType}`,
+        handler: `handlers.indexing.fileIndexer.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
         layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
@@ -110,7 +111,7 @@ export function buildIndexingFunction(
             config.app.openSearch.useProvisioned.enabled ||
             (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
                 ? vpc
-                : undefined, //Use VPC when provisioned OS or flag to use for all lambdas
+                : undefined,
         vpcSubnets:
             config.app.openSearch.useProvisioned.enabled ||
             (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
@@ -118,18 +119,19 @@ export function buildIndexingFunction(
                 : undefined,
 
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            AOS_ENDPOINT_PARAM: config.openSearchDomainEndpointSSMParam,
-            AOS_INDEX_NAME_PARAM: config.openSearchIndexNameSSMParam,
-            AOS_TYPE: config.app.openSearch.useProvisioned.enabled ? "es" : "aoss",
+            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            OPENSEARCH_FILE_INDEX_SSM_PARAM: config.openSearchFileIndexNameSSMParam,
+            OPENSEARCH_ENDPOINT_SSM_PARAM: config.openSearchDomainEndpointSSMParam,
+            OPENSEARCH_TYPE: config.app.openSearch.useProvisioned.enabled ? "provisioned" : "serverless",
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
         },
     });
 
-    // add access to read the parameter store param aossEndpoint
+    // Add access to read SSM parameters
     fun.role?.addToPrincipalPolicy(
         new cdk.aws_iam.PolicyStatement({
             actions: ["ssm:GetParameter"],
@@ -137,22 +139,101 @@ export function buildIndexingFunction(
         })
     );
 
-    storageResources.dynamo.metadataStorageTable.grantReadWriteData(fun);
+    // Grant permissions
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
+    storageResources.dynamo.metadataStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
-    // trigger the lambda from the dynamodb db streams
+    // Grant stream read permissions
     storageResources.dynamo.metadataStorageTable.grantStreamRead(fun);
-    storageResources.dynamo.assetStorageTable.grantStreamRead(fun);
 
+    // Grant S3 read permissions
     grantReadPermissionsToAllAssetBuckets(fun);
+
+    // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(fun);
 
     return fun;
 }
+
+export function buildAssetIndexingFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "assetIndexer";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.indexing.assetIndexer.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.openSearch.useProvisioned.enabled ||
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.openSearch.useProvisioned.enabled ||
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+                ? { subnets: subnets }
+                : undefined,
+
+        environment: {
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME: storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            ASSET_LINKS_STORAGE_TABLE_V2_NAME: storageResources.dynamo.assetLinksStorageTableV2.tableName,
+            ASSET_VERSIONS_STORAGE_TABLE_NAME: storageResources.dynamo.assetVersionsStorageTable.tableName,
+            OPENSEARCH_ASSET_INDEX_SSM_PARAM: config.openSearchAssetIndexNameSSMParam,
+            OPENSEARCH_ENDPOINT_SSM_PARAM: config.openSearchDomainEndpointSSMParam,
+            OPENSEARCH_TYPE: config.app.openSearch.useProvisioned.enabled ? "provisioned" : "serverless",
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+        },
+    });
+
+    // Add access to read SSM parameters
+    fun.role?.addToPrincipalPolicy(
+        new cdk.aws_iam.PolicyStatement({
+            actions: ["ssm:GetParameter"],
+            resources: [Service.IAMArn("*" + config.name + "*").ssm],
+        })
+    );
+
+    // Grant permissions
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.metadataStorageTable.grantReadData(fun);
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+
+    // Grant stream read permissions
+    storageResources.dynamo.assetStorageTable.grantStreamRead(fun);
+    storageResources.dynamo.metadataStorageTable.grantStreamRead(fun);
+    storageResources.dynamo.assetLinksStorageTableV2.grantStreamRead(fun);
+
+    // Apply security helpers
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagErrorsByGrantReadWrite(fun);
+
+    return fun;
+}
+
 
 export function buildSqsBucketSyncFunction(
     scope: Construct,

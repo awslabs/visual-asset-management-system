@@ -301,7 +301,7 @@ def check_destination_file_exists(bucket: str, key: str, path_display: str) -> b
         raise VAMSGeneralErrorResponse(f"Error accessing destination path. Please verify the folder exists.")
 
 def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str, source_asset_id: str = None, source_database_id: str = None, dest_asset_id: str = None, dest_database_id: str = None) -> bool:
-    """Copy an S3 object from one location to another
+    """Copy an S3 object from one location to another, handling large files with multipart copy
     
     Args:
         source_bucket: Source bucket
@@ -331,16 +331,18 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
             if dest_database_id:
                 metadata['databaseid'] = dest_database_id
             
-            # Copy with updated metadata
+            # Copy with updated metadata - uses managed transfer which handles multipart for large files
             s3_resource.meta.client.copy(
                 CopySource={'Bucket': source_bucket, 'Key': source_key},
                 Bucket=dest_bucket,
                 Key=dest_key,
-                MetadataDirective='REPLACE',
-                Metadata=metadata
+                ExtraArgs={
+                    'Metadata': metadata,
+                    'MetadataDirective': 'REPLACE'
+                }
             )
         else:
-            # Standard copy with preserved metadata
+            # Standard copy with preserved metadata - uses managed transfer which handles multipart for large files
             s3_resource.meta.client.copy(
                 CopySource={'Bucket': source_bucket, 'Key': source_key},
                 Bucket=dest_bucket,
@@ -1684,16 +1686,20 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
             raise VAMSGeneralErrorResponse(f"Could not find a previous version for file.")
         
         # Copy the latest version to create a new current version (effectively unarchiving)
-        copy_response = s3_client.copy_object(
+        # Use copy() which automatically handles multipart for large files
+        s3_resource.Object(bucket, full_key).copy(
             CopySource={
                 'Bucket': bucket,
                 'Key': full_key,
                 'VersionId': latest_version['VersionId']
             },
-            Bucket=bucket,
-            Key=full_key,
-            MetadataDirective='COPY'  # Preserve metadata from source version
+            ExtraArgs={
+                'MetadataDirective': 'COPY'
+            }
         )
+        
+        # Get the new version ID
+        copy_response = s3_client.head_object(Bucket=bucket, Key=full_key)
         
         new_version_id = copy_response.get('VersionId', 'null')
         affected_files = [file_path]
@@ -1742,15 +1748,16 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
                     
                     if preview_latest_version:
                         # Copy the latest version to create a new current version (effectively unarchiving)
-                        s3_client.copy_object(
+                        # Use copy() which automatically handles multipart for large files
+                        s3_resource.Object(bucket, preview_file).copy(
                             CopySource={
                                 'Bucket': bucket,
                                 'Key': preview_file,
                                 'VersionId': preview_latest_version['VersionId']
                             },
-                            Bucket=bucket,
-                            Key=preview_file,
-                            MetadataDirective='COPY'  # Preserve metadata from source version
+                            ExtraArgs={
+                                'MetadataDirective': 'COPY'
+                            }
                         )
                         logger.info(f"Successfully unarchived preview file {preview_file} from version {preview_latest_version['VersionId']}")
                             
@@ -2065,17 +2072,20 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
     
     # Copy the specified version to create a new current version
     try:
-        copy_response = s3_client.copy_object(
+        # Use copy() which automatically handles multipart for large files
+        s3_resource.Object(bucket, full_key).copy(
             CopySource={
                 'Bucket': bucket,
                 'Key': full_key,
                 'VersionId': version_id
             },
-            Bucket=bucket,
-            Key=full_key,
-            MetadataDirective='COPY'  # Preserve metadata from source version
+            ExtraArgs={
+                'MetadataDirective': 'COPY'
+            }
         )
         
+        # Get the new version ID
+        copy_response = s3_client.head_object(Bucket=bucket, Key=full_key)
         new_version_id = copy_response.get('VersionId', 'null')
         
     except Exception as e:

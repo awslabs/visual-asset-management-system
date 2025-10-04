@@ -38,8 +38,8 @@ async function search(overrides: any, { dispatch, state }: SearchPropertyFilterP
     }
 
     const body = {
-        tokens: state.propertyFilter.tokens,
-        operation: state.propertyFilter.operation,
+        tokens: state.propertyFilter?.tokens || [],
+        operation: (state.propertyFilter?.operation || 'AND').toUpperCase(),
         sort: state.sort,
         from: state?.pagination?.from,
         size: state?.tablePreferences?.pageSize,
@@ -48,6 +48,9 @@ async function search(overrides: any, { dispatch, state }: SearchPropertyFilterP
         ...overrides,
     };
     console.log("body to send", body);
+    console.log("search function - state.tableSort:", state.tableSort);
+    console.log("search function - overrides.tableSort:", overrides.tableSort);
+    console.log("search function - will dispatch tableSort:", overrides.tableSort || state.tableSort);
 
     dispatch({ type: "search-results-requested" });
 
@@ -56,15 +59,49 @@ async function search(overrides: any, { dispatch, state }: SearchPropertyFilterP
             "Content-type": "application/json",
             body: body,
         });
+        const tableSortToPass = overrides.tableSort || state.tableSort;
+        console.log("search function - dispatching tableSort:", tableSortToPass);
         dispatch({
             type: "search-result-update",
             result,
+            // Always pass tableSort through to preserve it
+            tableSort: tableSortToPass,
         });
-    } catch (e) {
+    } catch (e: any) {
+        console.error('Search API error:', e);
         dispatch({
             type: "search-result-error",
             error: e,
         });
+        // Show error toast notification
+        if (typeof window !== 'undefined') {
+            // Extract error message from various possible locations
+            let errorMessage = 'An error occurred while searching';
+            
+            if (e?.response?.data?.message) {
+                errorMessage = e.response.data.message;
+            } else if (e?.response?.message) {
+                errorMessage = e.response.message;
+            } else if (e?.message) {
+                errorMessage = e.message;
+            } else if (typeof e?.response?.data === 'string') {
+                try {
+                    const parsed = JSON.parse(e.response.data);
+                    errorMessage = parsed.message || errorMessage;
+                } catch {
+                    errorMessage = e.response.data;
+                }
+            }
+            
+            // Dispatch a custom event that can be caught by a toast manager
+            window.dispatchEvent(new CustomEvent('search-error', {
+                detail: {
+                    title: 'Search Failed',
+                    message: errorMessage,
+                    type: 'error'
+                }
+            }));
+        }
     }
 }
 
@@ -75,27 +112,33 @@ export async function sortSearch(
 ) {
     let sortingFieldIndex = sortingField;
     if (sortingField.indexOf("str_") === 0) {
-        sortingFieldIndex = sortingField + ".raw";
+        sortingFieldIndex = sortingField + ".keyword";
     }
+    
+    // Backend expects sort format: [{ field: "fieldname", order: "asc|desc" }, "_score"]
     const sort = [
         {
-            [sortingFieldIndex]: {
-                missing: "_last",
-                order: isDescending ? "desc" : "asc",
-            },
+            field: sortingFieldIndex,
+            order: isDescending ? "desc" : "asc",
         },
         "_score",
     ];
+    
+    const tableSort = {
+        sortingField,
+        sortingDescending: isDescending,
+    };
+    
     dispatch({
         type: "query-sort",
         sort,
-        tableSort: {
-            sortingField,
-            sortingDescending: isDescending,
-        },
+        tableSort,
     });
+    
+    // Pass tableSort through the search so it's preserved in the result
     const body = {
         sort,
+        tableSort, // Include this so it can be preserved
     };
     search(body, { dispatch, state });
 }
@@ -245,7 +288,7 @@ function SearchPropertyFilter({ state, dispatch }: SearchPropertyFilterProps) {
                 onChange={(e) => changeRectype(e.detail.selectedOption, { state, dispatch })}
                 options={[
                     { label: Synonyms.Assets, value: "asset" },
-                    { label: "Files", value: "s3object" },
+                    { label: "Files", value: "file" },
                 ]}
             />
         </SpaceBetween>

@@ -4078,6 +4078,122 @@ paths:
               - $ref: '#/components/parameters/maxItemsParam'
               - $ref: '#/components/parameters/pageSizeParam'
               - $ref: '#/components/parameters/startingTokenParam'
+    /search:
+        get:
+            summary: "Get OpenSearch index mappings."
+            description: "Retrieve the field mappings for both asset and file indexes to understand available search fields."
+            responses:
+                "200":
+                    description: Index mappings retrieved successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/searchMappingsResponse"
+                "403":
+                    description: Not authorized to access search.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Search service not available.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+        post:
+            summary: "Execute advanced search across assets and files."
+            description: "Execute complex search queries across asset and file indexes with advanced filtering, metadata search, aggregations, and result explanations."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/searchRequest"
+            responses:
+                "200":
+                    description: Search executed successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/searchResponse"
+                "400":
+                    description: Invalid search parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to access search.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Search service not available.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+    /search/simple:
+        post:
+            summary: "Execute simple search across assets and files."
+            description: "Execute simplified search queries with basic parameters for easy API integration. Searches across both asset and file indexes with automatic query construction."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/simpleSearchRequest"
+            responses:
+                "200":
+                    description: Simple search executed successfully.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/searchResponse"
+                "400":
+                    description: Invalid search parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized to access search.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Search service not available.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
 components:
     schemas:
         asset:
@@ -5576,6 +5692,425 @@ components:
                 - message
                 - filePath
                 - deletedCount
+        
+        # Search API Schemas
+        simpleSearchRequest:
+            type: object
+            properties:
+                query:
+                    type: string
+                    maxLength: 1000
+                    description: "General keyword search across all fields"
+                entityTypes:
+                    type: array
+                    items:
+                        type: string
+                        enum: [asset, file]
+                    description: "Filter by entity type (default: both asset and file)"
+                assetName:
+                    type: string
+                    maxLength: 256
+                    description: "Search by asset name"
+                assetId:
+                    type: string
+                    maxLength: 256
+                    description: "Search by asset ID"
+                assetType:
+                    type: string
+                    maxLength: 256
+                    description: "Filter by asset type"
+                fileKey:
+                    type: string
+                    maxLength: 1000
+                    description: "Search by S3 file key"
+                fileExtension:
+                    type: string
+                    maxLength: 50
+                    description: "Filter by file extension (without leading dot)"
+                databaseId:
+                    type: string
+                    maxLength: 256
+                    description: "Filter by database ID"
+                tags:
+                    type: array
+                    items:
+                        type: string
+                        maxLength: 256
+                    description: "Search by tags"
+                metadataKey:
+                    type: string
+                    maxLength: 256
+                    description: "Search metadata field names"
+                metadataValue:
+                    type: string
+                    maxLength: 1000
+                    description: "Search metadata field values"
+                includeArchived:
+                    type: boolean
+                    default: false
+                    description: "Include archived items"
+                from:
+                    type: integer
+                    minimum: 0
+                    maximum: 10000
+                    default: 0
+                    description: "Starting offset for pagination"
+                size:
+                    type: integer
+                    minimum: 1
+                    maximum: 1000
+                    default: 100
+                    description: "Number of results to return"
+            required: []
+        
+        searchRequest:
+            type: object
+            properties:
+                query:
+                    type: string
+                    maxLength: 1000
+                    description: "General text search query"
+                tokens:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/searchToken"
+                    description: "Structured search tokens"
+                filters:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/searchFilter"
+                    description: "Additional OpenSearch filters"
+                sort:
+                    type: array
+                    items:
+                        oneOf:
+                            - type: string
+                            - $ref: "#/components/schemas/searchSort"
+                    description: "Sort configuration"
+                operation:
+                    type: string
+                    enum: [AND, OR]
+                    default: "AND"
+                    description: "Default operation for tokens"
+                entityTypes:
+                    type: array
+                    items:
+                        type: string
+                        enum: [asset, file]
+                    description: "Filter by entity type"
+                includeArchived:
+                    type: boolean
+                    default: false
+                    description: "Include archived items"
+                aggregations:
+                    type: boolean
+                    default: true
+                    description: "Include aggregations in response"
+                metadataQuery:
+                    type: string
+                    maxLength: 1000
+                    description: "Separate metadata search query"
+                metadataSearchMode:
+                    type: string
+                    enum: [key, value, both]
+                    default: "both"
+                    description: "Search metadata keys, values, or both"
+                includeMetadataInSearch:
+                    type: boolean
+                    default: true
+                    description: "Include metadata fields in general search"
+                explainResults:
+                    type: boolean
+                    default: false
+                    description: "Include match explanations"
+                includeHighlights:
+                    type: boolean
+                    default: true
+                    description: "Enhanced highlighting"
+                from:
+                    type: integer
+                    minimum: 0
+                    maximum: 10000
+                    default: 0
+                    description: "Starting offset for pagination"
+                size:
+                    type: integer
+                    minimum: 1
+                    maximum: 2000
+                    default: 100
+                    description: "Number of results to return"
+            required: []
+        
+        searchToken:
+            type: object
+            properties:
+                operation:
+                    type: string
+                    enum: [AND, OR]
+                    default: "AND"
+                operator:
+                    type: string
+                    enum: ["=", ":", "!=", "!:"]
+                    default: "="
+                propertyKey:
+                    type: string
+                    description: "Property key to search (null or 'all' for multi-field search)"
+                value:
+                    type: string
+                    minLength: 1
+                    description: "Search value"
+            required:
+                - value
+        
+        searchFilter:
+            type: object
+            properties:
+                query_string:
+                    type: object
+                    additionalProperties:
+                        type: string
+                    description: "OpenSearch query_string filter"
+            required:
+                - query_string
+        
+        searchSort:
+            type: object
+            properties:
+                field:
+                    type: string
+                    minLength: 1
+                    description: "Field to sort by"
+                order:
+                    type: string
+                    enum: [asc, desc]
+                    default: "asc"
+                    description: "Sort order"
+            required:
+                - field
+        
+        searchMappingsResponse:
+            type: object
+            properties:
+                mappings:
+                    type: object
+                    properties:
+                        asset_index:
+                            type: object
+                            description: "Asset index mappings"
+                        file_index:
+                            type: object
+                            description: "File index mappings"
+                    description: "Index mappings for both asset and file indexes"
+            required:
+                - mappings
+        
+        searchHitSource:
+            type: object
+            properties:
+                _rectype:
+                    type: string
+                    enum: [asset, file]
+                    description: "Record type"
+                str_databaseid:
+                    type: string
+                    description: "Database ID"
+                str_assetid:
+                    type: string
+                    description: "Asset ID"
+                str_assetname:
+                    type: string
+                    description: "Asset name"
+                str_key:
+                    type: string
+                    description: "S3 key for files"
+                str_description:
+                    type: string
+                    description: "Asset description"
+                str_assettype:
+                    type: string
+                    description: "Asset type"
+                str_fileext:
+                    type: string
+                    description: "File extension"
+                list_tags:
+                    type: array
+                    items:
+                        type: string
+                    description: "Tags associated with the item"
+                bool_isdistributable:
+                    type: boolean
+                    description: "Whether asset is distributable"
+                date_lastmodified:
+                    type: string
+                    format: date-time
+                    description: "Last modified date"
+                num_size:
+                    type: integer
+                    description: "File size in bytes"
+                str_etag:
+                    type: string
+                    description: "S3 ETag"
+                str_s3_version_id:
+                    type: string
+                    description: "S3 version ID"
+                str_asset_version_id:
+                    type: string
+                    description: "Asset version ID"
+                bool_archived:
+                    type: boolean
+                    description: "Whether item is archived"
+            additionalProperties: true
+            required:
+                - _rectype
+        
+        searchHitExplanation:
+            type: object
+            properties:
+                matched_fields:
+                    type: array
+                    items:
+                        type: string
+                    description: "Fields that matched the query"
+                match_reasons:
+                    type: object
+                    additionalProperties:
+                        type: string
+                    description: "Field to reason mapping"
+                query_type:
+                    type: string
+                    description: "Type of query (general, metadata, combined)"
+                score_breakdown:
+                    type: object
+                    properties:
+                        total_score:
+                            type: number
+                        field_matches:
+                            type: integer
+                        highlight_matches:
+                            type: integer
+            required:
+                - matched_fields
+                - match_reasons
+                - query_type
+        
+        searchHit:
+            type: object
+            properties:
+                _index:
+                    type: string
+                    description: "Index name"
+                _id:
+                    type: string
+                    description: "Document ID"
+                _score:
+                    type: number
+                    description: "Search relevance score"
+                _source:
+                    $ref: "#/components/schemas/searchHitSource"
+                    description: "Source document data"
+                highlight:
+                    type: object
+                    additionalProperties:
+                        type: array
+                        items:
+                            type: string
+                    description: "Highlighted text snippets"
+                explanation:
+                    $ref: "#/components/schemas/searchHitExplanation"
+                    description: "Match explanation (if requested)"
+            required:
+                - _index
+                - _id
+                - _source
+        
+        searchHits:
+            type: object
+            properties:
+                total:
+                    type: object
+                    properties:
+                        value:
+                            type: integer
+                            description: "Total number of hits"
+                        relation:
+                            type: string
+                            description: "Relation type (eq, gte)"
+                    required:
+                        - value
+                max_score:
+                    type: number
+                    description: "Maximum score among hits"
+                hits:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/searchHit"
+                    description: "Array of search hits"
+            required:
+                - total
+                - hits
+        
+        aggregationBucket:
+            type: object
+            properties:
+                key:
+                    oneOf:
+                        - type: string
+                        - type: integer
+                        - type: number
+                    description: "Bucket key"
+                doc_count:
+                    type: integer
+                    description: "Number of documents in bucket"
+            required:
+                - key
+                - doc_count
+        
+        aggregation:
+            type: object
+            properties:
+                doc_count:
+                    type: integer
+                    description: "Total document count"
+                buckets:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/aggregationBucket"
+                    description: "Aggregation buckets"
+        
+        searchResponse:
+            type: object
+            properties:
+                took:
+                    type: integer
+                    description: "Time taken in milliseconds"
+                timed_out:
+                    type: boolean
+                    description: "Whether the search timed out"
+                _shards:
+                    type: object
+                    properties:
+                        total:
+                            type: integer
+                        successful:
+                            type: integer
+                        skipped:
+                            type: integer
+                        failed:
+                            type: integer
+                    description: "Shard information"
+                hits:
+                    $ref: "#/components/schemas/searchHits"
+                    description: "Search results"
+                aggregations:
+                    type: object
+                    additionalProperties:
+                        $ref: "#/components/schemas/aggregation"
+                    description: "Search aggregations"
+            required:
+                - took
+                - timed_out
+                - _shards
+                - hits
     parameters:
       maxItemsParam:
         name: maxItems

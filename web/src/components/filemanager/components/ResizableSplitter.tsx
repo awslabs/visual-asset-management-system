@@ -8,6 +8,7 @@ interface ResizableSplitterProps {
     minLeftWidth?: number;
     maxLeftWidth?: number;
     className?: string;
+    onWidthChange?: (width: number) => void; // Callback when width changes
 }
 
 export const ResizableSplitter: React.FC<ResizableSplitterProps> = ({
@@ -17,6 +18,7 @@ export const ResizableSplitter: React.FC<ResizableSplitterProps> = ({
     minLeftWidth = 200,
     maxLeftWidth = 800,
     className = "",
+    onWidthChange,
 }) => {
     const [leftWidth, setLeftWidth] = useState(initialLeftWidth);
     const [isDragging, setIsDragging] = useState(false);
@@ -45,7 +47,11 @@ export const ResizableSplitter: React.FC<ResizableSplitterProps> = ({
 
     const handleMouseUp = useCallback(() => {
         setIsDragging(false);
-    }, []);
+        // Notify parent of width change when dragging ends
+        if (onWidthChange) {
+            onWidthChange(leftWidth);
+        }
+    }, [leftWidth, onWidthChange]);
 
     // Add global mouse event listeners when dragging
     useEffect(() => {

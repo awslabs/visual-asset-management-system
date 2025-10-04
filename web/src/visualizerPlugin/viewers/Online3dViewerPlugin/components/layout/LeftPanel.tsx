@@ -76,9 +76,6 @@ const NavigatorFiles: React.FC<NavigatorFilesProps> = ({ model, onFileBrowseClic
             ) : (
                 <div className="ov-empty-state">
                     <p>No files loaded</p>
-                    <div className="ov_button" onClick={onFileBrowseClick}>
-                        Browse Files
-                    </div>
                 </div>
             )}
         </div>
