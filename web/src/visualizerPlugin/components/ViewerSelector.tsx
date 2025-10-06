@@ -38,6 +38,9 @@ export const ViewerSelector: React.FC<ViewerSelectorProps> = ({
     // Find the selected option
     const selectedOption = options.find((option) => option.value === selectedViewerId) || null;
 
+    // Determine if selection is required (multiple viewers available but none selected)
+    const isSelectionRequired = viewers.length > 1 && !selectedViewerId;
+
     const handleChange = (event: any) => {
         const selectedValue = event.detail.selectedOption?.value;
         if (selectedValue) {
@@ -54,9 +57,11 @@ export const ViewerSelector: React.FC<ViewerSelectorProps> = ({
             selectedOption={selectedOption}
             onChange={handleChange}
             options={options}
-            placeholder="Select viewer"
+            placeholder={isSelectionRequired ? "Select viewer (required)" : "Select viewer"}
             className={className}
             triggerVariant="option"
+            invalid={isSelectionRequired}
+            controlId="viewer-selector"
         />
     );
 };

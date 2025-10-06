@@ -91,7 +91,6 @@ export class ApiBuilderNestedStack extends NestedStack {
         storageResources: storageResources,
         authResources: authResources,
         lambdaCommonBaseLayer: LayerVersion,
-        lambdaCommonServiceSDKLayer: LayerVersion,
         vpc: ec2.IVpc,
         subnets: ec2.ISubnet[]
     ) {
@@ -104,7 +103,6 @@ export class ApiBuilderNestedStack extends NestedStack {
             storageResources,
             authResources,
             lambdaCommonBaseLayer,
-            lambdaCommonServiceSDKLayer,
             vpc,
             subnets
         );
@@ -138,7 +136,6 @@ export function apiBuilder(
     storageResources: storageResources,
     authResources: authResources,
     lambdaCommonBaseLayer: LayerVersion,
-    lambdaCommonServiceSDKLayer: LayerVersion,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ) {
@@ -1018,7 +1015,7 @@ export function apiBuilder(
 
     const createWorkflowFunction = buildCreateWorkflowFunction(
         scope,
-        lambdaCommonServiceSDKLayer,
+        lambdaCommonBaseLayer,
         storageResources,
         processWorkflowExecutionOutputFunction,
         config.env.coreStackName,

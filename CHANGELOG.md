@@ -47,6 +47,9 @@ Changes to BatchFargate CDK construct naming for use-case pipeline naming may re
     -   **UI** Added additional `Matrix` static asset link type metadata field of type 4x4 Matrix.
     -   **UI** Defaulted `rotation` static asset link metdata field to WXYZ field type (from XYZ)
 -   **UI** Changed Pipeline Edit/Create to make Asset Type and Output Type a required string text field. This removes the last place that requires specific VAMS extensions to be preloaded. These fields usages are expected to be overhauled along with overall pipelines in a future release.
+-   Refactored createWorkflow to not require the stepfunctions library anymore which entirely removes the additional heavyweight lambda layer created specifically for this function. This should speed up CDK deployments, reduce CDK package size, and reduce security posture by limiting backend libraries needed. Additionally, some other upgrades were done to createWorkflow as part of the refactor:
+    -   Updating an existing workflow no longer create a new AWS step function workflow but modifies the definition of the existing
+    -   Updated to the new backed error handling logic used since v2.2
 
 ### Bug Fixes
 

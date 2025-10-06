@@ -84,11 +84,20 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
         );
         setCompatibleViewers(viewerMetadata);
 
-        // Auto-select the highest priority viewer only if no viewer is currently selected
-        if (viewerMetadata.length > 0 && !selectedViewerId) {
+        // Auto-select only if there's exactly one viewer available
+        // If multiple viewers exist, force user to choose to avoid loading performance-heavy viewers
+        if (viewerMetadata.length === 1 && !selectedViewerId) {
             setSelectedViewerId(viewerMetadata[0].config.id);
+        } else if (viewerMetadata.length > 1 && !selectedViewerId) {
+            // Multiple viewers available - don't auto-select, force user choice
+            setSelectedViewerId(null);
+            setLoading(false); // Stop loading state to show the selector
         } else if (viewerMetadata.length === 0) {
-            setError(`No compatible viewers found for file types: ${fileExtensions.join(", ")}`);
+            // Customize error message based on whether multiple files are selected
+            const errorMessage = isMultiFile
+                ? `No compatible multi-file viewers found for file types: ${fileExtensions.join(", ")}`
+                : `No compatible viewers found for file types: ${fileExtensions.join(", ")}`;
+            setError(errorMessage);
             setLoading(false); // Stop loading when no viewers are found
         }
     }, [files, isPreviewMode, registryInitialized]); // Removed selectedViewerId from dependencies
@@ -287,8 +296,8 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                 />
                             ) : (
                                 <Box textAlign="center" padding="xl">
-                                    <Box variant="p" color="text-status-info">
-                                        No viewer component loaded
+                                    <Box variant="p" color="text-status-error">
+                                        No Viewer Component Selected
                                     </Box>
                                 </Box>
                             )}

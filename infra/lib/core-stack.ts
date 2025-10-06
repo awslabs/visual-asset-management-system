@@ -217,7 +217,6 @@ export class CoreVAMSStack extends cdk.Stack {
                 storageResourcesNestedStack.storageResources,
                 authBuilderNestedStack.authResources,
                 lambdaLayers.lambdaCommonBaseLayer,
-                lambdaLayers.lambdaCommonServiceSDKLayer,
                 this.vpc,
                 this.subnetsIsolated
             );

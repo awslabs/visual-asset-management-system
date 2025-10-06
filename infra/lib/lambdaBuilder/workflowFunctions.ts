@@ -147,7 +147,7 @@ export function buildListWorkflowExecutionsFunction(
 
 export function buildCreateWorkflowFunction(
     scope: Construct,
-    lambdaCommonServiceSDKLayer: LayerVersion,
+    lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
     processWorkflowExecutionOutputFunction: lambda.Function,
     stackName: string,
@@ -179,7 +179,7 @@ export function buildCreateWorkflowFunction(
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.workflows.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
-        layers: [lambdaCommonServiceSDKLayer],
+        layers: [lambdaCommonBaseLayer],
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
