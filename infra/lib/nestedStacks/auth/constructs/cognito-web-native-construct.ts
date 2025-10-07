@@ -195,15 +195,18 @@ export class CognitoWebNativeConstructStack extends Construct {
         });
 
         const cognitoIdentityPrincipal: string = Service("COGNITO_IDENTITY").PrincipalString;
+                const cognitoIdentityPrincipal: string = Service("COGNITO_IDENTITY").PrincipalString;
+        const cognitoIdentityAudString = cognitoIdentityPrincipal+":aud";
+        const cognitoIdentityAmrString = cognitoIdentityPrincipal+":amr";
         const unauthenticatedRole = new iam.Role(this, "DefaultUnauthenticatedRole", {
             assumedBy: new iam.FederatedPrincipal(
                 cognitoIdentityPrincipal,
                 {
                     StringEquals: {
-                        "cognito-identity.amazonaws.com:aud": identityPool.ref,
+                        [cognitoIdentityAudString]: identityPool.ref,
                     },
                     "ForAnyValue:StringLike": {
-                        "cognito-identity.amazonaws.com:amr": "unauthenticated",
+                        [cognitoIdentityAmrString]: "unauthenticated",
                     },
                 },
                 "sts:AssumeRoleWithWebIdentity"
@@ -320,21 +323,23 @@ export class CognitoWebNativeConstructStack extends Construct {
         );
     }
 
-    private createAuthenticatedRole(
+        private createAuthenticatedRole(
         id: string,
         identityPool: cognito.CfnIdentityPool,
         props: CognitoWebNativeConstructStackProps
     ) {
         const cognitoIdentityPrincipal: string = Service("COGNITO_IDENTITY").PrincipalString;
+        const cognitoIdentityAudString = cognitoIdentityPrincipal+":aud";
+        const cognitoIdentityAmrString = cognitoIdentityPrincipal+":amr";
         const authenticatedRole = new iam.Role(this, id, {
             assumedBy: new iam.FederatedPrincipal(
                 cognitoIdentityPrincipal,
                 {
                     StringEquals: {
-                        "cognito-identity.amazonaws.com:aud": identityPool.ref,
+                        [cognitoIdentityAudString]: identityPool.ref,
                     },
                     "ForAnyValue:StringLike": {
-                        "cognito-identity.amazonaws.com:amr": "authenticated",
+                        [cognitoIdentityAmrString]: "authenticated",
                     },
                 },
                 "sts:AssumeRoleWithWebIdentity"
@@ -346,4 +351,7 @@ export class CognitoWebNativeConstructStack extends Construct {
 
         return authenticatedRole;
     }
-}
+            maxSessionDuration: cdk.Duration.seconds(
+                props.config.app.authProvider.useCognito.credTokenTimeoutSeconds
+            ),
+        })
