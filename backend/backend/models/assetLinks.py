@@ -185,7 +185,15 @@ class CreateAssetLinkRequestModel(BaseModel):
     toAssetId: str = Field(..., description="Target asset ID")
     toAssetDatabaseId: str = Field(..., description="Target asset database ID")
     relationshipType: RelationshipType = Field(..., description="Type of relationship")
+    assetLinkAliasId: Optional[str] = Field(None, max_length=128, description="Optional alias ID for multiple parent-child relationships")
     tags: Optional[List[str]] = Field(default=[], description="Tags associated with the asset link")
+    
+    @validator('assetLinkAliasId')
+    def validate_alias_for_relationship_type(cls, v, values):
+        """Validate that aliasId is only used with parentChild relationships"""
+        if v and values.get('relationshipType') == RelationshipType.RELATED:
+            raise ValueError("assetLinkAliasId can only be used with parentChild relationships")
+        return v
 
 class CreateAssetLinkResponseModel(BaseModel):
     assetLinkId: str = Field(..., description="Generated asset link ID")
@@ -198,6 +206,7 @@ class AssetLinkModel(BaseModel):
     toAssetId: str = Field(..., description="Target asset ID")
     toAssetDatabaseId: str = Field(..., description="Target asset database ID")
     relationshipType: RelationshipType = Field(..., description="Type of relationship")
+    assetLinkAliasId: Optional[str] = Field(None, description="Optional alias ID for multiple parent-child relationships")
     tags: List[str] = Field(default=[], description="Tags associated with the asset link")
 
 class GetSingleAssetLinkResponseModel(BaseModel):
@@ -205,6 +214,7 @@ class GetSingleAssetLinkResponseModel(BaseModel):
     message: str = Field(default="Success", description="Response message")
 
 class UpdateAssetLinkRequestModel(BaseModel):
+    assetLinkAliasId: Optional[str] = Field(None, max_length=128, description="Optional alias ID for multiple parent-child relationships")
     tags: List[str] = Field(default=[], description="Updated tags for the asset link")
 
 class UpdateAssetLinkResponseModel(BaseModel):
@@ -299,6 +309,7 @@ class AssetNodeModel(BaseModel):
     assetName: str = Field(..., description="Asset name")
     databaseId: str = Field(..., description="Database ID")
     assetLinkId: Optional[str] = Field(None, description="Asset link ID if applicable")
+    assetLinkAliasId: Optional[str] = Field(None, description="Optional alias ID for this link")
 
 # Simple tree node model without self-reference to avoid Pydantic issues
 class AssetTreeNodeModel(BaseModel):
@@ -306,6 +317,7 @@ class AssetTreeNodeModel(BaseModel):
     assetName: str = Field(..., description="Asset name")
     databaseId: str = Field(..., description="Database ID")
     assetLinkId: str = Field(..., description="Asset link ID")
+    assetLinkAliasId: Optional[str] = Field(None, description="Optional alias ID for this link")
     children: List[Dict[str, Any]] = Field(default_factory=list, description="Child nodes in the tree")
 
 class UnauthorizedCountsModel(BaseModel):

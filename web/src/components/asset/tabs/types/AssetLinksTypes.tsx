@@ -8,6 +8,7 @@ export interface AssetNode {
     assetName: string;
     databaseId: string;
     assetLinkId: string;
+    assetLinkAliasId?: string;
     metadata?: AssetLinkMetadata[];
 }
 

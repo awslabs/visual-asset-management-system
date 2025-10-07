@@ -73,13 +73,13 @@ def validate_assets_exist(from_asset_id: str, from_database_id: str, to_asset_id
         logger.exception(f"Error validating assets exist: {e}")
         return False
 
-def check_existing_relationship(from_asset_id: str, from_database_id: str, to_asset_id: str, to_database_id: str, relationship_type: str) -> bool:
-    """Check if a relationship already exists between two assets"""
+def check_existing_relationship(from_asset_id: str, from_database_id: str, to_asset_id: str, to_database_id: str, relationship_type: str, alias_id: str = None) -> bool:
+    """Check if a relationship already exists between two assets with the same aliasId"""
     try:
         from_key = f"{from_database_id}:{from_asset_id}"
         to_key = f"{to_database_id}:{to_asset_id}"
         
-        # For 'related' relationships, check both directions
+        # For 'related' relationships, check both directions (aliases not applicable)
         if relationship_type == RelationshipType.RELATED:
             # Check from -> to
             response1 = asset_links_table.query(
@@ -99,8 +99,12 @@ def check_existing_relationship(from_asset_id: str, from_database_id: str, to_as
             
             return len(response1.get('Items', [])) > 0 or len(response2.get('Items', [])) > 0
         
-        # For 'parentChild' relationships, check exact direction
+        # For 'parentChild' relationships, use simplified approach
         else:
+            # Normalize alias_id to empty string if None
+            normalized_alias = alias_id if alias_id else ''
+            
+            # Step 1: Get ALL parent->child relationships for this parent-child pair using fromAssetGSI
             response = asset_links_table.query(
                 IndexName='fromAssetGSI',
                 KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(from_key) & 
@@ -108,7 +112,31 @@ def check_existing_relationship(from_asset_id: str, from_database_id: str, to_as
                 FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq(RelationshipType.PARENT_CHILD)
             )
             
-            return len(response.get('Items', [])) > 0
+            existing_links = response.get('Items', [])
+            
+            # Step 2: Check if any of these links have the same aliasId (or both have no alias)
+            for link in existing_links:
+                existing_alias = link.get('assetLinkAliasId')
+                # Both have no alias (None or missing)
+                if not existing_alias and not alias_id:
+                    return True
+                # Both have the same alias value
+                if existing_alias and alias_id and existing_alias == alias_id:
+                    return True
+            
+            # Step 3: Check for reverse relationship (child->parent) - not allowed regardless of alias
+            reverse_response = asset_links_table.query(
+                IndexName='fromAssetGSI',
+                KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(to_key) & 
+                                     Key('toAssetDatabaseId:toAssetId').eq(from_key),
+                FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq(RelationshipType.PARENT_CHILD)
+            )
+            
+            # If any reverse relationships exist, it's bidirectional (not allowed)
+            if len(reverse_response.get('Items', [])) > 0:
+                return True
+            
+            return False
             
     except Exception as e:
         logger.exception(f"Error checking existing relationship: {e}")
@@ -118,6 +146,7 @@ def detect_cycle_in_parent_child(from_asset_id: str, from_database_id: str, to_a
     """
     Detect if creating a parent-child relationship would create a cycle.
     This checks if the 'to' asset has any downstream children that eventually lead back to the 'from' asset.
+    Note: Cycles are checked across ALL aliases - a cycle exists if ANY path exists regardless of aliasId.
     """
     try:
         visited: Set[str] = set()
@@ -136,6 +165,7 @@ def detect_cycle_in_parent_child(from_asset_id: str, from_database_id: str, to_a
             visited.add(current_key)
             
             # Get all children of current asset (where current asset is the 'from' in parentChild relationships)
+            # This will return multiple items if there are multiple aliases for the same parent-child pair
             try:
                 response = asset_links_table.query(
                     IndexName='fromAssetGSI',
@@ -143,9 +173,10 @@ def detect_cycle_in_parent_child(from_asset_id: str, from_database_id: str, to_a
                     FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq(RelationshipType.PARENT_CHILD)
                 )
                 
+                # Process all items (may include multiple with different aliases)
                 for item in response.get('Items', []):
                     child_key = item['toAssetDatabaseId:toAssetId']
-                    child_asset_id, child_database_id = child_key.split(':', 1)
+                    child_database_id, child_asset_id = child_key.split(':', 1)
                     
                     if has_path_to_asset(child_asset_id, child_database_id, target_asset_id, target_database_id):
                         return True
@@ -218,15 +249,22 @@ def create_asset_link(request_model: CreateAssetLinkRequestModel, claims_and_rol
     if not check_asset_permissions(request_model.toAssetId, request_model.toAssetDatabaseId, claims_and_roles, "POST"):
         raise PermissionError("Not authorized to create links for the target asset")
     
-    # Check for existing relationships
+    # Check for existing relationships with the same aliasId
     if check_existing_relationship(
         request_model.fromAssetId,
         request_model.fromAssetDatabaseId,
         request_model.toAssetId,
         request_model.toAssetDatabaseId,
-        request_model.relationshipType
+        request_model.relationshipType,
+        request_model.assetLinkAliasId
     ):
-        raise ValueError("A relationship already exists between these assets")
+        if request_model.relationshipType == RelationshipType.PARENT_CHILD:
+            if request_model.assetLinkAliasId:
+                raise ValueError(f"Validation Error: A parent-child relationship already exists between these assets with provided alias")
+            else:
+                raise ValueError("Validation Error: A parent-child relationship already exists between these assets with provided alias")
+        else:
+            raise ValueError("Validation Error: A relationship already exists between these assets")
     
     # For parentChild relationships, check for cycles
     if request_model.relationshipType == RelationshipType.PARENT_CHILD:
@@ -236,7 +274,7 @@ def create_asset_link(request_model: CreateAssetLinkRequestModel, claims_and_rol
             request_model.toAssetId,
             request_model.toAssetDatabaseId
         ):
-            raise ValueError("Creating this parent-child relationship would create a cycle")
+            raise ValueError("Validation Error: Creating this parent-child relationship would create a cycle")
     
     # Generate new asset link ID
     asset_link_id = str(uuid.uuid4())
@@ -253,6 +291,10 @@ def create_asset_link(request_model: CreateAssetLinkRequestModel, claims_and_rol
         'relationshipType': request_model.relationshipType,
         'tags': request_model.tags or []
     }
+    
+    # Only add assetLinkAliasId if it has a value (DynamoDB GSI doesn't support empty strings)
+    if request_model.assetLinkAliasId:
+        asset_link_item['assetLinkAliasId'] = request_model.assetLinkAliasId
     
     try:
         # Save to DynamoDB

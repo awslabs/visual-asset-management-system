@@ -127,6 +127,59 @@ class DualIndexSearchManager:
         """Check if OpenSearch is available"""
         return self.client is not None
     
+    def _sort_combined_results(self, hits: List[Dict], sort_config: List) -> List[Dict]:
+        """Sort combined results from multiple indexes according to sort configuration
+        
+        Args:
+            hits: List of search hits to sort
+            sort_config: Sort configuration from OpenSearch query
+            
+        Returns:
+            Sorted list of hits
+        """
+        if not sort_config or not hits:
+            return hits
+        
+        logger.info(f"[Sort] Sorting {len(hits)} combined results with config: {sort_config}")
+        
+        # Build sort key function based on configuration
+        def get_sort_key(hit):
+            keys = []
+            for sort_item in sort_config:
+                if isinstance(sort_item, str):
+                    if sort_item == "_score":
+                        keys.append(hit.get("_score", 0))
+                    else:
+                        # Get value from _source
+                        keys.append(hit.get("_source", {}).get(sort_item, ""))
+                elif isinstance(sort_item, dict):
+                    # Extract field name and get value
+                    for field, config in sort_item.items():
+                        value = hit.get("_source", {}).get(field, "")
+                        # Handle None values
+                        if value is None:
+                            value = ""
+                        keys.append(value)
+            return tuple(keys) if len(keys) > 1 else (keys[0] if keys else "")
+        
+        # Determine sort order (check first sort item for direction)
+        reverse = False
+        if sort_config and isinstance(sort_config[0], dict):
+            first_sort = sort_config[0]
+            for field, config in first_sort.items():
+                if isinstance(config, dict) and config.get("order") == "desc":
+                    reverse = True
+                    break
+        
+        # Sort the hits
+        try:
+            sorted_hits = sorted(hits, key=get_sort_key, reverse=reverse)
+            logger.info(f"[Sort] Successfully sorted {len(sorted_hits)} hits (reverse={reverse})")
+            return sorted_hits
+        except Exception as e:
+            logger.warning(f"[Sort] Error sorting combined results: {e}, returning unsorted")
+            return hits
+    
     def get_index_mappings(self) -> Dict[str, Any]:
         """Get mappings for both indexes"""
         if not self.is_available():
@@ -230,11 +283,14 @@ class DualIndexSearchManager:
                 file_total = file_response.get("hits", {}).get("total", {}).get("value", 0)
                 results["hits"]["total"]["value"] += file_total
             
-            # Note: Each index is sorted by OpenSearch according to the sort configuration
-            # We simply combine the results without re-sorting
-            # This is acceptable since users typically search either assets OR files, not both
-            # Sort combined results by score
-            #results["hits"]["hits"].sort(key=lambda x: x.get("_score", 0), reverse=True)
+            # Re-sort combined results according to the sort configuration
+            # This is necessary because we're merging results from two indexes
+            # and need to maintain global sort order
+            # sort_config = asset_query.get("sort", file_query.get("sort", ["_score"]))
+            # results["hits"]["hits"] = self._sort_combined_results(results["hits"]["hits"], sort_config)
+            
+            # # Store sort config in results for use in response processing
+            # results["_sort_config"] = sort_config
             
             return results
             
@@ -1211,6 +1267,12 @@ class DualIndexResponseProcessor:
             
             logger.info(f"After authorization filtering: {len(filtered_hits)} hits remain")
             
+            # Re-sort filtered hits to maintain sort order after authorization filtering
+            # Authorization filtering may have disrupted the original sort order
+            # sort_config = opensearch_response.get("_sort_config", ["_score"])
+            # if sort_config and filtered_hits:
+            #     filtered_hits = self._sort_filtered_hits(filtered_hits, sort_config, request.sort)
+            
             # Apply pagination to filtered results
             paginated_hits = self._apply_pagination(filtered_hits, request)
             
@@ -1285,6 +1347,94 @@ class DualIndexResponseProcessor:
         except Exception as e:
             logger.warning(f"Error adding search explanation: {e}")
             return hit
+    
+    def _sort_filtered_hits(self, hits: List[Dict[str, Any]], sort_config: List, request_sort: List) -> List[Dict[str, Any]]:
+        """Sort filtered hits after authorization filtering
+        
+        Args:
+            hits: List of filtered hits
+            sort_config: Sort configuration from OpenSearch response
+            request_sort: Original sort configuration from request
+            
+        Returns:
+            Sorted list of hits
+        """
+        if not hits:
+            return hits
+        
+        # Use request sort if available, otherwise use response sort config
+        active_sort = request_sort if request_sort else sort_config
+        if not active_sort:
+            logger.warning("[Sort] No sort configuration available, returning unsorted hits")
+            return hits
+        
+        logger.info(f"[Sort] Re-sorting {len(hits)} filtered hits")
+        logger.info(f"[Sort] Request sort: {request_sort}")
+        logger.info(f"[Sort] Response sort config: {sort_config}")
+        logger.info(f"[Sort] Active sort: {active_sort}")
+        
+        # Log first few hits before sorting for debugging
+        if hits:
+            logger.info(f"[Sort] First hit before sort - fileext: {hits[0].get('_source', {}).get('str_fileext', 'N/A')}")
+        
+        # Build sort key function
+        def get_sort_key(hit):
+            keys = []
+            for sort_item in active_sort:
+                if isinstance(sort_item, str):
+                    if sort_item == "_score":
+                        keys.append(hit.get("_score", 0))
+                    else:
+                        # Remove .keyword suffix if present (OpenSearch mapping convention)
+                        field_name = sort_item.replace('.keyword', '')
+                        keys.append(hit.get("_source", {}).get(field_name, ""))
+                elif isinstance(sort_item, dict):
+                    for field, config in sort_item.items():
+                        # Remove .keyword suffix if present
+                        field_name = field.replace('.keyword', '')
+                        value = hit.get("_source", {}).get(field_name, "")
+                        if value is None:
+                            value = ""
+                        keys.append(value)
+                elif hasattr(sort_item, 'field'):
+                    # Handle Pydantic SearchSortModel objects
+                    # Remove .keyword suffix if present
+                    field_name = sort_item.field.replace('.keyword', '')
+                    value = hit.get("_source", {}).get(field_name, "")
+                    if value is None:
+                        value = ""
+                    keys.append(value)
+            return tuple(keys) if len(keys) > 1 else (keys[0] if keys else "")
+        
+        # Determine sort order - handle both dict and Pydantic model
+        reverse = False
+        if active_sort:
+            first_sort = active_sort[0]
+            if isinstance(first_sort, dict):
+                for field, config in first_sort.items():
+                    if isinstance(config, dict) and config.get("order") == "desc":
+                        reverse = True
+                        break
+            elif hasattr(first_sort, 'order'):
+                # Handle Pydantic SearchSortModel
+                reverse = first_sort.order == "desc"
+        
+        logger.info(f"[Sort] Determined reverse={reverse} from active_sort")
+        
+        try:
+            sorted_hits = sorted(hits, key=get_sort_key, reverse=reverse)
+            logger.info(f"[Sort] Successfully re-sorted {len(sorted_hits)} filtered hits (reverse={reverse})")
+            
+            # Log first few hits after sorting for debugging
+            if sorted_hits:
+                for i, hit in enumerate(sorted_hits[:5]):
+                    fileext = hit.get('_source', {}).get('str_fileext', 'N/A')
+                    logger.info(f"[Sort] Hit {i} after sort - fileext: {fileext}")
+            
+            return sorted_hits
+        except Exception as e:
+            logger.warning(f"[Sort] Error re-sorting filtered hits: {e}, returning unsorted")
+            return hits
     
     def _is_hit_authorized(self, hit: Dict[str, Any], claims_and_roles: Dict[str, Any]) -> bool:
         """Check if user is authorized to see this search hit"""

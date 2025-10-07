@@ -9,12 +9,12 @@ import {
     SpaceBetween,
     FormField,
     Select,
-    Multiselect,
     Button,
     Box,
     Toggle,
 } from "@cloudscape-design/components";
 import { SearchPreferences, FIELD_MAPPINGS, SearchFilters } from "../types";
+import DraggableColumnList from "./DraggableColumnList";
 
 interface PreferencesPanelProps {
     preferences: SearchPreferences;
@@ -144,8 +144,8 @@ const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
             assetTableColumns: defaultAssetColumns,
             fileTableColumns: defaultFileColumns,
             cardSize: "medium",
-            sortField: "_score",
-            sortDirection: "desc",
+            sortField: "str_assetname",
+            sortDirection: "asc",
             viewMode: "table",
         });
     };
@@ -176,18 +176,15 @@ const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
                     />
                 </FormField>
 
-                {/* Table Columns */}
+                {/* Table Columns - Drag & Drop */}
                 <FormField
                     label="Table Columns"
-                    description="Select columns to display in table view"
+                    description="Columns to show in table view"
                 >
-                    <Multiselect
-                        selectedOptions={selectedColumns}
-                        onChange={({ detail }) => {
-                            const newColumns = detail.selectedOptions
-                                .map((opt) => opt.value)
-                                .filter((val): val is string => val !== undefined);
-
+                    <DraggableColumnList
+                        selectedColumns={currentColumns || []}
+                        availableColumns={columnOptions}
+                        onColumnsChange={(newColumns) => {
                             // Update the appropriate column list based on record type
                             if (recordType === "asset") {
                                 onPreferencesChange({ assetTableColumns: newColumns });
@@ -195,8 +192,6 @@ const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
                                 onPreferencesChange({ fileTableColumns: newColumns });
                             }
                         }}
-                        options={columnOptions}
-                        placeholder="Select columns"
                         disabled={disabled}
                     />
                 </FormField>

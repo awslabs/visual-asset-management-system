@@ -195,6 +195,15 @@ function TreeItem({ item }: TreeItemProps) {
 
                 <span className="asset-links-tree-item-name">
                     {item.name}
+                    {/* Show alias ID for parent/child relationships */}
+                    {item.type === "asset" &&
+                        item.assetData?.assetLinkAliasId &&
+                        (item.relationshipType === "parent" || item.relationshipType === "child") && (
+                            <span className="asset-links-alias-id">
+                                {" "}
+                                (Alias: {item.assetData.assetLinkAliasId})
+                            </span>
+                        )}
                     {item.type === "root" && item.children.length > 0 && (
                         <span className="asset-links-count">({item.children.length})</span>
                     )}

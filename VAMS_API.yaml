@@ -5276,6 +5276,10 @@ components:
                     type: string
                     enum: [related, parentChild]
                     description: "Type of relationship between assets"
+                assetLinkAliasId:
+                    type: string
+                    maxLength: 128
+                    description: "Optional alias ID to allow multiple parent-child relationships between the same assets. Only applicable for parentChild relationship type. Each alias must be unique for the given child asset."
                 tags:
                     type: array
                     items:
@@ -5324,6 +5328,10 @@ components:
                     type: string
                     enum: [related, parentChild]
                     description: "Type of relationship between assets"
+                assetLinkAliasId:
+                    type: string
+                    maxLength: 128
+                    description: "Optional alias ID for multiple parent-child relationships between the same assets. Only applicable for parentChild relationship type."
                 tags:
                     type: array
                     items:
@@ -5394,6 +5402,10 @@ components:
                 assetLinkId:
                     $ref: '#/components/schemas/uuid_regex'
                     description: "Asset link ID if applicable"
+                assetLinkAliasId:
+                    type: string
+                    maxLength: 128
+                    description: "Optional alias ID for the asset link. Only present for parentChild relationships with aliases."
             required:
                 - assetId
                 - assetName
@@ -5414,6 +5426,10 @@ components:
                 assetLinkId:
                     $ref: '#/components/schemas/uuid_regex'
                     description: "Asset link ID"
+                assetLinkAliasId:
+                    type: string
+                    maxLength: 128
+                    description: "Optional alias ID for the asset link. Only present for parentChild relationships with aliases."
                 children:
                     type: array
                     items:

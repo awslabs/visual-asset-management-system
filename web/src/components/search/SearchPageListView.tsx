@@ -16,11 +16,11 @@ import {
     Popover,
     Icon,
 } from "@cloudscape-design/components";
-import { SearchExplanation } from "../../components/search/types";
-import AssetDeleteModal from "../../components/modals/AssetDeleteModal";
-import PreviewThumbnailCell from "../../components/search/SearchPreviewThumbnail/PreviewThumbnailCell";
-import FilePreviewThumbnailCell from "../../components/search/SearchPreviewThumbnail/FilePreviewThumbnailCell";
-import AssetPreviewModal from "../../components/filemanager/modals/AssetPreviewModal";
+import { SearchExplanation } from "./types";
+import AssetDeleteModal from "../modals/AssetDeleteModal";
+import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
+import FilePreviewThumbnailCell from "./SearchPreviewThumbnail/FilePreviewThumbnailCell";
+import AssetPreviewModal from "../filemanager/modals/AssetPreviewModal";
 import {
     changeFilter,
     changeRectype,
@@ -38,7 +38,6 @@ import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
 import { Checkbox } from "@cloudscape-design/components";
 
 var tagTypes: any;
-//let databases: any;
 
 // Helper component to render explanation popover
 const ExplanationPopover: React.FC<{ explanation: SearchExplanation }> = ({ explanation }) => (
@@ -445,7 +444,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                             assetName={item.str_assetname}
                         />
                     ),
-                    sortingField: "preview",
+                    sortingField: undefined, // Not sortable - client-side column
                     isRowHeader: false,
                 },
                 ...enhancedColumnDefinitions,
@@ -468,7 +467,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                             }
                         />
                     ),
-                    sortingField: "preview",
+                    sortingField: undefined, // Not sortable - client-side column
                     isRowHeader: false,
                 },
                 ...enhancedColumnDefinitions,
@@ -579,27 +578,25 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                     }
                     sortingDescending={!!state?.tableSort?.sortingDescending}
                     onSortingChange={({ detail }) => {
-                        console.log("sorting change", detail);
+                        console.log("[Sort] onSortingChange detail:", detail);
                         const sortingField = detail.sortingColumn?.sortingField;
                         if (sortingField) {
-                            // Build sort query for backend
-                            let sortingFieldIndex = sortingField;
-                            if (sortingField.indexOf("str_") === 0) {
-                                sortingFieldIndex = sortingField + ".keyword";
-                            }
+                            // Send field name as-is without .keyword suffix
+                            const isDescending = detail.isDescending ?? false;
 
                             const sort = [
                                 {
-                                    field: sortingFieldIndex,
-                                    order: detail.isDescending ? "desc" : "asc",
+                                    field: sortingField,
+                                    order: isDescending ? "desc" : "asc",
                                 },
-                                "_score",
                             ];
 
                             const tableSort = {
                                 sortingField,
-                                sortingDescending: detail.isDescending ?? false,
+                                sortingDescending: isDescending,
                             };
+
+                            console.log("[Sort] Built sort:", sort, "tableSort:", tableSort);
 
                             // Dispatch action - let the parent component handle the actual search
                             dispatch({
@@ -632,64 +629,7 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                             }}
                         />
                     }
-                    preferences={null as any /* Hidden - preferences managed in sidebar */}
-                    /* Commented out preferences gear icon - managed in sidebar instead
-                    preferences={
-                        <CollectionPreferences
-                            onConfirm={({ detail }) => {
-                                console.log("detail", detail);
-                                dispatch({ type: "set-search-table-preferences", payload: detail });
-                                if (typeof detail.pageSize === "number") {
-                                    paginateSearch(0, detail.pageSize, { state, dispatch });
-                                } else {
-                                    console.error("Page size is undefined in preferences detail.");
-                                }
-                            }}
-                            visibleContentPreference={{
-                                title: "Columns",
-                                options: [
-                                    {
-                                        label: "All columns",
-                                        options: enhancedColumnDefinitions
-                                            .map(
-                                                (
-                                                    columnDefinition: TableProps.ColumnDefinition<string>
-                                                ) => ({
-                                                    id: columnDefinition.id,
-                                                    label: columnDefinition.header,
-                                                })
-                                            )
-                                            .map((x: any) => {
-                                                if (
-                                                    ["str_assetname", "str_key"].indexOf(x.id) >= 0
-                                                ) {
-                                                    x.alwaysVisible = true;
-                                                    x.editable = false;
-                                                }
-                                                return x;
-                                            })
-                                            .sort((a: any, b: any) =>
-                                                a.label.localeCompare(b.label)
-                                            ),
-                                    },
-                                ],
-                            }}
-                            title="Preferences"
-                            confirmLabel="Confirm"
-                            cancelLabel="Cancel"
-                            preferences={state.tablePreferences}
-                            pageSizePreference={{
-                                title: "Page size",
-                                options: [
-                                    { value: 10, label: "10 resources" },
-                                    { value: 25, label: "25 resources" },
-                                    { value: 50, label: "50 resources" },
-                                    { value: 100, label: "100 resources" },
-                                ],
-                            }}
-                        />
-                    }
-                    */
+                    preferences={null as any}
                     header={
                         <Header
                             children={
@@ -727,140 +667,6 @@ function SearchPageListView({ state, dispatch }: SearchPageViewProps) {
                                 ) : null
                             }
                         />
-                    }
-                    filter={
-                        false && ( //Disable these for now
-                            <Grid
-                                gridDefinition={[
-                                    { colspan: { default: 7 } },
-                                    { colspan: { default: 5 } },
-                                ]}
-                            >
-                                <FormField label="Keywords">
-                                    <Grid
-                                        gridDefinition={[
-                                            { colspan: { default: 9 } },
-                                            { colspan: { default: 3 } },
-                                        ]}
-                                    >
-                                        <Input
-                                            placeholder="Search"
-                                            type="search"
-                                            onChange={(e) => {
-                                                dispatch({
-                                                    type: "query-updated",
-                                                    query: e.detail.value,
-                                                });
-                                            }}
-                                            onKeyDown={({ detail }) => {
-                                                if (detail.key === "Enter") {
-                                                    search({}, { state, dispatch });
-                                                }
-                                            }}
-                                            value={state?.query}
-                                        />
-                                        <Button
-                                            variant="primary"
-                                            onClick={(e) => {
-                                                search({}, { state, dispatch });
-                                            }}
-                                        >
-                                            Search
-                                        </Button>
-                                    </Grid>
-                                </FormField>
-                                <SpaceBetween direction="horizontal" size="xs">
-                                    <FormField label="Asset Type">
-                                        <Select
-                                            selectedOption={
-                                                state?.filters?._rectype || {
-                                                    label: Synonyms.Assets,
-                                                    value: "asset",
-                                                }
-                                            }
-                                            onChange={({ detail }) =>
-                                                // changeRectype(e.detail.selectedOption, { state, dispatch })
-                                                changeFilter("_rectype", detail.selectedOption, {
-                                                    state,
-                                                    dispatch,
-                                                })
-                                            }
-                                            options={[
-                                                { label: Synonyms.Assets, value: "asset" },
-                                                { label: "Files", value: "file" },
-                                            ]}
-                                            placeholder="Asset Type"
-                                        />
-                                    </FormField>
-                                    <FormField label="File Type">
-                                        <Select
-                                            selectedOption={state?.filters?.str_assettype}
-                                            placeholder="File Type"
-                                            options={[
-                                                { label: "All", value: "all" },
-                                                ...(state?.result?.aggregations?.str_assettype?.buckets.map(
-                                                    (b: any) => {
-                                                        return {
-                                                            label: `${b.key} (${b.doc_count})`,
-                                                            value: b.key,
-                                                        };
-                                                    }
-                                                ) || []),
-                                            ]}
-                                            onChange={({ detail }) =>
-                                                changeFilter(
-                                                    "str_assettype",
-                                                    detail.selectedOption,
-                                                    {
-                                                        state,
-                                                        dispatch,
-                                                    }
-                                                )
-                                            }
-                                        />
-                                    </FormField>
-                                    <FormField label="Database">
-                                        <Select
-                                            selectedOption={state?.filters?.str_databaseid}
-                                            placeholder="Database"
-                                            options={[
-                                                { label: "All", value: "all" },
-                                                //List every database from "databases" variable and then map to result aggregation to display (doc_count) next to each
-                                                //We do this because opensearch has a max items it will return in a query which may not be everything across aggregated databases
-                                                //Without this, you wouldn't be able to search on other databases not listed due to trimmed results.
-                                                // ...(databases?.map((b: any) => {
-                                                //     var count = 0
-                                                //     //Map through result aggregation to find doc_count for each database
-                                                //     state?.result?.aggregations?.str_databaseid?.buckets.map(
-                                                //         (c: any) => {
-                                                //             if (c.key === b.databaseId) {
-                                                //                 count = c.doc_count
-                                                //             }
-                                                //         }
-                                                //     )
-
-                                                //     return {
-                                                //         label: `${b.databaseId} (Results: ${count} / Total: ${b.assetCount})`,
-                                                //         value: b.databaseId,
-                                                //     };
-
-                                                // }) || []),
-                                            ]}
-                                            onChange={({ detail }) =>
-                                                changeFilter(
-                                                    "str_databaseid",
-                                                    detail.selectedOption,
-                                                    {
-                                                        state,
-                                                        dispatch,
-                                                    }
-                                                )
-                                            }
-                                        />
-                                    </FormField>
-                                </SpaceBetween>
-                            </Grid>
-                        )
                     }
                 />
             </SpaceBetween>

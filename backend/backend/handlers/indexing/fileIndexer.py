@@ -261,6 +261,8 @@ def get_s3_file_info(bucket_name: str, s3_key: str) -> Tuple[Optional[Dict[str, 
             for key, value in s3_metadata.items():
                 if not key.startswith('vams-') and key not in ['assetid', 'databaseid', 'uploadid']:
                     file_info[f"s3_{key}"] = value
+                if key in ['vams-primarytype']: #We do want to add this vams metadata key to search. 
+                    file_info[f"s3_{key}"] = value
             
             return file_info, False  # Not archived
             

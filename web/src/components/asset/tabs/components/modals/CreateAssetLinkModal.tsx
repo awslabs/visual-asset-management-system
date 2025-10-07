@@ -7,19 +7,17 @@ import React, { useState, useEffect } from "react";
 import {
     Box,
     Button,
-    Form,
     FormField,
     Input,
-    Link,
     Modal,
     SpaceBetween,
     Alert,
 } from "@cloudscape-design/components";
 import { API } from "aws-amplify";
-import { fetchAllAssets, fetchtagTypes } from "../../../../../services/APIService";
-import CustomTable from "../../../../table/CustomTable";
+import { fetchtagTypes } from "../../../../../services/APIService";
 import { useStatusMessage } from "../../../../common/StatusMessage";
 import { CreateAssetLinkModalProps } from "../../types/AssetLinksTypes";
+import { AssetSearchTable, AssetSearchItem } from "../../../../searchSmall/AssetSearchTable";
 
 export function CreateAssetLinkModal({
     visible,
@@ -36,15 +34,27 @@ export function CreateAssetLinkModal({
     const isUploadMode =
         currentAssetId === "temp-upload-asset" || currentDatabaseId === "temp-upload-db";
     const { showMessage } = useStatusMessage();
-    const [searchedEntity, setSearchedEntity] = useState("");
-    const [showTable, setShowTable] = useState(false);
-    const [searchResult, setSearchResult] = useState<any[]>([]);
-    const [selectedItems, setSelectedItems] = useState<any[]>([]);
-    const [selectedAssets, setSelectedAssets] = useState<any[]>([]);
-    const [nameError, setNameError] = useState("");
     const [formError, setFormError] = useState("");
     const [addDisabled, setAddDisabled] = useState(false);
     const [tagTypes, setTagTypes] = useState<any[]>([]);
+    const [aliasId, setAliasId] = useState<string>("");
+    const [aliasIdError, setAliasIdError] = useState<string>("");
+    
+    // Selected assets from the search table
+    const [selectedAssets, setSelectedAssets] = useState<AssetSearchItem[]>([]);
+
+    // Validation function for alias ID
+    const validateAliasId = (value: string): string => {
+        if (!value) return ""; // Optional field
+        if (value.length > 128) {
+            return "Alias ID must be 128 characters or less";
+        }
+        // Alphanumeric with hyphens and underscores
+        if (!/^[a-zA-Z0-9_-]+$/.test(value)) {
+            return "Alias ID can only contain letters, numbers, hyphens, and underscores";
+        }
+        return "";
+    };
 
     // Fetch tag types when component mounts
     useEffect(() => {
@@ -62,156 +72,14 @@ export function CreateAssetLinkModal({
         loadTagTypes();
     }, []);
 
-    // Format tags with tag types (same logic as SearchPageListView)
-    const formatAssetTags = (tags: any[]) => {
-        console.log("formatAssetTags called with:", tags);
-
-        if (!Array.isArray(tags) || tags.length === 0) {
-            console.log("No tags to format or tags is not an array");
-            return "No tags assigned";
-        }
-
-        try {
-            console.log("Tag types available:", tagTypes);
-
-            const tagsWithType = tags.map((tag) => {
-                console.log("Processing tag:", tag);
-
-                if (tagTypes && tagTypes.length > 0) {
-                    for (const tagType of tagTypes) {
-                        var tagTypeName = tagType.tagTypeName;
-
-                        // If tagType has required field add [R] to tag type name
-                        if (tagType && tagType.required === "True") {
-                            tagTypeName += " [R]";
-                        }
-
-                        if (
-                            tagType.tags &&
-                            Array.isArray(tagType.tags) &&
-                            tagType.tags.includes(tag)
-                        ) {
-                            console.log(`Found tag type for ${tag}: ${tagTypeName}`);
-                            return `${tag} [${tagTypeName}]`;
-                        }
-                    }
-                }
-                return tag;
-            });
-
-            const result = tagsWithType.join(", ");
-            console.log("Formatted tags result:", result);
-            return result;
-        } catch (error) {
-            console.error("Error formatting tags:", error);
-            return tags.join(", ");
-        }
-    };
-
-    // Handle entity search
-    const handleEntitySearch = async () => {
-        try {
-            // Clear any previous errors
-            setNameError("");
-            setFormError("");
-
-            if (!searchedEntity || searchedEntity.trim() === "") {
-                setNameError("Please enter an asset name to search for");
-                return;
-            }
-
-            // Show loading state
-            setAddDisabled(true);
-
-            let result;
-            if (!noOpenSearch) {
-                // Use OpenSearch API
-                const body = {
-                    tokens: [],
-                    operation: "AND",
-                    from: 0,
-                    size: 100,
-                    query: searchedEntity,
-                    filters: [
-                        {
-                            query_string: {
-                                query: '(_rectype:("asset"))',
-                            },
-                        },
-                    ],
-                };
-                result = await API.post("api", "search", {
-                    "Content-type": "application/json",
-                    body: body,
-                });
-                result = result?.hits?.hits;
-            } else {
-                // Use assets API
-                result = await fetchAllAssets();
-                result = result?.filter((item: any) => item.databaseId.indexOf("#deleted") === -1);
-                result = result?.filter((item: any) =>
-                    item.assetName.toLowerCase().includes(searchedEntity.toLowerCase())
-                );
-            }
-
-            if (result && Object.keys(result).length > 0) {
-                // Debug logging
-                console.log("Search results:", result);
-                if (result.length > 0) {
-                    console.log("First result:", result[0]);
-                    if (!noOpenSearch) {
-                        console.log("Tags in first result:", result[0]._source?.tags);
-                    } else {
-                        console.log("Tags in first result:", result[0].tags);
-                    }
-                }
-
-                setSearchResult(result);
-                setShowTable(true);
-            } else {
-                setSearchResult([]);
-                setShowTable(true);
-                setNameError(`No assets found matching "${searchedEntity}"`);
-            }
-        } catch (error: any) {
-            console.error("Error fetching data:", error);
-            setFormError(`Failed to search for assets: ${error.message || "Unknown error"}`);
-        } finally {
-            setAddDisabled(false);
-        }
-    };
-
-    // Add selected items to the selected assets list
-    const addSelectedToAssets = () => {
-        if (selectedItems.length === 0) {
-            setNameError("Please select at least one asset to add.");
-            return;
-        }
-
-        // Add selected items to the selected assets list, avoiding duplicates
-        const newSelectedAssets = [...selectedAssets];
-        selectedItems.forEach((item) => {
-            const isDuplicate = newSelectedAssets.some((asset) => asset.assetId === item.assetId);
-            if (!isDuplicate) {
-                newSelectedAssets.push(item);
-            }
-        });
-
-        setSelectedAssets(newSelectedAssets);
-        setSelectedItems([]);
-    };
-
-    // Remove an asset from the selected assets list
-    const removeSelectedAsset = (assetId: string) => {
-        setSelectedAssets(selectedAssets.filter((asset) => asset.assetId !== assetId));
+    // Handle assets selected from search table
+    const handleAssetsSelected = (assets: AssetSearchItem[]) => {
+        setSelectedAssets(assets);
     };
 
     // Add link
     const addLink = async () => {
-        // Use selectedAssets instead of selectedItems for the final selection
-        const assetsToLink = selectedAssets.length > 0 ? selectedAssets : selectedItems;
-
-        if (assetsToLink.length === 0) {
+        if (selectedAssets.length === 0) {
             setFormError("Please select at least one asset to link.");
             return;
         }
@@ -222,12 +90,18 @@ export function CreateAssetLinkModal({
                 setAddDisabled(true);
 
                 // Create asset node from the first selected item (upload mode doesn't support multi-select yet)
-                const selectedAsset = assetsToLink[0];
+                const selectedAsset = selectedAssets[0];
+                // Generate unique temp ID that includes alias to distinguish multiple links to same asset
+                const tempId = aliasId 
+                    ? `temp-${selectedAsset.assetId}-${relationshipType}-${aliasId}`
+                    : `temp-${selectedAsset.assetId}-${relationshipType}-no-alias`;
+                
                 const assetNode = {
                     assetId: selectedAsset.assetId,
                     assetName: selectedAsset.assetName,
                     databaseId: selectedAsset.databaseName || selectedAsset.databaseId,
-                    assetLinkId: `temp-${selectedAsset.assetId}-${relationshipType}`, // Temporary ID for upload mode
+                    assetLinkId: tempId,
+                    ...(aliasId && relationshipType !== "related" ? { assetLinkAliasId: aliasId } : {}),
                 };
 
                 // Show success message
@@ -259,14 +133,19 @@ export function CreateAssetLinkModal({
 
         try {
             // Process each selected asset
-            for (const selectedAsset of assetsToLink) {
-                const assetLinkBody = {
+            for (const selectedAsset of selectedAssets) {
+                const assetLinkBody: any = {
                     fromAssetId: "",
                     fromAssetDatabaseId: "",
                     toAssetId: "",
                     toAssetDatabaseId: "",
                     relationshipType: "",
                 };
+
+                // Add alias ID if provided and relationship is parent/child
+                if (aliasId && relationshipType !== "related") {
+                    assetLinkBody.assetLinkAliasId = aliasId;
+                }
 
                 // Special handling for sub-child mode
                 if (isSubChildMode && parentAssetData) {
@@ -390,123 +269,13 @@ export function CreateAssetLinkModal({
     };
 
     const handleClose = () => {
-        setSearchedEntity("");
-        setShowTable(false);
-        setSearchResult([]);
-        setSelectedItems([]);
         setSelectedAssets([]);
         setFormError("");
-        setNameError("");
         setAddDisabled(false);
+        setAliasId("");
+        setAliasIdError("");
         onDismiss();
     };
-
-    // Table columns for asset search results
-    const assetCols = [
-        {
-            id: "assetId",
-            header: "Asset Name",
-            cell: (item: any) => (
-                <Link
-                    href={`#/databases/${item.databaseName || item.databaseId}/assets/${
-                        item.assetId
-                    }`}
-                >
-                    {item.assetName}
-                </Link>
-            ),
-            sortingField: "name",
-            isRowHeader: true,
-        },
-        {
-            id: "databaseId",
-            header: "Database Name",
-            cell: (item: any) => item.databaseName || item.databaseId,
-            sortingField: "name",
-            isRowHeader: true,
-        },
-        {
-            id: "description",
-            header: "Description",
-            cell: (item: any) => item.description,
-            sortingField: "alt",
-        },
-        {
-            id: "tags",
-            header: "Tags",
-            cell: (item: any) => formatAssetTags(item.tags || []),
-            sortingField: "tags",
-        },
-    ];
-
-    // Format search results
-    const assetItems = Array.isArray(searchResult)
-        ? !noOpenSearch
-            ? searchResult.map((result: any) => {
-                  // Debug logging for OpenSearch results
-                  console.log("Processing OpenSearch result:", result);
-                  console.log(
-                      "_source fields:",
-                      result._source ? Object.keys(result._source) : "No _source"
-                  );
-
-                  // Check for tags in different possible locations
-                  // OpenSearch typically stores tags in list_tags field
-                  let tags = [];
-
-                  if (result._source?.list_tags) {
-                      // If list_tags is a string (comma-separated), split it
-                      if (typeof result._source.list_tags === "string") {
-                          tags = result._source.list_tags
-                              .split(",")
-                              .map((tag: string) => tag.trim());
-                      }
-                      // If list_tags is already an array
-                      else if (Array.isArray(result._source.list_tags)) {
-                          tags = result._source.list_tags;
-                      }
-                  }
-                  // Fallback to other possible tag fields
-                  else if (result._source?.tags) {
-                      tags = Array.isArray(result._source.tags)
-                          ? result._source.tags
-                          : [result._source.tags];
-                  }
-
-                  console.log("Found tags:", tags);
-
-                  // Search API results
-                  return {
-                      assetName: result._source?.str_assetname || "",
-                      databaseName: result._source?.str_databaseid || "",
-                      description: result._source?.str_description || "",
-                      assetId: result._source?.str_assetid || "",
-                      tags: tags,
-                  };
-              })
-            : // FetchAllAssets API Results (No OpenSearch)
-              searchResult.map((result: any) => {
-                  // Debug logging for direct API results
-                  console.log("Processing direct API result:", result);
-                  console.log("Available fields:", Object.keys(result));
-                  console.log("Tags field:", result.tags);
-
-                  return {
-                      assetName: result.assetName || "",
-                      databaseName: result.databaseId || "",
-                      description: result.description || "",
-                      assetId: result.assetId || "",
-                      tags: result.tags || [],
-                  };
-              })
-        : []; // No result
-
-    // Debug the formatted items
-    console.log("Formatted asset items:", assetItems);
-    if (assetItems.length > 0) {
-        console.log("First formatted item:", assetItems[0]);
-        console.log("Tags in first formatted item:", assetItems[0].tags);
-    }
 
     const relationshipDisplayName =
         relationshipType.charAt(0).toUpperCase() + relationshipType.slice(1);
@@ -540,10 +309,7 @@ export function CreateAssetLinkModal({
                         </Button>
                         <Button
                             variant="primary"
-                            disabled={
-                                addDisabled ||
-                                (selectedItems.length === 0 && selectedAssets.length === 0)
-                            }
+                            disabled={addDisabled || selectedAssets.length === 0}
                             onClick={addLink}
                         >
                             Create Link
@@ -553,15 +319,6 @@ export function CreateAssetLinkModal({
             }
         >
             <div style={{ width: "100%", maxWidth: "none" }}>
-                {/* Name error alert at the top of the modal content */}
-                {nameError && (
-                    <div style={{ marginBottom: "20px" }}>
-                        <Alert type="error" dismissible onDismiss={() => setNameError("")}>
-                            {nameError}
-                        </Alert>
-                    </div>
-                )}
-
                 {/* Sub-child mode warning */}
                 {isSubChildMode && parentAssetData && (
                     <div style={{ marginBottom: "20px" }}>
@@ -581,137 +338,38 @@ export function CreateAssetLinkModal({
                 )}
 
                 <SpaceBetween direction="vertical" size="l">
-                    {/* Selected Assets Table */}
-                    {selectedAssets.length > 0 && (
-                        <div style={{ width: "100%", maxWidth: "none", minWidth: 0 }}>
-                            <div style={{ marginBottom: "8px" }}>
-                                <label
-                                    style={{
-                                        display: "block",
-                                        fontWeight: "600",
-                                        fontSize: "14px",
-                                        color: "var(--color-text-label)",
-                                    }}
-                                >
-                                    Selected Assets ({selectedAssets.length})
-                                </label>
-                            </div>
-                            <div style={{ width: "100%", maxWidth: "none", minWidth: 0 }}>
-                                <CustomTable
-                                    columns={[
-                                        ...assetCols,
-                                        {
-                                            id: "actions",
-                                            header: "Actions",
-                                            cell: (item: any) => (
-                                                <Button
-                                                    variant="link"
-                                                    onClick={() =>
-                                                        removeSelectedAsset(item.assetId)
-                                                    }
-                                                >
-                                                    Remove
-                                                </Button>
-                                            ),
-                                        },
-                                    ]}
-                                    items={selectedAssets}
-                                    selectedItems={[]}
-                                    setSelectedItems={() => {}}
-                                    trackBy={"assetId"}
-                                    enablePagination={true}
-                                    pageSize={5}
-                                />
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Search Input */}
-                    <div style={{ width: "100%", maxWidth: "none" }}>
-                        <div style={{ marginBottom: "8px" }}>
-                            <label
-                                style={{
-                                    display: "block",
-                                    fontWeight: "600",
-                                    fontSize: "14px",
-                                    marginBottom: "4px",
-                                    color: "var(--color-text-label)",
-                                }}
-                            >
-                                Search Assets
-                            </label>
-                            <div
-                                style={{
-                                    fontSize: "12px",
-                                    color: "var(--color-text-body-secondary)",
-                                    marginBottom: "8px",
-                                }}
-                            >
-                                Input asset name. Press Enter to search.
-                            </div>
-                        </div>
-                        <div style={{ width: "100%", maxWidth: "none" }}>
+                    {/* Alias ID Field - Only for parent/child relationships */}
+                    {(relationshipType === "parent" || relationshipType === "child") && (
+                        <FormField
+                            label="Alias ID (Optional)"
+                            description="Unique identifier for this parent-child relationship. Allows multiple relationships between the same parent and child."
+                            constraintText="Maximum 128 characters. Alphanumeric with hyphens and underscores."
+                            errorText={aliasIdError}
+                        >
                             <Input
-                                placeholder="Search for assets"
-                                type="search"
-                                value={searchedEntity || ""}
+                                value={aliasId}
                                 onChange={({ detail }) => {
-                                    setSearchedEntity(detail.value);
-                                    setShowTable(false);
-                                    setSelectedItems([]);
-                                    setNameError("");
+                                    setAliasId(detail.value);
+                                    setAliasIdError(validateAliasId(detail.value));
                                 }}
-                                onKeyDown={({ detail }) => {
-                                    if (detail.key === "Enter") {
-                                        handleEntitySearch();
-                                    }
-                                }}
+                                placeholder="e.g., v1, version-2, config-a"
+                                disabled={addDisabled}
                             />
-                        </div>
-                    </div>
-
-                    {/* Search Results */}
-                    {showTable && (
-                        <div style={{ width: "100%", maxWidth: "none", minWidth: 0 }}>
-                            <div
-                                style={{
-                                    display: "flex",
-                                    justifyContent: "space-between",
-                                    alignItems: "center",
-                                    marginBottom: "8px",
-                                }}
-                            >
-                                <label
-                                    style={{
-                                        display: "block",
-                                        fontWeight: "600",
-                                        fontSize: "14px",
-                                        color: "var(--color-text-label)",
-                                    }}
-                                >
-                                    Search Results
-                                </label>
-                                <Button
-                                    onClick={addSelectedToAssets}
-                                    disabled={selectedItems.length === 0}
-                                >
-                                    Add Selected ({selectedItems.length})
-                                </Button>
-                            </div>
-                            <div style={{ width: "100%", maxWidth: "none", minWidth: 0 }}>
-                                <CustomTable
-                                    columns={assetCols}
-                                    items={assetItems}
-                                    selectedItems={selectedItems}
-                                    setSelectedItems={setSelectedItems}
-                                    trackBy={"assetId"}
-                                    enablePagination={true}
-                                    pageSize={10}
-                                    selectionType="multi"
-                                />
-                            </div>
-                        </div>
+                        </FormField>
                     )}
+
+                    {/* Asset Search Table */}
+                    <AssetSearchTable
+                        selectionMode="multi"
+                        currentAssetId={currentAssetId}
+                        currentDatabaseId={currentDatabaseId}
+                        onAssetsSelect={handleAssetsSelected}
+                        showDatabaseColumn={true}
+                        showTagsColumn={true}
+                        showSelectedAssets={true}
+                        tagTypes={tagTypes}
+                        noOpenSearch={noOpenSearch}
+                    />
                 </SpaceBetween>
             </div>
         </Modal>

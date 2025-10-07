@@ -75,6 +75,11 @@ def format_asset_link_output(link_data: Dict[str, Any], json_output: bool = Fals
     output_lines.append("Asset Link Details:")
     output_lines.append(f"  Link ID: {asset_link.get('assetLinkId', 'N/A')}")
     output_lines.append(f"  Relationship Type: {asset_link.get('relationshipType', 'N/A')}")
+    
+    # Alias ID (if present)
+    if asset_link.get('assetLinkAliasId'):
+        output_lines.append(f"  Alias ID: {asset_link.get('assetLinkAliasId')}")
+    
     output_lines.append("")
     output_lines.append("  From Asset:")
     output_lines.append(f"    Asset ID: {asset_link.get('fromAssetId', 'N/A')}")
@@ -107,7 +112,8 @@ def format_asset_links_list_output(links_data: Dict[str, Any], json_output: bool
     if related:
         for asset in related:
             link_id_short = asset.get('assetLinkId', 'N/A')[:8] + '...' if asset.get('assetLinkId') else 'N/A'
-            output_lines.append(f"  • {asset.get('assetName', asset.get('assetId', 'N/A'))} ({asset.get('databaseId', 'N/A')}) - Link ID: {link_id_short}")
+            alias_info = f" (Alias: {asset.get('assetLinkAliasId')})" if asset.get('assetLinkAliasId') else ""
+            output_lines.append(f"  • {asset.get('assetName', asset.get('assetId', 'N/A'))} ({asset.get('databaseId', 'N/A')}) - Link ID: {link_id_short}{alias_info}")
     else:
         output_lines.append("  None")
     
@@ -119,7 +125,8 @@ def format_asset_links_list_output(links_data: Dict[str, Any], json_output: bool
     if parents:
         for asset in parents:
             link_id_short = asset.get('assetLinkId', 'N/A')[:8] + '...' if asset.get('assetLinkId') else 'N/A'
-            output_lines.append(f"  • {asset.get('assetName', asset.get('assetId', 'N/A'))} ({asset.get('databaseId', 'N/A')}) - Link ID: {link_id_short}")
+            alias_info = f" (Alias: {asset.get('assetLinkAliasId')})" if asset.get('assetLinkAliasId') else ""
+            output_lines.append(f"  • {asset.get('assetName', asset.get('assetId', 'N/A'))} ({asset.get('databaseId', 'N/A')}) - Link ID: {link_id_short}{alias_info}")
     else:
         output_lines.append("  None")
     
@@ -135,7 +142,8 @@ def format_asset_links_list_output(links_data: Dict[str, Any], json_output: bool
             def format_tree_node(node, indent=2):
                 lines = []
                 link_id_short = node.get('assetLinkId', 'N/A')[:8] + '...' if node.get('assetLinkId') else 'N/A'
-                lines.append(f"{'  ' * indent}• {node.get('assetName', node.get('assetId', 'N/A'))} ({node.get('databaseId', 'N/A')}) - Link ID: {link_id_short}")
+                alias_info = f" (Alias: {node.get('assetLinkAliasId')})" if node.get('assetLinkAliasId') else ""
+                lines.append(f"{'  ' * indent}• {node.get('assetName', node.get('assetId', 'N/A'))} ({node.get('databaseId', 'N/A')}) - Link ID: {link_id_short}{alias_info}")
                 
                 for child in node.get('children', []):
                     lines.extend(format_tree_node(child, indent + 1))
@@ -148,7 +156,8 @@ def format_asset_links_list_output(links_data: Dict[str, Any], json_output: bool
             # Flat list formatting
             for asset in children:
                 link_id_short = asset.get('assetLinkId', 'N/A')[:8] + '...' if asset.get('assetLinkId') else 'N/A'
-                output_lines.append(f"  • {asset.get('assetName', asset.get('assetId', 'N/A'))} ({asset.get('databaseId', 'N/A')}) - Link ID: {link_id_short}")
+                alias_info = f" (Alias: {asset.get('assetLinkAliasId')})" if asset.get('assetLinkAliasId') else ""
+                output_lines.append(f"  • {asset.get('assetName', asset.get('assetId', 'N/A'))} ({asset.get('databaseId', 'N/A')}) - Link ID: {link_id_short}{alias_info}")
     else:
         output_lines.append("  None")
     
@@ -181,6 +190,7 @@ def asset_links():
 @click.option('--relationship-type', required=True, 
               type=click.Choice(['related', 'parentChild'], case_sensitive=False),
               help='Type of relationship (related or parentChild)')
+@click.option('--alias-id', help='Optional alias ID for multiple parent-child relationships (parentChild type only, max 128 chars)')
 @click.option('--tags', multiple=True, help='Tags for the asset link (can be used multiple times)')
 @click.option('--json-input', help='JSON input file path or JSON string with all asset link data')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
@@ -188,17 +198,22 @@ def asset_links():
 @requires_setup_and_auth
 def create(ctx: click.Context, from_asset_id: str, from_database_id: str, 
           to_asset_id: str, to_database_id: str, relationship_type: str,
-          tags: List[str], json_input: Optional[str], json_output: bool):
+          alias_id: Optional[str], tags: List[str], json_input: Optional[str], json_output: bool):
     """
     Create a new asset link between two assets.
     
     This command creates a relationship between two assets. The relationship can be
     'related' (bidirectional) or 'parentChild' (directional with cycle detection).
     
+    The --alias-id option allows multiple parent-child relationships between the same
+    assets by providing a unique identifier for each relationship. This option can only
+    be used with 'parentChild' relationship type.
+    
     Examples:
         vamscli asset-links create --from-asset-id asset1 --from-database-id db1 --to-asset-id asset2 --to-database-id db2 --relationship-type related
         vamscli asset-links create --from-asset-id parent --from-database-id db1 --to-asset-id child --to-database-id db1 --relationship-type parentChild --tags tag1 --tags tag2
-        vamscli asset-links create --json-input '{"fromAssetId":"asset1","fromAssetDatabaseId":"db1","toAssetId":"asset2","toAssetDatabaseId":"db2","relationshipType":"related"}'
+        vamscli asset-links create --from-asset-id parent --from-database-id db1 --to-asset-id child --to-database-id db1 --relationship-type parentChild --alias-id "primary-link"
+        vamscli asset-links create --json-input '{"fromAssetId":"asset1","fromAssetDatabaseId":"db1","toAssetId":"asset2","toAssetDatabaseId":"db2","relationshipType":"parentChild","assetLinkAliasId":"my-alias"}'
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -206,6 +221,12 @@ def create(ctx: click.Context, from_asset_id: str, from_database_id: str,
     api_client = APIClient(config['api_gateway_url'], profile_manager)
     
     try:
+        
+        # Validate alias_id usage
+        if alias_id and relationship_type.lower() != 'parentchild':
+            raise click.BadParameter(
+                "The --alias-id option can only be used with 'parentChild' relationship type"
+            )
         
         # Build asset link data
         if json_input:
@@ -221,6 +242,10 @@ def create(ctx: click.Context, from_asset_id: str, from_database_id: str,
                 'relationshipType': validate_relationship_type(relationship_type),
                 'tags': parse_tags_input(__builtins__['list'](tags))
             }
+            
+            # Add alias if provided
+            if alias_id:
+                link_data['assetLinkAliasId'] = alias_id
         
         if not json_output:
             click.echo("Creating asset link...")
@@ -237,6 +262,8 @@ def create(ctx: click.Context, from_asset_id: str, from_database_id: str,
             click.echo(f"  Asset Link ID: {result.get('assetLinkId')}")
             click.echo(f"  Relationship: {link_data.get('relationshipType')}")
             click.echo(f"  From: {link_data.get('fromAssetId')} ({link_data.get('fromAssetDatabaseId')}) → To: {link_data.get('toAssetId')} ({link_data.get('toAssetDatabaseId')})")
+            if link_data.get('assetLinkAliasId'):
+                click.echo(f"  Alias ID: {link_data.get('assetLinkAliasId')}")
             if link_data.get('tags'):
                 click.echo(f"  Tags: {', '.join(link_data.get('tags'))}")
             click.echo(f"  Message: {result.get('message', 'Asset link created')}")
@@ -335,22 +362,25 @@ def get(ctx: click.Context, asset_link_id: str, json_output: bool):
 
 @asset_links.command()
 @click.option('--asset-link-id', required=True, help='Asset link ID to update')
+@click.option('--alias-id', help='Optional alias ID to update (max 128 chars, parentChild relationships only)')
 @click.option('--tags', multiple=True, help='New tags for the asset link (replaces existing tags)')
 @click.option('--json-input', help='JSON input file path or JSON string with update data')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def update(ctx: click.Context, asset_link_id: str, tags: List[str], 
+def update(ctx: click.Context, asset_link_id: str, alias_id: Optional[str], tags: List[str], 
           json_input: Optional[str], json_output: bool):
     """
     Update an existing asset link.
     
-    This command updates an asset link. Currently, only tags can be updated.
-    The tags provided will replace all existing tags on the asset link.
+    This command updates an asset link. You can update the alias ID (for parentChild
+    relationships only) and/or tags. The tags provided will replace all existing tags.
     
     Examples:
         vamscli asset-links update --asset-link-id 12345678-1234-1234-1234-123456789012 --tags tag1 --tags tag2
-        vamscli asset-links update --asset-link-id 12345678-1234-1234-1234-123456789012 --json-input '{"tags":["new-tag1","new-tag2"]}'
+        vamscli asset-links update --asset-link-id 12345678-1234-1234-1234-123456789012 --alias-id "updated-alias"
+        vamscli asset-links update --asset-link-id 12345678-1234-1234-1234-123456789012 --alias-id "new-alias" --tags tag1
+        vamscli asset-links update --asset-link-id 12345678-1234-1234-1234-123456789012 --json-input '{"assetLinkAliasId":"my-alias","tags":["new-tag1","new-tag2"]}'
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -365,15 +395,21 @@ def update(ctx: click.Context, asset_link_id: str, tags: List[str],
             update_data = parse_json_input(json_input)
         else:
             # Build from individual options
-            update_data = {
-                'tags': parse_tags_input(__builtins__['list'](tags))
-            }
+            update_data = {}
+            
+            # Add alias if provided
+            if alias_id is not None:
+                update_data['assetLinkAliasId'] = alias_id
+            
+            # Add tags if provided
+            if tags:
+                update_data['tags'] = parse_tags_input(__builtins__['list'](tags))
             
             # Ensure at least one field is being updated
-            if not any(update_data.values()):
+            if not update_data:
                 raise click.BadParameter(
                     "At least one field must be provided for update. "
-                    "Use --tags or --json-input."
+                    "Use --alias-id, --tags, or --json-input."
                 )
         
         click.echo(f"Updating asset link '{asset_link_id}'...")
@@ -388,6 +424,8 @@ def update(ctx: click.Context, asset_link_id: str, tags: List[str],
                 click.style("✓ Asset link updated successfully!", fg='green', bold=True)
             )
             click.echo(f"  Asset Link ID: {asset_link_id}")
+            if 'assetLinkAliasId' in update_data:
+                click.echo(f"  New Alias ID: {update_data.get('assetLinkAliasId')}")
             if update_data.get('tags'):
                 click.echo(f"  New Tags: {', '.join(update_data.get('tags'))}")
             click.echo(f"  Message: {result.get('message', 'Asset link updated')}")

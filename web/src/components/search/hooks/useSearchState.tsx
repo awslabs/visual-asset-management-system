@@ -50,7 +50,7 @@ const initialState: SearchState = {
         },
     },
     metadataFilters: [],
-    sort: ["_score"],
+    sort: [],
     tableSort: {},
     pagination: {
         from: 0,
@@ -78,6 +78,7 @@ function searchReducer(state: SearchState, action: SearchAction): SearchState {
                 ...state,
                 filters: action.payload,
                 pagination: { ...state.pagination, from: 0 }, // Reset pagination on filter change
+                // Preserve sort state when filters change
             };
 
         case "SET_METADATA_FILTERS":

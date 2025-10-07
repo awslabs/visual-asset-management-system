@@ -21,6 +21,7 @@ export interface CreateAssetLinkRequest {
     toAssetId: string;
     toAssetDatabaseId: string;
     relationshipType: "related" | "parentChild";
+    assetLinkAliasId?: string;
     tags?: string[];
 }
 

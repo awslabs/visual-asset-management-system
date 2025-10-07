@@ -784,6 +784,423 @@ class TestAssetLinksCommandsEdgeCases:
             assert 'vamscli database list' in result.output
 
 
+class TestAssetLinksCreateWithAlias:
+    """Test asset-links create command with alias ID support."""
+
+    def test_create_with_alias_success(self, cli_runner, asset_links_command_mocks):
+        """Test successful asset link creation with alias ID."""
+        with asset_links_command_mocks as mocks:
+            mocks['api_client'].create_asset_link.return_value = {
+                'assetLinkId': '12345678-1234-1234-1234-123456789012',
+                'message': 'Asset link created successfully'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'asset-links', 'create',
+                '--from-asset-id', 'parent1',
+                '--from-database-id', 'db1',
+                '--to-asset-id', 'child1',
+                '--to-database-id', 'db1',
+                '--relationship-type', 'parentChild',
+                '--alias-id', 'primary-relationship'
+            ])
+
+            assert result.exit_code == 0
+            assert '✓ Asset link created successfully!' in result.output
+            assert 'Alias ID: primary-relationship' in result.output
+
+            # Verify API call included alias
+            call_args = mocks['api_client'].create_asset_link.call_args
+            assert call_args[0][0]['assetLinkAliasId'] == 'primary-relationship'
+
+    def test_create_with_alias_related_type_error(self, cli_runner, asset_links_command_mocks):
+        """Test that alias ID cannot be used with 'related' relationship type."""
+        with asset_links_command_mocks as mocks:
+            result = cli_runner.invoke(cli, [
+                'asset-links', 'create',
+                '--from-asset-id', 'asset1',
+                '--from-database-id', 'db1',
+                '--to-asset-id', 'asset2',
+                '--to-database-id', 'db1',
+                '--relationship-type', 'related',
+                '--alias-id', 'should-fail'
+            ])
+
+            assert result.exit_code == 2  # Click parameter error
+            assert 'can only be used with' in result.output or 'parentChild' in result.output
+
+    def test_create_with_alias_json_input(self, cli_runner, asset_links_command_mocks):
+        """Test asset link creation with alias using JSON input."""
+        with asset_links_command_mocks as mocks:
+            mocks['api_client'].create_asset_link.return_value = {
+                'assetLinkId': '12345678-1234-1234-1234-123456789012',
+                'message': 'Asset link created successfully'
+            }
+
+            json_input = json.dumps({
+                'fromAssetId': 'parent1',
+                'fromAssetDatabaseId': 'db1',
+                'toAssetId': 'child1',
+                'toAssetDatabaseId': 'db1',
+                'relationshipType': 'parentChild',
+                'assetLinkAliasId': 'json-alias'
+            })
+
+            # Note: Required parameters must still be provided even with --json-input
+            result = cli_runner.invoke(cli, [
+                'asset-links', 'create',
+                '--from-asset-id', 'parent1',
+                '--from-database-id', 'db1',
+                '--to-asset-id', 'child1',
+                '--to-database-id', 'db1',
+                '--relationship-type', 'parentChild',
+                '--json-input', json_input
+            ])
+
+            assert result.exit_code == 0
+            assert '✓ Asset link created successfully!' in result.output
+
+    def test_create_without_alias_success(self, cli_runner, asset_links_command_mocks):
+        """Test that asset link creation still works without alias (backward compatibility)."""
+        with asset_links_command_mocks as mocks:
+            mocks['api_client'].create_asset_link.return_value = {
+                'assetLinkId': '12345678-1234-1234-1234-123456789012',
+                'message': 'Asset link created successfully'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'asset-links', 'create',
+                '--from-asset-id', 'parent1',
+                '--from-database-id', 'db1',
+                '--to-asset-id', 'child1',
+                '--to-database-id', 'db1',
+                '--relationship-type', 'parentChild'
+            ])
+
+            assert result.exit_code == 0
+            assert '✓ Asset link created successfully!' in result.output
+
+            # Verify API call did not include alias
+            call_args = mocks['api_client'].create_asset_link.call_args
+            assert 'assetLinkAliasId' not in call_args[0][0]
+
+
+class TestAssetLinksUpdateWithAlias:
+    """Test asset-links update command with alias ID support."""
+
+    def test_update_alias_only(self, cli_runner, asset_links_command_mocks):
+        """Test updating only the alias ID."""
+        with asset_links_command_mocks as mocks:
+            mocks['api_client'].update_asset_link.return_value = {
+                'message': 'Asset link updated successfully'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'asset-links', 'update',
+                '--asset-link-id', '12345678-1234-1234-1234-123456789012',
+                '--alias-id', 'updated-alias'
+            ])
+
+            assert result.exit_code == 0
+            assert '✓ Asset link updated successfully!' in result.output
+            assert 'New Alias ID: updated-alias' in result.output
+
+            # Verify API call
+            call_args = mocks['api_client'].update_asset_link.call_args
+            assert call_args[0][1]['assetLinkAliasId'] == 'updated-alias'
+
+    def test_update_alias_and_tags(self, cli_runner, asset_links_command_mocks):
+        """Test updating both alias ID and tags."""
+        with asset_links_command_mocks as mocks:
+            mocks['api_client'].update_asset_link.return_value = {
+                'message': 'Asset link updated successfully'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'asset-links', 'update',
+                '--asset-link-id', '12345678-1234-1234-1234-123456789012',
+                '--alias-id', 'new-alias',
+                '--tags', 'tag1',
+                '--tags', 'tag2'
+            ])
+
+            assert result.exit_code == 0
+            assert '✓ Asset link updated successfully!' in result.output
+            assert 'New Alias ID: new-alias' in result.output
+            assert 'New Tags: tag1, tag2' in result.output
+
+            # Verify API call
+            call_args = mocks['api_client'].update_asset_link.call_args
+            assert call_args[0][1]['assetLinkAliasId'] == 'new-alias'
+            assert call_args[0][1]['tags'] == ['tag1', 'tag2']
+
+    def test_update_with_json_input_alias(self, cli_runner, asset_links_command_mocks):
+        """Test updating with JSON input including alias."""
+        with asset_links_command_mocks as mocks:
+            mocks['api_client'].update_asset_link.return_value = {
+                'message': 'Asset link updated successfully'
+            }
+
+            json_input = json.dumps({
+                'assetLinkAliasId': 'json-updated-alias',
+                'tags': ['new-tag1', 'new-tag2']
+            })
+
+            result = cli_runner.invoke(cli, [
+                'asset-links', 'update',
+                '--asset-link-id', '12345678-1234-1234-1234-123456789012',
+                '--json-input', json_input
+            ])
+
+            assert result.exit_code == 0
+            assert '✓ Asset link updated successfully!' in result.output
+
+
+class TestAssetLinksGetWithAlias:
+    """Test asset-links get command with alias ID in response."""
+
+    def test_get_with_alias_display(self, cli_runner, asset_links_command_mocks):
+        """Test that get command displays alias ID when present."""
+        with asset_links_command_mocks as mocks:
+            mocks['api_client'].get_single_asset_link.return_value = {
+                'assetLink': {
+                    'assetLinkId': '12345678-1234-1234-1234-123456789012',
+                    'fromAssetId': 'parent1',
+                    'fromAssetDatabaseId': 'db1',
+                    'toAssetId': 'child1',
+                    'toAssetDatabaseId': 'db1',
+                    'relationshipType': 'parentChild',
+                    'assetLinkAliasId': 'primary-link',
+                    'tags': ['tag1']
+                },
+                'message': 'Success'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'asset-links', 'get',
+                '--asset-link-id', '12345678-1234-1234-1234-123456789012'
+            ])
+
+            assert result.exit_code == 0
+            assert 'Alias ID: primary-link' in result.output
+            assert 'Relationship Type: parentChild' in result.output
+
+    def test_get_without_alias_display(self, cli_runner, asset_links_command_mocks):
+        """Test that get command works without alias (backward compatibility)."""
+        with asset_links_command_mocks as mocks:
+            mocks['api_client'].get_single_asset_link.return_value = {
+                'assetLink': {
+                    'assetLinkId': '12345678-1234-1234-1234-123456789012',
+                    'fromAssetId': 'parent1',
+                    'fromAssetDatabaseId': 'db1',
+                    'toAssetId': 'child1',
+                    'toAssetDatabaseId': 'db1',
+                    'relationshipType': 'parentChild',
+                    'tags': []
+                },
+                'message': 'Success'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'asset-links', 'get',
+                '--asset-link-id', '12345678-1234-1234-1234-123456789012'
+            ])
+
+            assert result.exit_code == 0
+            assert 'Alias ID:' not in result.output
+            assert 'Relationship Type: parentChild' in result.output
+
+
+class TestAssetLinksListWithAlias:
+    """Test asset-links list command with alias ID in responses."""
+
+    def test_list_with_aliases_flat_view(self, cli_runner, asset_links_command_mocks):
+        """Test list command displays aliases in flat view."""
+        with asset_links_command_mocks as mocks:
+            mocks['api_client'].get_asset_links_for_asset.return_value = {
+                'related': [],
+                'parents': [],
+                'children': [
+                    {
+                        'assetId': 'child1',
+                        'assetName': 'Child Asset 1',
+                        'databaseId': 'db1',
+                        'assetLinkId': '12345678-1234-1234-1234-123456789012',
+                        'assetLinkAliasId': 'primary-link'
+                    },
+                    {
+                        'assetId': 'child1',
+                        'assetName': 'Child Asset 1',
+                        'databaseId': 'db1',
+                        'assetLinkId': '87654321-4321-4321-4321-210987654321',
+                        'assetLinkAliasId': 'secondary-link'
+                    }
+                ],
+                'unauthorizedCounts': {'related': 0, 'parents': 0, 'children': 0},
+                'message': 'Success'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'asset-links', 'list',
+                '-d', 'db1',
+                '--asset-id', 'parent1'
+            ])
+
+            assert result.exit_code == 0
+            assert '(Alias: primary-link)' in result.output
+            assert '(Alias: secondary-link)' in result.output
+            assert 'Child Assets (2):' in result.output
+
+    def test_list_with_aliases_tree_view(self, cli_runner, asset_links_command_mocks):
+        """Test list command displays aliases in tree view."""
+        with asset_links_command_mocks as mocks:
+            mocks['api_client'].get_asset_links_for_asset.return_value = {
+                'related': [],
+                'parents': [],
+                'children': [
+                    {
+                        'assetId': 'child1',
+                        'assetName': 'Child Asset 1',
+                        'databaseId': 'db1',
+                        'assetLinkId': '12345678-1234-1234-1234-123456789012',
+                        'assetLinkAliasId': 'primary-link',
+                        'children': [
+                            {
+                                'assetId': 'grandchild1',
+                                'assetName': 'Grandchild Asset 1',
+                                'databaseId': 'db1',
+                                'assetLinkId': '11111111-1111-1111-1111-111111111111',
+                                'assetLinkAliasId': 'nested-link',
+                                'children': []
+                            }
+                        ]
+                    }
+                ],
+                'unauthorizedCounts': {'related': 0, 'parents': 0, 'children': 0},
+                'message': 'Success'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'asset-links', 'list',
+                '-d', 'db1',
+                '--asset-id', 'parent1',
+                '--tree-view'
+            ])
+
+            assert result.exit_code == 0
+            assert '(Alias: primary-link)' in result.output
+            assert '(Alias: nested-link)' in result.output
+
+    def test_list_without_aliases(self, cli_runner, asset_links_command_mocks):
+        """Test list command works without aliases (backward compatibility)."""
+        with asset_links_command_mocks as mocks:
+            mocks['api_client'].get_asset_links_for_asset.return_value = {
+                'related': [],
+                'parents': [],
+                'children': [
+                    {
+                        'assetId': 'child1',
+                        'assetName': 'Child Asset 1',
+                        'databaseId': 'db1',
+                        'assetLinkId': '12345678-1234-1234-1234-123456789012'
+                    }
+                ],
+                'unauthorizedCounts': {'related': 0, 'parents': 0, 'children': 0},
+                'message': 'Success'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'asset-links', 'list',
+                '-d', 'db1',
+                '--asset-id', 'parent1'
+            ])
+
+            assert result.exit_code == 0
+            assert '(Alias:' not in result.output
+            assert 'Child Assets (1):' in result.output
+
+
+class TestAssetLinksAliasValidation:
+    """Test alias ID validation and error handling."""
+
+    def test_alias_max_length_validation(self, cli_runner, asset_links_command_mocks):
+        """Test that alias ID respects max length (handled by backend)."""
+        with asset_links_command_mocks as mocks:
+            # Simulate backend validation error
+            mocks['api_client'].create_asset_link.side_effect = AssetLinkValidationError(
+                "assetLinkAliasId exceeds maximum length of 128 characters"
+            )
+
+            long_alias = 'a' * 129  # 129 characters
+
+            result = cli_runner.invoke(cli, [
+                'asset-links', 'create',
+                '--from-asset-id', 'parent1',
+                '--from-database-id', 'db1',
+                '--to-asset-id', 'child1',
+                '--to-database-id', 'db1',
+                '--relationship-type', 'parentChild',
+                '--alias-id', long_alias
+            ])
+
+            assert result.exit_code == 1
+            assert '✗ Validation Error' in result.output
+
+
+class TestAssetLinksAliasJsonOutput:
+    """Test JSON output includes alias ID."""
+
+    def test_create_json_output_with_alias(self, cli_runner, asset_links_command_mocks):
+        """Test JSON output for create command with alias."""
+        with asset_links_command_mocks as mocks:
+            mocks['api_client'].create_asset_link.return_value = {
+                'assetLinkId': '12345678-1234-1234-1234-123456789012',
+                'message': 'Asset link created successfully'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'asset-links', 'create',
+                '--from-asset-id', 'parent1',
+                '--from-database-id', 'db1',
+                '--to-asset-id', 'child1',
+                '--to-database-id', 'db1',
+                '--relationship-type', 'parentChild',
+                '--alias-id', 'test-alias',
+                '--json-output'
+            ])
+
+            assert result.exit_code == 0
+            output_data = json.loads(result.output)
+            assert output_data['assetLinkId'] == '12345678-1234-1234-1234-123456789012'
+
+    def test_get_json_output_with_alias(self, cli_runner, asset_links_command_mocks):
+        """Test JSON output for get command includes alias."""
+        with asset_links_command_mocks as mocks:
+            mocks['api_client'].get_single_asset_link.return_value = {
+                'assetLink': {
+                    'assetLinkId': '12345678-1234-1234-1234-123456789012',
+                    'fromAssetId': 'parent1',
+                    'fromAssetDatabaseId': 'db1',
+                    'toAssetId': 'child1',
+                    'toAssetDatabaseId': 'db1',
+                    'relationshipType': 'parentChild',
+                    'assetLinkAliasId': 'test-alias',
+                    'tags': []
+                },
+                'message': 'Success'
+            }
+
+            result = cli_runner.invoke(cli, [
+                'asset-links', 'get',
+                '--asset-link-id', '12345678-1234-1234-1234-123456789012',
+                '--json-output'
+            ])
+
+            assert result.exit_code == 0
+            output_data = json.loads(result.output)
+            assert output_data['assetLink']['assetLinkAliasId'] == 'test-alias'
+
+
 class TestAssetLinksUtilityFunctions:
     """Test utility functions for asset links commands."""
     

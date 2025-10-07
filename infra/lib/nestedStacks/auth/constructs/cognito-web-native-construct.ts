@@ -49,7 +49,6 @@ export class CognitoWebNativeConstructStack extends Construct {
     public identityPoolId: string;
     public webClientId: string;
     public nativeClientId: string;
-    public authenticatedRole: iam.Role;
     public unauthenticatedRole: iam.Role;
 
     constructor(parent: Construct, name: string, props: CognitoWebNativeConstructStackProps) {
@@ -201,49 +200,31 @@ export class CognitoWebNativeConstructStack extends Construct {
         });
 
         const cognitoIdentityPrincipal: string = Service("COGNITO_IDENTITY").PrincipalString;
+        const cognitoIdentityAudString = cognitoIdentityPrincipal+":aud";
+        const cognitoIdentityAmrString = cognitoIdentityPrincipal+":amr";
         const unauthenticatedRole = new iam.Role(this, "DefaultUnauthenticatedRole", {
             assumedBy: new iam.FederatedPrincipal(
                 cognitoIdentityPrincipal,
                 {
                     StringEquals: {
-                        "cognito-identity.amazonaws.com:aud": identityPool.ref,
+                        [cognitoIdentityAudString]: identityPool.ref,
                     },
                     "ForAnyValue:StringLike": {
-                        "cognito-identity.amazonaws.com:amr": "unauthenticated",
+                        [cognitoIdentityAmrString]: "unauthenticated",
                     },
                 },
                 "sts:AssumeRoleWithWebIdentity"
             ),
         });
 
-        const authenticatedRole = this.createAuthenticatedRole(
-            "DefaultAuthenticatedRole",
-            identityPool,
-            props
-        );
 
         const defaultPolicy = new cognito.CfnIdentityPoolRoleAttachment(
             this,
             "IdentityPoolRoleAttachment",
             {
                 identityPoolId: identityPool.ref,
-                // Disabled due to using Classic Auth Flow which doesn't support roleMappings
-                // Instead this should be handled in in s3scopedaccess
-                /*
-                roleMappings: {
-                    default: {
-                        type: "Token",
-                        ambiguousRoleResolution: "AuthenticatedRole",
-                        identityProvider: `${Service("COGNITO_IDP", false).Endpoint}/${
-                            //Don't use fips endpoints here due to RoleMapping ProviderName error
-                            userPool.userPoolId
-                        }:${userPoolWebClient.userPoolClientId}`,
-                    },
-                },
-                */
                 roles: {
                     unauthenticated: unauthenticatedRole.roleArn,
-                    authenticated: authenticatedRole.roleArn,
                 },
             }
         );
@@ -307,7 +288,6 @@ export class CognitoWebNativeConstructStack extends Construct {
         // assign public properties
         this.userPool = userPool;
         this.webClientUserPool = userPoolWebClient;
-        this.authenticatedRole = authenticatedRole;
         this.unauthenticatedRole = unauthenticatedRole;
         this.userPoolId = userPool.userPoolId;
         this.identityPoolId = identityPool.ref;
@@ -326,30 +306,4 @@ export class CognitoWebNativeConstructStack extends Construct {
         );
     }
 
-    private createAuthenticatedRole(
-        id: string,
-        identityPool: cognito.CfnIdentityPool,
-        props: CognitoWebNativeConstructStackProps
-    ) {
-        const cognitoIdentityPrincipal: string = Service("COGNITO_IDENTITY").PrincipalString;
-        const authenticatedRole = new iam.Role(this, id, {
-            assumedBy: new iam.FederatedPrincipal(
-                cognitoIdentityPrincipal,
-                {
-                    StringEquals: {
-                        "cognito-identity.amazonaws.com:aud": identityPool.ref,
-                    },
-                    "ForAnyValue:StringLike": {
-                        "cognito-identity.amazonaws.com:amr": "authenticated",
-                    },
-                },
-                "sts:AssumeRoleWithWebIdentity"
-            ),
-            maxSessionDuration: cdk.Duration.seconds(
-                props.config.app.authProvider.useCognito.credTokenTimeoutSeconds
-            ),
-        });
-
-        return authenticatedRole;
-    }
 }

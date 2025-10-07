@@ -397,8 +397,8 @@ function UploadModeAssetLinksTab(props: AssetLinksTabProps) {
 
                 return {
                     ...rootNode,
-                    children: assets.map((asset: AssetNode) => ({
-                        id: `${relationshipType}-${asset.assetId}`,
+                    children: assets.map((asset: AssetNode, index: number) => ({
+                        id: `${relationshipType}-${asset.assetId}-${asset.assetLinkAliasId || 'no-alias'}-${index}`,
                         name: asset.assetName,
                         type: "asset" as const,
                         level: 1,
@@ -424,26 +424,30 @@ function UploadModeAssetLinksTab(props: AssetLinksTabProps) {
         assetName: string,
         relationshipType: "related" | "parent" | "child"
     ) => {
-        // Extract assetId from assetLinkId (assuming format like "temp-assetId-relationshipType")
-        const assetId = assetLinkId.replace(`temp-`, "").replace(`-${relationshipType}`, "");
-
         setLocalAssetLinks((prev: NewAssetLinksData) => {
             // Handle the mapping between 'parent' and 'parents'
             const relationshipKey = relationshipType === "parent" ? "parents" : relationshipType;
+
+            // Filter by assetLinkId to remove only the specific link (not all links to the same asset)
+            const updatedAssetLinksFe = prev.assetLinksFe[
+                relationshipKey as keyof typeof prev.assetLinksFe
+            ].filter((asset: AssetNode) => asset.assetLinkId !== assetLinkId);
+
+            // Also update the assetLinks array (remove the assetId only if no other links to it exist)
+            const remainingAssetIds = updatedAssetLinksFe.map((asset: AssetNode) => asset.assetId);
+            const updatedAssetLinks = prev.assetLinks[
+                relationshipKey as keyof typeof prev.assetLinks
+            ].filter((id: string) => remainingAssetIds.includes(id));
 
             return {
                 ...prev,
                 assetLinksFe: {
                     ...prev.assetLinksFe,
-                    [relationshipKey]: prev.assetLinksFe[
-                        relationshipKey as keyof typeof prev.assetLinksFe
-                    ].filter((asset: AssetNode) => asset.assetId !== assetId),
+                    [relationshipKey]: updatedAssetLinksFe,
                 },
                 assetLinks: {
                     ...prev.assetLinks,
-                    [relationshipKey]: prev.assetLinks[
-                        relationshipKey as keyof typeof prev.assetLinks
-                    ].filter((id: string) => id !== assetId),
+                    [relationshipKey]: updatedAssetLinks,
                 },
             };
         });
@@ -462,6 +466,23 @@ function UploadModeAssetLinksTab(props: AssetLinksTabProps) {
                 // Handle the mapping between 'parent' and 'parents'
                 const relationshipKey =
                     relationshipType === "parent" ? "parents" : relationshipType;
+
+                // Check for duplicate: same asset with same alias (or both no alias)
+                const existingLinks = prev.assetLinksFe[relationshipKey as keyof typeof prev.assetLinksFe];
+                const isDuplicate = existingLinks.some((existing: AssetNode) => {
+                    if (existing.assetId !== assetNode.assetId) return false;
+                    // Both have no alias
+                    if (!existing.assetLinkAliasId && !assetNode.assetLinkAliasId) return true;
+                    // Both have the same alias
+                    if (existing.assetLinkAliasId && assetNode.assetLinkAliasId && 
+                        existing.assetLinkAliasId === assetNode.assetLinkAliasId) return true;
+                    return false;
+                });
+
+                if (isDuplicate) {
+                    console.warn("Duplicate asset link detected in upload mode");
+                    return prev; // Don't add duplicate
+                }
 
                 return {
                     ...prev,

@@ -11,14 +11,22 @@ export interface SearchFilters {
     str_databaseid?: {
         label: string;
         value: string;
+        values?: string[]; // Support multi-select
     };
     str_assettype?: {
         label: string;
         value: string;
+        values?: string[]; // Support multi-select
+    };
+    str_fileext?: {
+        label: string;
+        value: string;
+        values?: string[]; // Support multi-select
     };
     list_tags?: {
         label: string;
         value: string;
+        values?: string[]; // Support multi-select
     };
     includeMetadataInKeywordSearch?: boolean;
     showResultExplanation?: boolean;
@@ -30,6 +38,15 @@ export interface SearchFilters {
     } | null;
     bool_has_assets_related?: {
         value: boolean;
+    } | null;
+    date_lastmodified_filter?: {
+        operator: ">" | "<" | "=" | "between";
+        value: string | string[]; // ISO date string(s)
+    } | null;
+    num_filesize_filter?: {
+        operator: ">" | "<" | "=" | "between";
+        value: number | number[]; // Size in bytes
+        unit?: "bytes" | "KB" | "MB" | "GB"; // For display purposes
     } | null;
     [key: string]: any;
 }
@@ -389,8 +406,8 @@ export const DEFAULT_PREFERENCES: SearchPreferences = {
     ],
     cardSize: "medium",
     pageSize: 50, // Default page size changed to 50
-    sortField: "_score",
-    sortDirection: "desc",
+    sortField: "str_assetname",
+    sortDirection: "asc",
     showThumbnails: false,
     filterPresets: [],
     lastUsedFilters: {

@@ -4,7 +4,6 @@
  */
 
 // Main component
-export { default as SearchContainer } from "./SearchContainer";
 export { default as ModernSearchContainer } from "./ModernSearchContainer";
 
 // Types

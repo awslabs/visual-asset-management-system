@@ -457,6 +457,7 @@ Create a new asset link between two assets.
 
 **Options:**
 
+-   `--alias-id`: Optional alias ID for multiple parent-child relationships (parentChild type only, max 128 chars)
 -   `--tags`: Tags for the asset link (can be used multiple times)
 -   `--json-input`: JSON input file path or JSON string with all asset link data
 -   `--json-output`: Output raw JSON response
@@ -470,11 +471,17 @@ vamscli asset-links create --from-asset-id asset1 --from-database-id db1 --to-as
 # Create parent-child relationship with tags
 vamscli asset-links create --from-asset-id parent --from-database-id db1 --to-asset-id child --to-database-id db1 --relationship-type parentChild --tags tag1 --tags tag2
 
+# Create parent-child relationship with alias ID
+vamscli asset-links create --from-asset-id parent --from-database-id db1 --to-asset-id child --to-database-id db1 --relationship-type parentChild --alias-id "primary-link"
+
+# Create multiple relationships between same assets with different aliases
+vamscli asset-links create --from-asset-id parent --from-database-id db1 --to-asset-id child --to-database-id db1 --relationship-type parentChild --alias-id "secondary-link"
+
 # Create with comma-separated tags
 vamscli asset-links create --from-asset-id asset1 --from-database-id db1 --to-asset-id asset2 --to-database-id db2 --relationship-type related --tags "tag1,tag2,tag3"
 
-# Create with JSON input string
-vamscli asset-links create --json-input '{"fromAssetId":"asset1","fromAssetDatabaseId":"db1","toAssetId":"asset2","toAssetDatabaseId":"db2","relationshipType":"related","tags":["tag1","tag2"]}'
+# Create with JSON input string including alias
+vamscli asset-links create --json-input '{"fromAssetId":"asset1","fromAssetDatabaseId":"db1","toAssetId":"asset2","toAssetDatabaseId":"db2","relationshipType":"parentChild","assetLinkAliasId":"my-alias","tags":["tag1","tag2"]}'
 
 # Create from JSON file
 vamscli asset-links create --json-input @link-data.json --json-output
@@ -488,22 +495,40 @@ vamscli asset-links create --json-input @link-data.json --json-output
     "fromAssetDatabaseId": "source-database",
     "toAssetId": "target-asset",
     "toAssetDatabaseId": "target-database",
-    "relationshipType": "related",
+    "relationshipType": "parentChild",
+    "assetLinkAliasId": "optional-alias",
     "tags": ["tag1", "tag2", "tag3"]
 }
 ```
 
 **Relationship Types:**
 
--   **`related`**: Bidirectional relationship between assets (no hierarchy)
--   **`parentChild`**: Directional relationship with parent → child hierarchy (includes cycle detection)
+-   **`related`**: Bidirectional relationship between assets (no hierarchy, aliases not supported)
+-   **`parentChild`**: Directional relationship with parent → child hierarchy (includes cycle detection, supports aliases)
+
+**Alias ID Feature:**
+
+The `--alias-id` option enables multiple parent-child relationships between the same pair of assets:
+
+-   **Purpose**: Distinguish between different types of relationships (e.g., "primary-source", "backup-source")
+-   **Restriction**: Can ONLY be used with `parentChild` relationship type
+-   **Uniqueness**: Each alias must be unique for a given child asset
+-   **Max Length**: 128 characters
+-   **Optional**: Completely optional - existing functionality works without aliases
+
+**Alias Use Cases:**
+
+1. **Multiple Source Relationships**: Same child derived from same parent in different ways
+2. **Versioned Relationships**: Track different versions of parent-child connections
+3. **Role-Based Relationships**: Distinguish production vs. staging vs. development links
 
 **Features:**
 
 -   **Cycle Detection**: Prevents creating parent-child relationships that would create cycles
 -   **Asset Validation**: Ensures both assets exist before creating link
 -   **Permission Checking**: Validates user has permissions on both assets
--   **Duplicate Prevention**: Prevents creating duplicate relationships
+-   **Duplicate Prevention**: Prevents creating duplicate relationships (considering alias)
+-   **Alias Validation**: Enforces alias usage only for parentChild relationships
 
 ### `vamscli asset-links get`
 
@@ -537,6 +562,7 @@ Update an existing asset link.
 
 **Options:**
 
+-   `--alias-id`: Optional alias ID to update (max 128 chars, parentChild relationships only)
 -   `--tags`: New tags for the asset link (replaces existing tags)
 -   `--json-input`: JSON input file path or JSON string with update data
 -   `--json-output`: Output raw JSON response
@@ -547,11 +573,17 @@ Update an existing asset link.
 # Update tags (replaces all existing tags)
 vamscli asset-links update --asset-link-id 12345678-1234-1234-1234-123456789012 --tags new-tag1 --tags new-tag2
 
+# Update alias ID only
+vamscli asset-links update --asset-link-id 12345678-1234-1234-1234-123456789012 --alias-id "updated-alias"
+
+# Update both alias and tags
+vamscli asset-links update --asset-link-id 12345678-1234-1234-1234-123456789012 --alias-id "new-alias" --tags tag1 --tags tag2
+
 # Clear all tags
 vamscli asset-links update --asset-link-id 12345678-1234-1234-1234-123456789012 --tags ""
 
 # Update with JSON input
-vamscli asset-links update --asset-link-id 12345678-1234-1234-1234-123456789012 --json-input '{"tags":["updated-tag1","updated-tag2"]}'
+vamscli asset-links update --asset-link-id 12345678-1234-1234-1234-123456789012 --json-input '{"assetLinkAliasId":"my-alias","tags":["updated-tag1","updated-tag2"]}'
 
 # Update from JSON file
 vamscli asset-links update --asset-link-id 12345678-1234-1234-1234-123456789012 --json-input @update-data.json --json-output
@@ -561,13 +593,19 @@ vamscli asset-links update --asset-link-id 12345678-1234-1234-1234-123456789012 
 
 ```json
 {
+    "assetLinkAliasId": "updated-alias",
     "tags": ["updated-tag1", "updated-tag2", "updated-tag3"]
 }
 ```
 
+**Updatable Fields:**
+
+-   **Alias ID**: Can update or set alias for parentChild relationships
+-   **Tags**: Can update tags for any relationship type
+
 **Current Limitations:**
 
--   Only tags can be updated (relationship type and connected assets cannot be changed)
+-   Relationship type and connected assets cannot be changed
 -   To change relationship type or assets, delete the link and create a new one
 
 ### `vamscli asset-links delete`
@@ -637,7 +675,192 @@ vamscli asset-links list -d my-database --asset-id my-asset --json-output
 -   **Parent Assets**: Assets that have this asset as a child
 -   **Child Assets**: Assets that are children of this asset
 -   **Tree View**: Hierarchical display of parent-child relationships
+-   **Alias Display**: Shows alias IDs for links that have them (e.g., "(Alias: primary-link)")
 -   **Unauthorized Counts**: Number of linked assets user cannot access
+
+**Example Output with Aliases:**
+
+```
+Asset Links for parent-asset in database my-database:
+Related Assets (0):
+  None
+
+Parent Assets (0):
+  None
+
+Child Assets (2):
+  • child-asset (my-database) - Link ID: 12345678... (Alias: primary-relationship)
+  • child-asset (my-database) - Link ID: 87654321... (Alias: secondary-relationship)
+```
+
+## Asset Links Alias ID Feature
+
+### Overview
+
+The `assetLinkAliasId` feature enables multiple parent-child relationships between the same pair of assets by providing a unique identifier for each relationship. This allows for more complex asset hierarchies where the same child asset can have multiple distinct relationships with the same parent asset.
+
+### Key Concepts
+
+**What is an Alias ID?**
+
+An **alias ID** is an optional string identifier (max 128 characters) that can be assigned to a parent-child asset link. It allows you to:
+
+- Create multiple parent-child relationships between the same parent and child assets
+- Distinguish between different types of relationships (e.g., "primary-source", "backup-source", "reference-copy")
+- Maintain unique identifiers for each relationship instance
+
+**Restrictions:**
+
+- **Relationship Type**: Alias IDs can ONLY be used with `parentChild` relationship type
+- **Not for Related Links**: The `related` relationship type does NOT support aliases
+- **Uniqueness**: Each alias must be unique for a given child asset
+- **Optional**: Alias IDs are completely optional - existing functionality works without them
+
+### Alias Usage Examples
+
+**Create with Alias:**
+
+```bash
+# Create a parent-child link with an alias
+vamscli asset-links create \
+  --from-asset-id parent-asset \
+  --from-database-id my-database \
+  --to-asset-id child-asset \
+  --to-database-id my-database \
+  --relationship-type parentChild \
+  --alias-id "primary-relationship"
+
+# Create multiple relationships between same assets with different aliases
+vamscli asset-links create \
+  --from-asset-id parent-asset \
+  --from-database-id my-database \
+  --to-asset-id child-asset \
+  --to-database-id my-database \
+  --relationship-type parentChild \
+  --alias-id "secondary-relationship"
+```
+
+**Update Alias:**
+
+```bash
+# Update only the alias ID
+vamscli asset-links update \
+  --asset-link-id 12345678-1234-1234-1234-123456789012 \
+  --alias-id "updated-alias"
+
+# Update both alias and tags
+vamscli asset-links update \
+  --asset-link-id 12345678-1234-1234-1234-123456789012 \
+  --alias-id "new-alias" \
+  --tags tag1 --tags tag2
+```
+
+**View with Aliases:**
+
+```bash
+# Get single asset link (shows alias if present)
+vamscli asset-links get --asset-link-id 12345678-1234-1234-1234-123456789012
+
+# List shows aliases in output
+vamscli asset-links list -d my-database --asset-id parent-asset
+```
+
+### Alias Use Cases
+
+**1. Multiple Source Relationships:**
+
+```bash
+# Primary source relationship
+vamscli asset-links create \
+  --from-asset-id source-model \
+  --to-asset-id derived-asset \
+  --relationship-type parentChild \
+  --alias-id "primary-source"
+
+# Reference source relationship
+vamscli asset-links create \
+  --from-asset-id source-model \
+  --to-asset-id derived-asset \
+  --relationship-type parentChild \
+  --alias-id "reference-source"
+```
+
+**2. Versioned Relationships:**
+
+```bash
+# Version 1 relationship
+vamscli asset-links create \
+  --from-asset-id template-v1 \
+  --to-asset-id instance \
+  --relationship-type parentChild \
+  --alias-id "v1-instance"
+
+# Version 2 relationship
+vamscli asset-links create \
+  --from-asset-id template-v2 \
+  --to-asset-id instance \
+  --relationship-type parentChild \
+  --alias-id "v2-instance"
+```
+
+**3. Role-Based Relationships:**
+
+```bash
+# Production relationship
+vamscli asset-links create \
+  --from-asset-id master-config \
+  --to-asset-id deployment \
+  --relationship-type parentChild \
+  --alias-id "production"
+
+# Staging relationship
+vamscli asset-links create \
+  --from-asset-id master-config \
+  --to-asset-id deployment \
+  --relationship-type parentChild \
+  --alias-id "staging"
+```
+
+### Alias Error Handling
+
+**Invalid Relationship Type:**
+
+```bash
+# This will fail - alias not allowed for 'related' type
+vamscli asset-links create \
+  --from-asset-id asset1 \
+  --to-asset-id asset2 \
+  --relationship-type related \
+  --alias-id "will-fail"
+
+# Error: The --alias-id option can only be used with 'parentChild' relationship type
+```
+
+**Duplicate Alias:**
+
+```bash
+# Backend will reject duplicate aliases for same child asset
+vamscli asset-links create \
+  --from-asset-id parent \
+  --to-asset-id child \
+  --relationship-type parentChild \
+  --alias-id "existing-alias"
+
+# Error: Asset link already exists (if alias already used)
+```
+
+### Best Practices for Aliases
+
+1. **Use Descriptive Aliases**: Choose meaningful names that describe the relationship purpose
+   - ✅ Good: `"primary-source"`, `"backup-reference"`, `"v2-template"`
+   - ❌ Bad: `"link1"`, `"test"`, `"abc"`
+
+2. **Consistent Naming**: Use a consistent naming convention across your project
+   - Example: `"{purpose}-{version}"` → `"source-v1"`, `"source-v2"`
+
+3. **Document Aliases**: Keep track of what each alias represents in your project documentation
+
+4. **Avoid Overuse**: Only use aliases when you genuinely need multiple relationships between the same assets
 
 ## Asset Management Workflow Examples
 
@@ -669,7 +892,12 @@ vamscli asset-links create --from-asset-id model1 --from-database-id db1 --to-as
 # Create parent-child hierarchy
 vamscli asset-links create --from-asset-id main-model --from-database-id db1 --to-asset-id lod1-model --to-database-id db1 --relationship-type parentChild --tags "lod-hierarchy"
 
-# View all relationships for an asset
+# Create parent-child with alias for multiple relationships
+vamscli asset-links create --from-asset-id main-model --from-database-id db1 --to-asset-id variant-model --to-database-id db1 --relationship-type parentChild --alias-id "high-quality-variant"
+
+vamscli asset-links create --from-asset-id main-model --from-database-id db1 --to-asset-id variant-model --to-database-id db1 --relationship-type parentChild --alias-id "low-quality-variant"
+
+# View all relationships for an asset (shows aliases)
 vamscli asset-links list -d db1 --asset-id main-model --tree-view
 ```
 

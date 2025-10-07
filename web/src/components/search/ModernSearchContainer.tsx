@@ -18,8 +18,8 @@ import { useDebounce } from "./hooks/useDebounce";
 import { SearchTopBar, SearchSidebar } from "./SearchLayout";
 import CardView from "./SearchResults/CardView";
 import ToastManager from "./SearchNotifications/ToastManager";
-import SearchPageListView from "../../pages/search/SearchPageListView";
-import SearchPageMapView from "../../pages/search/SearchPageMapView";
+import SearchPageListView from "./SearchPageListView";
+import SearchPageMapView from "./SearchPageMapView";
 import ListPage from "../../pages/ListPage";
 import { AssetListDefinition } from "../list/list-definitions/AssetListDefinition.js";
 import { fetchAllAssets, fetchDatabaseAssets } from "../../services/APIService";
@@ -157,6 +157,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
         try {
             searchState.setLoading(true);
             const searchQuery = searchState.buildSearchQuery();
+            console.log("[Search] Executing search with sort:", searchQuery.sort, "tableSort:", searchState.tableSort);
             const result = await searchAPI.executeSearch(
                 searchQuery,
                 databaseId,
@@ -485,7 +486,31 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                                     if (action.sort && action.tableSort) {
                                         searchState.setSort(action.sort);
                                         searchState.setTableSort(action.tableSort);
-                                        handleSearch();
+                                        // Execute search with the new sort immediately
+                                        (async () => {
+                                            try {
+                                                searchState.setLoading(true);
+                                                // Build query with the new sort from action, not state
+                                                const searchQuery = {
+                                                    ...searchState.buildSearchQuery(),
+                                                    sort: action.sort,
+                                                };
+                                                console.log("[Sort] Executing search with sort from action:", action.sort);
+                                                const result = await searchAPI.executeSearch(
+                                                    searchQuery,
+                                                    databaseId,
+                                                    metadataSearchMode,
+                                                    metadataOperator
+                                                );
+                                                searchState.setResult(result);
+                                            } catch (error: any) {
+                                                console.error("Sort search error:", error);
+                                                searchState.setError(error.message || "Search failed");
+                                                showError("Search failed", error.message || "An error occurred while searching");
+                                            } finally {
+                                                searchState.setLoading(false);
+                                            }
+                                        })();
                                     }
                                     break;
                                 case "query-paginate":
@@ -573,7 +598,31 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                                     if (action.sort && action.tableSort) {
                                         searchState.setSort(action.sort);
                                         searchState.setTableSort(action.tableSort);
-                                        handleSearch();
+                                        // Execute search with the new sort immediately
+                                        (async () => {
+                                            try {
+                                                searchState.setLoading(true);
+                                                // Build query with the new sort from action, not state
+                                                const searchQuery = {
+                                                    ...searchState.buildSearchQuery(),
+                                                    sort: action.sort,
+                                                };
+                                                console.log("[Sort] Executing search with sort from action:", action.sort);
+                                                const result = await searchAPI.executeSearch(
+                                                    searchQuery,
+                                                    databaseId,
+                                                    metadataSearchMode,
+                                                    metadataOperator
+                                                );
+                                                searchState.setResult(result);
+                                            } catch (error: any) {
+                                                console.error("Sort search error:", error);
+                                                searchState.setError(error.message || "Search failed");
+                                                showError("Search failed", error.message || "An error occurred while searching");
+                                            } finally {
+                                                searchState.setLoading(false);
+                                            }
+                                        })();
                                     }
                                     break;
                                 case "query-paginate":

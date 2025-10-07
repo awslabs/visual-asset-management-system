@@ -29,12 +29,14 @@ export const useSearchAPI = () => {
                 Object.keys(searchQuery.filters).forEach((key) => {
                     const filter = searchQuery.filters[key];
 
-                    // Skip non-filter fields, _rectype (handled by entityTypes), and bool_archived (handled by includeArchived)
+                    // Skip non-filter fields, _rectype (handled by entityTypes), bool_archived (handled by includeArchived), and custom filter objects
                     if (
                         key === "includeMetadataInKeywordSearch" ||
                         key === "showResultExplanation" ||
                         key === "_rectype" ||
-                        key === "bool_archived"
+                        key === "bool_archived" ||
+                        key === "date_lastmodified_filter" ||
+                        key === "num_filesize_filter"
                     )
                         return;
 
@@ -46,7 +48,17 @@ export const useSearchAPI = () => {
                             },
                         });
                     }
-                    // Handle regular filters
+                    // Handle multi-value filters (values array)
+                    else if (filter && filter.values && Array.isArray(filter.values) && filter.values.length > 0) {
+                        // Build OR query for multiple values: field:("value1" OR "value2" OR "value3")
+                        const orQuery = filter.values.map((val: string) => `"${val}"`).join(" OR ");
+                        filters.push({
+                            query_string: {
+                                query: `(${key}:(${orQuery}))`,
+                            },
+                        });
+                    }
+                    // Handle single value filters
                     else if (filter && filter.value !== "all" && filter.value !== "") {
                         filters.push({
                             query_string: {
@@ -55,6 +67,72 @@ export const useSearchAPI = () => {
                         });
                     }
                 });
+
+                // Handle date_lastmodified_filter
+                if (searchQuery.filters.date_lastmodified_filter) {
+                    const dateFilter = searchQuery.filters.date_lastmodified_filter;
+                    let queryString = "";
+
+                    if (dateFilter.operator === "between" && Array.isArray(dateFilter.value)) {
+                        const [startDate, endDate] = dateFilter.value;
+                        if (startDate && endDate) {
+                            queryString = `date_lastmodified:[${startDate} TO ${endDate}]`;
+                        }
+                    } else if (typeof dateFilter.value === "string" && dateFilter.value) {
+                        switch (dateFilter.operator) {
+                            case ">":
+                                queryString = `date_lastmodified:>=${dateFilter.value}`;
+                                break;
+                            case "<":
+                                queryString = `date_lastmodified:<=${dateFilter.value}`;
+                                break;
+                            case "=":
+                                queryString = `date_lastmodified:${dateFilter.value}`;
+                                break;
+                        }
+                    }
+
+                    if (queryString) {
+                        filters.push({
+                            query_string: {
+                                query: queryString,
+                            },
+                        });
+                    }
+                }
+
+                // Handle num_filesize_filter
+                if (searchQuery.filters.num_filesize_filter) {
+                    const sizeFilter = searchQuery.filters.num_filesize_filter;
+                    let queryString = "";
+
+                    if (sizeFilter.operator === "between" && Array.isArray(sizeFilter.value)) {
+                        const [minSize, maxSize] = sizeFilter.value;
+                        if (minSize !== undefined && maxSize !== undefined) {
+                            queryString = `num_filesize:[${minSize} TO ${maxSize}]`;
+                        }
+                    } else if (typeof sizeFilter.value === "number") {
+                        switch (sizeFilter.operator) {
+                            case ">":
+                                queryString = `num_filesize:>=${sizeFilter.value}`;
+                                break;
+                            case "<":
+                                queryString = `num_filesize:<=${sizeFilter.value}`;
+                                break;
+                            case "=":
+                                queryString = `num_filesize:${sizeFilter.value}`;
+                                break;
+                        }
+                    }
+
+                    if (queryString) {
+                        filters.push({
+                            query_string: {
+                                query: queryString,
+                            },
+                        });
+                    }
+                }
 
                 // Add database filter if specified
                 if (databaseId) {
@@ -179,7 +257,7 @@ export const useSearchAPI = () => {
                 const body = {
                     query: searchQuery.query || undefined,
                     filters: filters.length > 0 ? filters : undefined,
-                    sort: searchQuery.sort,
+                    sort: searchQuery.sort && searchQuery.sort.length > 0 ? searchQuery.sort : undefined,
                     from: searchQuery.pagination.from,
                     size: searchQuery.pagination.size,
                     entityTypes: entityTypes.length > 0 ? entityTypes : undefined,
@@ -271,19 +349,12 @@ export const useSearchAPI = () => {
     }, []);
 
     const buildSortQuery = useCallback((sortField: string, isDescending: boolean) => {
-        let sortingFieldIndex = sortField;
-
-        // Handle string fields that need .keyword suffix for sorting (backend expects this)
-        if (sortField.indexOf("str_") === 0) {
-            sortingFieldIndex = sortField + ".keyword";
-        }
-
+        // Send field name as-is without .keyword suffix
         return [
             {
-                field: sortingFieldIndex,
+                field: sortField,
                 order: isDescending ? "desc" : "asc",
             },
-            "_score",
         ];
     }, []);
 

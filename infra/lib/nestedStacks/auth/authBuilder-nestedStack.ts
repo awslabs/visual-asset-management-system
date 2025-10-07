@@ -36,7 +36,6 @@ import {
 export interface authResources {
     roles: {
         unAuthenticatedRole: iam.Role;
-        authenticatedRole: iam.Role;
     };
     cognito: {
         userPool: cognito.UserPool;
@@ -86,7 +85,6 @@ export class AuthBuilderNestedStack extends NestedStack {
 
             this.authResources = {
                 roles: {
-                    authenticatedRole: cognitoWebNativeConstruct.authenticatedRole,
                     unAuthenticatedRole: cognitoWebNativeConstruct.unauthenticatedRole,
                 },
                 cognito: {

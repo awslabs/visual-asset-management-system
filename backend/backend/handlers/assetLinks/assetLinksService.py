@@ -197,6 +197,7 @@ def get_single_asset_link(asset_link_id: str, claims_and_roles: Dict) -> GetSing
             toAssetId=link_item['toAssetId'],
             toAssetDatabaseId=link_item['toAssetDatabaseId'],
             relationshipType=link_item['relationshipType'],
+            assetLinkAliasId=link_item.get('assetLinkAliasId', '') if link_item.get('assetLinkAliasId') else None,
             tags=link_item.get('tags', [])
         )
         
@@ -265,7 +266,8 @@ def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: 
                             assetId=link['toAssetId'],
                             assetName=other_asset.get('assetName', ''),
                             databaseId=link['toAssetDatabaseId'],
-                            assetLinkId=link['assetLinkId']
+                            assetLinkId=link['assetLinkId'],
+                            assetLinkAliasId=None  # Related relationships don't use aliases
                         ))
                     else:
                         unauthorized_counts.related += 1
@@ -277,7 +279,8 @@ def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: 
                             assetId=link['fromAssetId'],
                             assetName=other_asset.get('assetName', ''),
                             databaseId=link['fromAssetDatabaseId'],
-                            assetLinkId=link['assetLinkId']
+                            assetLinkId=link['assetLinkId'],
+                            assetLinkAliasId=None  # Related relationships don't use aliases
                         ))
                     else:
                         unauthorized_counts.related += 1
@@ -287,11 +290,13 @@ def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: 
                     # This asset is the child, so the 'from' asset is the parent
                     parent_asset = asset_details.get(from_key)
                     if parent_asset and check_asset_permission(parent_asset, claims_and_roles):
+                        alias_id = link.get('assetLinkAliasId', '')
                         parent_assets.append(AssetNodeModel(
                             assetId=link['fromAssetId'],
                             assetName=parent_asset.get('assetName', ''),
                             databaseId=link['fromAssetDatabaseId'],
-                            assetLinkId=link['assetLinkId']
+                            assetLinkId=link['assetLinkId'],
+                            assetLinkAliasId=alias_id if alias_id else None
                         ))
                     else:
                         unauthorized_counts.parents += 1
@@ -300,11 +305,13 @@ def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: 
                     # This asset is the parent, so the 'to' asset is the child
                     child_asset = asset_details.get(to_key)
                     if child_asset and check_asset_permission(child_asset, claims_and_roles):
+                        alias_id = link.get('assetLinkAliasId', '')
                         child_assets.append(AssetNodeModel(
                             assetId=link['toAssetId'],
                             assetName=child_asset.get('assetName', ''),
                             databaseId=link['toAssetDatabaseId'],
-                            assetLinkId=link['assetLinkId']
+                            assetLinkId=link['assetLinkId'],
+                            assetLinkAliasId=alias_id if alias_id else None
                         ))
                     else:
                         unauthorized_counts.children += 1
@@ -360,12 +367,16 @@ def build_child_tree(root_asset_id: str, root_database_id: str, claims_and_roles
                     # Recursively get children of this child
                     grandchildren = build_tree_recursive(link['toAssetId'], link['toAssetDatabaseId'])
                     
+                    # Get alias ID
+                    alias_id = link.get('assetLinkAliasId', '')
+                    
                     # Create a dictionary representation of the node
                     tree_node = {
                         "assetId": link['toAssetId'],
                         "assetName": child_asset.get('assetName', ''),
                         "databaseId": link['toAssetDatabaseId'],
                         "assetLinkId": link['assetLinkId'],
+                        "assetLinkAliasId": alias_id if alias_id else None,
                         "children": grandchildren
                     }
                     tree_nodes.append(tree_node)
@@ -385,6 +396,7 @@ def build_child_tree(root_asset_id: str, root_database_id: str, claims_and_roles
                 assetName=node_dict["assetName"],
                 databaseId=node_dict["databaseId"],
                 assetLinkId=node_dict["assetLinkId"],
+                assetLinkAliasId=node_dict.get("assetLinkAliasId"),
                 children=children_models
             )
         
@@ -399,7 +411,7 @@ def build_child_tree(root_asset_id: str, root_database_id: str, claims_and_roles
 #######################
 
 def update_asset_link(asset_link_id: str, request_model: UpdateAssetLinkRequestModel, claims_and_roles: dict) -> UpdateAssetLinkResponseModel:
-    """Update an asset link (currently only tags can be updated)"""
+    """Update an asset link (tags and assetLinkAliasId can be updated)"""
     try:
         # Get the asset link first
         response = asset_links_table.get_item(
@@ -423,16 +435,82 @@ def update_asset_link(asset_link_id: str, request_model: UpdateAssetLinkRequestM
                 check_asset_permission(to_asset, claims_and_roles, "PUT")):
             raise PermissionError("Not authorized to update this asset link")
         
-        # Update the asset link tags
-        asset_links_table.update_item(
-            Key={'assetLinkId': asset_link_id},
-            UpdateExpression='SET tags = :tags',
-            ExpressionAttributeValues={
-                ':tags': request_model.tags
-            }
-        )
+        # Check if assetLinkAliasId is being updated
+        if request_model.assetLinkAliasId is not None:
+            # Validate that aliases are only for parentChild relationships
+            if link_item['relationshipType'] != RelationshipType.PARENT_CHILD:
+                raise ValueError("Validation Error: assetLinkAliasId can only be used with parentChild relationships")
+            
+            # Check if the new aliasId would conflict with existing links
+            new_alias = request_model.assetLinkAliasId  # Can be a value or None
+            current_alias = link_item.get('assetLinkAliasId')  # Can be a value or None/missing
+            
+            # Only check for conflicts if the alias is actually changing
+            if new_alias != current_alias:
+                from_key = f"{link_item['fromAssetDatabaseId']}:{link_item['fromAssetId']}"
+                to_key = f"{link_item['toAssetDatabaseId']}:{link_item['toAssetId']}"
+                
+                # Get ALL parent->child relationships for this parent-child pair
+                conflict_response = asset_links_table.query(
+                    IndexName='fromAssetGSI',
+                    KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(from_key) & 
+                                         Key('toAssetDatabaseId:toAssetId').eq(to_key),
+                    FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq(RelationshipType.PARENT_CHILD)
+                )
+                
+                # Check if any existing links have the same new alias (excluding current link)
+                for item in conflict_response.get('Items', []):
+                    if item['assetLinkId'] != asset_link_id:
+                        existing_alias = item.get('assetLinkAliasId')
+                        # Both have no alias
+                        if not existing_alias and not new_alias:
+                            raise ValueError("Validation Error: A parent-child relationship already exists between these assets with provided alias")
+                        # Both have the same alias value
+                        if existing_alias and new_alias and existing_alias == new_alias:
+                            raise ValueError(f"Validation Error: A parent-child relationship already exists between these assets with provided alias")
         
-        logger.info(f"Updated asset link {asset_link_id} tags to {request_model.tags}")
+        # Build update expression dynamically
+        set_parts = []
+        remove_parts = []
+        expression_values = {}
+        
+        # Always update tags
+        set_parts.append('tags = :tags')
+        expression_values[':tags'] = request_model.tags
+        
+        # Update assetLinkAliasId if provided
+        if request_model.assetLinkAliasId is not None:
+            if request_model.assetLinkAliasId:
+                # Set to the new value
+                set_parts.append('assetLinkAliasId = :aliasId')
+                expression_values[':aliasId'] = request_model.assetLinkAliasId
+            else:
+                # Remove the attribute since DynamoDB GSI doesn't support empty strings
+                remove_parts.append('assetLinkAliasId')
+        
+        # Build the update expression
+        update_expression = ''
+        if set_parts:
+            update_expression += 'SET ' + ', '.join(set_parts)
+        if remove_parts:
+            if update_expression:
+                update_expression += ' '
+            update_expression += 'REMOVE ' + ', '.join(remove_parts)
+        
+        # Update the asset link
+        if expression_values:
+            asset_links_table.update_item(
+                Key={'assetLinkId': asset_link_id},
+                UpdateExpression=update_expression,
+                ExpressionAttributeValues=expression_values
+            )
+        else:
+            asset_links_table.update_item(
+                Key={'assetLinkId': asset_link_id},
+                UpdateExpression=update_expression
+            )
+        
+        logger.info(f"Updated asset link {asset_link_id}")
         
         return UpdateAssetLinkResponseModel(
             message="Asset link updated successfully"

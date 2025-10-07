@@ -25,8 +25,8 @@ import {
 } from "@cloudscape-design/components";
 import { Cache } from "aws-amplify";
 import { LngLatBoundsLike } from "maplibre-gl";
-import PreviewThumbnailCell from "../../components/search/SearchPreviewThumbnail/PreviewThumbnailCell";
-import { SearchExplanation } from "../../components/search/types";
+import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
+import { SearchExplanation } from "./types";
 
 interface LocationData {
     id: string;

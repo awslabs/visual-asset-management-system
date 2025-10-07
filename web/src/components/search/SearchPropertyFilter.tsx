@@ -9,8 +9,6 @@ import {
 } from "@cloudscape-design/collection-hooks";
 import { Select, SpaceBetween } from "@cloudscape-design/components";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
-import { deleteElement } from "../../services/APIService";
-import { execPath } from "process";
 
 interface SearchPropertyFilterProps {
     state: any;
@@ -115,18 +113,12 @@ export async function sortSearch(
     isDescending: boolean,
     { state, dispatch }: SearchPropertyFilterProps
 ) {
-    let sortingFieldIndex = sortingField;
-    if (sortingField.indexOf("str_") === 0) {
-        sortingFieldIndex = sortingField + ".keyword";
-    }
-
-    // Backend expects sort format: [{ field: "fieldname", order: "asc|desc" }, "_score"]
+    // Send field name as-is without .keyword suffix
     const sort = [
         {
-            field: sortingFieldIndex,
+            field: sortingField,
             order: isDescending ? "desc" : "asc",
         },
-        "_score",
     ];
 
     const tableSort = {
@@ -147,9 +139,6 @@ export async function sortSearch(
     };
     search(body, { dispatch, state });
 }
-
-// The deleteSelected function has been replaced by the AssetDeleteModal component
-// which handles both archive and permanent delete operations directly
 
 export async function paginateSearch(
     from: number,
@@ -219,12 +208,12 @@ async function runSearch(
         type: "property-filter-query-updated",
         tokens: detail.tokens,
         operation: detail.operation,
-        sort: ["_score"],
+        sort: [],
     });
     const body = {
         tokens: detail.tokens,
         operation: detail.operation,
-        sort: ["_score"],
+        sort: [],
         from: 0,
         size: state?.tablePreferences?.pageSize,
         filters: [{ query_string: { query: `(_rectype:(${state?.rectype.value}))` } }],

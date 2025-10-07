@@ -17,7 +17,7 @@ Changes to BatchFargate CDK construct naming for use-case pipeline naming may re
 ### Features
 
 -   **CLI** VAMS now has a CLI tool that can be used to automate VAMS operations. It includes operations so far for authentication, database, asset, assetLinks, assetLinkMetadata, metadata, metadataSchema, tags, TagTypes, search, featureSwitch, and files. More operations to match API functionality to come in future releases such as more admin functionalities of VAMS.
--   **UI** The website viewer system has been rewritten to support a plugin based dynamically loaded viewing system which allows for much easier capability to add new viewers and adds more functionality. Documentation can be found at: `web\src\visualizerPlugin\README.md`
+-   **Web** The website viewer system has been rewritten to support a plugin based dynamically loaded viewing system which allows for much easier capability to add new viewers and adds more functionality. Documentation can be found at: `web\src\visualizerPlugin\README.md`
     -   Support for multiple viewers per file types which is now controlled with a drop-down as part of the viewer
     -   Support to define which viewers are for multiple files or single files
     -   Support for custom parameters as part of viewer plugin configuration which allows for token configuration for paid/ISV integrations
@@ -32,12 +32,13 @@ Changes to BatchFargate CDK construct naming for use-case pipeline naming may re
     -   Assets and files are now split into two separate OpenSearch indexes; the old index will remain and will not be deleted for auditing and/or migration purposes; this causes breaking changes that require a migration script to re-index all assets/files for search
     -   Asset link relationship data will now additionally be indexed (excluding asset link metadata for now)
     -   **UI** Assets (now "Assets and Files") has a completely new search page with many new filtering capabilities and options.
-    -   **UI** Search map view will now allow for many more metadata fields to be used for adding map marker or area placement (any asset with `location` (GP/GS) and `longitude` (string or number) / `latitude` (string or number) combination metadata will show up)
+    -   **Web** Search map view will now allow for many more metadata fields to be used for adding map marker or area placement (any asset with `location` (GP/GS) and `longitude` (string or number) / `latitude` (string or number) combination metadata will show up)
     -   Search now has it's origional API of `/search` and a new `/search/simple` API for a simplified search input
     -   A new CDK tool section and migration scripts has been added to help with reindexing opensearch data at any time
 -   Maps on the backend and UI frontend is updated to use the new location service APIKey method and removes the older raster map and place functionality
-    -   Note: This removes the last place that cognito identities are used which means the locaiton service functionality can now be used for external IDP solutions
--   **UI** Added a draggable splitter in ViewAsset page between the file manager tree view and details panel
+    -   Note: This removes the last place that cognito identities are used which means the location services functionality can now be used for external IDP solutions
+    -   Note: This change removes the cognito authenticatedRole and association with the identity pool. Unauthenticated role (no permissions assigned) still remains for now as it is needed for basic auth login by the web Amplify-SDK v1. 
+-   **Web** Added a draggable splitter in ViewAsset page between the file manager tree view and details panel
 -   Added a new API endpoint for asset file streaming (similar to asset preview auxiliary files) at `GET /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`
 -   Added .clineRules for CLINE AI workflows for AI-assisted development for VAMS backend API development, CDK development, and CLI development
 -   All HTTP APIGateway authorizers were swapped for custom lambda authorizers.
@@ -45,17 +46,20 @@ Changes to BatchFargate CDK construct naming for use-case pipeline naming may re
     -   New support for CDK configured IP range restrictions for API Gateway calls that are managed in the authorizer
 -   Added WXYZ, Boolean, Date, 4x4 Matrix, Geoshape, GeoPoint, LLA (Latitude Longitude, Altitude), and JSON asset link metadata value types.
     -   **UI** Added additional `Matrix` static asset link type metadata field of type 4x4 Matrix.
-    -   **UI** Defaulted `rotation` static asset link metdata field to WXYZ field type (from XYZ)
--   **UI** Changed Pipeline Edit/Create to make Asset Type and Output Type a required string text field. This removes the last place that requires specific VAMS extensions to be preloaded. These fields usages are expected to be overhauled along with overall pipelines in a future release.
+    -   **Web** Defaulted `rotation` static asset link metdata field to WXYZ field type (from XYZ)
+-   Asset link parent-child relationships now support an additional key of `assetLinkAliasId` that can be added to allow multiple parent->child relationships of the same assets. This is common in scene or engineering assembly build-outs where a parent may contain multiple of the same type of asset below it (i.e. same screws on a panel or same trees in a forest scene). T
+-   **Web** Changed Pipeline Edit/Create to make Asset Type and Output Type a required string text field. This removes the last place that requires specific VAMS extensions to be preloaded. These fields usages are expected to be overhauled along with overall pipelines in a future release.
 -   Refactored createWorkflow to not require the stepfunctions library anymore which entirely removes the additional heavyweight lambda layer created specifically for this function. This should speed up CDK deployments, reduce CDK package size, and reduce security posture by limiting backend libraries needed. Additionally, some other upgrades were done to createWorkflow as part of the refactor:
     -   Updating an existing workflow no longer create a new AWS step function workflow but modifies the definition of the existing
     -   Updated to the new backed error handling logic used since v2.2
 
 ### Bug Fixes
 
--   **UI** Scrolling issues on browsers with MacOS should now hopefully be fixed. This was due to an issue with Potree libraries being loaded globally before.
+-   **Web** Scrolling issues on browsers with MacOS should now hopefully be fixed. This was due to an issue with Potree libraries being loaded globally before.
 -   Updated BatchFargate CDK construct names to be unique for the stack (see breaking changes)
 -   Fixed backend asset file operations and S3 indexing for files >5GB (introduced in v2.2)
+-   Fixed Cognito unauthenticated role trust policy to switch the partition correctly. Cognito deployments were causing errors in GovCloud environments without this. 
+-   Fixed When saving pipelines that lambda function names have whitespace trimmed to prevent workflow errors
 
 ### Chores
 
@@ -64,7 +68,7 @@ Changes to BatchFargate CDK construct naming for use-case pipeline naming may re
 -   Updated pipeline CDK export names and job definition names to be variable per the stack deploying it to further reduce conflicts of same stack deployments in the same region
 -   Enforce S3 bucket object ownership on static website bucket
 -   Update package dependencies and fixed any associated breaking changes
--   **UI** Updated ViewAsset page to support passing in a state with a file path to load (used from links from the new search page)
+-   **Web** Updated ViewAsset page to support passing in a state with a file path to load (used from links from the new search page)
 
 ## [2.2.0] (2025-09-31)
 

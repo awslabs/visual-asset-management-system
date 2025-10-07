@@ -710,6 +710,7 @@ export default function UploadManager({
                                 toAssetId: assetId,
                                 toAssetDatabaseId: assetDetail.databaseId || "",
                                 relationshipType: "parentChild",
+                                ...(parentAsset.assetLinkAliasId ? { assetLinkAliasId: parentAsset.assetLinkAliasId } : {}),
                             })
                                 .then((response) => {
                                     console.log("Parent link created successfully:", response);
@@ -748,6 +749,7 @@ export default function UploadManager({
                                 toAssetId: childAsset.assetId,
                                 toAssetDatabaseId: childAsset.databaseId,
                                 relationshipType: "parentChild",
+                                ...(childAsset.assetLinkAliasId ? { assetLinkAliasId: childAsset.assetLinkAliasId } : {}),
                             })
                                 .then((response) => {
                                     console.log("Child link created successfully:", response);
