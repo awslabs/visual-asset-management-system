@@ -35,6 +35,7 @@ export default function TableList(props) {
         UpdateSelectedElement,
         editEnabled,
         onReload,
+        hideDeleteButton = false,
     } = props;
     const {
         columnDefinitions,
@@ -283,16 +284,18 @@ export default function TableList(props) {
                                         Edit
                                     </Button>
                                 )}
-                                <Button
-                                    disabled={
-                                        deleting || collectionProps.selectedItems.length === 0
-                                    }
-                                    onClick={() => {
-                                        setShowDeleteModal(true);
-                                    }}
-                                >
-                                    Delete Selected
-                                </Button>
+                                {!hideDeleteButton && (
+                                    <Button
+                                        disabled={
+                                            deleting || collectionProps.selectedItems.length === 0
+                                        }
+                                        onClick={() => {
+                                            setShowDeleteModal(true);
+                                        }}
+                                    >
+                                        Delete Selected
+                                    </Button>
+                                )}
                                 {createNewElement}
                             </SpaceBetween>
                         }
@@ -337,12 +340,21 @@ export default function TableList(props) {
                             { colspan: { default: "5" } },
                         ]}
                     >
-                        <div id="textFilterCapture">
-                            <TextFilter
-                                id={"test"}
-                                {...filterProps}
-                                countText={getMatchesCountText(filteredItemsCount)}
-                                filteringAriaLabel={`Filter ${pluralName}`}
+                        <div id="textFilterCapture" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                            <div style={{ flex: 1 }}>
+                                <TextFilter
+                                    id={"test"}
+                                    {...filterProps}
+                                    countText={getMatchesCountText(filteredItemsCount)}
+                                    filteringAriaLabel={`Filter ${pluralName}`}
+                                />
+                            </div>
+                            <Button
+                                iconName="refresh"
+                                variant="icon"
+                                onClick={() => setReload(true)}
+                                loading={loading}
+                                ariaLabel="Refresh data"
                             />
                         </div>
                         <div style={{ float: "right" }}>

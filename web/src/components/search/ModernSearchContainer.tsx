@@ -398,6 +398,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                     listDefinition={AssetListDefinition}
                     fetchAllElements={fetchAllAssets}
                     fetchElements={fetchDatabaseAssets}
+                    hideDeleteButton={true}
                 />
             </Box>
         );

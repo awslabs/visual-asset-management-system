@@ -77,6 +77,7 @@ In order to get lambdas to work behind a VPC again (broken as of V2.2), MFA for 
 -   Enforce S3 bucket object ownership on static website bucket
 -   Update package dependencies and fixed any associated breaking changes
 -   **Web** Updated ViewAsset page to support passing in a state with a file path to load (used from links from the new search page)
+-   **Web** Added a refresh icon for many of the VAMS entity listing pages (databases, pipelines, etc.)
 
 ## [2.2.0] (2025-09-31)
 
