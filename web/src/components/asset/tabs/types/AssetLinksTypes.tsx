@@ -129,6 +129,7 @@ export interface AssetLinksTabProps {
     showErrors?: boolean;
     onAssetLinksChange?: (assetLinks: NewAssetLinksData) => void;
     initialData?: NewAssetLinksData;
+    // databaseId is also used in upload mode to filter asset search
 }
 
 // Legacy props interface for backward compatibility

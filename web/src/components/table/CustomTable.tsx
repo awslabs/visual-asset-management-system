@@ -34,18 +34,58 @@ const CustomTable: React.FC<CustomTableProps> = ({
     selectionType = "single",
 }) => {
     const [currentPageIndex, setCurrentPageIndex] = useState(1);
+    const [sortingColumn, setSortingColumn] = useState<ColumnDefinition | undefined>(undefined);
+    const [sortingDescending, setSortingDescending] = useState(false);
+
+    // Sort items if sorting is active
+    const sortedItems = React.useMemo(() => {
+        if (!sortingColumn || !sortingColumn.sortingField) {
+            return items;
+        }
+
+        const sorted = [...items].sort((a, b) => {
+            const aValue = a[sortingColumn.sortingField!];
+            const bValue = b[sortingColumn.sortingField!];
+
+            // Handle null/undefined values
+            if (aValue == null && bValue == null) return 0;
+            if (aValue == null) return 1;
+            if (bValue == null) return -1;
+
+            // String comparison
+            if (typeof aValue === "string" && typeof bValue === "string") {
+                return aValue.localeCompare(bValue);
+            }
+
+            // Numeric comparison
+            if (typeof aValue === "number" && typeof bValue === "number") {
+                return aValue - bValue;
+            }
+
+            // Default string conversion
+            return String(aValue).localeCompare(String(bValue));
+        });
+
+        return sortingDescending ? sorted.reverse() : sorted;
+    }, [items, sortingColumn, sortingDescending]);
 
     // Calculate pagination
-    const totalItems = items.length;
+    const totalItems = sortedItems.length;
     const totalPages = Math.ceil(totalItems / pageSize);
     const startIndex = (currentPageIndex - 1) * pageSize;
     const endIndex = Math.min(startIndex + pageSize, totalItems);
-    const paginatedItems = enablePagination ? items.slice(startIndex, endIndex) : items;
+    const paginatedItems = enablePagination ? sortedItems.slice(startIndex, endIndex) : sortedItems;
 
     const handlePageChange = ({ detail }: { detail: { currentPageIndex: number } }) => {
         setCurrentPageIndex(detail.currentPageIndex);
         // Clear selection when changing pages
         setSelectedItems([]);
+    };
+
+    const handleSortingChange = ({ detail }: any) => {
+        const column = columns.find((col) => col.id === detail.sortingColumn.sortingField);
+        setSortingColumn(column);
+        setSortingDescending(detail.isDescending || false);
     };
 
     return (
@@ -56,6 +96,9 @@ const CustomTable: React.FC<CustomTableProps> = ({
                         onSelectionChange={({ detail }) => {
                             setSelectedItems(detail.selectedItems);
                         }}
+                        onSortingChange={handleSortingChange}
+                        sortingColumn={sortingColumn}
+                        sortingDescending={sortingDescending}
                         trackBy={trackBy}
                         selectedItems={selectedItems}
                         columnDefinitions={columns}

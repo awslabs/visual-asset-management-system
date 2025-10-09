@@ -299,6 +299,7 @@ function UploadModeAssetLinksTab(props: AssetLinksTabProps) {
     const showErrors = props.showErrors!;
     const onAssetLinksChange = props.onAssetLinksChange!;
     const initialData = props.initialData;
+    const databaseId = props.databaseId || "temp-upload-db"; // Use real database ID if provided, fallback to temp
 
     // Local asset links data for upload mode
     const [localAssetLinks, setLocalAssetLinks] = useState<NewAssetLinksData>({
@@ -609,7 +610,7 @@ function UploadModeAssetLinksTab(props: AssetLinksTabProps) {
                     onDismiss={handleCreateModalDismiss}
                     relationshipType={createModalRelationshipType}
                     currentAssetId="temp-upload-asset" // Temporary ID for upload mode
-                    currentDatabaseId="temp-upload-db" // Temporary DB for upload mode
+                    currentDatabaseId={databaseId} // Use real database ID from props
                     onSuccess={handleModalSuccess}
                     noOpenSearch={useNoOpenSearch}
                 />

@@ -1086,26 +1086,48 @@ class DualIndexQueryBuilder:
         
         sanitized_sort = []
         
+        # Helper function to add .keyword suffix for text fields that need it
+        def add_keyword_suffix_if_needed(field_name: str) -> str:
+            """Add .keyword suffix to text fields for proper sorting in OpenSearch"""
+            # Skip special fields that don't need .keyword
+            if field_name in ["_score", "_id"]:
+                return field_name
+            
+            # Skip if already has .keyword suffix
+            if field_name.endswith(".keyword"):
+                return field_name
+            
+            # Text fields (str_*) need .keyword suffix for sorting
+            # List fields (list_*) also need .keyword suffix
+            if field_name.startswith(("str_", "list_")):
+                logger.info(f"[Sort] Adding .keyword suffix to text field: {field_name}")
+                return f"{field_name}.keyword"
+            
+            # Numeric, boolean, and date fields don't need .keyword
+            # (num_*, bool_*, date_*)
+            return field_name
+        
         for sort_item in sort_config:
             if isinstance(sort_item, str):
-                # Handle special fields based on index type
-                if sort_item == "list_tags" and index_type == "asset":
-                    sanitized_sort.append({"list_tags": {"order": "asc"}})
-                elif sort_item == "str_fileext" and index_type == "file":
-                    sanitized_sort.append({"str_fileext": {"order": "asc"}})
-                else:
-                    sanitized_sort.append(sort_item)
+                # Simple string sort field
+                field_with_keyword = add_keyword_suffix_if_needed(sort_item)
+                sanitized_sort.append(field_with_keyword)
             elif isinstance(sort_item, dict):
                 # Check if this is the frontend format: {"field": "fieldname", "order": "asc|desc"}
                 if "field" in sort_item and "order" in sort_item:
-                    # Transform to OpenSearch format: {"fieldname": {"order": "asc|desc"}}
+                    # Transform to OpenSearch format with .keyword suffix if needed
                     field_name = sort_item["field"]
                     order = sort_item["order"]
-                    logger.info(f"[Sort] Transforming frontend format: field={field_name}, order={order}")
-                    sanitized_sort.append({field_name: {"order": order}})
+                    field_with_keyword = add_keyword_suffix_if_needed(field_name)
+                    logger.info(f"[Sort] Transforming frontend format: field={field_name} -> {field_with_keyword}, order={order}")
+                    sanitized_sort.append({field_with_keyword: {"order": order}})
                 else:
-                    # Already in OpenSearch format or other dict format
-                    sanitized_sort.append(sort_item)
+                    # Already in OpenSearch format - check if fields need .keyword suffix
+                    transformed_item = {}
+                    for field_name, field_config in sort_item.items():
+                        field_with_keyword = add_keyword_suffix_if_needed(field_name)
+                        transformed_item[field_with_keyword] = field_config
+                    sanitized_sort.append(transformed_item)
         
         # Ensure we always have at least one sort field
         if not sanitized_sort:

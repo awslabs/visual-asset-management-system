@@ -874,45 +874,45 @@ export default function UploadManager({
                             }
                         } else {
                             console.log(
-                                `No metadata found for asset ${link.assetId} in relationship ${link.relationshipType}`
+                                `No metadata in originalAsset for ${link.assetId}, checking fallback structure`
                             );
-                        }
+                            
+                            // Only check fallback if originalAsset didn't have metadata
+                            if (assetDetail.assetLinksMetadata) {
+                                const fallbackMetadata =
+                                    assetDetail.assetLinksMetadata[
+                                        link.relationshipType as keyof typeof assetDetail.assetLinksMetadata
+                                    ]?.[link.assetId];
 
-                        // Also check the assetLinksMetadata structure as fallback
-                        if (assetDetail.assetLinksMetadata) {
-                            const fallbackMetadata =
-                                assetDetail.assetLinksMetadata[
-                                    link.relationshipType as keyof typeof assetDetail.assetLinksMetadata
-                                ]?.[link.assetId];
-
-                            if (fallbackMetadata && fallbackMetadata.length > 0) {
-                                console.log(
-                                    `Creating metadata for link ${link.assetLinkId} from fallback structure:`,
-                                    fallbackMetadata
-                                );
-                                for (const metadataItem of fallbackMetadata) {
-                                    metadataPromises.push(
-                                        AssetUploadService.createAssetLinkMetadata(
-                                            link.assetLinkId,
-                                            {
-                                                metadataKey: metadataItem.metadataKey,
-                                                metadataValue: metadataItem.metadataValue,
-                                                metadataValueType: metadataItem.metadataValueType,
-                                            }
-                                        )
-                                            .then((response) => {
-                                                console.log(
-                                                    `Asset link metadata created successfully for ${link.assetLinkId} (fallback):`,
-                                                    response
-                                                );
-                                                return response;
-                                            })
-                                            .catch((error) => {
-                                                const errorMsg = `Asset link metadata creation failed for ${link.assetLinkId} (fallback): ${error.message}`;
-                                                errors.push(errorMsg);
-                                                console.error(errorMsg, error);
-                                            })
+                                if (fallbackMetadata && fallbackMetadata.length > 0) {
+                                    console.log(
+                                        `Creating metadata for link ${link.assetLinkId} from fallback structure:`,
+                                        fallbackMetadata
                                     );
+                                    for (const metadataItem of fallbackMetadata) {
+                                        metadataPromises.push(
+                                            AssetUploadService.createAssetLinkMetadata(
+                                                link.assetLinkId,
+                                                {
+                                                    metadataKey: metadataItem.metadataKey,
+                                                    metadataValue: metadataItem.metadataValue,
+                                                    metadataValueType: metadataItem.metadataValueType,
+                                                }
+                                            )
+                                                .then((response) => {
+                                                    console.log(
+                                                        `Asset link metadata created successfully for ${link.assetLinkId} (fallback):`,
+                                                        response
+                                                    );
+                                                    return response;
+                                                })
+                                                .catch((error) => {
+                                                    const errorMsg = `Asset link metadata creation failed for ${link.assetLinkId} (fallback): ${error.message}`;
+                                                    errors.push(errorMsg);
+                                                    console.error(errorMsg, error);
+                                                })
+                                        );
+                                    }
                                 }
                             }
                         }

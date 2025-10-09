@@ -43,6 +43,18 @@ export function CreateAssetLinkModal({
     // Selected assets from the search table
     const [selectedAssets, setSelectedAssets] = useState<AssetSearchItem[]>([]);
 
+    // Reset state when modal visibility changes
+    useEffect(() => {
+        if (!visible) {
+            // Reset all state when modal is closed
+            setSelectedAssets([]);
+            setFormError("");
+            setAddDisabled(false);
+            setAliasId("");
+            setAliasIdError("");
+        }
+    }, [visible]);
+
     // Validation function for alias ID
     const validateAliasId = (value: string): string => {
         if (!value) return ""; // Optional field
@@ -360,6 +372,7 @@ export function CreateAssetLinkModal({
 
                     {/* Asset Search Table */}
                     <AssetSearchTable
+                        key={visible ? 'open' : 'closed'} // Force re-render when modal opens/closes
                         selectionMode="multi"
                         currentAssetId={currentAssetId}
                         currentDatabaseId={currentDatabaseId}

@@ -10,11 +10,11 @@ This version includes significant enhancements to VAMS to include a new CLI tool
 
 All APIGateway authorizers were swapped for custom lambda authorizers to provide more flexibility in implementing additional functionality. This may cause issues with your organization so please review with your security teams. Authorizer changes may require forced cache resets on API gateways if new authorizations are not follwoing new rules set. (https://docs.aws.amazon.com/cli/latest/reference/apigatewayv2/reset-authorizers-cache.html)
 
-OpenSearch has new indexes and requires the data migration script or new re-indexing tool script to be run on existing assets and files to re-index open search with existing data.
-
 Changes to BatchFargate CDK construct naming for use-case pipeline naming may require you to deploy CDK without batch pipelines and then again with to properly re-deploy them. Not doing this with existing deployed pipelines (Metadata 3D Labeling and PcPotree) will result in a CDK deployment error within ECS Fargate. This may also require you to update your VAMS pipeline/workflow lambda function names after re-deployment.
 
 In order to get lambdas to work behind a VPC again (broken as of V2.2), MFA for roles cannot be supported if Cognito is on and all lamdbas are behind a behind (CDK config flag) or OpenSearch provisioned is turned on (CDK config flag).
+
+OpenSearch has new indexes and requires the data migration script or new re-indexing tool script to be run on existing assets and files to re-index open search with existing data.
 
 **Recommended Upgrade Path:** Run upgrade script for the new OpenSearch indexes which will re-index content `infra\deploymentDataMigration\v2.2_to_v2.3\upgrade`
 
@@ -62,6 +62,8 @@ In order to get lambdas to work behind a VPC again (broken as of V2.2), MFA for 
 ### Bug Fixes
 
 -   **Web** Scrolling issues on browsers with MacOS should now hopefully be fixed. This was due to an issue with Potree libraries being loaded globally before.
+-   **Web** Fixed UI screen issues with Upload Asset and Asset Link relationship
+-   Fixed Asset Link Service GET API to properly return child trees that show full paths when duplicate nodes exist in different branches of the tree (previously trimmed the tree of duplicate nodes)
 -   Updated BatchFargate CDK construct names to be unique for the stack (see breaking changes)
 -   Fixed backend asset file operations and S3 indexing for files >5GB (introduced in v2.2)
 -   Fixed Cognito unauthenticated role trust policy to switch the partition correctly. Cognito deployments were causing errors in GovCloud environments without this. 
@@ -71,13 +73,18 @@ In order to get lambdas to work behind a VPC again (broken as of V2.2), MFA for 
 
 ### Chores
 
+-   **Web** Updated ViewAsset page to support passing in a state with a file path to load (used from links from the new search page)
+-   **Web** Added a refresh icon for many of the VAMS entity listing pages (databases, pipelines, etc.)
 -   Updated Cognito invitation and verification email messages to be more VAMS branded, show username where appropriate, and remove confusing period character directly after temporary passwords.
 -   Update KMS key policy to support Cloudformation principal better for CustomResources when modifying S3 or DynamoDB tables that have a KMS encryption key. This should fix errors with setting default auth constraints and roles during CDK deployment that sometimes cropped up.
 -   Updated pipeline CDK export names and job definition names to be variable per the stack deploying it to further reduce conflicts of same stack deployments in the same region
 -   Enforce S3 bucket object ownership on static website bucket
 -   Update package dependencies and fixed any associated breaking changes
--   **Web** Updated ViewAsset page to support passing in a state with a file path to load (used from links from the new search page)
--   **Web** Added a refresh icon for many of the VAMS entity listing pages (databases, pipelines, etc.)
+
+### Known Outstanding Issues
+
+-   With updating to support multiple S3 buckets, there are scenarios that can occur where if there are multiple buckets/prefixes across different databases where the assetId are now the same, there will be lookup conflicts within Asset Versions, Comments and subscriptions functionality. This can only occur right now with manual changes/updates as done directly to S3 as assetIds generated from VAMS uploads still generate unique GUIDs.
+-   Using the same pipeline ID in a GLOBAL and non-GLOBAL database will cause overlap conflicts and issues.
 
 ## [2.2.0] (2025-09-31)
 

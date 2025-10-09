@@ -241,15 +241,16 @@ def get_asset_metadata(database_id: str, asset_id: str) -> Dict[str, Any]:
 def get_asset_version_info(asset_id: str) -> Dict[str, Any]:
     """Get current asset version information"""
     try:
-        # Get current version info
+        # Get current version info - remove Limit to ensure we scan all records
+        # The FilterExpression will still only return matching items
         response = asset_versions_table.query(
             KeyConditionExpression=Key('assetId').eq(asset_id),
-            FilterExpression=boto3.dynamodb.conditions.Attr('isCurrentVersion').eq(True),
-            Limit=1
+            FilterExpression=boto3.dynamodb.conditions.Attr('isCurrentVersion').eq(True)
         )
         
         items = response.get('Items', [])
         if items:
+            # Should only be one current version, but take the first if multiple exist
             version_info = items[0]
             return {
                 'versionId': version_info.get('assetVersionId'),
@@ -272,7 +273,6 @@ def get_asset_relationship_flags(database_id: str, asset_id: str) -> Dict[str, b
             IndexName='fromAssetGSI',
             KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(asset_key),
             FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq('parentChild'),
-            Limit=1
         )
         has_children = len(children_response.get('Items', [])) > 0
         
@@ -281,7 +281,6 @@ def get_asset_relationship_flags(database_id: str, asset_id: str) -> Dict[str, b
             IndexName='toAssetGSI',
             KeyConditionExpression=Key('toAssetDatabaseId:toAssetId').eq(asset_key),
             FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq('parentChild'),
-            Limit=1
         )
         has_parents = len(parents_response.get('Items', [])) > 0
         
@@ -290,14 +289,12 @@ def get_asset_relationship_flags(database_id: str, asset_id: str) -> Dict[str, b
             IndexName='fromAssetGSI',
             KeyConditionExpression=Key('fromAssetDatabaseId:fromAssetId').eq(asset_key),
             FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq('related'),
-            Limit=1
         )
         
         related_to_response = asset_links_table.query(
             IndexName='toAssetGSI',
             KeyConditionExpression=Key('toAssetDatabaseId:toAssetId').eq(asset_key),
             FilterExpression=boto3.dynamodb.conditions.Attr('relationshipType').eq('related'),
-            Limit=1
         )
         
         has_related = (len(related_from_response.get('Items', [])) > 0 or 
@@ -645,8 +642,8 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
             )
         
         # Check if this is asset-level metadata (no path or root path)
-        if '#' in asset_id_with_path:
-            asset_id, file_path = asset_id_with_path.split('#', 1)
+        if '/' in asset_id_with_path:
+            asset_id, file_path = asset_id_with_path.split('/', 1)
             
             # Only process if it's root path metadata
             if file_path and file_path != '/' and file_path != '':

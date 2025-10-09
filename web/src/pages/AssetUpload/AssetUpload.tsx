@@ -12,6 +12,7 @@ import React, {
     useState,
     useMemo,
     useCallback,
+    useRef,
 } from "react";
 import {
     Box,
@@ -579,13 +580,27 @@ const AssetLinkingInfo = ({ setValid, showErrors }: AssetLinkingProps) => {
     const assetDetailContext = useContext(AssetDetailContext) as AssetDetailContextType;
     const { assetDetailState, assetDetailDispatch } = assetDetailContext;
 
+    // Use ref to track previous data and prevent update loops
+    const prevAssetLinksRef = useRef<string>();
+    const isInitializedRef = useRef(false);
+
     // Handle asset links change from the new component - use useCallback to prevent recreation
     const handleAssetLinksChange = useCallback(
         (newAssetLinks: any) => {
+            // Serialize the new data to compare with previous
+            const newDataStr = JSON.stringify(newAssetLinks);
+            
+            // Only update if data actually changed
+            if (prevAssetLinksRef.current === newDataStr) {
+                return;
+            }
+
             console.log(
                 "handleAssetLinksChange called with:",
                 JSON.stringify(newAssetLinks, null, 2)
             );
+
+            prevAssetLinksRef.current = newDataStr;
 
             // Update the asset detail state with the new links and metadata
             assetDetailDispatch({
@@ -609,9 +624,32 @@ const AssetLinkingInfo = ({ setValid, showErrors }: AssetLinkingProps) => {
         [assetDetailDispatch]
     );
 
-    // Convert existing data to new format - use useMemo to prevent unnecessary recreations
-    const initialData = useMemo(
-        () => ({
+    // Convert existing data to new format - only create once on mount
+    const initialData = useMemo(() => {
+        // Only create initial data once when component mounts
+        if (isInitializedRef.current) {
+            // Return a stable reference after initialization
+            return {
+                assetLinksFe: {
+                    parents: assetDetailState.assetLinksFe?.parents || [],
+                    child: assetDetailState.assetLinksFe?.child || [],
+                    related: assetDetailState.assetLinksFe?.related || [],
+                },
+                assetLinks: {
+                    parents: assetDetailState.assetLinks?.parents || [],
+                    child: assetDetailState.assetLinks?.child || [],
+                    related: assetDetailState.assetLinks?.related || [],
+                },
+                assetLinksMetadata: {
+                    parents: assetDetailState.assetLinksMetadata?.parents || {},
+                    child: assetDetailState.assetLinksMetadata?.child || {},
+                    related: assetDetailState.assetLinksMetadata?.related || {},
+                },
+            };
+        }
+
+        // First time initialization
+        const data = {
             assetLinksFe: {
                 parents: assetDetailState.assetLinksFe?.parents || [],
                 child: assetDetailState.assetLinksFe?.child || [],
@@ -623,20 +661,16 @@ const AssetLinkingInfo = ({ setValid, showErrors }: AssetLinkingProps) => {
                 related: assetDetailState.assetLinks?.related || [],
             },
             assetLinksMetadata: {
-                parents: {},
-                child: {},
-                related: {},
+                parents: assetDetailState.assetLinksMetadata?.parents || {},
+                child: assetDetailState.assetLinksMetadata?.child || {},
+                related: assetDetailState.assetLinksMetadata?.related || {},
             },
-        }),
-        [
-            assetDetailState.assetLinksFe?.parents,
-            assetDetailState.assetLinksFe?.child,
-            assetDetailState.assetLinksFe?.related,
-            assetDetailState.assetLinks?.parents,
-            assetDetailState.assetLinks?.child,
-            assetDetailState.assetLinks?.related,
-        ]
-    );
+        };
+
+        isInitializedRef.current = true;
+        prevAssetLinksRef.current = JSON.stringify(data);
+        return data;
+    }, []); // Empty dependency array - only create once
 
     return (
         <AssetLinksTab
@@ -645,6 +679,7 @@ const AssetLinkingInfo = ({ setValid, showErrors }: AssetLinkingProps) => {
             showErrors={showErrors}
             onAssetLinksChange={handleAssetLinksChange}
             initialData={initialData}
+            databaseId={assetDetailState.databaseId}
         />
     );
 };
@@ -846,13 +881,7 @@ const AssetFileInfo = ({
                                 description={
                                     assetDetailState.Asset
                                         ? `Total Files to Upload: ${assetDetailState.Asset.length}`
-                                        : "Select a folder or multiple files"
-                                }
-                                errorText={
-                                    (!assetDetailState.Asset &&
-                                        showErrors &&
-                                        "Asset is required") ||
-                                    undefined
+                                        : "Select a folder or multiple files (optional)"
                                 }
                             >
                                 <SpaceBetween direction="vertical" size="xs">

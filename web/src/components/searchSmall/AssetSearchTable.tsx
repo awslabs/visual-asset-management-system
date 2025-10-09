@@ -149,8 +149,8 @@ export function AssetSearchTable({
                 // Build filters array
                 const filters: object[] = [];
                 
-                // Add database filter if specified and in single-select mode
-                if (currentDatabaseId && selectionMode === "single") {
+                // Add database filter if specified (for both single and multi select modes)
+                if (currentDatabaseId) {
                     filters.push({
                         query_string: {
                             query: `(str_databaseid:("${currentDatabaseId}"))`,

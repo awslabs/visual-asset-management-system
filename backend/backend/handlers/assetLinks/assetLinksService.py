@@ -340,16 +340,17 @@ def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: 
 def build_child_tree(root_asset_id: str, root_database_id: str, claims_and_roles: Dict, unauthorized_counts: UnauthorizedCountsModel) -> List[AssetTreeNodeModel]:
     """Build a recursive tree structure of child assets"""
     try:
-        visited = set()
-        
-        def build_tree_recursive(asset_id: str, database_id: str) -> List[Dict]:
-            """Recursively build tree nodes as dictionaries"""
+        def build_tree_recursive(asset_id: str, database_id: str, current_path: Set[str]) -> List[Dict]:
+            """Recursively build tree nodes as dictionaries with path-based cycle detection"""
             asset_key = f"{database_id}:{asset_id}"
             
-            if asset_key in visited:
-                return []  # Prevent infinite loops
-                
-            visited.add(asset_key)
+            # Check if this asset is already in the current path (would create a cycle)
+            if asset_key in current_path:
+                return []  # Prevent infinite loops in the current path
+            
+            # Add current asset to the path for this branch
+            new_path = current_path.copy()
+            new_path.add(asset_key)
             
             # Get all children of this asset
             response = asset_links_table.query(
@@ -364,8 +365,8 @@ def build_child_tree(root_asset_id: str, root_database_id: str, claims_and_roles
                 child_asset = get_asset_details(link['toAssetId'], link['toAssetDatabaseId'])
                 
                 if child_asset and check_asset_permission(child_asset, claims_and_roles):
-                    # Recursively get children of this child
-                    grandchildren = build_tree_recursive(link['toAssetId'], link['toAssetDatabaseId'])
+                    # Recursively get children of this child, passing the current path
+                    grandchildren = build_tree_recursive(link['toAssetId'], link['toAssetDatabaseId'], new_path)
                     
                     # Get alias ID
                     alias_id = link.get('assetLinkAliasId', '')
@@ -385,8 +386,8 @@ def build_child_tree(root_asset_id: str, root_database_id: str, claims_and_roles
             
             return tree_nodes
         
-        # Get the tree as dictionaries
-        tree_dicts = build_tree_recursive(root_asset_id, root_database_id)
+        # Get the tree as dictionaries, starting with an empty path
+        tree_dicts = build_tree_recursive(root_asset_id, root_database_id, set())
         
         # Convert to AssetTreeNodeModel objects
         def dict_to_model(node_dict):
