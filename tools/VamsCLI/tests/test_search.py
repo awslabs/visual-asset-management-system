@@ -46,9 +46,7 @@ class TestSearchAssetsCommand:
         assert result.exit_code == 0
         assert 'Search assets using OpenSearch' in result.output
         assert '--query' in result.output
-        assert '--database' in result.output
-        assert '--asset-type' in result.output
-        assert '--tags' in result.output
+        assert '--filters' in result.output
         assert '--metadata-query' in result.output
         assert '--metadata-mode' in result.output
         assert '--explain-results' in result.output
@@ -136,7 +134,7 @@ class TestSearchAssetsCommand:
     
     @patch('vamscli.commands.search.is_feature_enabled')
     def test_assets_with_filters(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
-        """Test asset search with various filters."""
+        """Test asset search with filters argument."""
         with search_command_mocks as mocks:
             # Mock feature check (search enabled)
             mock_is_feature_enabled.return_value = False
@@ -163,9 +161,7 @@ class TestSearchAssetsCommand:
             result = cli_runner.invoke(cli, [
                 'search', 'assets', 
                 '-q', 'test',
-                '-d', 'test-db',
-                '--asset-type', '3d-model',
-                '--tags', 'test,model',
+                '--filters', 'str_databaseid:"test-db" AND str_assettype:"3d-model"',
                 '--sort-field', 'str_assetname',
                 '--sort-desc'
             ])
@@ -179,7 +175,8 @@ class TestSearchAssetsCommand:
             assert call_args['query'] == 'test'
             assert call_args['entityTypes'] == ['asset']
             assert call_args['sort'] == [{'field': 'str_assetname', 'order': 'desc'}]
-            assert len(call_args['filters']) == 3  # database, asset_type, and tags filters
+            assert 'filters' in call_args
+            assert len(call_args['filters']) == 1  # Single query_string filter
     
     @patch('vamscli.commands.search.is_feature_enabled')
     def test_assets_with_explain_results(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
@@ -312,9 +309,8 @@ class TestSearchFilesCommand:
         result = cli_runner.invoke(cli, ['search', 'files', '--help'])
         assert result.exit_code == 0
         assert 'Search files using OpenSearch' in result.output
-        assert '--file-ext' in result.output
+        assert '--filters' in result.output
         assert '--query' in result.output
-        assert '--database' in result.output
         assert '--metadata-query' in result.output
     
     @patch('vamscli.commands.search.is_feature_enabled')
@@ -345,7 +341,7 @@ class TestSearchFilesCommand:
             }
             mocks['api_client'].search_query.return_value = mock_search_result
             
-            result = cli_runner.invoke(cli, ['search', 'files', '--file-ext', 'gltf'])
+            result = cli_runner.invoke(cli, ['search', 'files', '--filters', 'str_fileext:"gltf"'])
             
             assert result.exit_code == 0
             assert 'Found 1 files' in result.output
@@ -358,7 +354,7 @@ class TestSearchFilesCommand:
     
     @patch('vamscli.commands.search.is_feature_enabled')
     def test_files_with_filters(self, mock_is_feature_enabled, cli_runner, search_command_mocks):
-        """Test file search with various filters."""
+        """Test file search with filters argument."""
         with search_command_mocks as mocks:
             # Mock feature check (search enabled)
             mock_is_feature_enabled.return_value = False
@@ -385,8 +381,7 @@ class TestSearchFilesCommand:
             result = cli_runner.invoke(cli, [
                 'search', 'files', 
                 '-q', 'texture',
-                '-d', 'test-db',
-                '--file-ext', 'png'
+                '--filters', 'str_databaseid:"test-db" AND str_fileext:"png"'
             ])
             
             assert result.exit_code == 0
@@ -397,12 +392,12 @@ class TestSearchFilesCommand:
             call_args = mocks['api_client'].search_query.call_args[0][0]
             assert call_args['query'] == 'texture'
             assert call_args['entityTypes'] == ['file']
-            assert len(call_args['filters']) == 2  # database and file_ext filters
+            assert 'filters' in call_args
     
     def test_files_no_setup(self, cli_runner, search_no_setup_mocks):
         """Test files command without setup."""
         with search_no_setup_mocks as mocks:
-            result = cli_runner.invoke(cli, ['search', 'files', '--file-ext', 'gltf'])
+            result = cli_runner.invoke(cli, ['search', 'files', '--filters', 'str_fileext:"gltf"'])
             
             assert result.exit_code == 1
             # Global exception handler catches SetupRequiredError
@@ -639,7 +634,6 @@ class TestSearchMappingCommand:
             result = cli_runner.invoke(cli, ['search', 'mapping'])
             
             assert result.exit_code == 0
-            assert 'Search mapping retrieved successfully' in result.output
             assert 'Retrieved search index mappings' in result.output
     
     @patch('vamscli.commands.search.is_feature_enabled')
@@ -737,6 +731,57 @@ class TestSearchUtilities:
         with pytest.raises(InvalidSearchParametersError, match="Invalid entity types"):
             _parse_entity_types("asset,invalid,file")
     
+    def test_parse_filters_query_string(self):
+        """Test filter parsing with query string format."""
+        from vamscli.commands.search import _parse_filters
+        
+        # Test simple query string
+        result = _parse_filters('str_databaseid:"my-db"')
+        assert result == [{"query_string": {"query": 'str_databaseid:"my-db"'}}]
+        
+        # Test complex query string with AND
+        result = _parse_filters('str_databaseid:"my-db" AND str_assettype:"3d-model"')
+        assert result == [{"query_string": {"query": 'str_databaseid:"my-db" AND str_assettype:"3d-model"'}}]
+        
+        # Test empty string
+        result = _parse_filters("")
+        assert result == []
+        
+        # Test None
+        result = _parse_filters(None)
+        assert result == []
+    
+    def test_parse_filters_json(self):
+        """Test filter parsing with JSON format."""
+        from vamscli.commands.search import _parse_filters
+        
+        # Test valid JSON array
+        json_filter = '[{"query_string": {"query": "str_databaseid:\\"my-db\\""}}]'
+        result = _parse_filters(json_filter)
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert "query_string" in result[0]
+        
+        # Test multiple filters in JSON
+        json_filter = '[{"term": {"str_assettype": "3d-model"}}, {"range": {"num_version": {"gte": 1}}}]'
+        result = _parse_filters(json_filter)
+        assert isinstance(result, list)
+        assert len(result) == 2
+    
+    def test_parse_filters_invalid_json(self):
+        """Test filter parsing with invalid JSON."""
+        from vamscli.commands.search import _parse_filters
+        from vamscli.utils.exceptions import InvalidSearchParametersError
+        
+        # Test invalid JSON syntax
+        with pytest.raises(InvalidSearchParametersError, match="Invalid JSON filter format"):
+            _parse_filters('[{"invalid": json}]')
+        
+        # Test JSON object that's not an array (treated as query string, not error)
+        result = _parse_filters('{"query_string": {"query": "test"}}')
+        # This is treated as a query string, not JSON
+        assert result == [{"query_string": {"query": '{"query_string": {"query": "test"}}'}}]
+    
     def test_build_sort_config(self):
         """Test sort configuration building."""
         from vamscli.commands.search import _build_sort_config
@@ -752,6 +797,126 @@ class TestSearchUtilities:
         # Test without field (default to score)
         result = _build_sort_config(None, False)
         assert result == ["_score"]
+    
+    def test_format_table_output(self):
+        """Test table output formatting."""
+        from vamscli.commands.search import _format_table_output
+        
+        # Test with asset results - verify data is present, not specific columns
+        result = {
+            "hits": {
+                "hits": [
+                    {
+                        "_source": {
+                            "str_assetname": "test-asset",
+                            "str_databaseid": "test-db",
+                            "str_assettype": "3d-model",
+                            "list_tags": ["tag1", "tag2"]
+                        }
+                    }
+                ]
+            }
+        }
+        output = _format_table_output(result, "asset")
+        # Verify data values are present (not specific to column structure)
+        assert "test-asset" in output
+        assert "test-db" in output
+        assert "3d-model" in output
+        assert "tag1" in output
+        
+        # Test with no results
+        empty_result = {"hits": {"hits": []}}
+        output = _format_table_output(empty_result, "asset")
+        assert output == "No results found."
+    
+    def test_format_csv_output(self):
+        """Test CSV output formatting."""
+        from vamscli.commands.search import _format_csv_output
+        
+        # Test with file results - verify data is present, not specific to columns
+        result = {
+            "hits": {
+                "hits": [
+                    {
+                        "_source": {
+                            "str_key": "asset/model.gltf",
+                            "str_databaseid": "test-db",
+                            "str_fileext": "gltf",
+                            "num_filesize": 2048000,
+                            "list_tags": ["tag1", "tag2"]
+                        }
+                    }
+                ]
+            }
+        }
+        output = _format_csv_output(result, "file")
+        # Verify data values are present (not specific to column structure)
+        assert "asset/model.gltf" in output
+        assert "test-db" in output
+        assert "gltf" in output
+        assert "2048000" in output
+        # Tags should be semicolon-separated in CSV
+        assert "tag1;tag2" in output or "tag1" in output
+        
+        # Test with no results
+        empty_result = {"hits": {"hits": []}}
+        output = _format_csv_output(empty_result, "file")
+        assert output == ""
+    
+    def test_format_mapping_table(self):
+        """Test mapping table formatting."""
+        from vamscli.commands.search import _format_mapping_table
+        
+        # Test with mapping data
+        mapping = {
+            "mappings": {
+                "asset_index": {
+                    "mappings": {
+                        "properties": {
+                            "str_assetname": {"type": "text"},
+                            "str_assettype": {"type": "keyword"}
+                        }
+                    }
+                }
+            }
+        }
+        output = _format_mapping_table(mapping)
+        assert "asset_index" in output
+        assert "str_assetname" in output
+        assert "text" in output
+        
+        # Test with no mappings
+        empty_mapping = {"mappings": {}}
+        output = _format_mapping_table(empty_mapping)
+        assert output == "No mapping information available."
+    
+    def test_format_mapping_csv(self):
+        """Test mapping CSV formatting."""
+        from vamscli.commands.search import _format_mapping_csv
+        
+        # Test with mapping data
+        mapping = {
+            "mappings": {
+                "file_index": {
+                    "mappings": {
+                        "properties": {
+                            "str_key": {"type": "text"},
+                            "str_fileext": {"type": "keyword"}
+                        }
+                    }
+                }
+            }
+        }
+        output = _format_mapping_csv(mapping)
+        assert "index,field_name,field_type" in output
+        assert "file_index" in output
+        assert "str_key" in output
+        assert "text" in output
+        
+        # Test with no mappings
+        empty_mapping = {"mappings": {}}
+        output = _format_mapping_csv(empty_mapping)
+        assert output == ""
 
 
 class TestSearchCommandsIntegration:

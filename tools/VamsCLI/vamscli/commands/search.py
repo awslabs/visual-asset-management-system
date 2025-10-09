@@ -56,6 +56,50 @@ def _parse_entity_types(entity_types_str: str) -> List[str]:
     return types
 
 
+def _parse_filters(filters_str: Optional[str]) -> List[Dict[str, Any]]:
+    """
+    Parse filters from string input.
+    
+    Supports two formats:
+    1. JSON array format: '[{"query_string": {"query": "field:value"}}]'
+    2. Query string format: 'field1:"value1" AND field2:"value2"'
+    
+    Args:
+        filters_str: Filter string in JSON or query string format
+        
+    Returns:
+        List of filter dictionaries for OpenSearch
+        
+    Raises:
+        InvalidSearchParametersError: If filter format is invalid
+    """
+    if not filters_str:
+        return []
+    
+    filters_str = filters_str.strip()
+    
+    # Try JSON format first
+    if filters_str.startswith('['):
+        try:
+            filters = json.loads(filters_str)
+            if not isinstance(filters, list):
+                raise InvalidSearchParametersError(
+                    "JSON filters must be an array. "
+                    "Example: '[{\"query_string\": {\"query\": \"field:value\"}}]'"
+                )
+            return filters
+        except json.JSONDecodeError as e:
+            raise InvalidSearchParametersError(f"Invalid JSON filter format: {e}")
+    
+    # Otherwise treat as query string format
+    # Convert query string to OpenSearch filter
+    return [{
+        "query_string": {
+            "query": filters_str
+        }
+    }]
+
+
 def _build_sort_config(sort_field: Optional[str], sort_desc: bool) -> List[Any]:
     """Build sort configuration for search request."""
     if not sort_field:
@@ -64,12 +108,231 @@ def _build_sort_config(sort_field: Optional[str], sort_desc: bool) -> List[Any]:
     return [{"field": sort_field, "order": "desc" if sort_desc else "asc"}]
 
 
+def _format_table_output(result: Dict[str, Any], entity_type: str) -> str:
+    """
+    Format search results as a table.
+    
+    Args:
+        result: Search result from API
+        entity_type: Type of entity ('asset', 'file', or 'mixed')
+        
+    Returns:
+        Formatted table string
+    """
+    hits = result.get("hits", {}).get("hits", [])
+    
+    if not hits:
+        return "No results found."
+    
+    # Build table rows - include all fields from _source
+    rows = []
+    all_keys = set()
+    
+    # First pass: collect all unique keys from all results
+    for hit in hits:
+        source = hit.get("_source", {})
+        all_keys.update(source.keys())
+    
+    # Sort keys for consistent column order
+    sorted_keys = sorted(all_keys)
+    
+    # Second pass: build rows with all fields
+    for hit in hits:
+        source = hit.get("_source", {})
+        row = {}
+        
+        for key in sorted_keys:
+            value = source.get(key, "")
+            # Handle list values (like tags)
+            if isinstance(value, list):
+                value = ", ".join(str(v) for v in value)
+            # Handle dict values
+            elif isinstance(value, dict):
+                value = json.dumps(value)
+            row[key] = str(value) if value else ""
+        
+        rows.append(row)
+    
+    if not rows:
+        return "No results found."
+    
+    # Get headers (sorted keys)
+    headers = sorted_keys
+    
+    # Calculate column widths
+    col_widths = {h: len(h) for h in headers}
+    for row in rows:
+        for header in headers:
+            col_widths[header] = max(col_widths[header], len(str(row.get(header, ""))))
+    
+    # Build table
+    output = []
+    
+    # Header row
+    header_row = " | ".join(h.ljust(col_widths[h]) for h in headers)
+    output.append(header_row)
+    
+    # Separator
+    separator = "-+-".join("-" * col_widths[h] for h in headers)
+    output.append(separator)
+    
+    # Data rows
+    for row in rows:
+        data_row = " | ".join(str(row.get(h, "")).ljust(col_widths[h]) for h in headers)
+        output.append(data_row)
+    
+    return "\n".join(output)
+
+
+def _format_csv_output(result: Dict[str, Any], entity_type: str) -> str:
+    """
+    Format search results as CSV.
+    
+    Args:
+        result: Search result from API
+        entity_type: Type of entity ('asset', 'file', or 'mixed')
+        
+    Returns:
+        CSV formatted string
+    """
+    hits = result.get("hits", {}).get("hits", [])
+    
+    if not hits:
+        return ""
+    
+    output = StringIO()
+    
+    # Collect all unique keys from all results
+    all_keys = set()
+    for hit in hits:
+        source = hit.get("_source", {})
+        all_keys.update(source.keys())
+    
+    # Sort keys for consistent column order
+    fieldnames = sorted(all_keys)
+    
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    
+    for hit in hits:
+        source = hit.get("_source", {})
+        row = {}
+        
+        for key in fieldnames:
+            value = source.get(key, "")
+            # Handle list values (like tags)
+            if isinstance(value, list):
+                value = ";".join(str(v) for v in value)  # Use semicolon for CSV
+            # Handle dict values
+            elif isinstance(value, dict):
+                value = json.dumps(value)
+            row[key] = str(value) if value else ""
+        
+        writer.writerow(row)
+    
+    return output.getvalue()
+
+
+def _format_mapping_table(mapping: Dict[str, Any]) -> str:
+    """
+    Format search mapping as a table.
+    
+    Args:
+        mapping: Search mapping from API
+        
+    Returns:
+        Formatted table string
+    """
+    mappings = mapping.get("mappings", {})
+    
+    if not mappings:
+        return "No mapping information available."
+    
+    rows = []
+    
+    for index_name, index_data in mappings.items():
+        properties = index_data.get("mappings", {}).get("properties", {})
+        
+        for field_name, field_info in properties.items():
+            field_type = field_info.get("type", "unknown")
+            row = {
+                "Index": index_name,
+                "Field": field_name,
+                "Type": field_type
+            }
+            rows.append(row)
+    
+    if not rows:
+        return "No fields found in mapping."
+    
+    # Get headers
+    headers = ["Index", "Field", "Type"]
+    
+    # Calculate column widths
+    col_widths = {h: len(h) for h in headers}
+    for row in rows:
+        for header in headers:
+            col_widths[header] = max(col_widths[header], len(str(row.get(header, ""))))
+    
+    # Build table
+    output = []
+    
+    # Header row
+    header_row = " | ".join(h.ljust(col_widths[h]) for h in headers)
+    output.append(header_row)
+    
+    # Separator
+    separator = "-+-".join("-" * col_widths[h] for h in headers)
+    output.append(separator)
+    
+    # Data rows
+    for row in rows:
+        data_row = " | ".join(str(row.get(h, "")).ljust(col_widths[h]) for h in headers)
+        output.append(data_row)
+    
+    return "\n".join(output)
+
+
+def _format_mapping_csv(mapping: Dict[str, Any]) -> str:
+    """
+    Format search mapping as CSV.
+    
+    Args:
+        mapping: Search mapping from API
+        
+    Returns:
+        CSV formatted string
+    """
+    mappings = mapping.get("mappings", {})
+    
+    if not mappings:
+        return ""
+    
+    output = StringIO()
+    fieldnames = ["index", "field_name", "field_type"]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    
+    for index_name, index_data in mappings.items():
+        properties = index_data.get("mappings", {}).get("properties", {})
+        
+        for field_name, field_info in properties.items():
+            field_type = field_info.get("type", "unknown")
+            writer.writerow({
+                "index": index_name,
+                "field_name": field_name,
+                "field_type": field_type
+            })
+    
+    return output.getvalue()
+
+
 def _check_search_availability(profile_manager):
     """Check if search is available (not disabled by NOOPENSEARCH feature)."""
     if is_feature_enabled(FEATURE_NOOPENSEARCH, profile_manager):
         raise SearchDisabledError(
             "Search functionality is disabled for this environment. "
-            "Use 'vamscli assets list' or 'vamscli database list-assets' instead."
+            "Use 'vamscli assets list'  instead."
         )
 
 
@@ -79,14 +342,14 @@ def search():
     Search assets and files using OpenSearch dual-index system.
     
     Note: Search functionality requires OpenSearch to be enabled. If search is disabled
-    (NOOPENSEARCH feature is enabled), use 'vamscli assets list' or 'vamscli database list-assets' instead.
+    (NOOPENSEARCH feature is enabled), use 'vamscli assets list' instead.
     
     The search system uses separate indexes for assets and files, allowing for optimized
     queries and better performance.
     
     Examples:
-        vamscli search assets -q "model" -d my-database
-        vamscli search files --file-ext "gltf"
+        vamscli search assets -q "model" --filters 'str_databaseid:"my-db"'
+        vamscli search files --filters 'str_fileext:"gltf"'
         vamscli search simple -q "training" --entity-types asset
         vamscli search mapping
     """
@@ -94,7 +357,6 @@ def search():
 
 
 @search.command()
-@click.option('-d', '--database', help='Database ID to search within')
 @click.option('-q', '--query', help='General text search query')
 @click.option('--metadata-query', help='Metadata search query (field:value format, supports AND/OR)')
 @click.option('--metadata-mode', type=click.Choice(['key', 'value', 'both']), default='both',
@@ -106,24 +368,34 @@ def search():
 @click.option('--sort-desc', is_flag=True, help='Sort in descending order')
 @click.option('--from', 'from_offset', type=int, default=0, help='Pagination start offset (default: 0)')
 @click.option('--size', type=int, default=100, help='Number of results per page (default: 100, max: 2000)')
-@click.option('--asset-type', help='Filter by asset type')
-@click.option('--tags', help='Filter by tags (comma-separated)')
+@click.option('--filters', help='Advanced filters in JSON array or query string format (see examples)')
 @click.option('--include-archived', is_flag=True, help='Include archived assets')
 @click.option('--output-format', type=click.Choice(['table', 'json', 'csv']), default='table',
               help='Output format (default: table)')
 @click.option('--jsonOutput', is_flag=True, help='Output raw API response as JSON (legacy)')
 @click.pass_context
 @requires_setup_and_auth
-def assets(ctx: click.Context, database: Optional[str], query: Optional[str], metadata_query: Optional[str],
+def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[str],
            metadata_mode: str, include_metadata: bool, explain_results: bool,
            sort_field: Optional[str], sort_desc: bool, from_offset: int, size: int,
-           asset_type: Optional[str], tags: Optional[str], include_archived: bool,
+           filters: Optional[str], include_archived: bool,
            output_format: str, jsonoutput: bool):
     """
-    Search assets using OpenSearch.
+    Search assets using OpenSearch with advanced filter support.
     
     Search across all assets with flexible filtering, metadata search, and sorting options.
     Supports general text search, metadata-specific search, and various output formats.
+    
+    Filter Examples:
+        Query String Format:
+            --filters 'str_databaseid:"my-db"'
+            --filters 'str_databaseid:"my-db" AND str_assettype:"3d-model"'
+            --filters 'list_tags:("training" OR "simulation")'
+            --filters 'str_assetname:model* AND str_databaseid:"db-123"'
+        
+        JSON Format:
+            --filters '[{"query_string": {"query": "str_databaseid:\\"my-db\\""}}]'
+            --filters '[{"term": {"str_assettype": "3d-model"}}, {"range": {"num_version": {"gte": 1}}}]'
     
     Metadata Search Examples:
         --metadata-query "MD_str_product:Training"              # Exact field:value match
@@ -133,8 +405,8 @@ def assets(ctx: click.Context, database: Optional[str], query: Optional[str], me
         --metadata-query "Training" --metadata-mode value       # Search values only
     
     General Examples:
-        vamscli search assets -q "training model" -d my-database
-        vamscli search assets --asset-type "3d-model" --tags "training,simulation"
+        vamscli search assets -q "training model" --filters 'str_databaseid:"my-db"'
+        vamscli search assets --filters 'str_assettype:"3d-model" AND list_tags:"training"'
         vamscli search assets -q "model" --metadata-query "MD_str_category:Training"
         vamscli search assets -q "model" --output-format csv > results.csv
         vamscli search assets -q "model" --explain-results
@@ -147,9 +419,6 @@ def assets(ctx: click.Context, database: Optional[str], query: Optional[str], me
     try:
         # Check if search is available
         _check_search_availability(profile_manager)
-        
-        # Parse tags
-        parsed_tags = _parse_tags_list(tags) if tags else None
         
         # Build search request using new SearchRequestModel format
         search_request = {
@@ -171,33 +440,10 @@ def assets(ctx: click.Context, database: Optional[str], query: Optional[str], me
             search_request["metadataQuery"] = metadata_query
             search_request["metadataSearchMode"] = metadata_mode
         
-        # Build filters for specific criteria
-        filters = []
-        
-        if database:
-            filters.append({
-                "query_string": {
-                    "query": f'str_databaseid:"{database}"'
-                }
-            })
-        
-        if asset_type:
-            filters.append({
-                "query_string": {
-                    "query": f'str_assettype:"{asset_type}"'
-                }
-            })
-        
-        if parsed_tags:
-            tags_query = " OR ".join([f'"{tag}"' for tag in parsed_tags])
-            filters.append({
-                "query_string": {
-                    "query": f"list_tags:({tags_query})"
-                }
-            })
-        
+        # Parse and add filters
         if filters:
-            search_request["filters"] = filters
+            parsed_filters = _parse_filters(filters)
+            search_request["filters"] = parsed_filters
         
         # Execute search
         result = api_client.search_query(search_request)
@@ -205,12 +451,17 @@ def assets(ctx: click.Context, database: Optional[str], query: Optional[str], me
         # Handle output format
         if jsonoutput or output_format == 'json':
             click.echo(json.dumps(result, indent=2))
-        else:
+        elif output_format == 'table':
             total = result.get("hits", {}).get("total", {}).get("value", 0)
-            click.echo(f"Found {total} assets")
+            click.echo(f"\nFound {total} assets\n")
+            table_output = _format_table_output(result, "asset")
+            click.echo(table_output)
             click.echo(
-                click.style(f"✓ Search completed. Found {total} assets.", fg='green', bold=True)
+                click.style(f"\n✓ Search completed. Found {total} assets.", fg='green', bold=True)
             )
+        elif output_format == 'csv':
+            csv_output = _format_csv_output(result, "asset")
+            click.echo(csv_output)
     
     except SearchDisabledError as e:
         # Command-specific business logic error
@@ -218,7 +469,7 @@ def assets(ctx: click.Context, database: Optional[str], query: Optional[str], me
             click.style(f"✗ Search Disabled: {e}", fg='red', bold=True),
             err=True
         )
-        click.echo("Use 'vamscli assets list' or 'vamscli database list-assets' instead.")
+        click.echo("Use 'vamscli assets list' instead.")
         raise click.ClickException(str(e))
     except InvalidSearchParametersError as e:
         # Command-specific business logic error
@@ -239,7 +490,6 @@ def assets(ctx: click.Context, database: Optional[str], query: Optional[str], me
 
 
 @search.command()
-@click.option('-d', '--database', help='Database ID to search within')
 @click.option('-q', '--query', help='General text search query')
 @click.option('--metadata-query', help='Metadata search query (field:value format, supports AND/OR)')
 @click.option('--metadata-mode', type=click.Choice(['key', 'value', 'both']), default='both',
@@ -251,28 +501,39 @@ def assets(ctx: click.Context, database: Optional[str], query: Optional[str], me
 @click.option('--sort-desc', is_flag=True, help='Sort in descending order')
 @click.option('--from', 'from_offset', type=int, default=0, help='Pagination start offset (default: 0)')
 @click.option('--size', type=int, default=100, help='Number of results per page (default: 100, max: 2000)')
-@click.option('--file-ext', help='Filter by file extension')
-@click.option('--tags', help='Filter by tags (comma-separated)')
+@click.option('--filters', help='Advanced filters in JSON array or query string format (see examples)')
 @click.option('--include-archived', is_flag=True, help='Include archived files')
 @click.option('--output-format', type=click.Choice(['table', 'json', 'csv']), default='table',
               help='Output format (default: table)')
 @click.option('--jsonOutput', is_flag=True, help='Output raw API response as JSON (legacy)')
 @click.pass_context
 @requires_setup_and_auth
-def files(ctx: click.Context, database: Optional[str], query: Optional[str], metadata_query: Optional[str],
+def files(ctx: click.Context, query: Optional[str], metadata_query: Optional[str],
           metadata_mode: str, include_metadata: bool, explain_results: bool,
           sort_field: Optional[str], sort_desc: bool, from_offset: int, size: int,
-          file_ext: Optional[str], tags: Optional[str], include_archived: bool,
+          filters: Optional[str], include_archived: bool,
           output_format: str, jsonoutput: bool):
     """
-    Search files using OpenSearch.
+    Search files using OpenSearch with advanced filter support.
     
     Search across all asset files with flexible filtering, metadata search, and sorting options.
     Supports general text search, metadata-specific search, and various output formats.
     
+    Filter Examples:
+        Query String Format:
+            --filters 'str_databaseid:"my-db"'
+            --filters 'str_fileext:"gltf"'
+            --filters 'str_fileext:"gltf" AND str_databaseid:"my-db"'
+            --filters 'list_tags:("ui" OR "interface")'
+            --filters 'str_key:*texture* AND str_fileext:"png"'
+        
+        JSON Format:
+            --filters '[{"query_string": {"query": "str_fileext:\\"gltf\\""}}]'
+            --filters '[{"term": {"str_fileext": "png"}}, {"range": {"num_filesize": {"lte": 1048576}}}]'
+    
     Examples:
-        vamscli search files -q "texture" -d my-database
-        vamscli search files --file-ext "gltf"
+        vamscli search files -q "texture" --filters 'str_databaseid:"my-db"'
+        vamscli search files --filters 'str_fileext:"gltf"'
         vamscli search files -q "texture" --output-format csv > files.csv
     """
     # Setup/auth already validated by decorator
@@ -283,9 +544,6 @@ def files(ctx: click.Context, database: Optional[str], query: Optional[str], met
     try:
         # Check if search is available
         _check_search_availability(profile_manager)
-        
-        # Parse tags
-        parsed_tags = _parse_tags_list(tags) if tags else None
         
         # Build search request using new SearchRequestModel format
         search_request = {
@@ -307,33 +565,10 @@ def files(ctx: click.Context, database: Optional[str], query: Optional[str], met
             search_request["metadataQuery"] = metadata_query
             search_request["metadataSearchMode"] = metadata_mode
         
-        # Build filters for specific criteria
-        filters = []
-        
-        if database:
-            filters.append({
-                "query_string": {
-                    "query": f'str_databaseid:"{database}"'
-                }
-            })
-        
-        if file_ext:
-            filters.append({
-                "query_string": {
-                    "query": f'str_fileext:"{file_ext}"'
-                }
-            })
-        
-        if parsed_tags:
-            tags_query = " OR ".join([f'"{tag}"' for tag in parsed_tags])
-            filters.append({
-                "query_string": {
-                    "query": f"list_tags:({tags_query})"
-                }
-            })
-        
+        # Parse and add filters
         if filters:
-            search_request["filters"] = filters
+            parsed_filters = _parse_filters(filters)
+            search_request["filters"] = parsed_filters
         
         # Execute search
         result = api_client.search_query(search_request)
@@ -341,12 +576,17 @@ def files(ctx: click.Context, database: Optional[str], query: Optional[str], met
         # Handle output format
         if jsonoutput or output_format == 'json':
             click.echo(json.dumps(result, indent=2))
-        else:
+        elif output_format == 'table':
             total = result.get("hits", {}).get("total", {}).get("value", 0)
-            click.echo(f"Found {total} files")
+            click.echo(f"\nFound {total} files\n")
+            table_output = _format_table_output(result, "file")
+            click.echo(table_output)
             click.echo(
-                click.style(f"✓ Search completed. Found {total} files.", fg='green', bold=True)
+                click.style(f"\n✓ Search completed. Found {total} files.", fg='green', bold=True)
             )
+        elif output_format == 'csv':
+            csv_output = _format_csv_output(result, "file")
+            click.echo(csv_output)
     
     except SearchDisabledError as e:
         # Command-specific business logic error
@@ -354,7 +594,7 @@ def files(ctx: click.Context, database: Optional[str], query: Optional[str], met
             click.style(f"✗ Search Disabled: {e}", fg='red', bold=True),
             err=True
         )
-        click.echo("Use 'vamscli assets list' or 'vamscli database list-assets' instead.")
+        click.echo("Use 'vamscli assets list' instead.")
         raise click.ClickException(str(e))
     except InvalidSearchParametersError as e:
         # Command-specific business logic error
@@ -410,6 +650,7 @@ def simple(ctx: click.Context, query: Optional[str], asset_name: Optional[str], 
         vamscli search simple --file-ext "gltf" --entity-types file
         vamscli search simple --metadata-key "product" --metadata-value "Training"
         vamscli search simple -d my-database --tags "simulation,training"
+        vamscli search simple -q "model" --output-format csv > results.csv
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -457,12 +698,17 @@ def simple(ctx: click.Context, query: Optional[str], asset_name: Optional[str], 
         # Handle output format
         if output_format == 'json':
             click.echo(json.dumps(result, indent=2))
-        else:
+        elif output_format == 'table':
             total = result.get("hits", {}).get("total", {}).get("value", 0)
-            click.echo(f"Found {total} results")
+            click.echo(f"\nFound {total} results\n")
+            table_output = _format_table_output(result, "mixed")
+            click.echo(table_output)
             click.echo(
-                click.style(f"✓ Search completed. Found {total} results.", fg='green', bold=True)
+                click.style(f"\n✓ Search completed. Found {total} results.", fg='green', bold=True)
             )
+        elif output_format == 'csv':
+            csv_output = _format_csv_output(result, "mixed")
+            click.echo(csv_output)
     
     except SearchDisabledError as e:
         # Command-specific business logic error
@@ -470,7 +716,7 @@ def simple(ctx: click.Context, query: Optional[str], asset_name: Optional[str], 
             click.style(f"✗ Search Disabled: {e}", fg='red', bold=True),
             err=True
         )
-        click.echo("Use 'vamscli assets list' or 'vamscli database list-assets' instead.")
+        click.echo("Use 'vamscli assets list' instead.")
         raise click.ClickException(str(e))
     except InvalidSearchParametersError as e:
         # Command-specific business logic error
@@ -516,11 +762,16 @@ def mapping(ctx: click.Context, output_format: str, jsonoutput: bool):
         # Handle output format
         if jsonoutput or output_format == 'json':
             click.echo(json.dumps(mapping, indent=2))
-        else:
-            click.echo("Search mapping retrieved successfully")
+        elif output_format == 'table':
+            click.echo("\nSearch Index Mappings\n")
+            table_output = _format_mapping_table(mapping)
+            click.echo(table_output)
             click.echo(
-                click.style("✓ Retrieved search index mappings.", fg='green', bold=True)
+                click.style("\n✓ Retrieved search index mappings.", fg='green', bold=True)
             )
+        elif output_format == 'csv':
+            csv_output = _format_mapping_csv(mapping)
+            click.echo(csv_output)
     
     except SearchDisabledError as e:
         # Command-specific business logic error
@@ -528,7 +779,7 @@ def mapping(ctx: click.Context, output_format: str, jsonoutput: bool):
             click.style(f"✗ Search Disabled: {e}", fg='red', bold=True),
             err=True
         )
-        click.echo("Use 'vamscli assets list' or 'vamscli database list-assets' instead.")
+        click.echo("Use 'vamscli assets list'instead.")
         raise click.ClickException(str(e))
     except SearchMappingError as e:
         # Command-specific business logic error

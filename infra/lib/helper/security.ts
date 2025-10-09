@@ -127,7 +127,12 @@ export function globalLambdaEnvironmentsAndPermissions(
     lambdaFunction: lambda.Function,
     config: Config.Config
 ) {
-    if (config.app.authProvider.useCognito.enabled) {
+    //We don't want to enable cognito for lambdas as any lambda behind a VPC isolated subnet won't be able to conduct cognito auth calls
+    //This will disable MFA check capabilities for these scenarios
+    if (config.app.authProvider.useCognito.enabled &&
+        !((config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) ||
+            config.app.openSearch.useProvisioned.enabled)
+    ) {
         lambdaFunction.addEnvironment("COGNITO_AUTH_ENABLED", "TRUE");
     } else {
         lambdaFunction.addEnvironment("COGNITO_AUTH_ENABLED", "FALSE");

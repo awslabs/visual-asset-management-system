@@ -21,7 +21,8 @@ from ..constants import (
 from ..version import get_version
 from .exceptions import (
     APIError, VersionMismatchError, AuthenticationError, OverrideTokenError, 
-    APIUnavailableError, AssetNotFoundError, AssetAlreadyExistsError, 
+    TokenExpiredError, PermissionDeniedError,
+    APIUnavailableError, AssetNotFoundError, AssetAlreadyExistsError,
     DatabaseNotFoundError, DatabaseAlreadyExistsError, DatabaseDeletionError,
     BucketNotFoundError, InvalidDatabaseDataError, InvalidAssetDataError, FileUploadError,
     AssetAlreadyArchivedError, AssetDeletionError, TagNotFoundError, TagAlreadyExistsError,
@@ -142,21 +143,109 @@ class APIClient:
                 else:
                     raise AuthenticationError("Authentication failed. Please run 'vamscli auth login' to re-authenticate.")
             
+            # Handle 403 errors - distinguish between expired tokens and permission issues
+            if response.status_code == 403 and include_auth and retry_count < MAX_AUTH_RETRIES:
+                # For override tokens, check if expired
+                if self.profile_manager.is_override_token():
+                    if self.profile_manager.is_token_expired():
+                        raise TokenExpiredError(
+                            "Override token has expired. Please provide a new token with "
+                            "'vamscli auth set-override --token <new_token>' or use "
+                            "'vamscli --token-override <new_token> <command>'"
+                        )
+                    else:
+                        # Token not expired, this is a permission issue
+                        raise PermissionDeniedError(
+                            "Access forbidden. You do not have permission to perform this action. "
+                            "Contact your administrator if you believe this is an error."
+                        )
+                
+                # For Cognito tokens, try to refresh and retry
+                if self._try_refresh_token():
+                    return self._make_request(
+                        method, endpoint, include_auth, retry_count + 1, 
+                        throttle_retry_count, **kwargs
+                    )
+                else:
+                    # Refresh failed - could be expired token or permission issue
+                    # Check if token is expired
+                    if self.profile_manager.is_token_expired():
+                        raise TokenExpiredError(
+                            "Authentication token has expired. Please run 'vamscli auth login' to re-authenticate."
+                        )
+                    else:
+                        # Not expired, this is a permission issue
+                        raise PermissionDeniedError(
+                            "Access forbidden. You do not have permission to perform this action. "
+                            "Contact your administrator if you believe this is an error."
+                        )
+            
             response.raise_for_status()
             return response
             
-        except (RateLimitExceededError, RetryExhaustedError):
-            # Re-raise throttling errors without wrapping
+        except (RateLimitExceededError, RetryExhaustedError, TokenExpiredError, PermissionDeniedError):
+            # Re-raise specific errors without wrapping
             raise
         except requests.exceptions.HTTPError as e:
-            # Handle other HTTP errors that might be retryable
-            if e.response.status_code == 429:
+            # Handle other HTTP errors with appropriate messages
+            status_code = e.response.status_code
+            
+            if status_code == 429:
                 # This shouldn't happen due to the check above, but just in case
                 raise RateLimitExceededError(f"Rate limit exceeded: {e}")
+            elif status_code >= 500:
+                # Server errors (500, 502, 503, 504, etc.)
+                error_data = {}
+                try:
+                    error_data = e.response.json() if e.response.content else {}
+                except Exception:
+                    pass
+                error_message = error_data.get('message', str(e))
+                raise APIError(
+                    f"Server error ({status_code}): {error_message}. "
+                    "The VAMS API is experiencing issues. Please try again later."
+                )
+            elif status_code == 404:
+                # Not found errors
+                error_data = {}
+                try:
+                    error_data = e.response.json() if e.response.content else {}
+                except Exception:
+                    pass
+                error_message = error_data.get('message', str(e))
+                raise APIError(f"Resource not found (404): {error_message}")
+            elif status_code == 400:
+                # Bad request errors
+                error_data = {}
+                try:
+                    error_data = e.response.json() if e.response.content else {}
+                except Exception:
+                    pass
+                error_message = error_data.get('message', str(e))
+                raise APIError(f"Invalid request (400): {error_message}")
             else:
-                raise APIError(f"API request failed: {e}")
+                # Other HTTP errors
+                error_data = {}
+                try:
+                    error_data = e.response.json() if e.response.content else {}
+                except Exception:
+                    pass
+                error_message = error_data.get('message', str(e))
+                raise APIError(f"API request failed ({status_code}): {error_message}")
+        except requests.exceptions.ConnectionError as e:
+            raise APIError(
+                f"Connection error: Unable to connect to the VAMS API. "
+                "Please check your network connection and verify the API Gateway URL is correct. "
+                f"Details: {e}"
+            )
+        except requests.exceptions.Timeout as e:
+            raise APIError(
+                f"Request timeout: The VAMS API did not respond in time. "
+                "The service may be experiencing high load. Please try again later. "
+                f"Details: {e}"
+            )
         except requests.exceptions.RequestException as e:
-            raise APIError(f"API request failed: {e}")
+            raise APIError(f"Request failed: {e}")
             
     def _try_refresh_token(self) -> bool:
         """Try to refresh the authentication token or re-authenticate using saved credentials."""

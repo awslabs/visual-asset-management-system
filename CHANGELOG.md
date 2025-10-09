@@ -14,6 +14,10 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
 
 Changes to BatchFargate CDK construct naming for use-case pipeline naming may require you to deploy CDK without batch pipelines and then again with to properly re-deploy them. Not doing this with existing deployed pipelines (Metadata 3D Labeling and PcPotree) will result in a CDK deployment error within ECS Fargate. This may also require you to update your VAMS pipeline/workflow lambda function names after re-deployment.
 
+In order to get lambdas to work behind a VPC again (broken as of V2.2), MFA for roles cannot be supported if Cognito is on and all lamdbas are behind a behind (CDK config flag) or OpenSearch provisioned is turned on (CDK config flag).
+
+**Recommended Upgrade Path:** Run upgrade script for the new OpenSearch indexes which will re-index content `infra\deploymentDataMigration\v2.2_to_v2.3\upgrade`
+
 ### Features
 
 -   **CLI** VAMS now has a CLI tool that can be used to automate VAMS operations. It includes operations so far for authentication, database, asset, assetLinks, assetLinkMetadata, metadata, metadataSchema, tags, TagTypes, search, featureSwitch, and files. More operations to match API functionality to come in future releases such as more admin functionalities of VAMS.
@@ -34,7 +38,8 @@ Changes to BatchFargate CDK construct naming for use-case pipeline naming may re
     -   **UI** Assets (now "Assets and Files") has a completely new search page with many new filtering capabilities and options.
     -   **Web** Search map view will now allow for many more metadata fields to be used for adding map marker or area placement (any asset with `location` (GP/GS) and `longitude` (string or number) / `latitude` (string or number) combination metadata will show up)
     -   Search now has it's origional API of `/search` and a new `/search/simple` API for a simplified search input
-    -   A new CDK tool section and migration scripts has been added to help with reindexing opensearch data at any time
+    -   Implemented a new CDK config option in `config.app.openSearch.reindexOnCdkDeploy` that can trigger a complete index clear and re-index of assets and files. This can also be used as CDK context argument `reindexOnCdkDeploy` for the cdk deploy command. Note: Only use this after having CDK deploying at least once with v2.3 changes, otherwise the reindex may not work or error. 
+    -   A new CDK custom tool section and migration scripts has been added to help manually trigger a reindex outside of a CDK deploy
 -   Maps on the backend and UI frontend is updated to use the new location service APIKey method and removes the older raster map and place functionality
     -   Note: This removes the last place that cognito identities are used which means the location services functionality can now be used for external IDP solutions
     -   Note: This change removes the cognito authenticatedRole and association with the identity pool. Unauthenticated role (no permissions assigned) still remains for now as it is needed for basic auth login by the web Amplify-SDK v1. 
@@ -52,6 +57,7 @@ Changes to BatchFargate CDK construct naming for use-case pipeline naming may re
 -   Refactored createWorkflow to not require the stepfunctions library anymore which entirely removes the additional heavyweight lambda layer created specifically for this function. This should speed up CDK deployments, reduce CDK package size, and reduce security posture by limiting backend libraries needed. Additionally, some other upgrades were done to createWorkflow as part of the refactor:
     -   Updating an existing workflow no longer create a new AWS step function workflow but modifies the definition of the existing
     -   Updated to the new backed error handling logic used since v2.2
+    -   GovCloud configuration restrictions updated to not include a hard use requirement of openSearch provisioned. OpenSearch serveless is supported now in GovCloud environments. 
 
 ### Bug Fixes
 
@@ -60,6 +66,8 @@ Changes to BatchFargate CDK construct naming for use-case pipeline naming may re
 -   Fixed backend asset file operations and S3 indexing for files >5GB (introduced in v2.2)
 -   Fixed Cognito unauthenticated role trust policy to switch the partition correctly. Cognito deployments were causing errors in GovCloud environments without this. 
 -   Fixed When saving pipelines that lambda function names have whitespace trimmed to prevent workflow errors
+-   Lambdas now work behind a VPC again however a compromise had to be made, Cognito MFA checks are currently not possible as a AWS VPC Endpoint doesn't exist for Cognito (BREAKING CHANGE).
+    -   Additional VPC Endpoints were added to support missing functionality for lambdas behind a VPC (APIGateway, SSM, Lambda, STS, Cloudwatch Logs, SNS, SQS)
 
 ### Chores
 

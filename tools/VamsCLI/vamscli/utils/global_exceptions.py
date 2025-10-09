@@ -79,10 +79,11 @@ def handle_global_exceptions():
                 return func(*args, **kwargs)
             except Exception as e:
                 # Import here to avoid circular imports
-                from ..exceptions import (
+                from .exceptions import (
                     SetupRequiredError, AuthenticationError, APIUnavailableError, ProfileError,
                     InvalidProfileNameError, ConfigurationError, OverrideTokenError, VersionMismatchError,
-                    RetryExhaustedError, RateLimitExceededError, APIError
+                    RetryExhaustedError, RateLimitExceededError, TokenExpiredError, PermissionDeniedError,
+                    APIError
                 )
                 
                 if isinstance(e, SetupRequiredError):
@@ -115,6 +116,10 @@ def handle_global_exceptions():
                     _handle_global_error("Rate Limit Exceeded", str(e), additional_info)
                 elif isinstance(e, RateLimitExceededError):
                     _handle_global_error("Rate Limit Exceeded", str(e))
+                elif isinstance(e, TokenExpiredError):
+                    _handle_global_error("Token Expired", str(e), "Your authentication token has expired. Run 'vamscli auth login' to re-authenticate.")
+                elif isinstance(e, PermissionDeniedError):
+                    _handle_global_error("Permission Denied", str(e), "You do not have permission to perform this action. Contact your administrator if you believe this is an error.")
                 elif isinstance(e, click.ClickException):
                     # Let Click handle its own exceptions
                     raise

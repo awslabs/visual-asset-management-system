@@ -43,7 +43,7 @@ def customMFATokenScopeCheckOverride(user, lambdaRequest):
                 response = cognitoClient.get_user(
                     AccessToken=authorizer_jwt_token
                 )
-                if 'UserMFASettingList' in response and len(response['UserMFASettingList']) > 0:
+                if response and 'UserMFASettingList' in response and len(response['UserMFASettingList']) > 0:
                     mfaLoginEnabled = True
                     logger.info("User logged in with MFA")
                     usersMFACache[user] = {'MFAEnabled': True, 'auth_time': authorizerJwt['auth_time']}

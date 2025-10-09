@@ -1,34 +1,37 @@
 {
-    "comments": "Configuration for VAMS v2.2 to v2.3 migration - Direct AssetsMetadata table updates",
+    "comments": "Configuration for VAMS v2.2 to v2.3 migration - Lambda-based reindexing",
 
-    "_comment_source_tables": "Source DynamoDB tables to read from",
-    "asset_storage_table_name": "YOUR_ASSET_STORAGE_TABLE_NAME",
-    "s3_asset_buckets_table_name": "YOUR_S3_ASSET_BUCKETS_TABLE_NAME",
+    "_comment_lambda": "Lambda function configuration (required)",
+    "function_name": "YOUR_REINDEXER_LAMBDA_FUNCTION_NAME",
 
-    "_comment_target_table": "Target DynamoDB table to write to (triggers reindexing via DynamoDB Streams)",
-    "assets_metadata_table_name": "YOUR_ASSETS_METADATA_TABLE_NAME",
+    "_comment_operation": "Reindexing operation settings",
+    "operation": "both",
+    "clear_indexes": true,
+    "dry_run": false,
+    "limit": null,
 
-    "_comment_opensearch": "SSM parameters for OpenSearch configuration (used for verification and optional index clearing)",
-    "opensearch_asset_index_ssm_param": "YOUR_OPENSEARCH_ASSET_INDEX_SSM_PARAM",
-    "opensearch_file_index_ssm_param": "YOUR_OPENSEARCH_FILE_INDEX_SSM_PARAM",
-    "opensearch_endpoint_ssm_param": "YOUR_OPENSEARCH_ENDPOINT_SSM_PARAM",
-
-    "_comment_aws": "AWS configuration",
+    "_comment_aws": "AWS configuration (optional)",
     "aws_profile": null,
     "aws_region": null,
 
-    "_comment_migration": "Migration settings",
-    "clear_indexes_before_migration": false,
-    "reindex_settings": {
-        "_comment": "Batch sizes and performance settings",
-        "asset_batch_size": 25,
-        "file_batch_size": 100,
-        "memory_batch_size": 1000,
-        "max_workers": 10
-    },
-
-    "_comment_verification": "Verification and logging settings",
-    "verification_wait_time": 120,
+    "_comment_logging": "Logging settings",
     "log_level": "INFO",
-    "dry_run": false
+
+    "_comment_instructions": "How to use this configuration file",
+    "_instructions": [
+        "1. Get the Lambda function name from CDK outputs:",
+        "   aws cloudformation describe-stacks --stack-name your-stack \\",
+        "     --query 'Stacks[0].Outputs[?OutputKey==`ReindexerFunctionNameOutput`].OutputValue' \\",
+        "     --output text",
+        "",
+        "2. Update 'function_name' with the actual Lambda function name",
+        "",
+        "3. Run migration:",
+        "   python v2.2_to_v2.3_migration.py --function-name <function-name>",
+        "",
+        "4. Or use command-line arguments to override config:",
+        "   python v2.2_to_v2.3_migration.py --function-name <name> --clear-indexes --dry-run",
+        "",
+        "Note: Only 'function_name' is required. All other settings are optional."
+    ]
 }

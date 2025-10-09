@@ -267,12 +267,10 @@ export function buildSqsBucketSyncFunction(
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
-            config.app.openSearch.useProvisioned.enabled ||
             (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
                 ? vpc
-                : undefined, //Use VPC when provisioned OS or flag to use for all lambdas
+                : undefined, 
         vpcSubnets:
-            config.app.openSearch.useProvisioned.enabled ||
             (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
                 ? { subnets: subnets }
                 : undefined,
@@ -319,5 +317,70 @@ export function buildSqsBucketSyncFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(fun);
+    return fun;
+}
+
+export function buildReindexerFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "crOsReindexer";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.indexing.crReindexer.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.openSearch.useProvisioned.enabled ||
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.openSearch.useProvisioned.enabled ||
+            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+                ? { subnets: subnets }
+                : undefined,
+
+        environment: {
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
+                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+            METADATA_STORAGE_TABLE_NAME: storageResources.dynamo.metadataStorageTable.tableName,
+            OPENSEARCH_ASSET_INDEX_SSM_PARAM: config.openSearchAssetIndexNameSSMParam,
+            OPENSEARCH_FILE_INDEX_SSM_PARAM: config.openSearchFileIndexNameSSMParam,
+            OPENSEARCH_ENDPOINT_SSM_PARAM: config.openSearchDomainEndpointSSMParam,
+            OPENSEARCH_TYPE: config.app.openSearch.useProvisioned.enabled
+                ? "provisioned"
+                : "serverless",
+        },
+    });
+
+    // Add access to read SSM parameters
+    fun.role?.addToPrincipalPolicy(
+        new cdk.aws_iam.PolicyStatement({
+            actions: ["ssm:GetParameter"],
+            resources: [Service.IAMArn("*" + config.name + "*").ssm],
+        })
+    );
+
+    // Grant DynamoDB permissions
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    storageResources.dynamo.metadataStorageTable.grantReadWriteData(fun);
+
+    // Grant S3 read permissions
+    grantReadPermissionsToAllAssetBuckets(fun);
+
+    // Apply security helpers
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagErrorsByGrantReadWrite(fun);
+
     return fun;
 }

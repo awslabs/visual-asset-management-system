@@ -110,6 +110,12 @@ export function getConfig(app: cdk.App): Config {
             false)
     );
 
+    config.app.openSearch.reindexOnCdkDeploy = <boolean>(
+        (app.node.tryGetContext("reindexOnCdkDeploy") ||
+            config.app.openSearch.reindexOnCdkDeploy ||
+            false)
+    );
+
     //OpenSearch Variables - Dual Index Configuration
     config.openSearchAssetIndexName = "vams-assets-v1";
     config.openSearchFileIndexName = "vams-files-v1";
@@ -132,6 +138,10 @@ export function getConfig(app: cdk.App): Config {
 
     if (config.app.openSearch.useProvisioned.enabled == undefined) {
         config.app.openSearch.useProvisioned.enabled = false;
+    }
+
+    if (config.app.openSearch.reindexOnCdkDeploy == undefined) {
+        config.app.openSearch.reindexOnCdkDeploy = false;
     }
 
     if (config.app.pipelines.usePreviewPcPotreeViewer.enabled == undefined) {
@@ -233,12 +243,6 @@ export function getConfig(app: cdk.App): Config {
             );
         }
 
-        if (config.app.openSearch.useServerless.enabled) {
-            throw new Error(
-                "Configuration Error: GovCloud must have openSearch.useServerless.enabled set to false"
-            );
-        }
-
         if (config.app.useLocationService.enabled) {
             throw new Error(
                 "Configuration Error: GovCloud must have app.useLocationService.enabled set to false"
@@ -260,11 +264,6 @@ export function getConfig(app: cdk.App): Config {
                 );
             }
 
-            if (!config.app.useGlobalVpc.useForAllLambdas) {
-                throw new Error(
-                    "Configuration Error: GovCloud IL6 must have app.useGlobalVpc.useForAllLambdas set to true"
-                );
-            }
 
             if (!config.app.useKmsCmkEncryption.enabled) {
                 throw new Error(
@@ -457,6 +456,17 @@ export function getConfig(app: cdk.App): Config {
         throw new Error("Configuration Error: Must specify either none or one openSearch method!");
     }
 
+    //Error check for reindexOnDeploy - requires OpenSearch to be enabled
+    if (
+        config.app.openSearch.reindexOnCdkDeploy &&
+        !config.app.openSearch.useServerless.enabled &&
+        !config.app.openSearch.useProvisioned.enabled
+    ) {
+        throw new Error(
+            "Configuration Error: reindexOnDeploy requires either OpenSearch Serverless or Provisioned to be enabled!"
+        );
+    }
+
     //Check when implementing auth providers
     if (
         config.app.authProvider.useCognito.enabled &&
@@ -621,6 +631,7 @@ export interface ConfigPublic {
                 masterNodeInstanceType: string;
                 ebsInstanceNodeSizeGb: number;
             };
+            reindexOnCdkDeploy: boolean;
         };
         useLocationService: {
             enabled: boolean;

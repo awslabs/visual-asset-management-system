@@ -48,6 +48,7 @@ Some configuration options can be overriden at time of deployment with either en
 -   `app.openSearch.useProvisioned.dataNodeInstanceType` | default: r6g.large.search | #When using OpenSearch Provisioned, the Instance type to use for the data nodes (2x nodes deployed)
 -   `app.openSearch.useProvisioned.masterNodeInstanceType` | default: r6g.large.search | #When using OpenSearch Provisioned, the Instance type to use for the master nodes (3x nodes deploy)
 -   `app.openSearch.useProvisioned.ebsInstanceNodeSizeGb` | default: 120 | #When using OpenSearch Provisioned, the EBS volume size to deploy per data instance node in GB
+-   `app.openSearch.reindexOnCdkDeploy` | default: false | #Feature to trigger automatic reindexing of all assets and files during CDK deployment via a CloudFormation custom resource. **IMPORTANT**: This should only be enabled for a second deployment after an initial deployment or version upgrade has completed. Set to true to reindex during deployment, then set back to false afterwards to prevent reindexing on every deployment. Can be set/overridden with CDK context parameter `reindexOnCdkDeploy=true`. Requires either OpenSearch Serverless or Provisioned to be enabled.
 
 -   `app.useLocationService.enabled` | default: true | #Feature to use location services to display maps data for asset metadata types that store global position coordinates. Note that currently map view won't show up if OpenSearch is not enabled.
 
@@ -90,10 +91,11 @@ Some configuration options can be overriden at time of deployment with either en
 
 ### Additional configuration notes
 
--   `GovCloud` - This will check for Use Global VPC (enabled), Use ALB (enabled - other configuration needed, see ALB section), Use OpenSearch Provisioned (enabled), and Use Location Services (disabled). Additionally does some small implementation changes for components that are different in GovCloud partitions.
+-   `GovCloud` - This will check for Use Global VPC (enabled), Use ALB (enabled - other configuration needed, see ALB section), and Use Location Services (disabled). Additionally does some small implementation changes for components that are different in GovCloud partitions.
 -   `GovCloud - IL6 Compliant` - This will check for Use Cognito (disabled), Use WAF (enabled), Use VPC for all Lambdas (enabled), and Use KMS CMK Encryption (enabled). Additionally does some small implementation changes for components that are different in GovCloud IL6 partition.
 -   `OpenSearch` - If both serverless and provisioned are not enabled, no OpenSearch will be enabled which will reduce the functionality in the application to not have any search capabilities on assets. All authorized assets will be returned always on the assets page.
 -   `OpenSearch - Provisioned` - This service is very sensitive to VPC Subnet Availabilty Zone selection. If using an external VPC, make sure the provided private subnets are a minimum of 3 and are each in their own availability zone. OpenSearch Provisioned CDK creates service-linked roles althoguh sometimes these don't get recognized right away during a first-time deployment by receiving the following error: `Invalid request provided: Before you can proceed, you must enable a service-linked role to give Amazon OpenSearch Service permissions to access your VPC.`. Wait 5 minutes minutes after your first run and then re-run your deployment (after clearing out any previous stack in CloudFormation). If you continue seeing issues, run the following CLI command manually to try to create these roles by hand: `aws iam create-service-linked-role --aws-service-name es.amazonaws.com`, `aws iam create-service-linked-role --aws-service-name opensearchservice.amazonaws.com`
+-   `OpenSearch - Reindexing` - The `reindexOnCdkDeploy` configuration option triggers automatic reindexing during CDK deployment. This is useful for migrations (e.g., v2.2 to v2.3) or when you need to rebuild indexes. **Two-Step Process Required**: (1) First deploy v2.3 to create the reindexer Lambda function, (2) Then enable `reindexOnCdkDeploy` and deploy again to trigger reindexing. After reindexing completes, set this back to `false` to prevent reindexing on every deployment. For manual reindexing without CDK deployment, use the reindex utility script at `infra/deploymentDataMigration/tools/reindex_utility.py` which directly invokes the deployed Lambda function.
 
 -   `Global VPC` - Will auto be enabled if ALB, OpenSearch Provisioned, or Use-case Pipelines is enabled. OpenSearch Serverless endpoints and associated lambdas will also be put behind the VPC if toggling on the VPC and using for all lambdas.
 -   -   IPs Used per Feature:
@@ -103,23 +105,28 @@ Some configuration options can be overriden at time of deployment with either en
 -   -   VPC Interface Endpoints: 1 IP per endpoint per subnet (based on overall configuration needs, see `Global VPC Endpoints` below)
 -   `Global VPC Subnets` - Each Subnet to subnet-type (relevent to public or private) used should reside in it's own AZ within the region. Subnets should be configured for IPv4. CDK will probably deploy/create to the amount of AZs and related subnets. When importing an existing VPC/subnets, make sure each subnet provided is located within its own AZ (otherwise errors may occur). The minimum amount of AZs/Subnets needed are (use the higher number): 3 - when using Open Search Provisioned, 2 - when using ALB, 1 - for all other configurations. Reccomended to have at least 128 IPs (IPv4) available per subnet for deployment to support current VAMS usage (max configuration) and growth.
 -   `Global VPC Endpoints` - When using a Global VPC, interface/gateway endpoints are needed. The following is the below chart of VPC Endpoints created (when using addVpcEndpoints config option) or are needed otherwise. Some endpoints have special creation conditions that are noted below.
+-   -   (Interface) CloudWatch Logs - Deployed/used with Global VPC enablement
+-   -   (Interface) SNS - Deployed/used with Global VPC enablement
+-   -   (Interface) SQS - Deployed/used with Global VPC enablement
+-   -   (Interface) SFN - Deployed/used with Global VPC enablement
+-   -   (Interface) APIGateway - Deployed/used with Global VPC enablement
+-   -   (Interface) SSM - Deployed/used with Global VPC enablement
+-   -   (Interface) Lambda - Deployed/used with Global VPC enablement
+-   -   (Interface) STS - Deployed/used with Global VPC enablement
+-   -   (Interface) (AWS- NOT SUPPORTED YET) Cognito IDP - Deployed/used with Global VPC enablement [not implemented until AWS implements cognito IDP VPCe]
 -   -   (Interface) KMS - Deployed/used with Use KMS CMK Encryption Features
 -   -   (Interface) KMS FIPS - Deployed/used with Use KMS CMK Encryption and Use FIPS Features
--   -   (Interface) ECR - Deployed/used with "Use with All Lambda" and Use-case Pipeline Features
+-   -   (Interface) ECR - Deployed/used with "Use with All Lambda" and Use-case Pipeline Features (Isolated + Private for AWS Marketplace pipelines)
+-   -   (Interface) OpenSearch Serverless - Deployed/used with OpenSearch Serverless Feature
 -   -   (Interface) ECR Docker - Deployed/used with "Use with All Lambda" and Use-casePipeline Features
--   -   (Interface) CloudWatch Logs - Deployed/used with "Use with All Lambda" and Use-case Pipeline Features
--   -   (Interface) SNS - Deployed/used with "Use with All Lambda" and Use-case Pipeline Features
--   -   (Interface) SFN - Deployed/used with "Use with All Lambda" and Use-case Pipeline Features
 -   -   (Interface) Bedrock Runtime - Deployed/used with "Use with All Lambda" and Use-case Pipeline Features
 -   -   (Interface) Rekognition - Deployed/used with "Use with All Lambda" and Use-case Pipeline Features
--   -   (Interface) SSM - Deployed/used with "Use with All Lambda" and Open Search Provisioned Features
--   -   (Interface) Lambda - Deployed/used with "Use with All Lambda" Feature
--   -   (Interface) STS - Deployed/used with "Use with All Lambda" Feature
 -   -   (Interface) Batch - Deployed/used with Use-case Pipeline Feature
--   -   (Interface) OpenSearch Serverless - Deployed/used with OpenSearch Serverless Feature
 -   -   (Interface) S3 (ALB-Special) - Created on VPC when using ALB as it's specially setup with the ALB IPs and targets. Separate configuration option to create this under the ALB setting.
 -   -   (Gateway) S3 - Due to no pricing implications, deployed/used across all features that require VPC
 -   -   (Gateway) DynamoDB - Due to no pricing implications, deployed/used across all features that require VPC
+
+APIGateway, SSM, Lambda, STS, Cloudwatch Logs, SNS, SQS
 
 -   `KMS Encryption - External CMK` - When importing an external CMK KMS key to use for encryption the VAMS deployment, ensure the CMK key is located in the same region as the deployment and has the following permissions.
 -   -   Actions: `["kms:GenerateDataKey*", "kms:Decrypt", "kms:ReEncrypt*", "kms:DescribeKey",  "kms:ListKeys", "kms:CreateGrant"]`
@@ -300,11 +307,23 @@ This is a post-configuration option or modification to the CDK and not a feature
 
 https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/distribution-web-values-specify.html#DownloadDistValues-security-policy
 
+## Multi-Factor Authentication (MFA) Support
+
+The solution in some cases can support MFA checks with role support. Roles can be toggled to allow only if a user is logged in with MFA. 
+
+However, this check is only supported on a user for each API call if the following is true:
+1. External IDP Auth is used (see External IDP MFA Check in LoginProfile section)
+2. Cognito IDP Auth is used with:
+2.a. OpenSearch Serverless (CDK Config Flag)
+2.b. Lambdas not behind a VPC (CDK Config Flag)
+
+If Cognito AWS VPC Interface Endpoints are supported in the future, the top cognito restrictions fall away. 
+
 ## Additional Configuration Docker Options
 
 See [CDK SSL Deploy in the developer guide](./DeveloperGuide.md#CDK-Deploy-with-Custom-SSL-Cert-Proxy) for information on customized docker settings for CDK deployment builds
 
-## Additional Configuration LoginProfile Updatng
+## Additional Configuration LoginProfile Updating
 
 See [LoginProfile in the developer guide](./DeveloperGuide.md#loginprofile-custom-organizational-updates) for information on customized user loginprofile override code for lambdas when login profile information needs to be fetched externally or overwritten otherwise
 

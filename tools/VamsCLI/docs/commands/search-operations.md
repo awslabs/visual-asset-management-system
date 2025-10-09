@@ -13,7 +13,6 @@ This guide covers VamsCLI search commands for finding assets and files using the
 Search functionality requires OpenSearch to be enabled in your VAMS deployment. If the `NOOPENSEARCH` feature switch is enabled, search commands will be disabled and you should use alternative commands:
 
 -   Use `vamscli assets list` instead of `vamscli search assets`
--   Use `vamscli database list-assets` for database-specific asset listing
 
 ## Dual-Index Architecture
 
@@ -32,7 +31,7 @@ This architecture provides:
 
 ### `vamscli search assets`
 
-Search across all assets with flexible filtering, metadata search, and sorting options.
+Search across all assets with flexible filtering, metadata search, and sorting options using advanced filter syntax.
 
 #### Basic Usage
 
@@ -40,14 +39,102 @@ Search across all assets with flexible filtering, metadata search, and sorting o
 # Simple text search
 vamscli search assets -q "training model"
 
-# Search within specific database
-vamscli search assets -q "model" -d my-database
+# Search with filters (query string format)
+vamscli search assets -q "model" --filters 'str_databaseid:"my-database"'
 
-# Search with asset type filter
-vamscli search assets --asset-type "3d-model"
+# Search with multiple filters
+vamscli search assets --filters 'str_databaseid:"my-db" AND str_assettype:"3d-model"'
 
 # Search with tag filters
-vamscli search assets --tags "training,simulation"
+vamscli search assets --filters 'list_tags:("training" OR "simulation")'
+```
+
+#### Advanced Filter Syntax
+
+The `--filters` argument supports two formats for maximum flexibility:
+
+**Query String Format** (Recommended for most use cases):
+```bash
+# Single filter
+--filters 'str_databaseid:"my-db"'
+
+# Multiple filters with AND
+--filters 'str_databaseid:"my-db" AND str_assettype:"3d-model"'
+
+# Multiple filters with OR
+--filters 'list_tags:("training" OR "simulation")'
+
+# Wildcard matching
+--filters 'str_assetname:model*'
+
+# Complex combinations
+--filters 'str_assetname:model* AND str_databaseid:"db-123" AND list_tags:"training"'
+```
+
+**JSON Format** (For advanced OpenSearch queries):
+```bash
+# Single query_string filter
+--filters '[{"query_string": {"query": "str_databaseid:\"my-db\""}}]'
+
+# Term filter (exact match)
+--filters '[{"term": {"str_assettype": "3d-model"}}]'
+
+# Range filter
+--filters '[{"range": {"num_version": {"gte": 1, "lte": 5}}}]'
+
+# Multiple filters (all must match)
+--filters '[{"term": {"str_assettype": "3d-model"}}, {"range": {"num_version": {"gte": 1}}}]'
+```
+
+#### Filter Construction Guide
+
+**Database Filtering:**
+```bash
+--filters 'str_databaseid:"my-database"'
+--filters 'str_databaseid:(db-1 OR db-2 OR db-3)'
+```
+
+**Asset Type Filtering:**
+```bash
+--filters 'str_assettype:"3d-model"'
+--filters 'str_assettype:("3d-model" OR "texture")'
+```
+
+**Tag Filtering:**
+```bash
+# Single tag
+--filters 'list_tags:"training"'
+
+# Multiple tags (OR - any match)
+--filters 'list_tags:("training" OR "simulation")'
+
+# Multiple tags (AND - all must match)
+--filters 'list_tags:"training" AND list_tags:"simulation"'
+```
+
+**Name/Description Filtering:**
+```bash
+# Exact match
+--filters 'str_assetname:"my-model"'
+
+# Wildcard match
+--filters 'str_assetname:model*'
+--filters 'str_assetname:*training*'
+
+# Case-insensitive search
+--filters 'str_assetname:/training/i'
+```
+
+**Combining Multiple Filters:**
+```bash
+# All conditions must match (AND)
+--filters 'str_databaseid:"my-db" AND str_assettype:"3d-model" AND list_tags:"training"'
+
+# Any condition can match (OR)
+--filters 'str_assettype:"3d-model" OR str_assettype:"texture"'
+
+# Complex combinations
+--filters '(str_assettype:"3d-model" OR str_assettype:"texture") AND str_databaseid:"my-db"'
 ```
 
 #### Metadata Search (NEW)
@@ -119,8 +206,8 @@ vamscli search assets -q "model" --jsonOutput
 
 | Parameter                          | Description                                | Example                                      |
 | ---------------------------------- | ------------------------------------------ | -------------------------------------------- |
-| `-d, --database`                   | Database ID to search within               | `-d my-database`                             |
 | `-q, --query`                      | General text search query                  | `-q "training model"`                        |
+| `--filters`                        | Advanced filters (query string or JSON)    | `--filters 'str_databaseid:"my-db"'`         |
 | `--metadata-query`                 | Metadata search query (field:value format) | `--metadata-query "MD_str_product:Training"` |
 | `--metadata-mode`                  | Metadata search mode (key/value/both)      | `--metadata-mode value`                      |
 | `--include-metadata/--no-metadata` | Include metadata in general search         | `--no-metadata`                              |
@@ -129,27 +216,87 @@ vamscli search assets -q "model" --jsonOutput
 | `--sort-desc/--sort-asc`           | Sort direction                             | `--sort-desc`                                |
 | `--from`                           | Pagination start offset                    | `--from 20`                                  |
 | `--size`                           | Results per page (max 2000)                | `--size 50`                                  |
-| `--asset-type`                     | Filter by asset type                       | `--asset-type "3d-model"`                    |
-| `--tags`                           | Filter by tags (comma-separated)           | `--tags "training,simulation"`               |
 | `--include-archived`               | Include archived assets                    | `--include-archived`                         |
 | `--output-format`                  | Output format (table/json/csv)             | `--output-format csv`                        |
 | `--jsonOutput`                     | Raw API response as JSON                   | `--jsonOutput`                               |
 
 ### `vamscli search files`
 
-Search across all asset files with file-specific filtering and metadata search options.
+Search across all asset files with file-specific filtering and metadata search options using advanced filter syntax.
 
 #### Basic Usage
 
 ```bash
-# Search files by extension
-vamscli search files --file-ext "gltf"
+# Search files with filters (query string format)
+vamscli search files --filters 'str_fileext:"gltf"'
 
 # Search files with text query
 vamscli search files -q "texture"
 
-# Search files within specific database
-vamscli search files -q "model" -d my-database
+# Search files with multiple filters
+vamscli search files --filters 'str_fileext:"gltf" AND str_databaseid:"my-database"'
+```
+
+#### Advanced Filter Syntax
+
+**Query String Format:**
+```bash
+# Single filter
+--filters 'str_fileext:"gltf"'
+
+# Multiple filters with AND
+--filters 'str_fileext:"gltf" AND str_databaseid:"my-db"'
+
+# Tag filters with OR
+--filters 'list_tags:("ui" OR "interface")'
+
+# Wildcard matching
+--filters 'str_key:*texture*'
+
+# Complex combinations
+--filters 'str_key:*texture* AND str_fileext:"png" AND str_databaseid:"my-db"'
+```
+
+**JSON Format:**
+```bash
+# Single query_string filter
+--filters '[{"query_string": {"query": "str_fileext:\"gltf\""}}]'
+
+# Term filter (exact match)
+--filters '[{"term": {"str_fileext": "png"}}]'
+
+# Range filter (file size)
+--filters '[{"range": {"num_filesize": {"lte": 1048576}}}]'
+
+# Multiple filters
+--filters '[{"term": {"str_fileext": "png"}}, {"range": {"num_filesize": {"lte": 1048576}}}]'
+```
+
+#### Filter Construction Guide for Files
+
+**File Extension Filtering:**
+```bash
+--filters 'str_fileext:"gltf"'
+--filters 'str_fileext:("gltf" OR "glb" OR "fbx")'
+```
+
+**File Size Filtering (JSON format required):**
+```bash
+# Files under 1MB
+--filters '[{"range": {"num_filesize": {"lte": 1048576}}}]'
+
+# Files between 1MB and 10MB
+--filters '[{"range": {"num_filesize": {"gte": 1048576, "lte": 10485760}}}]'
+```
+
+**File Key Filtering:**
+```bash
+# Exact match
+--filters 'str_key:"asset/model.gltf"'
+
+# Wildcard match
+--filters 'str_key:*texture*'
+--filters 'str_key:asset/textures/*'
 ```
 
 #### Metadata Search for Files
@@ -158,29 +305,29 @@ vamscli search files -q "model" -d my-database
 # Search file metadata
 vamscli search files --metadata-query "MD_str_format:GLTF2.0"
 
-# Combine file extension with metadata
-vamscli search files --file-ext "gltf" --metadata-query "MD_num_polycount:>10000"
+# Combine filters with metadata
+vamscli search files --filters 'str_fileext:"gltf"' --metadata-query "MD_num_polycount:>10000"
 ```
 
 #### Advanced Usage
 
 ```bash
 # Combine multiple filters
-vamscli search files --file-ext "png" --tags "ui,interface"
+vamscli search files --filters 'str_fileext:"png" AND list_tags:("ui" OR "interface")'
 
 # Sort by file properties
 vamscli search files -q "texture" --sort-field "str_key" --sort-asc
 
 # Include archived files
-vamscli search files --file-ext "gltf" --include-archived
+vamscli search files --filters 'str_fileext:"gltf"' --include-archived
 ```
 
 #### Parameters
 
 | Parameter                          | Description                           | Example                                 |
 | ---------------------------------- | ------------------------------------- | --------------------------------------- |
-| `-d, --database`                   | Database ID to search within          | `-d my-database`                        |
 | `-q, --query`                      | General text search query             | `-q "texture"`                          |
+| `--filters`                        | Advanced filters (query string or JSON) | `--filters 'str_fileext:"gltf"'`      |
 | `--metadata-query`                 | Metadata search query                 | `--metadata-query "MD_str_format:GLTF"` |
 | `--metadata-mode`                  | Metadata search mode (key/value/both) | `--metadata-mode value`                 |
 | `--include-metadata/--no-metadata` | Include metadata in general search    | `--no-metadata`                         |
@@ -189,8 +336,6 @@ vamscli search files --file-ext "gltf" --include-archived
 | `--sort-desc/--sort-asc`           | Sort direction                        | `--sort-asc`                            |
 | `--from`                           | Pagination start offset               | `--from 0`                              |
 | `--size`                           | Results per page (max 2000)           | `--size 100`                            |
-| `--file-ext`                       | Filter by file extension              | `--file-ext "gltf"`                     |
-| `--tags`                           | Filter by tags (comma-separated)      | `--tags "texture,ui"`                   |
 | `--include-archived`               | Include archived files                | `--include-archived`                    |
 | `--output-format`                  | Output format (table/json/csv)        | `--output-format json`                  |
 | `--jsonOutput`                     | Raw API response as JSON              | `--jsonOutput`                          |
@@ -513,30 +658,56 @@ vamscli search assets -q "model" --token-override <token> --user-id user@example
 
 ## Examples by Use Case
 
-### Finding Assets by Type
+### Finding Assets by Type (Advanced Mode)
 
 ```bash
 # Find all 3D models
-vamscli search assets --asset-type "3d-model"
+vamscli search assets --filters 'str_assettype:"3d-model"'
 
 # Find textures with specific tags
-vamscli search assets --asset-type "texture" --tags "ui,interface"
+vamscli search assets --filters 'str_assettype:"texture" AND list_tags:("ui" OR "interface")'
 
 # Find assets with specific metadata
 vamscli search assets --metadata-query "MD_str_category:Training"
+
+# Find assets in specific database with type filter
+vamscli search assets --filters 'str_databaseid:"my-db" AND str_assettype:"3d-model"'
 ```
 
-### Finding Files by Extension
+### Finding Assets by Type (Simple Mode)
+
+```bash
+# Find all 3D models (simple mode)
+vamscli search simple --asset-type "3d-model" --entity-types asset
+
+# Find textures with specific tags (simple mode)
+vamscli search simple --asset-type "texture" --tags "ui,interface" --entity-types asset
+```
+
+### Finding Files by Extension (Advanced Mode)
 
 ```bash
 # Find all GLTF files
-vamscli search files --file-ext "gltf"
+vamscli search files --filters 'str_fileext:"gltf"'
 
 # Find PNG files in specific database
-vamscli search files --file-ext "png" -d my-database
+vamscli search files --filters 'str_fileext:"png" AND str_databaseid:"my-database"'
 
 # Find files with specific metadata
 vamscli search files --metadata-query "MD_str_format:GLTF2.0"
+
+# Find files with size constraints
+vamscli search files --filters '[{"term": {"str_fileext": "png"}}, {"range": {"num_filesize": {"lte": 1048576}}}]'
+```
+
+### Finding Files by Extension (Simple Mode)
+
+```bash
+# Find all GLTF files (simple mode)
+vamscli search simple --file-ext "gltf" --entity-types file
+
+# Find PNG files in specific database (simple mode)
+vamscli search simple --file-ext "png" -d my-database --entity-types file
 ```
 
 ### Using Simple Search
@@ -568,15 +739,13 @@ vamscli search assets -d production --output-format csv > production_assets.csv
 vamscli search assets -q "model" --output-format json > results.json
 ```
 
-### Complex Queries
+### Complex Queries (Advanced Mode)
 
 ```bash
-# Multi-criteria asset search
+# Multi-criteria asset search with filters
 vamscli search assets \
   -q "training" \
-  -d "vr-models" \
-  --asset-type "3d-model" \
-  --tags "simulation,training" \
+  --filters 'str_databaseid:"vr-models" AND str_assettype:"3d-model" AND list_tags:("simulation" OR "training")' \
   --metadata-query "MD_str_category:A" \
   --sort-field "str_assetname" \
   --sort-asc \
@@ -588,6 +757,26 @@ vamscli search assets \
   --metadata-query "MD_str_product:Training AND MD_num_version:2" \
   --metadata-mode both \
   --output-format json
+
+# Complex file search with multiple conditions
+vamscli search files \
+  -q "texture" \
+  --filters 'str_fileext:("png" OR "jpg") AND str_databaseid:"my-db"' \
+  --metadata-query "MD_str_format:RGB" \
+  --output-format csv > textures.csv
+```
+
+### Complex Queries (Simple Mode)
+
+```bash
+# Multi-criteria asset search (simple mode)
+vamscli search simple \
+  -q "training" \
+  -d "vr-models" \
+  --asset-type "3d-model" \
+  --tags "simulation,training" \
+  --entity-types asset \
+  --output-format table
 ```
 
 ## Troubleshooting

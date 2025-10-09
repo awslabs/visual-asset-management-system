@@ -44,7 +44,8 @@
                 "dataNodeInstanceType": "r6g.large.search",
                 "masterNodeInstanceType": "r6g.large.search",
                 "ebsInstanceNodeSizeGb": 120
-            }
+            },
+            "reindexOnCdkDeploy": false
         },
         "useLocationService": {
             "enabled": false

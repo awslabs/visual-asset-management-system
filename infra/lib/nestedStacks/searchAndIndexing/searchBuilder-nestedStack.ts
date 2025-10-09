@@ -17,6 +17,7 @@ import {
     buildSqsBucketSyncFunction,
     buildFileIndexingFunction,
     buildAssetIndexingFunction,
+    buildReindexerFunction,
 } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
 import { attachFunctionToApi } from "../apiLambda/apiBuilder-nestedStack";
 import { Stack, NestedStack } from "aws-cdk-lib";
@@ -30,6 +31,7 @@ import * as s3AssetBuckets from "../../helper/s3AssetBuckets";
 import { Service } from "../../helper/service-helper";
 import * as iam from "aws-cdk-lib/aws-iam";
 import { PropagatedTagSource } from "aws-cdk-lib/aws-ecs";
+import * as cr from "aws-cdk-lib/custom-resources";
 
 export class SearchBuilderNestedStack extends NestedStack {
     constructor(
@@ -86,6 +88,7 @@ export function searchBuilder(
 
     let fileIndexingFunction: lambda.Function | undefined = undefined;
     let assetIndexingFunction: lambda.Function | undefined = undefined;
+    let reindexerFunction: lambda.Function | undefined = undefined;
 
     if (config.app.openSearch.useServerless.enabled) {
         //Serverless Deployment
@@ -96,6 +99,16 @@ export function searchBuilder(
             vpc: vpc,
             subnets: subnets,
         });
+
+        const osEndpointOutput = new cdk.CfnOutput(
+            scope,
+            "OpenSearchServerlessDomainEndpointOutput",
+            {
+                value: aoss.aossEndpointUrl,
+                description:
+                    "The HTTP endpoint for the serverless open search domain",
+            }
+        );
 
         // Build file indexer function
         fileIndexingFunction = buildFileIndexingFunction(
@@ -109,6 +122,16 @@ export function searchBuilder(
 
         // Build asset indexer function
         assetIndexingFunction = buildAssetIndexingFunction(
+            scope,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+
+        // Build reindexer function (always created regardless of reindexOnDeploy config)
+        reindexerFunction = buildReindexerFunction(
             scope,
             lambdaCommonBaseLayer,
             storageResources,
@@ -220,6 +243,11 @@ export function searchBuilder(
         //grant search function access to collection and VPCe
         aoss.grantCollectionAccess(searchFun);
         aoss.grantVPCeAccess(searchFun);
+
+        // Grant OpenSearch access to reindexer
+        aoss.grantCollectionAccess(reindexerFunction);
+        aoss.grantVPCeAccess(reindexerFunction);
+
     } else if (config.app.openSearch.useProvisioned.enabled) {
         //Provisioned Deployment
         const aos = new OpensearchProvisionedConstruct(scope, "AOS", {
@@ -242,6 +270,16 @@ export function searchBuilder(
                 : undefined,
         });
 
+        const osEndpointOutput = new cdk.CfnOutput(
+            scope,
+            "OpenSearchProvisionedDomainEndpointOutput",
+            {
+                value: aos.domainEndpoint,
+                description:
+                    "The HTTP endpoint for the provisioned open search domain",
+            }
+        );
+
         // Build file indexer function
         fileIndexingFunction = buildFileIndexingFunction(
             scope,
@@ -254,6 +292,16 @@ export function searchBuilder(
 
         // Build asset indexer function
         assetIndexingFunction = buildAssetIndexingFunction(
+            scope,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+
+        // Build reindexer function (always created regardless of reindexOnDeploy config)
+        reindexerFunction = buildReindexerFunction(
             scope,
             lambdaCommonBaseLayer,
             storageResources,
@@ -362,6 +410,10 @@ export function searchBuilder(
 
         //grant search function access to AOS
         aos.grantOSDomainAccess(searchFun);
+
+        // Grant OpenSearch access to reindexer
+        aos.grantOSDomainAccess(reindexerFunction);
+
     }
 
     /////////////////////////////////////////////////////////////////////////////
@@ -487,6 +539,60 @@ export function searchBuilder(
             const cfnEsm = esmDeleted.node.defaultChild as lambda.CfnEventSourceMapping;
             cfnEsm.addPropertyDeletionOverride("Tags");
         }
+    }
+
+    /////////////////////////////////////////////////////////////////////////////
+    // Setup Custom Resource for Reindexing (after bucket sync to ensure streams are ready)
+    /////////////////////////////////////////////////////////////////////////////
+
+    // Create custom resource to trigger reindex on deployment if enabled
+    if (reindexerFunction && config.app.openSearch.reindexOnCdkDeploy) {
+        const reindexProvider = new cr.Provider(scope, "OsReindexProvider", {
+            onEventHandler: reindexerFunction,
+        });
+
+        new cdk.CustomResource(scope, "ReindexTrigger", {
+            serviceToken: reindexProvider.serviceToken,
+            properties: {
+                Operation: "both",
+                ClearIndexes: "true",
+                Timestamp: Date.now().toString(),
+            },
+        });
+    }
+
+    //Setup final index output
+    const openSearchIndexAssetSOutput = new cdk.CfnOutput(
+        scope,
+        "OpenSearchIndexAssetsOutput",
+        {
+            value: config.openSearchAssetIndexName,
+            description:
+                "The OpenSearch index name for assets",
+        }
+    );
+
+    const openSearchIndexFilesOutput = new cdk.CfnOutput(
+        scope,
+        "OpenSearchIndexFilesOutput",
+        {
+            value: config.openSearchFileIndexName,
+            description:
+                "The OpenSearch index name for files",
+        }
+    );
+
+    // Output reindexer function name if it was created
+    if (reindexerFunction) {
+        const reindexerFunctionOutput = new cdk.CfnOutput(
+            scope,
+            "ReindexerFunctionNameOutput",
+            {
+                value: reindexerFunction.functionName,
+                description:
+                    "The Lambda function name for the OpenSearch reindexer",
+            }
+        );
     }
 
     //Nag supressions

@@ -426,19 +426,89 @@ export class VPCBuilderNestedStack extends NestedStack {
         //Note: More switching is done to avoid creating endpoints when not needed (mostly for cost)
         //Note: Don't add any end points if we are just loading context
 
-        // var vpcEndpointSubnets:  ec2.ISubnet[];
-
-        // if (this.privateSubnets.length > 0) {
-        //     vpcEndpointSubnets = [...this.isolatedSubnets, ...this.privateSubnets];
-        // } else {
-        //     vpcEndpointSubnets = this.isolatedSubnets;
-        // }
-
         if (
             props.config.app.useGlobalVpc.addVpcEndpoints &&
             !props.config.env.loadContextIgnoreVPCStacks
         ) {
-            //Add Interface Endpoints
+
+            ///Common endpoints needed for VAMS
+            // Create VPC endpoint for API Gateway
+            new ec2.InterfaceVpcEndpoint(this, "APIGatewayEndpoint", {
+                vpc: this.vpc,
+                privateDnsEnabled: true,
+                service: ec2.InterfaceVpcEndpointAwsService.APIGATEWAY,
+                subnets: { subnets: this.isolatedSubnets },
+                securityGroups: [vpceSecurityGroup],
+            });
+
+            // Create VPC endpoint for SSM
+            new ec2.InterfaceVpcEndpoint(this, "SSMEndpoint", {
+                vpc: this.vpc,
+                privateDnsEnabled: true,
+                service: ec2.InterfaceVpcEndpointAwsService.SSM,
+                subnets: { subnets: this.isolatedSubnets },
+                securityGroups: [vpceSecurityGroup],
+            });
+
+            // Create VPC endpoint for Lambda
+            new ec2.InterfaceVpcEndpoint(this, "LambdaEndpoint", {
+                vpc: this.vpc,
+                privateDnsEnabled: true,
+                service: ec2.InterfaceVpcEndpointAwsService.LAMBDA,
+                subnets: { subnets: this.isolatedSubnets },
+                securityGroups: [vpceSecurityGroup],
+            });
+
+            // Create VPC endpoint for STS
+            new ec2.InterfaceVpcEndpoint(this, "STSEndpoint", {
+                vpc: this.vpc,
+                privateDnsEnabled: true,
+                service: ec2.InterfaceVpcEndpointAwsService.STS,
+                subnets: { subnets: this.isolatedSubnets },
+                securityGroups: [vpceSecurityGroup],
+            });
+
+            // Create VPC endpoint for CloudWatch Logs
+            new ec2.InterfaceVpcEndpoint(this, "CloudWatchEndpoint", {
+                vpc: this.vpc,
+                privateDnsEnabled: true,
+                service: ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS,
+                subnets: { subnets: this.isolatedSubnets },
+                securityGroups: [vpceSecurityGroup],
+            });
+
+            // Create VPC endpoint for SFN
+            new ec2.InterfaceVpcEndpoint(this, "SFNEndpoint", {
+                vpc: this.vpc,
+                privateDnsEnabled: true,
+                service: ec2.InterfaceVpcEndpointAwsService.STEP_FUNCTIONS,
+                subnets: { subnets: this.isolatedSubnets },
+                securityGroups: [vpceSecurityGroup],
+            });
+
+            // Create VPC endpoint for SNS
+            new ec2.InterfaceVpcEndpoint(this, "SNSEndpoint", {
+                vpc: this.vpc,
+                privateDnsEnabled: true,
+                service: ec2.InterfaceVpcEndpointAwsService.SNS,
+                subnets: { subnets: this.isolatedSubnets },
+                securityGroups: [vpceSecurityGroup],
+            });
+
+            // Create VPC endpoint for SQS
+            new ec2.InterfaceVpcEndpoint(this, "SQSEndpoint", {
+                vpc: this.vpc,
+                privateDnsEnabled: true,
+                service: ec2.InterfaceVpcEndpointAwsService.SQS,
+                subnets: { subnets: this.isolatedSubnets },
+                securityGroups: [vpceSecurityGroup],
+            });
+
+            //Add endpoint for cognito IDP
+            if (props.config.app.authProvider.useCognito.enabled) {
+                //Currently not suppored as a VPC endpoint
+            }
+
             //Add for all endpoints if using KMS
             if (props.config.app.useKmsCmkEncryption.enabled) {
                 // Create VPC endpoint for KMS
@@ -497,38 +567,6 @@ export class VPCBuilderNestedStack extends NestedStack {
                     securityGroups: [vpceSecurityGroup],
                 });
 
-                // Create VPC endpoint for CloudWatch Logs
-                new ec2.InterfaceVpcEndpoint(this, "CloudWatchEndpoint", {
-                    vpc: this.vpc,
-                    privateDnsEnabled: true,
-                    service: ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS,
-                    subnets: { subnets: this.isolatedSubnets },
-                    securityGroups: [vpceSecurityGroup],
-                });
-
-                // Create VPC endpoint for SFN
-                new ec2.InterfaceVpcEndpoint(this, "SFNEndpoint", {
-                    vpc: this.vpc,
-                    privateDnsEnabled: true,
-                    service: ec2.InterfaceVpcEndpointAwsService.STEP_FUNCTIONS,
-                    subnets: { subnets: this.isolatedSubnets },
-                    securityGroups: [vpceSecurityGroup],
-                });
-            }
-
-            //All Lambda and Potree Viewer Pipeline Required Endpoints
-            if (
-                props.config.app.useGlobalVpc.useForAllLambdas &&
-                props.config.app.pipelines.usePreviewPcPotreeViewer.enabled
-            ) {
-                // Create VPC endpoint for SNS
-                new ec2.InterfaceVpcEndpoint(this, "SNSEndpoint", {
-                    vpc: this.vpc,
-                    privateDnsEnabled: true,
-                    service: ec2.InterfaceVpcEndpointAwsService.SNS,
-                    subnets: { subnets: this.isolatedSubnets },
-                    securityGroups: [vpceSecurityGroup],
-                });
             }
 
             //All Lambda and Metadata Generation Pipeline Required Endpoints
@@ -555,43 +593,8 @@ export class VPCBuilderNestedStack extends NestedStack {
                 });
             }
 
-            //All Lambda and OpenSearch Provisioned Required Endpoints
-            if (
-                props.config.app.useGlobalVpc.useForAllLambdas ||
-                props.config.app.openSearch.useProvisioned.enabled
-            ) {
-                // Create VPC endpoint for SSM
-                new ec2.InterfaceVpcEndpoint(this, "SSMEndpoint", {
-                    vpc: this.vpc,
-                    privateDnsEnabled: true,
-                    service: ec2.InterfaceVpcEndpointAwsService.SSM,
-                    subnets: { subnets: this.isolatedSubnets },
-                    securityGroups: [vpceSecurityGroup],
-                });
-            }
 
-            //All Lambda Required Endpoints
-            if (props.config.app.useGlobalVpc.useForAllLambdas) {
-                // Create VPC endpoint for Lambda
-                new ec2.InterfaceVpcEndpoint(this, "LambdaEndpoint", {
-                    vpc: this.vpc,
-                    privateDnsEnabled: true,
-                    service: ec2.InterfaceVpcEndpointAwsService.LAMBDA,
-                    subnets: { subnets: this.isolatedSubnets },
-                    securityGroups: [vpceSecurityGroup],
-                });
-
-                // Create VPC endpoint for STS
-                new ec2.InterfaceVpcEndpoint(this, "STSEndpoint", {
-                    vpc: this.vpc,
-                    privateDnsEnabled: true,
-                    service: ec2.InterfaceVpcEndpointAwsService.STS,
-                    subnets: { subnets: this.isolatedSubnets },
-                    securityGroups: [vpceSecurityGroup],
-                });
-            }
-
-            // AWS Marketplace Pipeline Required Endpoint
+            // AWS Marketplace Pipeline Required Endpoint on Private Subnet (not isolated)
             if (
                 props.config.app.pipelines.useModelOps.enabled ||
                 props.config.app.pipelines.useRapidPipeline.enabled

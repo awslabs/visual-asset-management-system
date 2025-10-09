@@ -343,9 +343,6 @@ vamscli search simple -q "model" --entity-types file
     # Try broader search
     vamscli search assets -q "model"
 
-    # Check without filters
-    vamscli search assets -q "model"  # Remove --database, --asset-type, etc.
-    ```
 
 2. **Check available fields**:
 
@@ -604,10 +601,10 @@ vamscli search mapping
     vamscli search assets --metadata-query "MD_str_product:Training"
     ```
 
-3. **Combine with other filters**:
+3. **Combine with filters**:
     ```bash
-    # ✅ Narrow search with database filter
-    vamscli search assets --metadata-query "MD_str_product:Training" -d specific-db
+    # ✅ Narrow search with filters
+    vamscli search assets --metadata-query "MD_str_product:Training" --filters 'str_databaseid:"specific-db"'
     ```
 
 ### Large Result Sets
@@ -624,14 +621,100 @@ vamscli search mapping
 2. **Add more filters**:
 
     ```bash
-    # Narrow results with multiple filters
-    vamscli search assets -q "model" -d my-db --asset-type "3d-model" --tags "training"
+    # Narrow results with filters
+    vamscli search assets -q "model" --filters 'str_databaseid:"my-db" AND str_assettype:"3d-model" AND list_tags:"training"'
     ```
 
 3. **Use CSV for large exports**:
     ```bash
     # CSV is more memory-efficient
     vamscli search assets -q "model" --output-format csv > results.csv
+    ```
+
+## Filter Syntax Issues
+
+### Error: "Invalid JSON filter format"
+
+**Cause**: Malformed JSON in `--filters` argument.
+
+**Solutions**:
+
+1. **Check JSON syntax**:
+
+    ```bash
+    # ❌ Invalid JSON
+    --filters '[{"query_string": {"query": "test"}]'  # Missing closing brace
+
+    # ✅ Valid JSON
+    --filters '[{"query_string": {"query": "test"}}]'
+    ```
+
+2. **Escape quotes properly**:
+
+    ```bash
+    # ✅ Proper escaping in JSON format
+    --filters '[{"query_string": {"query": "str_databaseid:\"my-db\""}}]'
+    ```
+
+3. **Use query string format instead**:
+    ```bash
+    # ✅ Simpler query string format
+    --filters 'str_databaseid:"my-db"'
+    ```
+
+### Error: "JSON filters must be an array"
+
+**Cause**: JSON filter is not an array.
+
+**Solution**:
+
+```bash
+# ❌ JSON object (not array)
+--filters '{"query_string": {"query": "test"}}'
+
+# ✅ JSON array
+--filters '[{"query_string": {"query": "test"}}]'
+
+# ✅ Or use query string format
+--filters 'str_databaseid:"test"'
+```
+
+### Filter Not Working as Expected
+
+**Troubleshooting**:
+
+1. **Verify field names**:
+
+    ```bash
+    # Check available fields
+    vamscli search mapping
+    ```
+
+2. **Check filter syntax**:
+
+    ```bash
+    # ❌ Missing quotes around values
+    --filters 'str_databaseid:my-db'
+
+    # ✅ Values must be quoted
+    --filters 'str_databaseid:"my-db"'
+    ```
+
+3. **Test filters individually**:
+
+    ```bash
+    # Test each filter separately
+    vamscli search assets --filters 'str_databaseid:"my-db"'
+    vamscli search assets --filters 'str_assettype:"3d-model"'
+
+    # Then combine
+    vamscli search assets --filters 'str_databaseid:"my-db" AND str_assettype:"3d-model"'
+    ```
+
+4. **Use simple mode for troubleshooting**:
+    ```bash
+    # Simple mode is easier to debug
+    vamscli search simple -d my-db --asset-type "3d-model" --entity-types asset
     ```
 
 ## Related Documentation

@@ -59,9 +59,9 @@ const iam = new IAMClient({});
 Deploys an Amazon Opensearch Domain
 */
 export class OpensearchProvisionedConstruct extends Construct {
-    aosName: string;
-    domain: cdk.aws_opensearchservice.Domain;
-    domainEndpoint: string;
+    public aosName: string;
+    public domain: cdk.aws_opensearchservice.Domain;
+    public domainEndpoint: string;
     config: Config.Config;
 
     constructor(scope: Construct, name: string, props: OpensearchProvisionedConstructProps) {

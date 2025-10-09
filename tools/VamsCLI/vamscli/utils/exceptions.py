@@ -51,6 +51,16 @@ class OverrideTokenError(GlobalInfrastructureError):
     pass
 
 
+class TokenExpiredError(GlobalInfrastructureError):
+    """Raised when authentication token has expired."""
+    pass
+
+
+class PermissionDeniedError(GlobalInfrastructureError):
+    """Raised when user lacks permissions for the requested action (legitimate 403)."""
+    pass
+
+
 class VersionMismatchError(GlobalInfrastructureError):
     """Raised when CLI and API versions don't match."""
     pass
