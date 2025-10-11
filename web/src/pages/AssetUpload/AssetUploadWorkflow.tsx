@@ -52,7 +52,7 @@ export default function AssetUploadWorkflow({
             setUploadResponse(response);
             onComplete(response);
         } else {
-            // Still store the response but don't show the completion message yet
+            // Still store the response but don't show the completion message yett
             setUploadResponse(response);
             onComplete(response);
         }
