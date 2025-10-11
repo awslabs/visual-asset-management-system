@@ -200,8 +200,8 @@ export class CognitoWebNativeConstructStack extends Construct {
         });
 
         const cognitoIdentityPrincipal: string = Service("COGNITO_IDENTITY").PrincipalString;
-        const cognitoIdentityAudString = cognitoIdentityPrincipal+":aud";
-        const cognitoIdentityAmrString = cognitoIdentityPrincipal+":amr";
+        const cognitoIdentityAudString = cognitoIdentityPrincipal + ":aud";
+        const cognitoIdentityAmrString = cognitoIdentityPrincipal + ":amr";
         const unauthenticatedRole = new iam.Role(this, "DefaultUnauthenticatedRole", {
             assumedBy: new iam.FederatedPrincipal(
                 cognitoIdentityPrincipal,
@@ -216,7 +216,6 @@ export class CognitoWebNativeConstructStack extends Construct {
                 "sts:AssumeRoleWithWebIdentity"
             ),
         });
-
 
         const defaultPolicy = new cognito.CfnIdentityPoolRoleAttachment(
             this,
@@ -305,5 +304,4 @@ export class CognitoWebNativeConstructStack extends Construct {
             true
         );
     }
-
 }

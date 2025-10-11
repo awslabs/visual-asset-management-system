@@ -688,7 +688,7 @@ export const fetchDatabaseAssets = async (
         });
 
         let items = [];
-        
+
         // Handle legacy response format with message wrapper
         if (response.message) {
             if (response.message.Items) {
@@ -721,7 +721,7 @@ export const fetchDatabaseAssets = async (
             }
             return items;
         }
-        
+
         return [];
     } catch (error) {
         console.log("Error fetching database assets:", error);
@@ -758,7 +758,7 @@ export const fetchAllAssets = async (
         });
 
         let items = [];
-        
+
         // Handle legacy response format with message wrapper
         if (response.message) {
             if (response.message.Items) {
@@ -791,7 +791,7 @@ export const fetchAllAssets = async (
             }
             return items;
         }
-        
+
         return [];
     } catch (error) {
         console.log("Error fetching all assets:", error);

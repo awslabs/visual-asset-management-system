@@ -177,10 +177,7 @@ const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
                 </FormField>
 
                 {/* Table Columns - Drag & Drop */}
-                <FormField
-                    label="Table Columns"
-                    description="Columns to show in table view"
-                >
+                <FormField label="Table Columns" description="Columns to show in table view">
                     <DraggableColumnList
                         selectedColumns={currentColumns || []}
                         availableColumns={columnOptions}

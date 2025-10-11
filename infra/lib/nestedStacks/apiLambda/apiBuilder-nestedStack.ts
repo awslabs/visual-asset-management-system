@@ -798,23 +798,28 @@ export function apiBuilder(
     );
 
     // Create event source mapping from SQS to Lambda (no batching)
-    const esmUploadLargeFileProcessing = new lambda.EventSourceMapping(scope, "UploadLargeFileProcessingEventSourceMapping", {
-        target: sqsUploadFileLargeFunction,
-        eventSourceArn: largeFileProcessingQueue.queueArn,
-        batchSize: 1, // Process one message at a time
-        maxBatchingWindow: cdk.Duration.seconds(0), // No batching window
-    });
+    const esmUploadLargeFileProcessing = new lambda.EventSourceMapping(
+        scope,
+        "UploadLargeFileProcessingEventSourceMapping",
+        {
+            target: sqsUploadFileLargeFunction,
+            eventSourceArn: largeFileProcessingQueue.queueArn,
+            batchSize: 1, // Process one message at a time
+            maxBatchingWindow: cdk.Duration.seconds(0), // No batching window
+        }
+    );
 
     // Due to cdk version upgrade, not all regions support tags for EventSourceMapping
     // this line should remove the tags for regions that dont support it (govcloud currently not supported)
     if (config.app.govCloud.enabled) {
-        const cfnEsmUploadLarge = esmUploadLargeFileProcessing.node.defaultChild as lambda.CfnEventSourceMapping;
+        const cfnEsmUploadLarge = esmUploadLargeFileProcessing.node
+            .defaultChild as lambda.CfnEventSourceMapping;
         cfnEsmUploadLarge.addPropertyDeletionOverride("Tags");
     }
 
     // Grant SQS permissions to the large file processor Lambda
     largeFileProcessingQueue.grantConsumeMessages(sqsUploadFileLargeFunction);
-    
+
     // Grant SQS send message permissions to uploadFile Lambda
     largeFileProcessingQueue.grantSendMessages(uploadFileFunction);
 

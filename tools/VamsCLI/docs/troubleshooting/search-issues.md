@@ -343,6 +343,7 @@ vamscli search simple -q "model" --entity-types file
     # Try broader search
     vamscli search assets -q "model"
 
+    ```
 
 2. **Check available fields**:
 

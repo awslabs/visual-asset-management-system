@@ -340,7 +340,10 @@ export default function TableList(props) {
                             { colspan: { default: "5" } },
                         ]}
                     >
-                        <div id="textFilterCapture" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <div
+                            id="textFilterCapture"
+                            style={{ display: "flex", alignItems: "center", gap: "8px" }}
+                        >
                             <div style={{ flex: 1 }}>
                                 <TextFilter
                                     id={"test"}

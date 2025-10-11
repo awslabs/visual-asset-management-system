@@ -54,7 +54,9 @@ export class OpensearchServerlessConstruct extends Construct {
         this.config = props.config;
 
         this.useVPCEndpoint =
-            props.config.app.useGlobalVpc.enabled && props.config.app.useGlobalVpc.useForAllLambdas && props.config.app.useGlobalVpc.addVpcEndpoints;
+            props.config.app.useGlobalVpc.enabled &&
+            props.config.app.useGlobalVpc.useForAllLambdas &&
+            props.config.app.useGlobalVpc.addVpcEndpoints;
 
         //Create Open Search VPC endpoint if we are using a VPC for all our lambda functions
         //Note: Ignoring addVpcEndpoint configuration on purpose as this is required to create to attach to a collection network security policy. must create at this juncture

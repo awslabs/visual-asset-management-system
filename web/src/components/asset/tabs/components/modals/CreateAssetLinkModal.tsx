@@ -39,7 +39,7 @@ export function CreateAssetLinkModal({
     const [tagTypes, setTagTypes] = useState<any[]>([]);
     const [aliasId, setAliasId] = useState<string>("");
     const [aliasIdError, setAliasIdError] = useState<string>("");
-    
+
     // Selected assets from the search table
     const [selectedAssets, setSelectedAssets] = useState<AssetSearchItem[]>([]);
 
@@ -104,16 +104,18 @@ export function CreateAssetLinkModal({
                 // Create asset node from the first selected item (upload mode doesn't support multi-select yet)
                 const selectedAsset = selectedAssets[0];
                 // Generate unique temp ID that includes alias to distinguish multiple links to same asset
-                const tempId = aliasId 
+                const tempId = aliasId
                     ? `temp-${selectedAsset.assetId}-${relationshipType}-${aliasId}`
                     : `temp-${selectedAsset.assetId}-${relationshipType}-no-alias`;
-                
+
                 const assetNode = {
                     assetId: selectedAsset.assetId,
                     assetName: selectedAsset.assetName,
                     databaseId: selectedAsset.databaseName || selectedAsset.databaseId,
                     assetLinkId: tempId,
-                    ...(aliasId && relationshipType !== "related" ? { assetLinkAliasId: aliasId } : {}),
+                    ...(aliasId && relationshipType !== "related"
+                        ? { assetLinkAliasId: aliasId }
+                        : {}),
                 };
 
                 // Show success message
@@ -372,7 +374,7 @@ export function CreateAssetLinkModal({
 
                     {/* Asset Search Table */}
                     <AssetSearchTable
-                        key={visible ? 'open' : 'closed'} // Force re-render when modal opens/closes
+                        key={visible ? "open" : "closed"} // Force re-render when modal opens/closes
                         selectionMode="multi"
                         currentAssetId={currentAssetId}
                         currentDatabaseId={currentDatabaseId}

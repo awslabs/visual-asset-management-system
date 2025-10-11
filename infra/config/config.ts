@@ -264,7 +264,6 @@ export function getConfig(app: cdk.App): Config {
                 );
             }
 
-
             if (!config.app.useKmsCmkEncryption.enabled) {
                 throw new Error(
                     "Configuration Error: GovCloud IL6 must have config.app.useKmsCmkEncryption.enabled set to true"

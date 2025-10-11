@@ -1092,7 +1092,6 @@ NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback 
 
 See VNTANA [documentation](https://www.vntana.com/resource/platform-inputs/) for all supported input and output formats.
 
-
 ## OpenSearch Reindexing
 
 VAMS v2.3 introduces a Lambda-based reindexing system that allows you to rebuild OpenSearch indexes either automatically during CDK deployment or manually via Lambda invocation.
@@ -1100,11 +1099,12 @@ VAMS v2.3 introduces a Lambda-based reindexing system that allows you to rebuild
 ### When to Use Reindexing
 
 Reindexing is useful in the following scenarios:
-- **Migration from v2.2 to v2.3**: Required to populate the new dual-index system
-- **Index Corruption**: When OpenSearch indexes become corrupted or inconsistent
-- **Schema Changes**: After modifying OpenSearch index mappings
-- **Data Recovery**: After restoring from backups or disaster recovery
-- **Performance Optimization**: To rebuild indexes with updated settings
+
+-   **Migration from v2.2 to v2.3**: Required to populate the new dual-index system
+-   **Index Corruption**: When OpenSearch indexes become corrupted or inconsistent
+-   **Schema Changes**: After modifying OpenSearch index mappings
+-   **Data Recovery**: After restoring from backups or disaster recovery
+-   **Performance Optimization**: To rebuild indexes with updated settings
 
 ### Reindexing Methods
 
@@ -1113,6 +1113,7 @@ Reindexing is useful in the following scenarios:
 **IMPORTANT**: This requires a two-step deployment process.
 
 **Step 1: Initial v2.3 Deployment**
+
 ```bash
 cd infra
 cdk deploy --all
@@ -1123,31 +1124,35 @@ This creates the reindexer Lambda function and all v2.3 infrastructure.
 **Step 2: Enable Reindexing and Deploy Again**
 
 Option A - Configuration File:
+
 ```json
 {
-  "app": {
-    "openSearch": {
-      "reindexOnCdkDeploy": true
+    "app": {
+        "openSearch": {
+            "reindexOnCdkDeploy": true
+        }
     }
-  }
 }
 ```
 
 Then deploy:
+
 ```bash
 cdk deploy --all
 ```
 
 Option B - CDK Context Parameter:
+
 ```bash
 cdk deploy --all --context reindexOnCdkDeploy=true
 ```
 
 **What Happens:**
-- CloudFormation custom resource invokes the reindexer Lambda
-- All assets and files are reindexed automatically
-- Deployment waits for completion
-- CloudFormation reports success/failure
+
+-   CloudFormation custom resource invokes the reindexer Lambda
+-   All assets and files are reindexed automatically
+-   Deployment waits for completion
+-   CloudFormation reports success/failure
 
 **Important**: After reindexing completes, set `reindexOnCdkDeploy` back to `false` to prevent reindexing on every deployment.
 
@@ -1156,6 +1161,7 @@ cdk deploy --all --context reindexOnCdkDeploy=true
 For production environments or when you need more control, use the reindex utility script.
 
 **Step 1: Get Lambda Function Name**
+
 ```bash
 aws cloudformation describe-stacks \
   --stack-name your-vams-stack \
@@ -1166,12 +1172,14 @@ aws cloudformation describe-stacks \
 **Step 2: Run Reindexing**
 
 Basic reindexing:
+
 ```bash
 cd infra/deploymentDataMigration/tools
 python reindex_utility.py --function-name your-reindexer-function --operation both
 ```
 
 With options:
+
 ```bash
 # Dry run (test without changes)
 python reindex_utility.py --function-name your-function --operation both --dry-run
@@ -1191,42 +1199,46 @@ python reindex_utility.py --function-name your-function --operation both --profi
 
 ### Reindexing Options
 
-- `--operation`: Choose what to reindex
-  - `assets`: Reindex only assets
-  - `files`: Reindex only files
-  - `both`: Reindex both assets and files (default)
+-   `--operation`: Choose what to reindex
 
-- `--clear-indexes`: Clear all documents from OpenSearch indexes before reindexing
-  - Useful for complete index rebuilds
-  - Removes all existing documents first
-  - Then reindexes from DynamoDB
+    -   `assets`: Reindex only assets
+    -   `files`: Reindex only files
+    -   `both`: Reindex both assets and files (default)
 
-- `--dry-run`: Test without making changes
-  - Validates configuration
-  - Shows what would be processed
-  - No actual updates made
+-   `--clear-indexes`: Clear all documents from OpenSearch indexes before reindexing
 
-- `--limit N`: Process only N items (for testing)
-  - Useful for validating the process
-  - Test with small subset first
+    -   Useful for complete index rebuilds
+    -   Removes all existing documents first
+    -   Then reindexes from DynamoDB
 
-- `--async`: Use asynchronous invocation
-  - For very large datasets (>100,000 items)
-  - Returns immediately
-  - Monitor via CloudWatch Logs
+-   `--dry-run`: Test without making changes
+
+    -   Validates configuration
+    -   Shows what would be processed
+    -   No actual updates made
+
+-   `--limit N`: Process only N items (for testing)
+
+    -   Useful for validating the process
+    -   Test with small subset first
+
+-   `--async`: Use asynchronous invocation
+    -   For very large datasets (>100,000 items)
+    -   Returns immediately
+    -   Monitor via CloudWatch Logs
 
 ### Environment Variables
 
 The reindexer Lambda function uses the following environment variables (automatically configured by CDK):
 
-- `ASSET_STORAGE_TABLE_NAME`: Source DynamoDB table for assets
-- `S3_ASSET_BUCKETS_STORAGE_TABLE_NAME`: Source DynamoDB table for S3 bucket configs
-- `METADATA_STORAGE_TABLE_NAME`: Target DynamoDB table (triggers reindexing via Streams)
-- `OPENSEARCH_ASSET_INDEX_SSM_PARAM`: SSM parameter for asset index name
-- `OPENSEARCH_FILE_INDEX_SSM_PARAM`: SSM parameter for file index name
-- `OPENSEARCH_ENDPOINT_SSM_PARAM`: SSM parameter for OpenSearch endpoint
-- `OPENSEARCH_TYPE`: Type of OpenSearch deployment (serverless or provisioned)
-- `AWS_REGION`: AWS region for OpenSearch authentication
+-   `ASSET_STORAGE_TABLE_NAME`: Source DynamoDB table for assets
+-   `S3_ASSET_BUCKETS_STORAGE_TABLE_NAME`: Source DynamoDB table for S3 bucket configs
+-   `METADATA_STORAGE_TABLE_NAME`: Target DynamoDB table (triggers reindexing via Streams)
+-   `OPENSEARCH_ASSET_INDEX_SSM_PARAM`: SSM parameter for asset index name
+-   `OPENSEARCH_FILE_INDEX_SSM_PARAM`: SSM parameter for file index name
+-   `OPENSEARCH_ENDPOINT_SSM_PARAM`: SSM parameter for OpenSearch endpoint
+-   `OPENSEARCH_TYPE`: Type of OpenSearch deployment (serverless or provisioned)
+-   `AWS_REGION`: AWS region for OpenSearch authentication
 
 ### How Reindexing Works
 
@@ -1239,6 +1251,7 @@ The reindexer Lambda function uses the following environment variables (automati
 ### Monitoring Reindexing
 
 **CloudWatch Logs:**
+
 ```bash
 # Reindexer Lambda logs
 aws logs tail /aws/lambda/your-reindexer-function --follow
@@ -1254,6 +1267,7 @@ aws logs filter-log-events \
 
 **Synchronous Invocation Output:**
 The utility script displays real-time progress:
+
 ```
 2024-01-15 10:00:00 - INFO - VAMS OPENSEARCH REINDEXER - LAMBDA INVOCATION
 2024-01-15 10:00:00 - INFO - Function: vams-prod-reindexer
@@ -1269,45 +1283,51 @@ The utility script displays real-time progress:
 ### Permissions Required
 
 **For Local Execution:**
+
 ```json
 {
-  "Version": "2012-01-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": ["lambda:InvokeFunction"],
-      "Resource": "arn:aws:lambda:*:*:function:*-reindexer-*"
-    }
-  ]
+    "Version": "2012-01-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": ["lambda:InvokeFunction"],
+            "Resource": "arn:aws:lambda:*:*:function:*-reindexer-*"
+        }
+    ]
 }
 ```
 
 **Lambda Function Permissions (automatically configured by CDK):**
-- DynamoDB: Read from AssetStorageTable and S3AssetBucketsTable
-- DynamoDB: Read/Write to AssetsMetadataTable
-- S3: Read from all asset buckets
-- SSM: Read parameters for OpenSearch configuration
-- OpenSearch: Access to indexes (for clearing)
-- KMS: Encrypt/decrypt operations
+
+-   DynamoDB: Read from AssetStorageTable and S3AssetBucketsTable
+-   DynamoDB: Read/Write to AssetsMetadataTable
+-   S3: Read from all asset buckets
+-   SSM: Read parameters for OpenSearch configuration
+-   OpenSearch: Access to indexes (for clearing)
+-   KMS: Encrypt/decrypt operations
 
 ### Troubleshooting
 
 **Lambda Function Not Found:**
-- Verify function name from CDK outputs
-- Ensure v2.3 stack is deployed
+
+-   Verify function name from CDK outputs
+-   Ensure v2.3 stack is deployed
 
 **Permission Errors:**
-- Ensure you have `lambda:InvokeFunction` permission
-- Check Lambda execution role has required permissions
+
+-   Ensure you have `lambda:InvokeFunction` permission
+-   Check Lambda execution role has required permissions
 
 **Timeout Issues:**
-- Use `--async` flag for large datasets
-- Monitor CloudWatch Logs for progress
+
+-   Use `--async` flag for large datasets
+-   Monitor CloudWatch Logs for progress
 
 **Index Clearing Fails:**
-- Verify OpenSearch endpoint is accessible
-- Check Lambda has OpenSearch permissions
-- Review CloudWatch Logs for specific errors
+
+-   Verify OpenSearch endpoint is accessible
+-   Check Lambda has OpenSearch permissions
+-   Review CloudWatch Logs for specific errors
 
 ### Best Practices
 

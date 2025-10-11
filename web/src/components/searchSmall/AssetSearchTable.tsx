@@ -148,7 +148,7 @@ export function AssetSearchTable({
             if (!useNoOpenSearch) {
                 // Build filters array
                 const filters: object[] = [];
-                
+
                 // Add database filter if specified (for both single and multi select modes)
                 if (currentDatabaseId) {
                     filters.push({
@@ -220,14 +220,16 @@ export function AssetSearchTable({
                     total = filtered.length;
                     const startIndex = (page - 1) * pageSize;
 
-                    results = filtered.slice(startIndex, startIndex + pageSize).map((asset: any) => ({
-                        assetId: asset.assetId,
-                        assetName: asset.assetName,
-                        databaseId: asset.databaseId,
-                        databaseName: asset.databaseId,
-                        description: asset.description,
-                        tags: asset.tags || [],
-                    }));
+                    results = filtered
+                        .slice(startIndex, startIndex + pageSize)
+                        .map((asset: any) => ({
+                            assetId: asset.assetId,
+                            assetName: asset.assetName,
+                            databaseId: asset.databaseId,
+                            databaseName: asset.databaseId,
+                            description: asset.description,
+                            tags: asset.tags || [],
+                        }));
                 }
             }
 
@@ -289,9 +291,7 @@ export function AssetSearchTable({
         // Add selected items to the selected assets list, avoiding duplicates
         const newSelectedAssets = [...selectedAssets];
         selectedItems.forEach((item) => {
-            const isDuplicate = newSelectedAssets.some(
-                (asset) => asset.assetId === item.assetId
-            );
+            const isDuplicate = newSelectedAssets.some((asset) => asset.assetId === item.assetId);
             if (!isDuplicate) {
                 newSelectedAssets.push(item);
             }
@@ -324,8 +324,10 @@ export function AssetSearchTable({
                 id: "assetName",
                 header: "Asset Name",
                 cell: (item: AssetSearchItem) => (
-                    <Link 
-                        href={`#/databases/${item.databaseName || item.databaseId}/assets/${item.assetId}`}
+                    <Link
+                        href={`#/databases/${item.databaseName || item.databaseId}/assets/${
+                            item.assetId
+                        }`}
                         external
                         target="_blank"
                     >
@@ -510,18 +512,17 @@ export function AssetSearchTable({
                             {totalResults > 0 && (
                                 <Badge color="blue">
                                     Showing {(currentPage - 1) * pageSize + 1}-
-                                    {Math.min(currentPage * pageSize, totalResults)} of {totalResults}{" "}
-                                    results
+                                    {Math.min(currentPage * pageSize, totalResults)} of{" "}
+                                    {totalResults} results
                                 </Badge>
                             )}
-                            {currentDatabaseId && (
-                                <Badge>
-                                    Database: {currentDatabaseId}
-                                </Badge>
-                            )}
+                            {currentDatabaseId && <Badge>Database: {currentDatabaseId}</Badge>}
                         </SpaceBetween>
                         {selectionMode === "multi" && (
-                            <Button onClick={handleAddSelected} disabled={selectedItems.length === 0}>
+                            <Button
+                                onClick={handleAddSelected}
+                                disabled={selectedItems.length === 0}
+                            >
                                 Add Selected ({selectedItems.length})
                             </Button>
                         )}
@@ -548,7 +549,9 @@ export function AssetSearchTable({
                                     <Pagination
                                         currentPageIndex={currentPage}
                                         pagesCount={totalPages}
-                                        onChange={({ detail }) => handlePageChange(detail.currentPageIndex)}
+                                        onChange={({ detail }) =>
+                                            handlePageChange(detail.currentPageIndex)
+                                        }
                                     />
                                 )}
                             </>

@@ -705,16 +705,16 @@ The `assetLinkAliasId` feature enables multiple parent-child relationships betwe
 
 An **alias ID** is an optional string identifier (max 128 characters) that can be assigned to a parent-child asset link. It allows you to:
 
-- Create multiple parent-child relationships between the same parent and child assets
-- Distinguish between different types of relationships (e.g., "primary-source", "backup-source", "reference-copy")
-- Maintain unique identifiers for each relationship instance
+-   Create multiple parent-child relationships between the same parent and child assets
+-   Distinguish between different types of relationships (e.g., "primary-source", "backup-source", "reference-copy")
+-   Maintain unique identifiers for each relationship instance
 
 **Restrictions:**
 
-- **Relationship Type**: Alias IDs can ONLY be used with `parentChild` relationship type
-- **Not for Related Links**: The `related` relationship type does NOT support aliases
-- **Uniqueness**: Each alias must be unique for a given child asset
-- **Optional**: Alias IDs are completely optional - existing functionality works without them
+-   **Relationship Type**: Alias IDs can ONLY be used with `parentChild` relationship type
+-   **Not for Related Links**: The `related` relationship type does NOT support aliases
+-   **Uniqueness**: Each alias must be unique for a given child asset
+-   **Optional**: Alias IDs are completely optional - existing functionality works without them
 
 ### Alias Usage Examples
 
@@ -852,11 +852,13 @@ vamscli asset-links create \
 ### Best Practices for Aliases
 
 1. **Use Descriptive Aliases**: Choose meaningful names that describe the relationship purpose
-   - ✅ Good: `"primary-source"`, `"backup-reference"`, `"v2-template"`
-   - ❌ Bad: `"link1"`, `"test"`, `"abc"`
+
+    - ✅ Good: `"primary-source"`, `"backup-reference"`, `"v2-template"`
+    - ❌ Bad: `"link1"`, `"test"`, `"abc"`
 
 2. **Consistent Naming**: Use a consistent naming convention across your project
-   - Example: `"{purpose}-{version}"` → `"source-v1"`, `"source-v2"`
+
+    - Example: `"{purpose}-{version}"` → `"source-v1"`, `"source-v2"`
 
 3. **Document Aliases**: Keep track of what each alias represents in your project documentation
 

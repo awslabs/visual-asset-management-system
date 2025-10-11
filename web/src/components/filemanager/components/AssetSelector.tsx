@@ -1,9 +1,5 @@
 import React, { useState, useEffect } from "react";
-import {
-    FormField,
-    Box,
-    SpaceBetween,
-} from "@cloudscape-design/components";
+import { FormField, Box, SpaceBetween } from "@cloudscape-design/components";
 import { AssetSearchTable, AssetSearchItem } from "../../searchSmall/AssetSearchTable";
 import { fetchtagTypes } from "../../../services/APIService";
 

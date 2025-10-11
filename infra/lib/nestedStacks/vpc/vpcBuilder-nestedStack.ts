@@ -430,7 +430,6 @@ export class VPCBuilderNestedStack extends NestedStack {
             props.config.app.useGlobalVpc.addVpcEndpoints &&
             !props.config.env.loadContextIgnoreVPCStacks
         ) {
-
             ///Common endpoints needed for VAMS
             // Create VPC endpoint for API Gateway
             new ec2.InterfaceVpcEndpoint(this, "APIGatewayEndpoint", {
@@ -566,7 +565,6 @@ export class VPCBuilderNestedStack extends NestedStack {
                     subnets: { subnets: this.isolatedSubnets },
                     securityGroups: [vpceSecurityGroup],
                 });
-
             }
 
             //All Lambda and Metadata Generation Pipeline Required Endpoints
@@ -592,7 +590,6 @@ export class VPCBuilderNestedStack extends NestedStack {
                     securityGroups: [vpceSecurityGroup],
                 });
             }
-
 
             // AWS Marketplace Pipeline Required Endpoint on Private Subnet (not isolated)
             if (

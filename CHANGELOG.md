@@ -38,11 +38,11 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
     -   **UI** Assets (now "Assets and Files") has a completely new search page with many new filtering capabilities and options.
     -   **Web** Search map view will now allow for many more metadata fields to be used for adding map marker or area placement (any asset with `location` (GP/GS) and `longitude` (string or number) / `latitude` (string or number) combination metadata will show up)
     -   Search now has it's origional API of `/search` and a new `/search/simple` API for a simplified search input
-    -   Implemented a new CDK config option in `config.app.openSearch.reindexOnCdkDeploy` that can trigger a complete index clear and re-index of assets and files. This can also be used as CDK context argument `reindexOnCdkDeploy` for the cdk deploy command. Note: Only use this after having CDK deploying at least once with v2.3 changes, otherwise the reindex may not work or error. 
+    -   Implemented a new CDK config option in `config.app.openSearch.reindexOnCdkDeploy` that can trigger a complete index clear and re-index of assets and files. This can also be used as CDK context argument `reindexOnCdkDeploy` for the cdk deploy command. Note: Only use this after having CDK deploying at least once with v2.3 changes, otherwise the reindex may not work or error.
     -   A new CDK custom tool section and migration scripts has been added to help manually trigger a reindex outside of a CDK deploy
 -   Maps on the backend and UI frontend is updated to use the new location service APIKey method and removes the older raster map and place functionality
     -   Note: This removes the last place that cognito identities are used which means the location services functionality can now be used for external IDP solutions
-    -   Note: This change removes the cognito authenticatedRole and association with the identity pool. Unauthenticated role (no permissions assigned) still remains for now as it is needed for basic auth login by the web Amplify-SDK v1. 
+    -   Note: This change removes the cognito authenticatedRole and association with the identity pool. Unauthenticated role (no permissions assigned) still remains for now as it is needed for basic auth login by the web Amplify-SDK v1.
 -   **Web** Added a draggable splitter in ViewAsset page between the file manager tree view and details panel
 -   Added a new API endpoint for asset file streaming (similar to asset preview auxiliary files) at `GET /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`
 -   Added .clineRules and .kiro for AI workflows for AI-assisted development for VAMS backend API development, CDK development, and CLI development
@@ -58,7 +58,7 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
 -   Refactored createWorkflow to not require the stepfunctions library anymore which entirely removes the additional heavyweight lambda layer created specifically for this function. This should speed up CDK deployments, reduce CDK package size, and reduce security posture by limiting backend libraries needed. Additionally, some other upgrades were done to createWorkflow as part of the refactor:
     -   Updating an existing workflow no longer create a new AWS step function workflow but modifies the definition of the existing
     -   Updated to the new backed error handling logic used since v2.2
-    -   GovCloud configuration restrictions updated to not include a hard use requirement of openSearch provisioned. OpenSearch serveless is supported now in GovCloud environments. 
+    -   GovCloud configuration restrictions updated to not include a hard use requirement of openSearch provisioned. OpenSearch serveless is supported now in GovCloud environments.
 
 ### Bug Fixes
 
@@ -67,7 +67,7 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
 -   Fixed Asset Link Service GET API to properly return child trees that show full paths when duplicate nodes exist in different branches of the tree (previously trimmed the tree of duplicate nodes)
 -   Updated BatchFargate CDK construct names to be unique for the stack (see breaking changes)
 -   Fixed backend asset file operations and S3 indexing for files >5GB (introduced in v2.2)
--   Fixed Cognito unauthenticated role trust policy to switch the partition correctly. Cognito deployments were causing errors in GovCloud environments without this. 
+-   Fixed Cognito unauthenticated role trust policy to switch the partition correctly. Cognito deployments were causing errors in GovCloud environments without this.
 -   Fixed PcPotreePipeline to remove tags from SQS lambda event source as this is not supported in GovCloud environments.
 -   Fixed When saving pipelines that lambda function names have whitespace trimmed to prevent workflow errors
 -   Lambdas now work behind a VPC again however a compromise had to be made, Cognito MFA checks are currently not possible as a AWS VPC Endpoint doesn't exist for Cognito (BREAKING CHANGE).

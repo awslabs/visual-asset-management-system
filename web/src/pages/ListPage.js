@@ -68,7 +68,9 @@ export default function ListPage(props) {
                 }
             } catch (err) {
                 console.error("Error loading data:", err);
-                setError(err.message || "An error occurred while loading data. Please try refreshing.");
+                setError(
+                    err.message || "An error occurred while loading data. Please try refreshing."
+                );
             } finally {
                 setLoading(false);
                 setReload(false);

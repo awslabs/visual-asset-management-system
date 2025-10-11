@@ -712,7 +712,9 @@ export default function UploadManager({
                                 toAssetId: assetId,
                                 toAssetDatabaseId: assetDetail.databaseId || "",
                                 relationshipType: "parentChild",
-                                ...(parentAsset.assetLinkAliasId ? { assetLinkAliasId: parentAsset.assetLinkAliasId } : {}),
+                                ...(parentAsset.assetLinkAliasId
+                                    ? { assetLinkAliasId: parentAsset.assetLinkAliasId }
+                                    : {}),
                             })
                                 .then((response) => {
                                     console.log("Parent link created successfully:", response);
@@ -751,7 +753,9 @@ export default function UploadManager({
                                 toAssetId: childAsset.assetId,
                                 toAssetDatabaseId: childAsset.databaseId,
                                 relationshipType: "parentChild",
-                                ...(childAsset.assetLinkAliasId ? { assetLinkAliasId: childAsset.assetLinkAliasId } : {}),
+                                ...(childAsset.assetLinkAliasId
+                                    ? { assetLinkAliasId: childAsset.assetLinkAliasId }
+                                    : {}),
                             })
                                 .then((response) => {
                                     console.log("Child link created successfully:", response);
@@ -878,7 +882,7 @@ export default function UploadManager({
                             console.log(
                                 `No metadata in originalAsset for ${link.assetId}, checking fallback structure`
                             );
-                            
+
                             // Only check fallback if originalAsset didn't have metadata
                             if (assetDetail.assetLinksMetadata) {
                                 const fallbackMetadata =
@@ -898,7 +902,8 @@ export default function UploadManager({
                                                 {
                                                     metadataKey: metadataItem.metadataKey,
                                                     metadataValue: metadataItem.metadataValue,
-                                                    metadataValueType: metadataItem.metadataValueType,
+                                                    metadataValueType:
+                                                        metadataItem.metadataValueType,
                                                 }
                                             )
                                                 .then((response) => {

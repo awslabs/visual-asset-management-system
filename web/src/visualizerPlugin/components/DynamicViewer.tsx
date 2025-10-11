@@ -95,7 +95,9 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
         } else if (viewerMetadata.length === 0) {
             // Customize error message based on whether multiple files are selected
             const errorMessage = isMultiFile
-                ? `No compatible multi-file viewers found for file types: ${fileExtensions.join(", ")}`
+                ? `No compatible multi-file viewers found for file types: ${fileExtensions.join(
+                      ", "
+                  )}`
                 : `No compatible viewers found for file types: ${fileExtensions.join(", ")}`;
             setError(errorMessage);
             setLoading(false); // Stop loading when no viewers are found

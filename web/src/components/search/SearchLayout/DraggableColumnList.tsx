@@ -135,7 +135,7 @@ const DraggableColumnList: React.FC<DraggableColumnListProps> = ({
                     const newColumns = detail.selectedOptions
                         .map((opt) => opt.value)
                         .filter((val): val is string => val !== undefined);
-                    
+
                     if (newColumns.length > 0) {
                         // Add the new columns to the end of the list
                         const updatedColumns = [...selectedColumns, ...newColumns];

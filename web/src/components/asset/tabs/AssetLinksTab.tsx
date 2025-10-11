@@ -399,7 +399,9 @@ function UploadModeAssetLinksTab(props: AssetLinksTabProps) {
                 return {
                     ...rootNode,
                     children: assets.map((asset: AssetNode, index: number) => ({
-                        id: `${relationshipType}-${asset.assetId}-${asset.assetLinkAliasId || 'no-alias'}-${index}`,
+                        id: `${relationshipType}-${asset.assetId}-${
+                            asset.assetLinkAliasId || "no-alias"
+                        }-${index}`,
                         name: asset.assetName,
                         type: "asset" as const,
                         level: 1,
@@ -469,14 +471,19 @@ function UploadModeAssetLinksTab(props: AssetLinksTabProps) {
                     relationshipType === "parent" ? "parents" : relationshipType;
 
                 // Check for duplicate: same asset with same alias (or both no alias)
-                const existingLinks = prev.assetLinksFe[relationshipKey as keyof typeof prev.assetLinksFe];
+                const existingLinks =
+                    prev.assetLinksFe[relationshipKey as keyof typeof prev.assetLinksFe];
                 const isDuplicate = existingLinks.some((existing: AssetNode) => {
                     if (existing.assetId !== assetNode.assetId) return false;
                     // Both have no alias
                     if (!existing.assetLinkAliasId && !assetNode.assetLinkAliasId) return true;
                     // Both have the same alias
-                    if (existing.assetLinkAliasId && assetNode.assetLinkAliasId && 
-                        existing.assetLinkAliasId === assetNode.assetLinkAliasId) return true;
+                    if (
+                        existing.assetLinkAliasId &&
+                        assetNode.assetLinkAliasId &&
+                        existing.assetLinkAliasId === assetNode.assetLinkAliasId
+                    )
+                        return true;
                     return false;
                 });
 

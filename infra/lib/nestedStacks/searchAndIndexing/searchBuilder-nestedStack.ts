@@ -105,8 +105,7 @@ export function searchBuilder(
             "OpenSearchServerlessDomainEndpointOutput",
             {
                 value: aoss.aossEndpointUrl,
-                description:
-                    "The HTTP endpoint for the serverless open search domain",
+                description: "The HTTP endpoint for the serverless open search domain",
             }
         );
 
@@ -247,7 +246,6 @@ export function searchBuilder(
         // Grant OpenSearch access to reindexer
         aoss.grantCollectionAccess(reindexerFunction);
         aoss.grantVPCeAccess(reindexerFunction);
-
     } else if (config.app.openSearch.useProvisioned.enabled) {
         //Provisioned Deployment
         const aos = new OpensearchProvisionedConstruct(scope, "AOS", {
@@ -275,8 +273,7 @@ export function searchBuilder(
             "OpenSearchProvisionedDomainEndpointOutput",
             {
                 value: aos.domainEndpoint,
-                description:
-                    "The HTTP endpoint for the provisioned open search domain",
+                description: "The HTTP endpoint for the provisioned open search domain",
             }
         );
 
@@ -413,7 +410,6 @@ export function searchBuilder(
 
         // Grant OpenSearch access to reindexer
         aos.grantOSDomainAccess(reindexerFunction);
-
     }
 
     /////////////////////////////////////////////////////////////////////////////
@@ -562,37 +558,22 @@ export function searchBuilder(
     }
 
     //Setup final index output
-    const openSearchIndexAssetSOutput = new cdk.CfnOutput(
-        scope,
-        "OpenSearchIndexAssetsOutput",
-        {
-            value: config.openSearchAssetIndexName,
-            description:
-                "The OpenSearch index name for assets",
-        }
-    );
+    const openSearchIndexAssetSOutput = new cdk.CfnOutput(scope, "OpenSearchIndexAssetsOutput", {
+        value: config.openSearchAssetIndexName,
+        description: "The OpenSearch index name for assets",
+    });
 
-    const openSearchIndexFilesOutput = new cdk.CfnOutput(
-        scope,
-        "OpenSearchIndexFilesOutput",
-        {
-            value: config.openSearchFileIndexName,
-            description:
-                "The OpenSearch index name for files",
-        }
-    );
+    const openSearchIndexFilesOutput = new cdk.CfnOutput(scope, "OpenSearchIndexFilesOutput", {
+        value: config.openSearchFileIndexName,
+        description: "The OpenSearch index name for files",
+    });
 
     // Output reindexer function name if it was created
     if (reindexerFunction) {
-        const reindexerFunctionOutput = new cdk.CfnOutput(
-            scope,
-            "ReindexerFunctionNameOutput",
-            {
-                value: reindexerFunction.functionName,
-                description:
-                    "The Lambda function name for the OpenSearch reindexer",
-            }
-        );
+        const reindexerFunctionOutput = new cdk.CfnOutput(scope, "ReindexerFunctionNameOutput", {
+            value: reindexerFunction.functionName,
+            description: "The Lambda function name for the OpenSearch reindexer",
+        });
     }
 
     //Nag supressions

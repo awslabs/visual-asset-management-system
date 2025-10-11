@@ -49,7 +49,12 @@ export const useSearchAPI = () => {
                         });
                     }
                     // Handle multi-value filters (values array)
-                    else if (filter && filter.values && Array.isArray(filter.values) && filter.values.length > 0) {
+                    else if (
+                        filter &&
+                        filter.values &&
+                        Array.isArray(filter.values) &&
+                        filter.values.length > 0
+                    ) {
                         // Build OR query for multiple values: field:("value1" OR "value2" OR "value3")
                         const orQuery = filter.values.map((val: string) => `"${val}"`).join(" OR ");
                         filters.push({
@@ -257,7 +262,10 @@ export const useSearchAPI = () => {
                 const body = {
                     query: searchQuery.query || undefined,
                     filters: filters.length > 0 ? filters : undefined,
-                    sort: searchQuery.sort && searchQuery.sort.length > 0 ? searchQuery.sort : undefined,
+                    sort:
+                        searchQuery.sort && searchQuery.sort.length > 0
+                            ? searchQuery.sort
+                            : undefined,
                     from: searchQuery.pagination.from,
                     size: searchQuery.pagination.size,
                     entityTypes: entityTypes.length > 0 ? entityTypes : undefined,

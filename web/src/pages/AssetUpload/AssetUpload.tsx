@@ -589,7 +589,7 @@ const AssetLinkingInfo = ({ setValid, showErrors }: AssetLinkingProps) => {
         (newAssetLinks: any) => {
             // Serialize the new data to compare with previous
             const newDataStr = JSON.stringify(newAssetLinks);
-            
+
             // Only update if data actually changed
             if (prevAssetLinksRef.current === newDataStr) {
                 return;

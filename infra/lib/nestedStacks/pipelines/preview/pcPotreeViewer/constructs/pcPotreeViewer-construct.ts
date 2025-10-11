@@ -426,11 +426,10 @@ export class PcPotreeViewerConstruct extends NestedStack {
                         ? sqs.QueueEncryption.KMS
                         : sqs.QueueEncryption.SQS_MANAGED,
                     encryptionMasterKey: props.storageResources.encryption.kmsKey,
-                    enforceSSL: true
+                    enforceSSL: true,
                 }
             );
             onS3ObjectCreatedQueue.grantSendMessages(Service("SNS").Principal);
-
 
             //Build Lambda SNS Execution Function (as an optional pipeline execution action)
             const PcPotreeViewerPipelineSqsExecuteFunction =
@@ -447,7 +446,6 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     props.pipelineSubnets,
                     props.storageResources.encryption.kmsKey
                 );
-
 
             //Add event notifications for syncing
             if (record.snsS3ObjectCreatedTopic) {
@@ -473,7 +471,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
             // Due to cdk version upgrade, not all regions support tags for EventSourceMapping
             // this line should remove the tags for regions that dont support it (govcloud currently not supported)
             if (props.config.app.govCloud.enabled) {
-                const cfnEsm = esmPcCreated .node.defaultChild as lambda.CfnEventSourceMapping;
+                const cfnEsm = esmPcCreated.node.defaultChild as lambda.CfnEventSourceMapping;
                 cfnEsm.addPropertyDeletionOverride("Tags");
             }
 

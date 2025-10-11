@@ -157,7 +157,12 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
         try {
             searchState.setLoading(true);
             const searchQuery = searchState.buildSearchQuery();
-            console.log("[Search] Executing search with sort:", searchQuery.sort, "tableSort:", searchState.tableSort);
+            console.log(
+                "[Search] Executing search with sort:",
+                searchQuery.sort,
+                "tableSort:",
+                searchState.tableSort
+            );
             const result = await searchAPI.executeSearch(
                 searchQuery,
                 databaseId,
@@ -496,7 +501,10 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                                                     ...searchState.buildSearchQuery(),
                                                     sort: action.sort,
                                                 };
-                                                console.log("[Sort] Executing search with sort from action:", action.sort);
+                                                console.log(
+                                                    "[Sort] Executing search with sort from action:",
+                                                    action.sort
+                                                );
                                                 const result = await searchAPI.executeSearch(
                                                     searchQuery,
                                                     databaseId,
@@ -506,8 +514,14 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                                                 searchState.setResult(result);
                                             } catch (error: any) {
                                                 console.error("Sort search error:", error);
-                                                searchState.setError(error.message || "Search failed");
-                                                showError("Search failed", error.message || "An error occurred while searching");
+                                                searchState.setError(
+                                                    error.message || "Search failed"
+                                                );
+                                                showError(
+                                                    "Search failed",
+                                                    error.message ||
+                                                        "An error occurred while searching"
+                                                );
                                             } finally {
                                                 searchState.setLoading(false);
                                             }
@@ -608,7 +622,10 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                                                     ...searchState.buildSearchQuery(),
                                                     sort: action.sort,
                                                 };
-                                                console.log("[Sort] Executing search with sort from action:", action.sort);
+                                                console.log(
+                                                    "[Sort] Executing search with sort from action:",
+                                                    action.sort
+                                                );
                                                 const result = await searchAPI.executeSearch(
                                                     searchQuery,
                                                     databaseId,
@@ -618,8 +635,14 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                                                 searchState.setResult(result);
                                             } catch (error: any) {
                                                 console.error("Sort search error:", error);
-                                                searchState.setError(error.message || "Search failed");
-                                                showError("Search failed", error.message || "An error occurred while searching");
+                                                searchState.setError(
+                                                    error.message || "Search failed"
+                                                );
+                                                showError(
+                                                    "Search failed",
+                                                    error.message ||
+                                                        "An error occurred while searching"
+                                                );
                                             } finally {
                                                 searchState.setLoading(false);
                                             }

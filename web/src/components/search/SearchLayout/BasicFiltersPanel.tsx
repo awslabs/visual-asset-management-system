@@ -36,10 +36,14 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
 }) => {
     const [databases, setDatabases] = useState<any[]>([]);
     const [tags, setTags] = useState<any[]>([]);
-    
+
     // Cache for aggregation results from non-filtered searches
-    const [cachedAssetTypes, setCachedAssetTypes] = useState<Array<{ label: string; value: string }>>([]);
-    const [cachedFileTypes, setCachedFileTypes] = useState<Array<{ label: string; value: string }>>([]);
+    const [cachedAssetTypes, setCachedAssetTypes] = useState<
+        Array<{ label: string; value: string }>
+    >([]);
+    const [cachedFileTypes, setCachedFileTypes] = useState<Array<{ label: string; value: string }>>(
+        []
+    );
     const [cachedTags, setCachedTags] = useState<Array<{ label: string; value: string }>>([]);
 
     useEffect(() => {
@@ -136,7 +140,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                 label: `${bucket.key} (${bucket.doc_count})`,
                 value: bucket.key,
             })) || [];
-        
+
         // Use cache if we have it and current results are filtered
         if (cachedAssetTypes.length > 0 && !isNonFilteredSearch()) {
             return cachedAssetTypes;
@@ -151,7 +155,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                 label: `${bucket.key} (${bucket.doc_count})`,
                 value: bucket.key,
             })) || [];
-        
+
         // Use cache if we have it and current results are filtered
         if (cachedFileTypes.length > 0 && !isNonFilteredSearch()) {
             return cachedFileTypes;
@@ -168,7 +172,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                     value: value.trim(),
                 }))
             ) || [];
-        
+
         // Use cache if we have it and current results are filtered
         if (cachedTags.length > 0 && !isNonFilteredSearch()) {
             return cachedTags;
@@ -213,7 +217,8 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
             headingTagOverride="h5"
         >
             <Box variant="p" color="text-body-secondary" margin={{ bottom: "s" }}>
-                Note: Type and tag values are cached from non-filtered searches for easier multi-selection
+                Note: Type and tag values are cached from non-filtered searches for easier
+                multi-selection
             </Box>
             <SpaceBetween direction="vertical" size="m">
                 {/* Database Filter */}

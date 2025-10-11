@@ -267,11 +267,11 @@ export function buildSqsBucketSyncFunction(
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? vpc
-                : undefined, 
+                : undefined,
         vpcSubnets:
-            (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas)
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
 

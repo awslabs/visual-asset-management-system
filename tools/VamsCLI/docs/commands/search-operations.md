@@ -54,6 +54,7 @@ vamscli search assets --filters 'list_tags:("training" OR "simulation")'
 The `--filters` argument supports two formats for maximum flexibility:
 
 **Query String Format** (Recommended for most use cases):
+
 ```bash
 # Single filter
 --filters 'str_databaseid:"my-db"'
@@ -72,6 +73,7 @@ The `--filters` argument supports two formats for maximum flexibility:
 ```
 
 **JSON Format** (For advanced OpenSearch queries):
+
 ```bash
 # Single query_string filter
 --filters '[{"query_string": {"query": "str_databaseid:\"my-db\""}}]'
@@ -89,18 +91,21 @@ The `--filters` argument supports two formats for maximum flexibility:
 #### Filter Construction Guide
 
 **Database Filtering:**
+
 ```bash
 --filters 'str_databaseid:"my-database"'
 --filters 'str_databaseid:(db-1 OR db-2 OR db-3)'
 ```
 
 **Asset Type Filtering:**
+
 ```bash
 --filters 'str_assettype:"3d-model"'
 --filters 'str_assettype:("3d-model" OR "texture")'
 ```
 
 **Tag Filtering:**
+
 ```bash
 # Single tag
 --filters 'list_tags:"training"'
@@ -113,6 +118,7 @@ The `--filters` argument supports two formats for maximum flexibility:
 ```
 
 **Name/Description Filtering:**
+
 ```bash
 # Exact match
 --filters 'str_assetname:"my-model"'
@@ -126,6 +132,7 @@ The `--filters` argument supports two formats for maximum flexibility:
 ```
 
 **Combining Multiple Filters:**
+
 ```bash
 # All conditions must match (AND)
 --filters 'str_databaseid:"my-db" AND str_assettype:"3d-model" AND list_tags:"training"'
@@ -240,6 +247,7 @@ vamscli search files --filters 'str_fileext:"gltf" AND str_databaseid:"my-databa
 #### Advanced Filter Syntax
 
 **Query String Format:**
+
 ```bash
 # Single filter
 --filters 'str_fileext:"gltf"'
@@ -258,6 +266,7 @@ vamscli search files --filters 'str_fileext:"gltf" AND str_databaseid:"my-databa
 ```
 
 **JSON Format:**
+
 ```bash
 # Single query_string filter
 --filters '[{"query_string": {"query": "str_fileext:\"gltf\""}}]'
@@ -275,12 +284,14 @@ vamscli search files --filters 'str_fileext:"gltf" AND str_databaseid:"my-databa
 #### Filter Construction Guide for Files
 
 **File Extension Filtering:**
+
 ```bash
 --filters 'str_fileext:"gltf"'
 --filters 'str_fileext:("gltf" OR "glb" OR "fbx")'
 ```
 
 **File Size Filtering (JSON format required):**
+
 ```bash
 # Files under 1MB
 --filters '[{"range": {"num_filesize": {"lte": 1048576}}}]'
@@ -290,6 +301,7 @@ vamscli search files --filters 'str_fileext:"gltf" AND str_databaseid:"my-databa
 ```
 
 **File Key Filtering:**
+
 ```bash
 # Exact match
 --filters 'str_key:"asset/model.gltf"'
@@ -324,21 +336,21 @@ vamscli search files --filters 'str_fileext:"gltf"' --include-archived
 
 #### Parameters
 
-| Parameter                          | Description                           | Example                                 |
-| ---------------------------------- | ------------------------------------- | --------------------------------------- |
-| `-q, --query`                      | General text search query             | `-q "texture"`                          |
-| `--filters`                        | Advanced filters (query string or JSON) | `--filters 'str_fileext:"gltf"'`      |
-| `--metadata-query`                 | Metadata search query                 | `--metadata-query "MD_str_format:GLTF"` |
-| `--metadata-mode`                  | Metadata search mode (key/value/both) | `--metadata-mode value`                 |
-| `--include-metadata/--no-metadata` | Include metadata in general search    | `--no-metadata`                         |
-| `--explain-results`                | Include match explanations            | `--explain-results`                     |
-| `--sort-field`                     | Field to sort by                      | `--sort-field str_key`                  |
-| `--sort-desc/--sort-asc`           | Sort direction                        | `--sort-asc`                            |
-| `--from`                           | Pagination start offset               | `--from 0`                              |
-| `--size`                           | Results per page (max 2000)           | `--size 100`                            |
-| `--include-archived`               | Include archived files                | `--include-archived`                    |
-| `--output-format`                  | Output format (table/json/csv)        | `--output-format json`                  |
-| `--jsonOutput`                     | Raw API response as JSON              | `--jsonOutput`                          |
+| Parameter                          | Description                             | Example                                 |
+| ---------------------------------- | --------------------------------------- | --------------------------------------- |
+| `-q, --query`                      | General text search query               | `-q "texture"`                          |
+| `--filters`                        | Advanced filters (query string or JSON) | `--filters 'str_fileext:"gltf"'`        |
+| `--metadata-query`                 | Metadata search query                   | `--metadata-query "MD_str_format:GLTF"` |
+| `--metadata-mode`                  | Metadata search mode (key/value/both)   | `--metadata-mode value`                 |
+| `--include-metadata/--no-metadata` | Include metadata in general search      | `--no-metadata`                         |
+| `--explain-results`                | Include match explanations              | `--explain-results`                     |
+| `--sort-field`                     | Field to sort by                        | `--sort-field str_key`                  |
+| `--sort-desc/--sort-asc`           | Sort direction                          | `--sort-asc`                            |
+| `--from`                           | Pagination start offset                 | `--from 0`                              |
+| `--size`                           | Results per page (max 2000)             | `--size 100`                            |
+| `--include-archived`               | Include archived files                  | `--include-archived`                    |
+| `--output-format`                  | Output format (table/json/csv)          | `--output-format json`                  |
+| `--jsonOutput`                     | Raw API response as JSON                | `--jsonOutput`                          |
 
 ### `vamscli search simple` (NEW)
 

@@ -309,15 +309,16 @@ https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/distribution-
 
 ## Multi-Factor Authentication (MFA) Support
 
-The solution in some cases can support MFA checks with role support. Roles can be toggled to allow only if a user is logged in with MFA. 
+The solution in some cases can support MFA checks with role support. Roles can be toggled to allow only if a user is logged in with MFA.
 
 However, this check is only supported on a user for each API call if the following is true:
+
 1. External IDP Auth is used (see External IDP MFA Check in LoginProfile section)
 2. Cognito IDP Auth is used with:
-2.a. OpenSearch Serverless (CDK Config Flag)
-2.b. Lambdas not behind a VPC (CDK Config Flag)
+   2.a. OpenSearch Serverless (CDK Config Flag)
+   2.b. Lambdas not behind a VPC (CDK Config Flag)
 
-If Cognito AWS VPC Interface Endpoints are supported in the future, the top cognito restrictions fall away. 
+If Cognito AWS VPC Interface Endpoints are supported in the future, the top cognito restrictions fall away.
 
 ## Additional Configuration Docker Options
 
