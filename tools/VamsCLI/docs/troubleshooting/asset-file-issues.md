@@ -120,6 +120,47 @@ This document covers common issues with asset management, file operations, and a
 4. Use `--retry-attempts` to increase retry count
 5. Check file sizes and formats
 
+### Large File Processing Delays
+
+**Situation:**
+
+```
+✅ Upload completed successfully!
+
+📋 Large File Processing:
+   Your upload contains large files that will undergo separate asynchronous processing.
+   This may take some time, so files may take longer to appear in the asset.
+   You can check the asset files later using: vamscli file list -d my-db -a my-asset
+```
+
+**What this means:**
+
+-   Your files have been successfully uploaded to VAMS
+-   Large files require additional processing time on the backend
+-   Files may not immediately appear in asset listings
+-   No action is required - processing happens automatically
+
+**If files don't appear after extended time:**
+
+1. **Wait for processing**: Large files can take several minutes to hours depending on size and complexity
+2. **Check periodically**: Use `vamscli file list -d <database> -a <asset>` to check if files have appeared
+3. **Verify upload success**: Confirm the upload completed successfully (exit code 0)
+4. **Check system status**: Contact your administrator if files don't appear after several hours
+5. **Re-upload if necessary**: If processing fails, you may need to re-upload the files
+
+**Typical processing times:**
+
+-   Small to Medium files (< 1GB): Immediate
+-   Medium to Large files (1GB - 10GB): 0-2 minutes
+-   Very large files (10GB - 5TB): 2 - 15 minutes
+
+**Best practices for large files:**
+
+-   Upload during off-peak hours when possible
+-   Consider compressing files before upload if appropriate
+-   Split very large uploads into smaller batches
+-   Monitor system resources and network stability
+
 ## Asset Version Issues
 
 ### Asset Version Not Found

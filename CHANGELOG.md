@@ -45,10 +45,11 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
     -   Note: This change removes the cognito authenticatedRole and association with the identity pool. Unauthenticated role (no permissions assigned) still remains for now as it is needed for basic auth login by the web Amplify-SDK v1. 
 -   **Web** Added a draggable splitter in ViewAsset page between the file manager tree view and details panel
 -   Added a new API endpoint for asset file streaming (similar to asset preview auxiliary files) at `GET /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`
--   Added .clineRules for CLINE AI workflows for AI-assisted development for VAMS backend API development, CDK development, and CLI development
+-   Added .clineRules and .kiro for AI workflows for AI-assisted development for VAMS backend API development, CDK development, and CLI development
 -   All HTTP APIGateway authorizers were swapped for custom lambda authorizers.
     -   New Lambda Layer specifically with libraries for the lambda authorizers
     -   New support for CDK configured IP range restrictions for API Gateway calls that are managed in the authorizer
+-   Added new uploadFile backend logic with an SQS queue to handle final processing of large >1GB files asynchonously. This prevented APIGateway->Lambda timesouts (30 seconds)
 -   Added WXYZ, Boolean, Date, 4x4 Matrix, Geoshape, GeoPoint, LLA (Latitude Longitude, Altitude), and JSON asset link metadata value types.
     -   **UI** Added additional `Matrix` static asset link type metadata field of type 4x4 Matrix.
     -   **Web** Defaulted `rotation` static asset link metdata field to WXYZ field type (from XYZ)
@@ -67,9 +68,11 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
 -   Updated BatchFargate CDK construct names to be unique for the stack (see breaking changes)
 -   Fixed backend asset file operations and S3 indexing for files >5GB (introduced in v2.2)
 -   Fixed Cognito unauthenticated role trust policy to switch the partition correctly. Cognito deployments were causing errors in GovCloud environments without this. 
+-   Fixed PcPotreePipeline to remove tags from SQS lambda event source as this is not supported in GovCloud environments.
 -   Fixed When saving pipelines that lambda function names have whitespace trimmed to prevent workflow errors
 -   Lambdas now work behind a VPC again however a compromise had to be made, Cognito MFA checks are currently not possible as a AWS VPC Endpoint doesn't exist for Cognito (BREAKING CHANGE).
     -   Additional VPC Endpoints were added to support missing functionality for lambdas behind a VPC (APIGateway, SSM, Lambda, STS, Cloudwatch Logs, SNS, SQS)
+-   Updated SearchBuilder and PCPotreePipeline SQS queues to use new name format to prevent overlaps of stacks within a AWS region
 
 ### Chores
 

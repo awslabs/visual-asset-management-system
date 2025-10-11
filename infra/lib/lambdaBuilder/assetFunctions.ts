@@ -5,6 +5,7 @@
 
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as s3 from "aws-cdk-lib/aws-s3";
+import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as path from "path";
 import * as sns from "aws-cdk-lib/aws-sns";
 import * as iam from "aws-cdk-lib/aws-iam";
@@ -239,6 +240,7 @@ export function buildUploadFileFunction(
     lambdaCommonBaseLayer: LayerVersion,
     storageResources: storageResources,
     sendEmailFunction: lambda.Function,
+    largeFileProcessingQueue: sqs.IQueue,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
@@ -271,6 +273,7 @@ export function buildUploadFileFunction(
             ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
             PRESIGNED_URL_TIMEOUT_SECONDS:
                 config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
+            LARGE_FILE_PROCESSING_QUEUE_URL: largeFileProcessingQueue.queueUrl,
         },
     });
 
@@ -489,6 +492,55 @@ export function buildStreamAssetFunction(
     storageResources.dynamo.rolesStorageTable.grantReadData(fun);
 
     grantReadPermissionsToAllAssetBuckets(fun);
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+
+    suppressCdkNagErrorsByGrantReadWrite(scope);
+    return fun;
+}
+
+export function buildSqsUploadFileLargeFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    sendEmailFunction: lambda.Function,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const name = "sqsUploadFileLarge";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.assets.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined, //Use VPC when flagged to use for all lambdas
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            SEND_EMAIL_FUNCTION_NAME: sendEmailFunction.functionName,
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+        },
+    });
+
+    // Grant same permissions as uploadFile Lambda
+    storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    sendEmailFunction.grantInvoke(fun);
+
+    grantReadWritePermissionsToAllAssetBuckets(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, config);
 

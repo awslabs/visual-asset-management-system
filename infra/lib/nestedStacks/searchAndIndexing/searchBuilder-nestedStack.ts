@@ -426,8 +426,8 @@ export function searchBuilder(
     const assetBucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
     for (const record of assetBucketRecords) {
         //Create created queue
-        const onS3ObjectCreatedQueue = new sqs.Queue(scope, "bucketSyncCreated-" + record.bucket, {
-            queueName: `${config.app.baseStackName}-bucketSyncCreated--${index}`,
+        const onS3ObjectCreatedQueue = new sqs.Queue(scope, "bucketSyncCreated--" + record.bucket, {
+            queueName: `${config.name}-${config.app.baseStackName}-bucketSyncCreated-${index}`,
             visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900.
             encryption: storageResources.encryption.kmsKey
                 ? sqs.QueueEncryption.KMS
@@ -467,7 +467,7 @@ export function searchBuilder(
         // The functions poll the respective queues, which is populated by messages sent to the topic.
         const esmCreated = new lambda.EventSourceMapping(
             scope,
-            `SQSEventSourceBucketSyncCreated--${index}`,
+            `SQSEventSourceBucketSyncCreated-${index}`,
             {
                 eventSourceArn: onS3ObjectCreatedQueue.queueArn,
                 target: sqsBucketSyncFunctionCreated,
@@ -486,8 +486,8 @@ export function searchBuilder(
         index = index + 1;
 
         //Create deleted queue
-        const onS3ObjectDeletedQueue = new sqs.Queue(scope, "bucketSyncDeleted-" + record.bucket, {
-            queueName: `${config.app.baseStackName}-bucketSyncDeleted--${index}`,
+        const onS3ObjectDeletedQueue = new sqs.Queue(scope, "bucketSyncDeleted--" + record.bucket, {
+            queueName: `${config.name}-${config.app.baseStackName}-bucketSyncDeleted-${index}`,
             visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900.
             encryption: storageResources.encryption.kmsKey
                 ? sqs.QueueEncryption.KMS
@@ -524,7 +524,7 @@ export function searchBuilder(
 
         const esmDeleted = new lambda.EventSourceMapping(
             scope,
-            `SQSEventSourceBucketSyncDeleted--${index}`,
+            `SQSEventSourceBucketSyncDeleted-${index}`,
             {
                 eventSourceArn: onS3ObjectDeletedQueue.queueArn,
                 target: sqsBucketSyncFunctionRemoved,

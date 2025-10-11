@@ -4678,6 +4678,10 @@ components:
                     type: boolean
                 error:
                     type: string
+                largeFileAsynchronousHandling:
+                    type: boolean
+                    description: "Indicates if this file is being processed asynchronously due to large file size"
+                    default: false
             required:
                 - key
                 - uploadIdS3
@@ -4702,6 +4706,10 @@ components:
                         $ref: "#/components/schemas/fileCompletionResult"
                 overallSuccess:
                     type: boolean
+                largeFileAsynchronousHandling:
+                    type: boolean
+                    description: "Indicates if any file in this upload is being processed asynchronously due to large file size"
+                    default: false
             required:
                 - message
                 - uploadId

@@ -10,6 +10,7 @@ import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as path from "path";
 import * as sqs from "aws-cdk-lib/aws-sqs";
+import * as lambda from "aws-cdk-lib/aws-lambda";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import { SqsEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
 import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
@@ -417,31 +418,19 @@ export class PcPotreeViewerConstruct extends NestedStack {
         for (const record of assetBucketRecords) {
             const onS3ObjectCreatedQueue = new sqs.Queue(
                 this,
-                "pcPotreePipelineS3EventCreated" + record.bucket,
+                "pcPotreePipelineS3EventCreated-" + record.bucket,
                 {
-                    queueName: `${props.config.app.baseStackName}-pcPotreePipelineS3EventCreated-${index}`,
+                    queueName: `${props.config.name}-${props.config.app.baseStackName}-pcPotreePipelineS3EventCreated-${index}`,
                     visibilityTimeout: cdk.Duration.seconds(360), // Corresponding function's is 300.
                     encryption: props.storageResources.encryption.kmsKey
                         ? sqs.QueueEncryption.KMS
                         : sqs.QueueEncryption.SQS_MANAGED,
                     encryptionMasterKey: props.storageResources.encryption.kmsKey,
+                    enforceSSL: true
                 }
             );
             onS3ObjectCreatedQueue.grantSendMessages(Service("SNS").Principal);
 
-            //Set TLS HTTPS on SQS queue
-            const onS3ObjectCreatedQueueTopicPolicy = new iam.PolicyStatement({
-                effect: iam.Effect.DENY,
-                principals: [new iam.AnyPrincipal()],
-                actions: ["sqs:*"],
-                resources: [onS3ObjectCreatedQueue.queueArn],
-                conditions: {
-                    Bool: {
-                        "aws:SecureTransport": "false",
-                    },
-                },
-            });
-            onS3ObjectCreatedQueue.addToResourcePolicy(onS3ObjectCreatedQueueTopicPolicy);
 
             //Build Lambda SNS Execution Function (as an optional pipeline execution action)
             const PcPotreeViewerPipelineSqsExecuteFunction =
@@ -459,7 +448,6 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     props.storageResources.encryption.kmsKey
                 );
 
-            index = index + 1;
 
             //Add event notifications for syncing
             if (record.snsS3ObjectCreatedTopic) {
@@ -468,12 +456,28 @@ export class PcPotreeViewerConstruct extends NestedStack {
                 );
             }
 
+            onS3ObjectCreatedQueue.grantConsumeMessages(PcPotreeViewerPipelineSqsExecuteFunction);
+
             // The functions poll the respective queues, which is populated by messages sent to the topic.
-            PcPotreeViewerPipelineSqsExecuteFunction.addEventSource(
-                new SqsEventSource(onS3ObjectCreatedQueue, {
+            const esmPcCreated = new lambda.EventSourceMapping(
+                this,
+                `SQSEventSourceBucketSyncPCCreated-${index}`,
+                {
+                    eventSourceArn: onS3ObjectCreatedQueue.queueArn,
+                    target: PcPotreeViewerPipelineSqsExecuteFunction,
                     batchSize: 1, // Max configurable records w/o maxBatchingWindow.
-                })
+                    maxBatchingWindow: cdk.Duration.seconds(0), // Max configurable time to wait before function is invoked.
+                }
             );
+
+            // Due to cdk version upgrade, not all regions support tags for EventSourceMapping
+            // this line should remove the tags for regions that dont support it (govcloud currently not supported)
+            if (props.config.app.govCloud.enabled) {
+                const cfnEsm = esmPcCreated .node.defaultChild as lambda.CfnEventSourceMapping;
+                cfnEsm.addPropertyDeletionOverride("Tags");
+            }
+
+            index = index + 1;
         }
 
         //Output VAMS Pipeline Execution Function name

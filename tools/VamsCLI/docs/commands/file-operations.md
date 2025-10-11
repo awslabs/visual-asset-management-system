@@ -108,6 +108,7 @@ vamscli file upload -d my-db -a my-asset --hide-progress --json-output file.gltf
 -   **Error Handling**: Comprehensive error handling with detailed failure reporting
 -   **Zero-byte File Support**: Properly handles empty files (created during upload completion)
 -   **Rate Limit Handling**: Automatic retry with exponential backoff for 429 throttling
+-   **Large File Asynchronous Processing**: Automatic detection and notification when large files require additional processing time
 
 ### Upload Limits (Backend v2.2+)
 
@@ -138,6 +139,58 @@ When your upload exceeds the backend limits, VamsCLI automatically:
 💡 Tip: You can split your upload by using multiple commands:
    vamscli file upload -d my-db -a my-asset file1.ext file2.ext ... (up to 1000 files)
    vamscli file upload -d my-db -a my-asset file1001.ext ...
+```
+
+### Large File Asynchronous Processing
+
+When uploading very large files, VAMS may need to perform additional processing after the upload completes. VamsCLI automatically detects this situation and provides appropriate feedback:
+
+**Large File Processing Notification:**
+
+```bash
+✅ Upload completed successfully!
+
+📋 Large File Processing:
+   Your upload contains large files that will undergo separate asynchronous processing.
+   This may take some time, so files may take longer to appear in the asset.
+   You can check the asset files later using: vamscli file list -d my-db -a my-asset
+
+Results:
+  Successful files: 1/1
+  Total size: 2.5GB
+  Duration: 5m 23s
+  Average speed: 8.2MB/s
+```
+
+**What this means:**
+
+-   **Upload Success**: Your files have been successfully uploaded to VAMS
+-   **Additional Processing**: Large files require extra processing time on the backend
+-   **Delayed Visibility**: Files may not immediately appear in asset listings
+-   **Automatic Processing**: No action required - processing happens automatically
+-   **Check Later**: Use `vamscli file list` to verify files appear after processing completes
+
+**When this occurs:**
+
+-   Very large individual files (typically multi-gigabyte files)
+-   Files that require intensive processing (complex 3D models, high-resolution images)
+-   Uploads during high system load periods
+-   Files that trigger additional validation or conversion processes
+
+**Recommended workflow:**
+
+```bash
+# Upload large files
+vamscli file upload -d my-db -a my-asset large-model.gltf
+
+# If large file processing is indicated, wait and check later
+# (Processing time varies based on file size and complexity)
+
+# Check if files have appeared (retry periodically)
+vamscli file list -d my-db -a my-asset
+
+# Get detailed file information once processing completes
+vamscli file info -d my-db -a my-asset -p "/large-model.gltf"
 ```
 
 ### Supported Upload Types

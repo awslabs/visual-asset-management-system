@@ -579,6 +579,99 @@ class TestFileUploadCommand:
                     assert 'Authentication failed' in str(result.exception)
         finally:
             Path(tmp_path).unlink()
+    
+    def test_upload_large_file_async_handling_message(self, cli_runner, file_command_mocks):
+        """Test upload command shows large file async handling message."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp:
+            tmp.write(b"test content")
+            tmp_path = tmp.name
+        
+        try:
+            with file_command_mocks as mocks:
+                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                    # Mock result with large file async handling
+                    mock_run.return_value = {
+                        "overall_success": True,
+                        "total_files": 1,
+                        "successful_files": 1,
+                        "failed_files": 0,
+                        "total_size": 12,
+                        "total_size_formatted": "12B",
+                        "upload_duration": 1.0,
+                        "average_speed": 12.0,
+                        "average_speed_formatted": "12B/s",
+                        "sequence_results": [
+                            {
+                                "sequence_id": 1,
+                                "completion_result": {
+                                    "message": "Upload completed successfully",
+                                    "overallSuccess": True,
+                                    "largeFileAsynchronousHandling": True
+                                }
+                            }
+                        ]
+                    }
+                    
+                    result = cli_runner.invoke(cli, [
+                        'file', 'upload',
+                        '-d', 'test-db',
+                        '-a', 'test-asset',
+                        tmp_path
+                    ])
+                    
+                    assert result.exit_code == 0
+                    assert 'Upload completed successfully!' in result.output
+                    assert 'Large File Processing:' in result.output
+                    assert 'large files that will undergo separate asynchronous processing' in result.output
+                    assert 'may take longer to appear in the asset' in result.output
+                    assert 'vamscli file list -d test-db -a test-asset' in result.output
+        finally:
+            Path(tmp_path).unlink()
+    
+    def test_upload_no_large_file_async_handling_message(self, cli_runner, file_command_mocks):
+        """Test upload command does not show large file message when not needed."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp:
+            tmp.write(b"test content")
+            tmp_path = tmp.name
+        
+        try:
+            with file_command_mocks as mocks:
+                with patch('vamscli.commands.file.asyncio.run') as mock_run:
+                    # Mock result without large file async handling
+                    mock_run.return_value = {
+                        "overall_success": True,
+                        "total_files": 1,
+                        "successful_files": 1,
+                        "failed_files": 0,
+                        "total_size": 12,
+                        "total_size_formatted": "12B",
+                        "upload_duration": 1.0,
+                        "average_speed": 12.0,
+                        "average_speed_formatted": "12B/s",
+                        "sequence_results": [
+                            {
+                                "sequence_id": 1,
+                                "completion_result": {
+                                    "message": "Upload completed successfully",
+                                    "overallSuccess": True,
+                                    "largeFileAsynchronousHandling": False
+                                }
+                            }
+                        ]
+                    }
+                    
+                    result = cli_runner.invoke(cli, [
+                        'file', 'upload',
+                        '-d', 'test-db',
+                        '-a', 'test-asset',
+                        tmp_path
+                    ])
+                    
+                    assert result.exit_code == 0
+                    assert 'Upload completed successfully!' in result.output
+                    assert 'Large File Processing:' not in result.output
+        finally:
+            Path(tmp_path).unlink()
 
 
 class TestFileUploadCommandJSONHandling:
@@ -1226,6 +1319,7 @@ class TestZeroByteFileSupport:
                         assert "created during upload completion" in result.output
         finally:
             Path(tmp_path).unlink()
+    
 
 
 if __name__ == '__main__':

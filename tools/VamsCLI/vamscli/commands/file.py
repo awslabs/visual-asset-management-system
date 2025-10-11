@@ -324,6 +324,14 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
         if not hide_progress:
             click.echo('\033[2K\033[1A' * 10, nl=False)  # Clear progress lines
         
+        # Check for large file asynchronous handling across all completion results
+        has_large_file_async_handling = False
+        for seq_result in result.get("sequence_results", []):
+            completion_result = seq_result.get("completion_result")
+            if completion_result and completion_result.get("largeFileAsynchronousHandling"):
+                has_large_file_async_handling = True
+                break
+        
         # Output results
         if json_output:
             click.echo(json.dumps(result, indent=2))
@@ -335,6 +343,13 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
                 click.echo(f"⚠️  Upload completed with some failures")
             else:
                 click.echo(f"❌ Upload failed")
+            
+            # Show large file async handling message if detected
+            if has_large_file_async_handling:
+                click.echo(f"\n📋 Large File Processing:")
+                click.echo(f"   Your upload contains large files that will undergo separate asynchronous processing.")
+                click.echo(f"   This may take some time, so files may take longer to appear in the asset.")
+                click.echo(f"   You can check the asset files later using: vamscli file list -d {database_id} -a {asset_id}")
             
             click.echo(f"\nResults:")
             click.echo(f"  Successful files: {result['successful_files']}/{result['total_files']}")

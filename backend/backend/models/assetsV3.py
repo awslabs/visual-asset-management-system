@@ -249,6 +249,7 @@ class FileCompletionResult(BaseModel, extra=Extra.ignore):
     uploadIdS3: str
     success: bool
     error: Optional[str] = None
+    largeFileAsynchronousHandling: bool = False
 
 class ExternalFileModel(BaseModel, extra=Extra.ignore):
     """Model for an external file in a completion request"""
@@ -293,6 +294,7 @@ class CompleteUploadResponseModel(BaseModel, extra=Extra.ignore):
     assetType: Optional[str] = None
     fileResults: List[FileCompletionResult] = []
     overallSuccess: bool = True
+    largeFileAsynchronousHandling: bool = False
 
 ######################## Create Folder API Models ##########################
 class CreateFolderRequestModel(BaseModel, extra=Extra.ignore):
@@ -593,6 +595,7 @@ class IngestAssetCompleteResponseModel(BaseModel, extra=Extra.ignore):
     assetId: str
     fileResults: List[FileCompletionResult] = []
     overallSuccess: bool = True
+    largeFileAsynchronousHandling: bool = False
 
 ######################## Asset Service API Models ##########################
 class GetAssetRequestModel(BaseModel, extra=Extra.ignore):

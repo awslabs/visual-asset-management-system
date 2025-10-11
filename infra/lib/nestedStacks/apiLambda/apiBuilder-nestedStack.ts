@@ -7,6 +7,7 @@
 import { Construct } from "constructs";
 import { Names } from "aws-cdk-lib";
 import * as apigateway from "aws-cdk-lib/aws-apigatewayv2";
+import * as sqs from "aws-cdk-lib/aws-sqs";
 
 import { ApiGatewayV2LambdaConstruct } from "./constructs/apigatewayv2-lambda-construct";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -35,6 +36,7 @@ import {
     buildCreateAssetFunction,
     buildUploadFileFunction,
     buildAssetVersionsFunction,
+    buildSqsUploadFileLargeFunction,
 } from "../../lambdaBuilder/assetFunctions";
 import {
     buildAddCommentLambdaFunction,
@@ -749,11 +751,25 @@ export function apiBuilder(
         api: api,
     });
 
+    // Create SQS queue for large file processing
+    const largeFileProcessingQueue = new sqs.Queue(scope, "LargeFileProcessingQueue", {
+        queueName: `${config.name}-${config.env.coreStackName}-sqsUploadLargeFile-queue`,
+        visibilityTimeout: cdk.Duration.minutes(15), // Match Lambda timeout
+        retentionPeriod: cdk.Duration.days(5),
+        deadLetterQueue: undefined, // No DLQ initially as per requirements
+        encryption: storageResources.encryption.kmsKey
+            ? sqs.QueueEncryption.KMS
+            : sqs.QueueEncryption.SQS_MANAGED,
+        encryptionMasterKey: storageResources.encryption.kmsKey,
+        enforceSSL: true,
+    });
+
     const uploadFileFunction = buildUploadFileFunction(
         scope,
         lambdaCommonBaseLayer,
         storageResources,
         sendEmailFunction,
+        largeFileProcessingQueue,
         config,
         vpc,
         subnets
@@ -769,6 +785,38 @@ export function apiBuilder(
         method: apigateway.HttpMethod.POST,
         api: api,
     });
+
+    // Create large file processor Lambda function
+    const sqsUploadFileLargeFunction = buildSqsUploadFileLargeFunction(
+        scope,
+        lambdaCommonBaseLayer,
+        storageResources,
+        sendEmailFunction,
+        config,
+        vpc,
+        subnets
+    );
+
+    // Create event source mapping from SQS to Lambda (no batching)
+    const esmUploadLargeFileProcessing = new lambda.EventSourceMapping(scope, "UploadLargeFileProcessingEventSourceMapping", {
+        target: sqsUploadFileLargeFunction,
+        eventSourceArn: largeFileProcessingQueue.queueArn,
+        batchSize: 1, // Process one message at a time
+        maxBatchingWindow: cdk.Duration.seconds(0), // No batching window
+    });
+
+    // Due to cdk version upgrade, not all regions support tags for EventSourceMapping
+    // this line should remove the tags for regions that dont support it (govcloud currently not supported)
+    if (config.app.govCloud.enabled) {
+        const cfnEsmUploadLarge = esmUploadLargeFileProcessing.node.defaultChild as lambda.CfnEventSourceMapping;
+        cfnEsmUploadLarge.addPropertyDeletionOverride("Tags");
+    }
+
+    // Grant SQS permissions to the large file processor Lambda
+    largeFileProcessingQueue.grantConsumeMessages(sqsUploadFileLargeFunction);
+    
+    // Grant SQS send message permissions to uploadFile Lambda
+    largeFileProcessingQueue.grantSendMessages(uploadFileFunction);
 
     const streamAuxiliaryPreviewAssetFunction = buildStreamAuxiliaryPreviewAssetFunction(
         scope,
@@ -1101,4 +1149,16 @@ export function apiBuilder(
         method: apigateway.HttpMethod.POST,
         api: api,
     });
+
+    //Nag Supressions
+    NagSuppressions.addResourceSuppressions(
+        scope,
+        [
+            {
+                id: "AwsSolutions-SQS3",
+                reason: "Intended not to use DLQs for these types of SQS events. Re-drives should come from re-uploading files.",
+            },
+        ],
+        true
+    );
 }

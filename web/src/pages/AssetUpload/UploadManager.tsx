@@ -68,6 +68,7 @@ interface UploadState {
     hasFailedParts: boolean;
     hasSkippedParts: boolean;
     assetLinksErrors: string[];
+    largeFileAsynchronousHandling: boolean;
 }
 
 interface FilePart {
@@ -114,6 +115,7 @@ export default function UploadManager({
         hasFailedParts: false,
         hasSkippedParts: false,
         assetLinksErrors: [],
+        largeFileAsynchronousHandling: false,
     });
 
     const [fileParts, setFileParts] = useState<FilePart[]>([]);
@@ -1500,6 +1502,10 @@ export default function UploadManager({
 
             console.log("Completion response:", JSON.stringify(response, null, 2));
 
+            // Extract the largeFileAsynchronousHandling field from the response
+            const hasLargeFileProcessing = response.largeFileAsynchronousHandling === true;
+            console.log("Large file asynchronous handling:", hasLargeFileProcessing);
+
             // Check if the response indicates partial failure (overallSuccess is false)
             const hasPartialFailure = response.overallSuccess === false;
             const failedFiles = response.fileResults?.filter((file) => !file.success) || [];
@@ -1515,6 +1521,7 @@ export default function UploadManager({
                 setUploadState((prev) => ({
                     ...prev,
                     completionStatus: "completed",
+                    largeFileAsynchronousHandling: hasLargeFileProcessing,
                     errors: [
                         ...prev.errors,
                         {
@@ -1528,6 +1535,7 @@ export default function UploadManager({
                 const modifiedResponse = {
                     ...response,
                     message: response.message + " (Preview file upload failed)",
+                    largeFileAsynchronousHandling: hasLargeFileProcessing,
                 };
                 onUploadComplete(modifiedResponse);
             } else if (hasPartialFailure) {
@@ -1542,6 +1550,7 @@ export default function UploadManager({
                 setUploadState((prev) => ({
                     ...prev,
                     completionStatus: allFilesFailed ? "failed" : "partial",
+                    largeFileAsynchronousHandling: hasLargeFileProcessing,
                     errors: [...prev.errors, ...failedFileErrors],
                     hasFailedParts: true,
                 }));
@@ -1549,7 +1558,11 @@ export default function UploadManager({
                 // Call onUploadComplete with the response
                 onUploadComplete(response);
             } else {
-                setUploadState((prev) => ({ ...prev, completionStatus: "completed" }));
+                setUploadState((prev) => ({
+                    ...prev,
+                    completionStatus: "completed",
+                    largeFileAsynchronousHandling: hasLargeFileProcessing,
+                }));
                 onUploadComplete(response);
             }
 
