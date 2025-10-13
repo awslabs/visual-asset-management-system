@@ -222,15 +222,26 @@ export const buildScatterPlot = ({
             PCS.addPoints(points.length, pointGenerator);
 
             (async () => {
-                await PCS.buildMeshAsync();
-                scene.registerBeforeRender(function () {
-                    PCS.setParticles(0, 999999, true);
-                });
-                PCS.mesh.position.subtractInPlace(this.mesh.position);
-                PCS.mesh.parent = this.mesh;
-                this._meshes.push(PCS);
-                this.shape = PCS;
-                this.mesh.position = this._defPos;
+                try {
+                    await PCS.buildMeshAsync();
+                    
+                    // Check if mesh was successfully created
+                    if (!PCS.mesh) {
+                        console.error('PCS.mesh is undefined after buildMeshAsync()');
+                        return;
+                    }
+                    
+                    scene.registerBeforeRender(function () {
+                        PCS.setParticles(0, 999999, true);
+                    });
+                    PCS.mesh.position.subtractInPlace(this.mesh.position);
+                    PCS.mesh.parent = this.mesh;
+                    this._meshes.push(PCS);
+                    this.shape = PCS;
+                    this.mesh.position = this._defPos;
+                } catch (error) {
+                    console.error('Error building PCS mesh:', error);
+                }
             })();
         }
     };

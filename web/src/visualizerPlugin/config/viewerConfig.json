@@ -196,6 +196,52 @@
             "category": "document"
         },
         {
+            "id": "gaussian-splat-viewer-babylonjs",
+            "name": "Gaussian Splat Viewer (BabylonJS)",
+            "description": "View Gaussian Splat files (.ply, .spz) with 3D visualization using BabylonJS",
+            "componentPath": "./viewers/BabylonJSGaussianSplatViewerPlugin/BabylonJSGaussianSplatViewerComponent",
+            "dependencyManager": "./viewers/BabylonJSGaussianSplatViewerPlugin/dependencies",
+            "dependencyManagerClass": "BabylonJSGaussianSplatDependencyManager",
+            "dependencyManagerMethod": "loadBabylonJS",
+            "dependencyCleanupMethod": "cleanup",
+            "supportedExtensions": [".ply", ".spz"],
+            "supportsMultiFile": false,
+            "canFullscreen": true,
+            "priority": 1,
+            "dependencies": ["babylonjs", "babylonjs-loaders"],
+            "loadStrategy": "lazy",
+            "category": "3d",
+            "customParameters": {
+                "enableXR": true,
+                "pointSize": 5.0,
+                "maxPoints": 100000,
+                "enableLighting": false
+            }
+        },
+        {
+            "id": "gaussian-splat-viewer-playcanvas",
+            "name": "Gaussian Splat Viewer (PlayCanvas)",
+            "description": "View Gaussian Splat files (.ply, .sog) with 3D visualization using PlayCanvas",
+            "componentPath": "./viewers/PlayCanvasGaussianSplatViewerPlugin/PlayCanvasGaussianSplatViewerComponent",
+            "dependencyManager": "./viewers/PlayCanvasGaussianSplatViewerPlugin/dependencies",
+            "dependencyManagerClass": "PlayCanvasGaussianSplatDependencyManager",
+            "dependencyManagerMethod": "loadPlayCanvas",
+            "dependencyCleanupMethod": "cleanup",
+            "supportedExtensions": [".ply", ".sog"],
+            "supportsMultiFile": false,
+            "canFullscreen": true,
+            "priority": 2,
+            "dependencies": ["playcanvas"],
+            "loadStrategy": "lazy",
+            "category": "3d",
+            "customParameters": {
+                "enableXR": true,
+                "cameraMode": "orbit",
+                "autoFocus": true,
+                "enableSorting": true
+            }
+        },
+        {
             "id": "preview-viewer",
             "name": "Preview Viewer",
             "description": "View generated preview images",
