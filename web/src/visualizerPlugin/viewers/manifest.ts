@@ -24,6 +24,10 @@ export const VIEWER_COMPONENTS = {
     "./viewers/CesiumViewerPlugin/CesiumViewerComponent":
         "CesiumViewerPlugin/CesiumViewerComponent",
     "./viewers/TextViewerPlugin/TextViewerComponent": "TextViewerPlugin/TextViewerComponent",
+    "./viewers/BabylonJSGaussianSplatViewerPlugin/BabylonJSGaussianSplatViewerComponent":
+        "BabylonJSGaussianSplatViewerPlugin/BabylonJSGaussianSplatViewerComponent",
+    "./viewers/PlayCanvasGaussianSplatViewerPlugin/PlayCanvasGaussianSplatViewerComponent":
+        "PlayCanvasGaussianSplatViewerPlugin/PlayCanvasGaussianSplatViewerComponent",
 } as const;
 
 // Dependency manager paths - add new dependency managers here
@@ -31,6 +35,8 @@ export const DEPENDENCY_MANAGERS = {
     "./viewers/PotreeViewerPlugin/dependencies": "PotreeViewerPlugin/dependencies",
     "./viewers/CesiumViewerPlugin/dependencies": "CesiumViewerPlugin/dependencies",
     "./viewers/Online3dViewerPlugin/dependencies": "Online3dViewerPlugin/dependencies",
+    "./viewers/BabylonJSGaussianSplatViewerPlugin/dependencies": "BabylonJSGaussianSplatViewerPlugin/dependencies",
+    "./viewers/PlayCanvasGaussianSplatViewerPlugin/dependencies": "PlayCanvasGaussianSplatViewerPlugin/dependencies",
     // Add new dependency managers here as needed:
     // './viewers/MyViewerPlugin/dependencies': 'MyViewerPlugin/dependencies',
 } as const;

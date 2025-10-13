@@ -25,8 +25,8 @@ Javascript Libraries:
 | arraybuffer-to-buffer    | arraybuffer-to-buffer@0.0.7                                          | MIT                     |
 | aws-amplify-react        | aws-amplify-react@5.1.9                                              | Apache-2.0              |
 | aws-amplify              | aws-amplify@4.3.39                                                   | Apache-2.0              |
-| babylonjs-loaders        | babylonjs-loaders@4.2.2                                              | Apache-2.0              |
-| babylonjs                | babylonjs@4.2.2                                                      | Apache-2.0              |
+| babylonjs-loaders        | babylonjs-loaders@7.0.0                                              | Apache-2.0              |
+| babylonjs                | babylonjs@7.0.0                                                      | Apache-2.0              |
 | buffer                   | buffer@4.9.2                                                         | MIT                     |
 | buffer                   | buffer@6.0.3                                                         | MIT                     |
 | dompurify                | dompurify@2.4.0                                                      | (MPL-2.0 OR Apache-2.0) |
@@ -53,6 +53,7 @@ Javascript Libraries:
 | rhino3dm                 | [rhino3dm@7.15.0](https://github.com/mcneel/rhino3dm)                | MIT                     |
 | web-ifc                  | [web-ifc@0.0.39](https://github.com/IFCjs/web-ifc)                   | Mozilla-2.0             |
 | cesium                   | [cesium@1.118.0](https://github.com/CesiumGS/cesium)                 | Apache-2.0              |
+| playcanvas               | [playcanvas@2.11.8](https://github.com/playcanvas/engine)            | MIT                     |
 
 Python Libraries
 

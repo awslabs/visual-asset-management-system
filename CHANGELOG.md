@@ -30,6 +30,8 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
     -   Added a PDF viewer for `.pdf` extension
     -   Added a text viewer for `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `ipynb`, and `.ini` extensions
     -   Added the CesiumJS viewer for `.json` tileset files which can load subsequent other files referenced in the asset (even if not selected for viewing directly). This is an initial/basic CesiumJS viewer implementation with default options as part of this release. Requires `allowUnsafeEvalFeatures` CDK `config.json` configuration flag to be turned on (off by default).
+    -   Added BabylonJS-based Gaussian Splat viewer for `.ply` and `.spz` splat files
+    -   Added PlayCanvas-based Gaussian Splat viewer for `.ply` and `.sog` splat files
     -   3D Online viewer now has additional UI added to support basic extra functionality
     -   3D Online Viewer once again will also support `.ply` file extensions for viewing (previously switched to PotreeViewer only)
 -   Overhauled the file and asset OpenSearch system, APIs, indexing, and user interfaces
