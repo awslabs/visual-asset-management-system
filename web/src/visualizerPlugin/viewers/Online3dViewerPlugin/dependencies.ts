@@ -15,10 +15,11 @@ export class Online3dViewerDependencyManager {
         try {
             // Load CSS dynamically from public directory using StylesheetManager
             // This allows proper cleanup when the plugin is unloaded
-            await StylesheetManager.loadStylesheet(
-                this.PLUGIN_ID,
-                "/online3dviewer/Online3DViewerContainer.css"
-            );
+
+            // await StylesheetManager.loadStylesheet(
+            //     this.PLUGIN_ID,
+            //     "/online3dviewer/Online3DViewerContainer.css"
+            // );
 
             console.log("Online3dViewer dependencies loaded successfully");
             this.loaded = true;
