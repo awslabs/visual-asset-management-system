@@ -31,6 +31,7 @@ import AssetPreviewThumbnail from "./AssetPreviewThumbnail";
 import FilePreviewThumbnail from "./FilePreviewThumbnail";
 import PreviewModal from "./PreviewModal";
 import FileViewerModal from "../modals/FileViewerModal";
+import FileMetadata from "../../metadata/FileMetadata";
 import "./FileDetailsPanel.css";
 import { previewFileFormats } from "../../../common/constants/fileFormats";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
@@ -82,6 +83,16 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
         selectedItem?.isFolder !== undefined
             ? selectedItem.isFolder
             : selectedItem?.subTree.length! > 0 || selectedItem?.keyPrefix.endsWith("/");
+
+    // Determine if metadata should be shown
+    const shouldShowMetadata =
+        selectedItem &&
+        !isFolder &&
+        !isMultiSelect &&
+        selectedItem.keyPrefix !== "/" &&
+        selectedItem.relativePath !== "/" &&
+        selectedItem.level > 0 &&
+        !selectedItem.isArchived;
 
     // State for modals
     const [createFolderModalVisible, setCreateFolderModalVisible] = useState(false);
@@ -1230,6 +1241,20 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                 return null;
                             })()}
                         </>
+                    )}
+
+                    {/* Metadata section - only shown for single file selections */}
+                    {shouldShowMetadata && (
+                        <div className="file-metadata-section">
+                            <FileMetadata
+                                key={selectedItem.keyPrefix} // Force remount when file changes
+                                databaseId={databaseId!}
+                                assetId={assetId!}
+                                prefix={selectedItem.keyPrefix}
+                                showHeader={false}
+                                className="file-details-metadata"
+                            />
+                        </div>
                     )}
                 </div>
             </div>

@@ -90,7 +90,16 @@ def run(stage: PipelineStage, inputMetadata: str = '', inputParameters: str = ''
         logger.info(filePathsToDownload)
 
         for filePath in filePathsToDownload:
+            # Skip directory markers (empty relativePath or keys ending with '/')
+            if not filePath['relativePath'] or filePath['key'].endswith('/'):
+                logger.info(f"Skipping directory marker: {filePath['key']}")
+                continue
+            
             localPath = os.path.join(local_input_dir, filePath['relativePath'])
+            
+            # Ensure parent directory exists for nested file structures
+            os.makedirs(os.path.dirname(localPath), exist_ok=True)
+            
             s3.download(
                 input.bucketName,
                 filePath['key'],
@@ -161,7 +170,3 @@ def allconvert_blenderrenderer_pipeline(input_file_path: str, output_dir: str) -
         "output_dir": output_dir,
         "output_files": output_files
     }
-
-
-
-

@@ -23,6 +23,7 @@ import { generateUniqueNameHash } from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { layerBundlingCommand } from "../../../../../helper/lambda";
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as cr from "aws-cdk-lib/custom-resources";
 
 export interface Conversion3dBasicConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -31,6 +32,7 @@ export interface Conversion3dBasicConstructProps extends cdk.StackProps {
     pipelineSubnets: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: LayerVersion;
+    importGlobalPipelineWorkflowFunctionName: string;
 }
 
 /**
@@ -70,5 +72,123 @@ export class Conversion3dBasicConstruct extends NestedStack {
         });
 
         this.pipelineVamsLambdaFunctionName = pipelineConversion3dBasicLambdaFunction.functionName;
+
+        // Create custom resource to automatically register pipeline and workflow
+        if (props.config.app.pipelines.useConversion3dBasic.autoRegisterWithVAMS === true) {
+            const importFunction = lambda.Function.fromFunctionArn(
+                this,
+                "ImportFunction",
+                `arn:aws:lambda:${region}:${account}:function:${props.importGlobalPipelineWorkflowFunctionName}`
+            );
+
+            const importProvider = new cr.Provider(this, "ImportProvider", {
+                onEventHandler: importFunction,
+            });
+            const currentTimestamp = new Date().toISOString();
+
+            // Register STL to OBJ conversion pipeline and workflow
+            new cdk.CustomResource(this, "Conversion3dBasicStlToObjPipelineWorkflow", {
+                serviceToken: importProvider.serviceToken,
+                properties: {
+                    timestamp: currentTimestamp,
+                    pipelineId: "conversion-3d-basic-to-obj",
+                    pipelineDescription:
+                        "3D Basic Conversion Pipeline - X to OBJ format conversion using Trimesh library. X can be STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ.",
+                    pipelineType: "standardFile",
+                    pipelineExecutionType: "Lambda",
+                    assetType: ".all",
+                    outputType: ".obj",
+                    waitForCallback: "Disabled", // Synchronous pipeline
+                    lambdaName: pipelineConversion3dBasicLambdaFunction.functionName,
+                    taskTimeout: "900", // 15 minutes (lambda limit)
+                    taskHeartbeatTimeout: "",
+                    inputParameters: "",
+                    workflowId: "conversion-3d-basic-to-obj",
+                    workflowDescription:
+                        "Automated workflow for X to OBJ conversion using 3D Basic Conversion Pipeline. X can be STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ.",
+                },
+            });
+
+            // Register OBJ to STL conversion pipeline and workflow
+            new cdk.CustomResource(this, "Conversion3dBasicObjToStlPipelineWorkflow", {
+                serviceToken: importProvider.serviceToken,
+                properties: {
+                    timestamp: currentTimestamp,
+                    pipelineId: "conversion-3d-basic-to-stl",
+                    pipelineDescription:
+                        "3D Basic Conversion Pipeline -  X to STL format conversion using Trimesh library. X can be STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ.",
+                    pipelineType: "standardFile",
+                    pipelineExecutionType: "Lambda",
+                    assetType: ".all",
+                    outputType: ".stl",
+                    waitForCallback: "Disabled", // Synchronous pipeline
+                    lambdaName: pipelineConversion3dBasicLambdaFunction.functionName,
+                    taskTimeout: "900", // 15 minutes (lambda limit)
+                    taskHeartbeatTimeout: "",
+                    inputParameters: "",
+                    workflowId: "conversion-3d-basic-to-stl",
+                    workflowDescription:
+                        "Automated workflow for  X to STL conversion using 3D Basic Conversion Pipeline. X can be STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ.",
+                },
+            });
+
+            // Register PLY to GLTF conversion pipeline and workflow
+            new cdk.CustomResource(this, "Conversion3dBasicPlyToGltfPipelineWorkflow", {
+                serviceToken: importProvider.serviceToken,
+                properties: {
+                    timestamp: currentTimestamp,
+                    pipelineId: "conversion-3d-basic-to-gltf",
+                    pipelineDescription:
+                        "3D Basic Conversion Pipeline - X to GLTF format conversion using Trimesh library. X can be STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ.",
+                    pipelineType: "standardFile",
+                    pipelineExecutionType: "Lambda",
+                    assetType: ".all",
+                    outputType: ".gltf",
+                    waitForCallback: "Disabled", // Synchronous pipeline
+                    lambdaName: pipelineConversion3dBasicLambdaFunction.functionName,
+                    taskTimeout: "900", // 15 minutes (lambda limit)
+                    taskHeartbeatTimeout: "",
+                    inputParameters: "",
+                    workflowId: "conversion-3d-basic-to-gltf",
+                    workflowDescription:
+                        "Automated workflow for X to GLTF conversion using 3D Basic Conversion Pipeline. X can be STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ.",
+                },
+            });
+
+            // Register GLTF to GLB conversion pipeline and workflow
+            new cdk.CustomResource(this, "Conversion3dBasicGltfToGlbPipelineWorkflow", {
+                serviceToken: importProvider.serviceToken,
+                properties: {
+                    timestamp: currentTimestamp,
+                    pipelineId: "conversion-3d-basic-to-glb",
+                    pipelineDescription:
+                        "3D Basic Conversion Pipeline -  X to GLB format conversion using Trimesh library. X can be STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ.",
+                    pipelineType: "standardFile",
+                    pipelineExecutionType: "Lambda",
+                    assetType: ".all",
+                    outputType: ".glb",
+                    waitForCallback: "Disabled", // Synchronous pipeline
+                    lambdaName: pipelineConversion3dBasicLambdaFunction.functionName,
+                    taskTimeout: "900", // 15 minutes (lambda limit)
+                    taskHeartbeatTimeout: "",
+                    inputParameters: "",
+                    workflowId: "conversion-3d-basic-to-glb",
+                    workflowDescription:
+                        "Automated workflow for X to GLB conversion using 3D Basic Conversion Pipeline. X can be STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ.",
+                },
+            });
+
+            //Nag supression
+            NagSuppressions.addResourceSuppressions(
+                importProvider,
+                [
+                    {
+                        id: "AwsSolutions-IAM5",
+                        reason: "* Wildcard permissions needed for pipelineWorkflow lambda import and execution for custom resource",
+                    },
+                ],
+                true
+            );
+        }
     }
 }

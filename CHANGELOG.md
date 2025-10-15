@@ -29,7 +29,7 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
     -   Viewer is now shown both on the View File page and as a modal pop-up from the file manager for easier quick access
     -   Added a PDF viewer for `.pdf` extension
     -   Added a text viewer for `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `ipynb`, and `.ini` extensions
-    -   Added the CesiumJS viewer for `.json` tileset files which can load subsequent other files referenced in the asset (even if not selected for viewing directly). This is an initial/basic CesiumJS viewer implementation with default options as part of this release. Requires `allowUnsafeEvalFeatures` CDK `config.json` configuration flag to be turned on (off by default).
+    -   Added the CesiumJS viewer for `.json` tileset files which can load subsequent other files referenced in the asset (even if not selected for viewing directly). This is an initial/basic CesiumJS viewer implementation with default options as part of this release. Note: Requires `allowUnsafeEvalFeatures` CDK `config.json` configuration flag to be turned on (off by default).
     -   Added BabylonJS-based Gaussian Splat viewer for `.ply` and `.spz` splat files
     -   Added PlayCanvas-based Gaussian Splat viewer for `.ply` and `.sog` splat files
     -   3D Online viewer now has additional UI added to support basic extra functionality
@@ -58,9 +58,15 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
 -   Asset link parent-child relationships now support an additional key of `assetLinkAliasId` that can be added to allow multiple parent->child relationships of the same assets. This is common in scene or engineering assembly build-outs where a parent may contain multiple of the same type of asset below it (i.e. same screws on a panel or same trees in a forest scene). T
 -   **Web** Changed Pipeline Edit/Create to make Asset Type and Output Type a required string text field. This removes the last place that requires specific VAMS extensions to be preloaded. These fields usages are expected to be overhauled along with overall pipelines in a future release.
 -   Refactored createWorkflow to not require the stepfunctions library anymore which entirely removes the additional heavyweight lambda layer created specifically for this function. This should speed up CDK deployments, reduce CDK package size, and reduce security posture by limiting backend libraries needed. Additionally, some other upgrades were done to createWorkflow as part of the refactor:
-    -   Updating an existing workflow no longer create a new AWS step function workflow but modifies the definition of the existing
+    -   Updating an existing workflow no longer create a new AWS step function workflow but modifies the definition of the existing (preserves job history)
     -   Updated to the new backed error handling logic used since v2.2
     -   GovCloud configuration restrictions updated to not include a hard use requirement of openSearch provisioned. OpenSearch serveless is supported now in GovCloud environments.
+-   Added backend and CDK capability to auto-register deployed pipelines as global pipelines and workflows in VAMS.
+    -   Defaulted many pipelines to now have defualt entries added to make it easier out of the box to execute on those pipelines/workflows.
+-   Added `SYSTEM_USER` to admin role during CDK deployment and enabled lambda cross-call logic during authorization checks. System user is used for authorized lambda cross-calls where a requesting user context may not be present (such as calling lambdas from CDK deployments or external side-car solutions). IAM permissions must be used in this case to control access to direct lambda calls that can to inject a `lambdaCrossCall` object into the event.
+-   Added new asynchronous lambda-based `meshCadMetadataExtraction` pipeline and workflow that is `disabled by default` in all CDK configuration files. This pipeline can extract basic attributes and add them to the asset metadata for certain MESH and CAD file types selected. It uses Trimesh (MIT license) and cadQuery (Apache 2.0). Note: cadQuery further uses OpenCascade which is a LGPL-2.1 licensed.
+-   Pipelines also now have `inputAssetLocationKey` data on execution to provide the asset root prefix of where the asset is located in the assets S3 bucket (used for generating relative paths as needed, such as for file-level metadata)
+-   **Web** Metadata for individual files is now also shown and managed in the ViewAsset file manager when selecting a file, shown in the file details panel. This is on top of the existing location in the ViewFile page.
 
 ### Bug Fixes
 
@@ -70,20 +76,26 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
 -   Updated BatchFargate CDK construct names to be unique for the stack (see breaking changes)
 -   Fixed backend asset file operations and S3 indexing for files >5GB (introduced in v2.2)
 -   Fixed Cognito unauthenticated role trust policy to switch the partition correctly. Cognito deployments were causing errors in GovCloud environments without this.
--   Fixed PcPotreePipeline to remove tags from SQS lambda event source as this is not supported in GovCloud environments.
+-   Fixed `PcPotreePipeline` to remove tags from SQS lambda event source as this is not supported in GovCloud environments.
 -   Fixed When saving pipelines that lambda function names have whitespace trimmed to prevent workflow errors
 -   Lambdas now work behind a VPC again however a compromise had to be made, Cognito MFA checks are currently not possible as a AWS VPC Endpoint doesn't exist for Cognito (BREAKING CHANGE).
     -   Additional VPC Endpoints were added to support missing functionality for lambdas behind a VPC (APIGateway, SSM, Lambda, STS, Cloudwatch Logs, SNS, SQS)
 -   Updated SearchBuilder and PCPotreePipeline SQS queues to use new name format to prevent overlaps of stacks within a AWS region
+-   Fix GenAIMetadataLabelingPipeline to now handle the v2.2 VAMS functionalities of multi-file assets with folders
+-   Permanently deleting asset files via the API did not remove the files metadata records
 
 ### Chores
 
 -   **Web** Updated ViewAsset page to support passing in a state with a file path to load (used from links from the new search page)
 -   **Web** Added a refresh icon for many of the VAMS entity listing pages (databases, pipelines, etc.)
+-   **Web** Cleaned up Assets Workflow Executions table to only show workflows with past executions, shorten descriptions in the table, and default sort executions by `Started` column in descending order
 -   Updated Cognito invitation and verification email messages to be more VAMS branded, show username where appropriate, and remove confusing period character directly after temporary passwords.
 -   Update KMS key policy to support Cloudformation principal better for CustomResources when modifying S3 or DynamoDB tables that have a KMS encryption key. This should fix errors with setting default auth constraints and roles during CDK deployment that sometimes cropped up.
 -   Updated pipeline CDK export names and job definition names to be variable per the stack deploying it to further reduce conflicts of same stack deployments in the same region
+-   Update CDK ApiBuilder core logic to not be wrapped in a function anymore to make it easier to have global class variables in the CDK nested stack
 -   Enforce S3 bucket object ownership on static website bucket
+-   Updated `GenAIMetadataLabelingPipeline` to use the latest Claude Sonnet 4.5 GenAI model for commercial and Sonnet 4.0 in GovCloud (previously used 3.0) and pass model ID now from CDK configuration
+-   Updated `conversion3dBasic` pipeline to use the latest Trimesh version (4.8.3)
 -   Update package dependencies and fixed any associated breaking changes
 
 ### Known Outstanding Issues

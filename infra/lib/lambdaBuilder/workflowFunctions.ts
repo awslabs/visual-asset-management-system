@@ -492,3 +492,64 @@ export function buildWorkflowRole(
 
     return role;
 }
+
+export function buildImportGlobalPipelineWorkflowFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    createPipelineFunction: lambda.Function,
+    pipelineServiceFunction: lambda.Function,
+    createWorkflowFunction: lambda.Function,
+    workflowServiceFunction: lambda.Function
+): lambda.Function {
+    const name = "importGlobalPipelineWorkflow";
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.workflows.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            // Standard VAMS environment variables
+            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
+            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
+            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+
+            // Service function names - set directly from function parameters
+            CREATE_PIPELINE_FUNCTION_NAME: createPipelineFunction.functionName,
+            PIPELINE_SERVICE_FUNCTION_NAME: pipelineServiceFunction.functionName,
+            CREATE_WORKFLOW_FUNCTION_NAME: createWorkflowFunction.functionName,
+            WORKFLOW_SERVICE_FUNCTION_NAME: workflowServiceFunction.functionName,
+        },
+    });
+
+    // Grant DynamoDB read permissions for auth and role tables
+    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
+    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
+    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+
+    // Grant invoke permissions to the service functions directly
+    createPipelineFunction.grantInvoke(fun);
+    pipelineServiceFunction.grantInvoke(fun);
+    createWorkflowFunction.grantInvoke(fun);
+    workflowServiceFunction.grantInvoke(fun);
+
+    // Apply standard security helper functions
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
+
+    return fun;
+}

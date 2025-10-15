@@ -106,7 +106,7 @@ def create_retry_config(
     error_equals: List[str] = None,
     interval_seconds: int = 5,
     backoff_rate: float = 2.0,
-    max_attempts: int = 3
+    max_attempts: int = 2
 ) -> Dict[str, Any]:
     """
     Create a retry configuration for task states.

@@ -14,6 +14,7 @@ import { PcPotreeViewerBuilderNestedStack } from "./preview/pcPotreeViewer/pcPot
 import { Metadata3dLabelingNestedStack } from "./genAi/metadata3dLabeling/metadata3dLabelingBuilder-nestedStack";
 import { RapidPipelineNestedStack } from "./multi/rapidPipeline/rapidPipeline-nestedStack";
 import { Conversion3dBasicNestedStack } from "./conversion/3dBasic/conversion3dBasicBuilder-nestedStack";
+import { ConversionMeshCadMetadataExtractionNestedStack } from "./conversion/meshCadMetadataExtraction/conversionMeshCadMetadataExtractionBuilder-nestedStack";
 import { ModelOpsNestedStack } from "./multi/modelOps/modelOps-nestedStack";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as Config from "../../../config/config";
@@ -30,6 +31,7 @@ export interface PipelineBuilderNestedStackProps extends cdk.StackProps {
     vpceSecurityGroup: ec2.ISecurityGroup;
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
+    importGlobalPipelineWorkflowFunctionName: string;
 }
 
 /**
@@ -68,12 +70,38 @@ export class PipelineBuilderNestedStack extends NestedStack {
                     pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
                     pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
                     lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                    importGlobalPipelineWorkflowFunctionName:
+                        props.importGlobalPipelineWorkflowFunctionName,
                 }
             );
 
             //Add function name to array for stack output
             this.pipelineVamsLambdaFunctionNames.push(
                 conversion3dBasicPipelineNestedStack.pipelineVamsLambdaFunctionName
+            );
+        }
+
+        if (props.config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled) {
+            const conversionMeshCadMetadataExtractionPipelineNestedStack =
+                new ConversionMeshCadMetadataExtractionNestedStack(
+                    this,
+                    "ConversionMeshCadMetadataExtractionNestedStack",
+                    {
+                        ...props,
+                        config: props.config,
+                        storageResources: props.storageResources,
+                        vpc: props.vpc,
+                        pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
+                        pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                        lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                        importGlobalPipelineWorkflowFunctionName:
+                            props.importGlobalPipelineWorkflowFunctionName,
+                    }
+                );
+
+            //Add function name to array for stack output
+            this.pipelineVamsLambdaFunctionNames.push(
+                conversionMeshCadMetadataExtractionPipelineNestedStack.pipelineVamsLambdaFunctionName
             );
         }
 
@@ -95,6 +123,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
                         vpc: props.vpc,
                         pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
                         pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                        importGlobalPipelineWorkflowFunctionName:
+                            props.importGlobalPipelineWorkflowFunctionName,
                     });
 
                 //Add function name to array for stack output
@@ -115,6 +145,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
                         vpc: props.vpc,
                         pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
                         pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                        importGlobalPipelineWorkflowFunctionName:
+                            props.importGlobalPipelineWorkflowFunctionName,
                     }
                 );
 
@@ -134,6 +166,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
                     pipelineSubnetsPrivate: pipelineNetwork.privateSubnets.pipeline,
                     pipelineSubnetsIsolated: pipelineNetwork.isolatedSubnets.pipeline,
                     pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                    importGlobalPipelineWorkflowFunctionName:
+                        props.importGlobalPipelineWorkflowFunctionName,
                 });
                 //Add function name to array for stack output
                 this.pipelineVamsLambdaFunctionNames.push(
@@ -154,6 +188,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
                         pipelineSubnetsPrivate: pipelineNetwork.privateSubnets.pipeline,
                         pipelineSubnetsIsolated: pipelineNetwork.isolatedSubnets.pipeline,
                         pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                        importGlobalPipelineWorkflowFunctionName:
+                            props.importGlobalPipelineWorkflowFunctionName,
                     }
                 );
                 //Add function name to array for stack output

@@ -25,31 +25,34 @@ export class BabylonJSGaussianSplatDependencyManager {
 
         try {
             console.log("Loading BabylonJS for BabylonJS Gaussian Splat viewer...");
-            
+
             // Dynamic import of BabylonJS with proper error handling
             const BABYLON = await import("babylonjs").catch(() => {
                 throw new Error("BabylonJS package not found. Please install babylonjs package.");
             });
-            
+
             // Load additional modules
             await import("babylonjs-loaders").catch(() => {
                 console.warn("babylonjs-loaders not found, some features may be limited");
             });
-            
+
             // Make BabylonJS available globally for the splat loader
             (window as any).BABYLON = BABYLON;
-            
+
             this.babylonEngine = BABYLON;
             this.loaded = true;
-            
+
             console.log("BabylonJS loaded successfully for BabylonJS Gaussian Splat viewer");
             return BABYLON;
-            
         } catch (error) {
             console.error("Failed to load BabylonJS:", error);
             this.loaded = false;
             this.babylonEngine = null;
-            throw new Error(`Failed to load required dependencies for BabylonJS Gaussian Splat viewer: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            throw new Error(
+                `Failed to load required dependencies for BabylonJS Gaussian Splat viewer: ${
+                    error instanceof Error ? error.message : "Unknown error"
+                }`
+            );
         }
     }
 
@@ -76,24 +79,24 @@ export class BabylonJSGaussianSplatDependencyManager {
      */
     static cleanup(): void {
         console.log("Cleaning up BabylonJS Gaussian Splat viewer dependencies...");
-        
+
         // Dispose all active engines
-        this.activeEngines.forEach(engine => {
+        this.activeEngines.forEach((engine) => {
             try {
-                if (engine && typeof engine.dispose === 'function') {
+                if (engine && typeof engine.dispose === "function") {
                     engine.dispose();
                 }
             } catch (error) {
                 console.warn("Error disposing BabylonJS engine:", error);
             }
         });
-        
+
         this.activeEngines.clear();
-        
+
         // Reset state but keep BabylonJS loaded for other potential uses
         // this.loaded = false;
         // this.babylonEngine = null;
-        
+
         console.log("BabylonJS Gaussian Splat viewer dependencies cleaned up");
     }
 
@@ -109,7 +112,7 @@ export class BabylonJSGaussianSplatDependencyManager {
         return {
             loaded: this.loaded,
             activeEngines: this.activeEngines.size,
-            babylonAvailable: this.babylonEngine !== null
+            babylonAvailable: this.babylonEngine !== null,
         };
     }
 }

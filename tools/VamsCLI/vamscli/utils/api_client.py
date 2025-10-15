@@ -524,7 +524,7 @@ class APIClient:
     
     def create_asset(self, asset_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Create a new asset using the /assets PUT endpoint.
+        Create a new asset using the /assets POST endpoint.
         
         Args:
             asset_data: Asset creation data matching CreateAssetRequestModel
@@ -539,7 +539,7 @@ class APIClient:
             APIError: When API call fails
         """
         try:
-            response = self.put(API_ASSETS, data=asset_data, include_auth=True)
+            response = self.post(API_ASSETS, data=asset_data, include_auth=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:

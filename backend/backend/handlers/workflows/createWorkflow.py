@@ -134,8 +134,9 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
     logger.info("Generating workflow ASL definition")
 
     # Generate unique names for each pipeline job
+    # Trim UID to first 5 chars, place in front of pipeline name, then trim to 80 chars
     job_names = [
-        x['name'] + "-{}".format(uuid.uuid1().hex) for x in pipelines
+        (uuid.uuid1().hex[:5] + "-" + x['name'])[:80] for x in pipelines
     ]
     logger.info(f"Generated job names: {job_names}")
 
@@ -166,9 +167,9 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
     first_pipeline_name = pipelines[0]['name']
     first_job_name = job_names[0]
     
-    global_output_s3_asset_files_uri = f"States.Format('s3://{{0}}/pipelines/{first_pipeline_name}/{first_job_name}/output/{{1}}/files/', $.bucketAsset, $$.Execution.Name)"
-    global_output_s3_asset_preview_uri = f"States.Format('s3://{{0}}/pipelines/{first_pipeline_name}/{first_job_name}/output/{{1}}/previews/', $.bucketAsset, $$.Execution.Name)"
-    global_output_s3_asset_metadata_uri = f"States.Format('s3://{{0}}/pipelines/{first_pipeline_name}/{first_job_name}/output/{{1}}/metadata/', $.bucketAsset, $$.Execution.Name)"
+    global_output_s3_asset_files_uri = f"States.Format('s3://{{}}/pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/files/', $.bucketAsset, $$.Execution.Name)"
+    global_output_s3_asset_preview_uri = f"States.Format('s3://{{}}/pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/previews/', $.bucketAsset, $$.Execution.Name)"
+    global_output_s3_asset_metadata_uri = f"States.Format('s3://{{}}/pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/metadata/', $.bucketAsset, $$.Execution.Name)"
 
     # Build list of pipeline states
     states = []
@@ -178,11 +179,11 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
         if pipeline.get('pipelineType', 'standardFile') == 'previewFile':
             assetAuxiliaryAssetSubFolderName = "preview"
 
-        inputOutput_s3_assetAuxiliary_files_uri = f"States.Format('s3://{{0}}/{{1}}/{assetAuxiliaryAssetSubFolderName}/{pipeline['name']}/', $.bucketAssetAuxiliary, $.inputAssetFileKey)"
+        inputOutput_s3_assetAuxiliary_files_uri = f"States.Format('s3://{{}}/{{}}/{assetAuxiliaryAssetSubFolderName}/{pipeline['name']}/', $.bucketAssetAuxiliary, $.inputAssetFileKey)"
 
         # First pipeline uses original input, subsequent pipelines use global output paths
         if i == 0:
-            input_s3_asset_uri = "States.Format('s3://{0}/{1}', $.bucketAsset, $.inputAssetFileKey)"
+            input_s3_asset_uri = "States.Format('s3://{}/{}', $.bucketAsset, $.inputAssetFileKey)"
         else:
             input_s3_asset_uri = global_output_s3_asset_files_uri
 
@@ -190,7 +191,8 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
         
         if ('pipelineExecutionType' in pipeline and pipeline['pipelineExecutionType'] == 'Lambda'):
             # Create Lambda step
-            lambda_state_id = f"{pipeline['name']}-{uuid.uuid1().hex}"
+            # Trim UID to first 5 chars, place in front of pipeline name, then trim to 80 chars
+            lambda_state_id = (uuid.uuid1().hex[:5] + "-" + pipeline['name'])[:80]
             
             # Build callback configuration
             callback_config = {}
@@ -227,6 +229,7 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
                     "bucketAssetAuxiliary.$": "$.bucketAssetAuxiliary",
                     "bucketAsset.$": "$.bucketAsset",
                     "inputAssetFileKey.$": "$.inputAssetFileKey",
+                    "inputAssetLocationKey.$": "$.inputAssetLocationKey",
                     "outputType": pipeline["outputType"],
                     "inputMetadata.$": "$.inputMetadata",
                     "inputParameters": inputParameters,
@@ -266,10 +269,10 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
             "assetId.$": "$.assetId",
             "workflowDatabaseId.$": "$.workflowDatabaseId",
             "workflowId.$": "$.workflowId",
-            # Use GLOBAL output paths (where all pipelines wrote their outputs)
-            "filesPathKey.$": f"States.Format('pipelines/{first_pipeline_name}/{first_job_name}/output/{{0}}/files/', $$.Execution.Name)",
-            "metadataPathKey.$": f"States.Format('pipelines/{first_pipeline_name}/{first_job_name}/output/{{0}}/metadata/', $$.Execution.Name)",
-            "previewPathKey.$": f"States.Format('pipelines/{first_pipeline_name}/{first_job_name}/output/{{0}}/previews/', $$.Execution.Name)",
+            "assetLocationKey.$": "$.inputAssetLocationKey",
+            "filesPathKey.$": f"States.Format('pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/files/', $$.Execution.Name)",
+            "metadataPathKey.$": f"States.Format('pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/metadata/', $$.Execution.Name)",
+            "previewPathKey.$": f"States.Format('pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/previews/', $$.Execution.Name)",
             "description": f'Output from {last_job_name}',
             "executionId.$": "$$.Execution.Name",
             "pipeline": last_pipeline['name'],

@@ -167,7 +167,7 @@ def get_asset_metadata(databaseId, assetId, keyPrefix, event):
         return {}
 
 
-def launchWorkflow(inputAssetBucket, inputAssetFileKey, workflow_arn, database_id, asset_id, workflow_database_id, workflow_id, executingUserName, executingRequestContext, inputMetadata = {}):
+def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, workflow_arn, database_id, asset_id, workflow_database_id, workflow_id, executingUserName, executingRequestContext, inputMetadata = {}):
 
     logger.info("Launching workflow with arn: "+workflow_arn)
 
@@ -176,7 +176,7 @@ def launchWorkflow(inputAssetBucket, inputAssetFileKey, workflow_arn, database_i
 
     response = sfn_client.start_execution(
         stateMachineArn=workflow_arn,
-        input=json.dumps({'bucketAsset': inputAssetBucket, 'bucketAssetAuxiliary': bucket_name_assetAuxiliary, 'inputAssetFileKey': inputAssetFileKey, 'databaseId': database_id,
+        input=json.dumps({'bucketAsset': inputAssetBucket, 'bucketAssetAuxiliary': bucket_name_assetAuxiliary, 'inputAssetLocationKey': inputAssetLocationKey, 'inputAssetFileKey': inputAssetFileKey, 'databaseId': database_id,
                           'assetId': asset_id, 'inputMetadata': json.dumps(inputMetadata), 'workflowDatabaseId': workflow_database_id,
                           'workflowId': workflow_id, 'executingUserName': executingUserName, 'executingRequestContext': executingRequestContext})
     )
@@ -466,12 +466,13 @@ def lambda_handler(event, context):
                             
                             # Determine which file key to use
                             # If fileKey is provided in request body, use it, otherwise use asset's base prefix key
-                            file_key = asset['assetLocation']['Key']
+                            asset_file_key = asset['assetLocation']['Key']
                             
                             # Get bucket name from bucketId using get_default_bucket_details
                             bucketDetails = get_default_bucket_details(asset['bucketId'])
                             asset_bucket = bucketDetails['bucketName']
                             
+                            file_key = asset_file_key
                             if request_body and 'fileKey' in request_body:
                                 file_key = resolve_asset_file_path(file_key, request_body['fileKey'])
                                 logger.info(f"Using file key from request: {file_key}")
@@ -498,7 +499,7 @@ def lambda_handler(event, context):
                             }
 
                             logger.info("Launching Workflow:")
-                            executionId = launchWorkflow(asset_bucket, file_key, workflow['workflow_arn'], pathParams['databaseId'],
+                            executionId = launchWorkflow(asset_bucket, asset_file_key, file_key, workflow['workflow_arn'], pathParams['databaseId'],
                                                          pathParams['assetId'], request_body.get('workflowDatabaseId'), workflow['workflowId'],
                                                          executingUserName, executingRequestContext, inputMetadata)
                             response["statusCode"] = 200

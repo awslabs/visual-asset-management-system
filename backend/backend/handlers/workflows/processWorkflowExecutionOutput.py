@@ -273,6 +273,278 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
         return None
 
 
+def filter_metadata_files(objects_list):
+    """Filter S3 objects to only include files ending with _metadata.json"""
+    return [obj for obj in objects_list if obj['Key'].endswith('_metadata.json') and '/' != obj['Key'][-1]]
+
+
+def parse_file_metadata_path(s3_key, metadata_path_key):
+    """
+    Extract the target file path from metadata filename.
+    Example: 'prefix/folder1/folder2/boopy.glb_metadata.json' -> '/folder1/folder2/boopy.glb'
+    """
+    try:
+        # Remove the metadata_path_key prefix
+        if s3_key.startswith(metadata_path_key):
+            relative_path = s3_key[len(metadata_path_key):]
+        else:
+            relative_path = s3_key
+        
+        # Remove '_metadata.json' suffix
+        if relative_path.endswith('_metadata.json'):
+            relative_path = relative_path[:-len('_metadata.json')]
+        
+        # Ensure leading slash
+        if not relative_path.startswith('/'):
+            relative_path = '/' + relative_path
+        
+        return relative_path
+    except Exception as e:
+        logger.exception(f"Error parsing file metadata path: {e}")
+        return None
+
+
+def build_file_prefix(asset_id, relative_path):
+    """
+    Build full prefix for file-level metadata.
+    Example: asset_id='x1c688932-ad0f-49c0-971d-578939126947', relative_path='/folder1/folder2/boopy.glb'
+    Returns: '/x1c688932-ad0f-49c0-971d-578939126947/folder1/folder2/boopy.glb'
+    """
+    # Ensure asset_id has leading slash
+    if not asset_id.startswith('/'):
+        asset_id = '/' + asset_id
+    
+    # Remove leading slash from relative_path if present (we'll add it back)
+    if relative_path.startswith('/'):
+        relative_path = relative_path[1:]
+    
+    return f"{asset_id}/{relative_path}"
+
+
+def process_metadata_fields(json_data):
+    """
+    Process JSON fields according to rules:
+    - Strings: add as-is
+    - Lists: join with commas if all elements are strings
+    - Dicts: convert entire dict to JSON string
+    - Skip: assetId, databaseId fields
+    Returns: processed metadata dictionary
+    """
+    processed_metadata = {}
+    
+    for k, v in json_data.items():
+        # Skip assetId and databaseId fields
+        if str(k) in ['assetId', 'databaseId']:
+            continue
+        
+        if isinstance(v, dict):
+            # Convert entire dictionary to JSON string
+            processed_metadata[str(k)] = json.dumps(v)
+        elif isinstance(v, list):
+            # Check if all elements are strings, if so join with commas
+            if v and all(isinstance(item, str) for item in v):
+                processed_metadata[str(k)] = ",".join(v)
+            else:
+                # Convert list to JSON string if not all strings
+                processed_metadata[str(k)] = json.dumps(v)
+        else:
+            # Add string values as-is (skip empty strings)
+            if str(v) != "":
+                processed_metadata[str(k)] = str(v)
+    
+    return processed_metadata
+
+
+def get_or_create_metadata(database_id, asset_id, request_context, prefix=None):
+    """
+    Query existing metadata or create new entry with defaults.
+    Returns: metadata dictionary
+    """
+    # Build Lambda payload for read_metadata
+    l_payload = {
+        "requestContext": request_context,
+        "pathParameters": {
+            "databaseId": database_id,
+            "assetId": asset_id
+        }
+    }
+    
+    # Add prefix query parameter if provided (for file-level metadata)
+    if prefix:
+        l_payload["queryStringParameters"] = {
+            "prefix": prefix
+        }
+    
+    logger.info(f"Getting metadata for assetId={asset_id}, prefix={prefix}")
+    logger.info(l_payload)
+    
+    try:
+        read_metadata_response = _lambda_read_metadata(l_payload)
+        stream = read_metadata_response['Payload']
+        
+        if stream:
+            json_response = json.loads(stream.read().decode("utf-8"))
+            logger.info("readMetadata response:")
+            logger.info(json_response)
+            
+            # Check if metadata exists
+            if "statusCode" in json_response and json_response["statusCode"] == 200:
+                if "body" in json_response:
+                    response_body = json.loads(json_response['body'])
+                    if "metadata" in response_body:
+                        return response_body['metadata']
+            
+            # Metadata doesn't exist, create new with defaults
+            logger.info("Metadata not found, creating new entry with defaults")
+            metadata = {
+                "databaseId": database_id,
+                "assetId": prefix if prefix else asset_id,
+                "_metadata_last_updated": datetime.now().isoformat()
+            }
+            return metadata
+    except Exception as e:
+        logger.exception(f"Error getting metadata: {e}")
+        # Return new metadata with defaults on error
+        return {
+            "databaseId": database_id,
+            "assetId": prefix if prefix else asset_id,
+            "_metadata_last_updated": datetime.now().isoformat()
+        }
+
+
+def save_metadata(database_id, asset_id, metadata, request_context, prefix=None):
+    """
+    Save metadata via create_metadata Lambda.
+    Handles prefix parameter for file-level metadata.
+    """
+    # Remove assetId and databaseId from metadata (they are primary/sort keys)
+    metadata_to_save = {k: v for k, v in metadata.items() if k not in ['assetId', 'databaseId']}
+    
+    # Make sure we have something to save
+    if not metadata_to_save:
+        logger.warning("Empty metadata dictionary, skipping save")
+        return False
+    
+    # Build Lambda payload
+    l_payload = {
+        "requestContext": request_context,
+        "pathParameters": {
+            "databaseId": database_id,
+            "assetId": asset_id
+        },
+        "body": json.dumps({
+            "version": "1",
+            "metadata": metadata_to_save
+        })
+    }
+    
+    # Add prefix query parameter if provided (for file-level metadata)
+    if prefix:
+        l_payload["queryStringParameters"] = {
+            "prefix": prefix
+        }
+    
+    logger.info(f"Saving metadata for assetId={asset_id}, prefix={prefix}")
+    logger.info(l_payload)
+    
+    try:
+        create_metadata_response = _lambda_create_metadata(l_payload)
+        stream = create_metadata_response['Payload']
+        
+        if stream:
+            json_response = json.loads(stream.read().decode("utf-8"))
+            logger.info("createMetadata response:")
+            logger.info(json_response)
+            
+            if "statusCode" in json_response:
+                if json_response['statusCode'] == 200:
+                    logger.info("Metadata saved successfully")
+                    return True
+                else:
+                    logger.error(f"Error saving metadata, status code: {json_response['statusCode']}")
+                    return False
+            else:
+                logger.error("No status code in createMetadata response")
+                return False
+    except Exception as e:
+        logger.exception(f"Error saving metadata: {e}")
+        return False
+
+
+def process_root_metadata(bucket_name, s3_key, database_id, asset_id, request_context):
+    """Process root asset metadata from asset_metadata.json"""
+    try:
+        logger.info(f"Processing root metadata from: {s3_key}")
+        
+        # Get existing metadata
+        metadata = get_or_create_metadata(database_id, asset_id, request_context)
+        
+        # Read JSON file from S3
+        objectResponse = s3c.get_object(Bucket=bucket_name, Key=s3_key)
+        objectData = objectResponse['Body'].read().decode("utf-8")
+        
+        try:
+            data = json.loads(objectData)
+            logger.info(f"Root metadata JSON content: {data}")
+            
+            # Process fields and merge with existing metadata
+            processed_fields = process_metadata_fields(data)
+            metadata.update(processed_fields)
+            
+            # Update timestamp
+            metadata['_metadata_last_updated'] = datetime.now().isoformat()
+            
+            # Save metadata
+            save_metadata(database_id, asset_id, metadata, request_context)
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"Root metadata file is not valid JSON: {e}")
+    except Exception as e:
+        logger.exception(f"Error processing root metadata: {e}")
+
+
+def process_file_level_metadata(bucket_name, s3_key, metadata_path_key, database_id, asset_id, request_context):
+    """Process file-level metadata from *_metadata.json files"""
+    try:
+        logger.info(f"Processing file-level metadata from: {s3_key}")
+        
+        # Parse the relative path from the metadata filename
+        relative_path = parse_file_metadata_path(s3_key, metadata_path_key)
+        if not relative_path:
+            logger.error(f"Could not parse relative path from: {s3_key}")
+            return
+        
+        # Build full prefix for file-level metadata
+        full_prefix = build_file_prefix(asset_id, relative_path)
+        logger.info(f"File-level metadata prefix: {full_prefix}")
+        
+        # Get existing metadata for this file
+        metadata = get_or_create_metadata(database_id, asset_id, request_context, prefix=full_prefix)
+        
+        # Read JSON file from S3
+        objectResponse = s3c.get_object(Bucket=bucket_name, Key=s3_key)
+        objectData = objectResponse['Body'].read().decode("utf-8")
+        
+        try:
+            data = json.loads(objectData)
+            logger.info(f"File-level metadata JSON content: {data}")
+            
+            # Process fields and merge with existing metadata
+            processed_fields = process_metadata_fields(data)
+            metadata.update(processed_fields)
+            
+            # Update timestamp
+            metadata['_metadata_last_updated'] = datetime.now().isoformat()
+            
+            # Save metadata with prefix
+            save_metadata(database_id, asset_id, metadata, request_context, prefix=full_prefix)
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"File-level metadata file is not valid JSON: {e}")
+    except Exception as e:
+        logger.exception(f"Error processing file-level metadata: {e}")
+
+
 def lambda_handler(event, context):
     response = STANDARD_JSON_RESPONSE
     logger.info(event)
@@ -456,116 +728,6 @@ def lambda_handler(event, context):
                     else:
                         logger.error("No image files found in preview folder")
 
-            #Handle metadata outputs
-            if('metadataPathKey' in event):
-                metadataPathKey = event['metadataPathKey']
-
-                objectsFound = {}
-                try:
-                    objectsFound = verify_get_path_objects(bucket_name, metadataPathKey)
-                except Exception as e:
-                    logger.error(e)
-
-                if 'Contents' in objectsFound:
-                    metadata = {}
-
-                    #Get existing metadata through read metadata invoke
-                    l_payload = {
-                        "requestContext": requestContext,
-                        "pathParameters": {
-                            "databaseId": event['databaseId'],
-                            "assetId": event['assetId']
-                        }
-                    }
-                    logger.info("Getting metadata")
-                    logger.info(l_payload)
-                    read_metadata_response = _lambda_read_metadata(l_payload)
-                    logger.info("read metadata response:")
-                    #logger.info(read_metadata_response)
-                    stream = read_metadata_response['Payload']
-                    if stream:
-                        json_response = json.loads(stream.read().decode("utf-8"))
-                        logger.info("readMetadata payload:")
-                        logger.info(json_response)
-                        if "body" in json_response:
-                            response_body = json.loads(json_response['body'])
-                            if "metadata" in response_body:
-                                metadata = response_body['metadata']
-
-                    #Check if we don't yet have any metadata for this asset (shouldn't be possible so another fault must have occured)
-                    if('assetId' in metadata and 'databaseId' in metadata):
-                        files = [x['Key'] for x in objectsFound['Contents'] if '/' != x['Key'][-1]]
-                        logger.info("Files present in pipeline output metadata folder:")
-                        logger.info(files)
-                        for file in files:
-                            #Only process files that end in JSON extension for now
-                            if file.lower().endswith('.json'):
-                                objectResponse = s3c.get_object(Bucket=bucket_name, Key=file)
-                                objectData = objectResponse['Body'].read().decode("utf-8")
-                                data = {}
-                                try:
-                                    data = json.loads(objectData)
-                                    logger.info(data)
-                                except Exception as e:
-                                    logger.error("Metadata object type for Pipeline Process Output File is not JSON parsable")
-                                    logger.error(e)
-
-                                #Loop through each key/value in JSON dictionary and add to or update existing entries
-                                for k, v in data.items():
-                                    if isinstance(v, dict):
-                                        logger.warn("Not able to process sub-dictionaries right now for metadata elements")
-                                    elif isinstance(v, list):
-                                        #Check if first element is a string, if it is, join all of them together as a comma-deliminated list
-                                        if isinstance(v[0], str):
-                                            metadata[str(k)] = ",".join(v)
-                                    else:
-                                        if(str(k) != 'assetId' and str(k) != 'databaseId' and str(v) != ""):
-                                            metadata[str(k)] = str(v)
-                            else:
-                                logger.error("Files present in pipeline output metadata folder outside of JSON. Skipping...")
-
-                        logger.info(metadata)
-
-                        #Pop off assetId and databaseId from metadata (otherwise won't save on invoke as they are the primary/sort keys on DB)
-                        metadata.pop('assetId', None)
-                        metadata.pop('databaseId', None)
-
-                        #Make sure we don't have an empty dictionary, and then save
-                        if metadata:
-                            #Conduct final save of metadata
-                            l_payload = {
-                                "requestContext": requestContext,
-                                "pathParameters": {
-                                    "databaseId": event['databaseId'],
-                                    "assetId": event['assetId']
-                                },
-                                "body": json.dumps({
-                                    "version": "1",
-                                    "metadata": metadata
-                                })
-                            }
-                            logger.info("Saving metadata")
-                            logger.info(l_payload)
-                            create_metadata_response = _lambda_create_metadata(l_payload)
-                            logger.info("create metadata response:")
-                            logger.info(read_metadata_response)
-                            stream = create_metadata_response['Payload']
-                            if stream:
-                                json_response = json.loads(stream.read().decode("utf-8"))
-                                logger.info("createMetadata payload:")
-                                logger.info(json_response)
-                                if "statusCode" in json_response:
-                                    #log error if we have anything but a 200 status code
-                                    if(json_response['statusCode'] != 200):
-                                        logger.error("Error code not 200 for saving metadata back to database for asset. Skipping...")
-                                else:
-                                    logger.error("Error status code not present for saving metadata back to database for asset. Skipping...")
-                        else:
-                            logger.warn("Empty metadata dictionary on save. Skipping....")
-
-                    else:
-                        logger.error("Metadata database entry not found for asset. Skipping...")
-
             #Handle asset file outputs
             if('filesPathKey' in event):
                 filesPathKey = event['filesPathKey']
@@ -634,6 +796,61 @@ def lambda_handler(event, context):
                             logger.exception(f"Error processing asset file upload: {e}")
                     else:
                         logger.warning("No files found in asset output folder")
+
+            #Handle metadata outputs (needs to happen after S3)
+            if('metadataPathKey' in event):
+                metadataPathKey = event['metadataPathKey']
+
+                objectsFound = {}
+                try:
+                    objectsFound = verify_get_path_objects(bucket_name, metadataPathKey)
+                except Exception as e:
+                    logger.error(e)
+
+                if 'Contents' in objectsFound:
+                    # Filter to only metadata JSON files
+                    metadata_files = filter_metadata_files(objectsFound['Contents'])
+                    logger.info(f"Found {len(metadata_files)} metadata files")
+                    
+                    # Separate root metadata from file-level metadata
+                    root_metadata_file = None
+                    file_metadata_files = []
+                    
+                    for file_obj in metadata_files:
+                        filename = os.path.basename(file_obj['Key'])
+                        if filename == 'asset_metadata.json':
+                            root_metadata_file = file_obj
+                            logger.info(f"Found root metadata file: {file_obj['Key']}")
+                        else:
+                            file_metadata_files.append(file_obj)
+                            logger.info(f"Found file-level metadata: {file_obj['Key']}")
+                    
+                    # Process root metadata (asset_metadata.json)
+                    if root_metadata_file:
+                        try:
+                            process_root_metadata(
+                                bucket_name,
+                                root_metadata_file['Key'],
+                                event['databaseId'],
+                                event['assetId'],
+                                requestContext
+                            )
+                        except Exception as e:
+                            logger.exception(f"Error processing root metadata: {e}")
+                    
+                    # Process each file-level metadata
+                    for file_obj in file_metadata_files:
+                        try:
+                            process_file_level_metadata(
+                                bucket_name,
+                                file_obj['Key'],
+                                metadataPathKey,
+                                event['databaseId'],
+                                event['assetId'],
+                                requestContext
+                            )
+                        except Exception as e:
+                            logger.exception(f"Error processing file-level metadata {file_obj['Key']}: {e}")
 
 
             response['statusCode'] = 200

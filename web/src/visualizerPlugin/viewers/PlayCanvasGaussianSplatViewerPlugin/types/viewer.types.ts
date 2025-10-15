@@ -20,7 +20,7 @@ export interface PlayCanvasGaussianSplatViewerProps extends ViewerPluginProps {}
 export interface GaussianSplatOptions {
     keepInRam?: boolean;
     progressiveUpdateAmount?: number;
-    quality?: 'low' | 'medium' | 'high';
+    quality?: "low" | "medium" | "high";
 }
 
 export interface ViewerState {
@@ -48,7 +48,7 @@ export interface SplatControls {
     pan: (deltaX: number, deltaY: number) => void;
 }
 
-export type PlyType = 'splat' | 'pc';
+export type PlyType = "splat" | "pc";
 
 // Settings and configuration specific to PlayCanvas Gaussian Splat viewing
 export interface ViewerSettings {

@@ -224,13 +224,13 @@ export const buildScatterPlot = ({
             (async () => {
                 try {
                     await PCS.buildMeshAsync();
-                    
+
                     // Check if mesh was successfully created
                     if (!PCS.mesh) {
-                        console.error('PCS.mesh is undefined after buildMeshAsync()');
+                        console.error("PCS.mesh is undefined after buildMeshAsync()");
                         return;
                     }
-                    
+
                     scene.registerBeforeRender(function () {
                         PCS.setParticles(0, 999999, true);
                     });
@@ -240,7 +240,7 @@ export const buildScatterPlot = ({
                     this.shape = PCS;
                     this.mesh.position = this._defPos;
                 } catch (error) {
-                    console.error('Error building PCS mesh:', error);
+                    console.error("Error building PCS mesh:", error);
                 }
             })();
         }

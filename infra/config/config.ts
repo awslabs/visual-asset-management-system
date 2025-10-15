@@ -168,6 +168,10 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useConversion3dBasic.enabled = true;
     }
 
+    if (config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled == undefined) {
+        config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled = false;
+    }
+
     if (config.app.authProvider.useExternalOAuthIdp.enabled == undefined) {
         config.app.authProvider.useExternalOAuthIdp.enabled = false;
     }
@@ -646,20 +650,30 @@ export interface ConfigPublic {
         pipelines: {
             useConversion3dBasic: {
                 enabled: boolean;
+                autoRegisterWithVAMS: boolean;
+            };
+            useConversionCadMeshMetadataExtraction: {
+                enabled: boolean;
+                autoRegisterWithVAMS: boolean;
             };
             usePreviewPcPotreeViewer: {
                 enabled: boolean;
+                autoRegisterWithVAMS: boolean;
             };
             useGenAiMetadata3dLabeling: {
                 enabled: boolean;
+                bedrockModelId: string;
+                autoRegisterWithVAMS: boolean;
             };
             useRapidPipeline: {
                 enabled: boolean;
                 ecrContainerImageURI: string;
+                autoRegisterWithVAMS: boolean;
             };
             useModelOps: {
                 enabled: boolean;
                 ecrContainerImageURI: string;
+                autoRegisterWithVAMS: boolean;
             };
         };
         authProvider: {

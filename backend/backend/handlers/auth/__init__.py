@@ -4,15 +4,16 @@ import json
 from customConfigCommon.customAuthClaimsCheck import customAuthClaimsCheckOverride
 
 def request_to_claims(request):
-    if 'requestContext' not in request:
-        # #Lambda cross-calling input. Only checked when requestContext is not present through API Gateway call.
-        # if 'lambdaCrossCall' in request:
-        #     return {
-        #         "tokens": [request["lambdaCrossCall"]["userName"]],
-        #         "roles": [],
-        #         "externalAttributes": []
-        #     }
-        # else:
+
+    #Lambda cross-calling input short-circuit. 
+    if 'lambdaCrossCall' in request:
+        return {
+            "tokens": [request["lambdaCrossCall"].get("userName", "SYSTEM_USER")],
+            "roles": [],
+            "externalAttributes": [],
+            "mfaEnabled": True
+        }
+    elif 'requestContext' not in request or 'authorizer' not in request['requestContext']:
         return {
             "tokens": [],
             "roles": [],
@@ -26,13 +27,11 @@ def request_to_claims(request):
     externalAttributes = []
     mfaEnabled = False
 
-    #Handle both claims from APIGateway standard authorizer format, lambda authorizers, or lambda cross-calls
+    #Handle both claims from APIGateway standard authorizer format or lambda authorizers
     if 'jwt' in request['requestContext']['authorizer'] and 'claims' in request['requestContext']['authorizer']['jwt']:
         claims = request['requestContext']['authorizer']['jwt']['claims']
     elif 'lambda' in request['requestContext']['authorizer']:
         claims = request['requestContext']['authorizer']['lambda']
-    elif 'lambdaCrossCall' in request: #currently this case wouldn't apply for now due to check above
-        claims = request['lambdaCrossCall']
     else:
         claims = {}
 

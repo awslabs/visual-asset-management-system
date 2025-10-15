@@ -13,9 +13,12 @@ export class Online3dViewerDependencyManager {
         if (this.loaded) return;
 
         try {
-            // The Online3dViewerComponent imports its CSS directly
-            // We need to track it for cleanup purposes
-            // The CSS is embedded in the component file, so we'll create a virtual reference
+            // Load CSS dynamically from public directory using StylesheetManager
+            // This allows proper cleanup when the plugin is unloaded
+            await StylesheetManager.loadStylesheet(
+                this.PLUGIN_ID,
+                "/online3dviewer/Online3DViewerContainer.css"
+            );
 
             console.log("Online3dViewer dependencies loaded successfully");
             this.loaded = true;
@@ -26,7 +29,7 @@ export class Online3dViewerDependencyManager {
     }
 
     static cleanup(): void {
-        // Remove any stylesheets managed by this plugin
+        // Remove all stylesheets managed by this plugin
         StylesheetManager.removePluginStylesheets(this.PLUGIN_ID);
 
         this.loaded = false;

@@ -1,6 +1,6 @@
 /**
  * PlayCanvas Gaussian Splat Dependency Manager
- * 
+ *
  * Handles dynamic loading and cleanup of PlayCanvas engine for Gaussian Splat viewing.
  * Follows VAMS plugin dependency management patterns.
  */
@@ -28,7 +28,7 @@ export class PlayCanvasGaussianSplatDependencyManager {
 
         // Start loading PlayCanvas
         this.loadPromise = this.performLoad();
-        
+
         try {
             const result = await this.loadPromise;
             this.loadPromise = null;
@@ -48,29 +48,29 @@ export class PlayCanvasGaussianSplatDependencyManager {
 
             // Dynamic import of PlayCanvas
             const pc = await import("playcanvas");
-            
+
             // Verify PlayCanvas loaded correctly
-            if (!pc || typeof pc.Application !== 'function') {
+            if (!pc || typeof pc.Application !== "function") {
                 throw new Error("PlayCanvas module did not load correctly");
             }
 
             // Store the loaded module
             this.playcanvas = pc;
             this.loaded = true;
-            
+
             console.log(`[${this.PLUGIN_ID}] PlayCanvas engine loaded successfully`);
-            console.log(`[${this.PLUGIN_ID}] PlayCanvas version:`, pc.version || 'Unknown');
-            
+            console.log(`[${this.PLUGIN_ID}] PlayCanvas version:`, pc.version || "Unknown");
+
             return pc;
         } catch (error) {
             console.error(`[${this.PLUGIN_ID}] Failed to load PlayCanvas:`, error);
-            
+
             // Reset state on failure
             this.loaded = false;
             this.playcanvas = null;
-            
+
             // Provide user-friendly error message
-            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            const errorMessage = error instanceof Error ? error.message : "Unknown error";
             throw new Error(`Failed to load PlayCanvas engine: ${errorMessage}`);
         }
     }
@@ -86,7 +86,7 @@ export class PlayCanvasGaussianSplatDependencyManager {
             this.loaded = false;
             this.playcanvas = null;
             this.loadPromise = null;
-            
+
             console.log(`[${this.PLUGIN_ID}] PlayCanvas cleanup completed`);
         } catch (error) {
             console.error(`[${this.PLUGIN_ID}] Error during cleanup:`, error);
@@ -115,7 +115,7 @@ export class PlayCanvasGaussianSplatDependencyManager {
             id: this.PLUGIN_ID,
             loaded: this.loaded,
             hasModule: this.playcanvas !== null,
-            version: this.playcanvas?.version || null
+            version: this.playcanvas?.version || null,
         };
     }
 }

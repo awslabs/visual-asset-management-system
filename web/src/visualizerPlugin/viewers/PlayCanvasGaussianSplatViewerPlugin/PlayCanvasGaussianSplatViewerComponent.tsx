@@ -5,7 +5,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { downloadAsset } from "../../../services/APIService";
-import { PlayCanvasGaussianSplatDependencyManager } from './dependencies';
+import { PlayCanvasGaussianSplatDependencyManager } from "./dependencies";
 import { PlayCanvasGaussianSplatViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
 
@@ -25,7 +25,7 @@ const createCameraControls = (app: any, camera: any, pc: any) => {
         const x = target.x + cameraDistance * Math.sin(cameraYaw) * Math.cos(cameraPitch);
         const y = target.y + cameraDistance * Math.sin(cameraPitch);
         const z = target.z + cameraDistance * Math.cos(cameraYaw) * Math.cos(cameraPitch);
-        
+
         camera.setPosition(x, y, z);
         camera.lookAt(target.x, target.y, target.z);
     };
@@ -50,25 +50,28 @@ const createCameraControls = (app: any, camera: any, pc: any) => {
             const panSpeed = cameraDistance * 0.001;
             const right = new pc.Vec3();
             const up = new pc.Vec3();
-            
+
             // Calculate right and up vectors from camera
             const cameraTransform = camera.getWorldTransform();
             cameraTransform.getX(right);
             cameraTransform.getY(up);
-            
+
             right.mulScalar(-deltaX * panSpeed);
             up.mulScalar(deltaY * panSpeed);
-            
+
             target.add(right).add(up);
         } else {
             // Rotate around target
             const rotateSpeed = 0.005;
-            cameraYaw += deltaX * rotateSpeed;  // Fixed: + instead of - to match BabylonJS behavior
-            cameraPitch = Math.max(-Math.PI/2 + 0.1, Math.min(Math.PI/2 - 0.1, cameraPitch + deltaY * rotateSpeed));
+            cameraYaw += deltaX * rotateSpeed; // Fixed: + instead of - to match BabylonJS behavior
+            cameraPitch = Math.max(
+                -Math.PI / 2 + 0.1,
+                Math.min(Math.PI / 2 - 0.1, cameraPitch + deltaY * rotateSpeed)
+            );
         }
 
         updateCameraPosition();
-        
+
         lastMouseX = e.clientX;
         lastMouseY = e.clientY;
         e.preventDefault();
@@ -111,13 +114,16 @@ const createCameraControls = (app: any, camera: any, pc: any) => {
             // Single finger - rotate
             const deltaX = e.touches[0].clientX - lastTouchX;
             const deltaY = e.touches[0].clientY - lastTouchY;
-            
+
             const rotateSpeed = 0.005;
-            cameraYaw += deltaX * rotateSpeed;  // Fixed: + instead of - to match mouse controls
-            cameraPitch = Math.max(-Math.PI/2 + 0.1, Math.min(Math.PI/2 - 0.1, cameraPitch + deltaY * rotateSpeed));
-            
+            cameraYaw += deltaX * rotateSpeed; // Fixed: + instead of - to match mouse controls
+            cameraPitch = Math.max(
+                -Math.PI / 2 + 0.1,
+                Math.min(Math.PI / 2 - 0.1, cameraPitch + deltaY * rotateSpeed)
+            );
+
             updateCameraPosition();
-            
+
             lastTouchX = e.touches[0].clientX;
             lastTouchY = e.touches[0].clientY;
         } else if (e.touches.length === 2) {
@@ -125,39 +131,42 @@ const createCameraControls = (app: any, camera: any, pc: any) => {
             const dx = e.touches[0].clientX - e.touches[1].clientX;
             const dy = e.touches[0].clientY - e.touches[1].clientY;
             const distance = Math.sqrt(dx * dx + dy * dy);
-            
+
             if (lastTouchDistance > 0) {
                 const zoomSpeed = 0.01;
                 const deltaDistance = distance - lastTouchDistance;
-                cameraDistance = Math.max(0.5, Math.min(100, cameraDistance - deltaDistance * zoomSpeed));
+                cameraDistance = Math.max(
+                    0.5,
+                    Math.min(100, cameraDistance - deltaDistance * zoomSpeed)
+                );
                 updateCameraPosition();
             }
-            
+
             lastTouchDistance = distance;
         }
         e.preventDefault();
     };
 
     // Attach event listeners
-    canvas.addEventListener('mousedown', onMouseDown);
-    canvas.addEventListener('mousemove', onMouseMove);
-    canvas.addEventListener('mouseup', onMouseUp);
-    canvas.addEventListener('wheel', onWheel, { passive: false });
-    canvas.addEventListener('touchstart', onTouchStart, { passive: false });
-    canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+    canvas.addEventListener("mousedown", onMouseDown);
+    canvas.addEventListener("mousemove", onMouseMove);
+    canvas.addEventListener("mouseup", onMouseUp);
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    canvas.addEventListener("touchstart", onTouchStart, { passive: false });
+    canvas.addEventListener("touchmove", onTouchMove, { passive: false });
 
     // Initialize camera position
     updateCameraPosition();
 
     return {
         destroy: () => {
-            canvas.removeEventListener('mousedown', onMouseDown);
-            canvas.removeEventListener('mousemove', onMouseMove);
-            canvas.removeEventListener('mouseup', onMouseUp);
-            canvas.removeEventListener('wheel', onWheel);
-            canvas.removeEventListener('touchstart', onTouchStart);
-            canvas.removeEventListener('touchmove', onTouchMove);
-        }
+            canvas.removeEventListener("mousedown", onMouseDown);
+            canvas.removeEventListener("mousemove", onMouseMove);
+            canvas.removeEventListener("mouseup", onMouseUp);
+            canvas.removeEventListener("wheel", onWheel);
+            canvas.removeEventListener("touchstart", onTouchStart);
+            canvas.removeEventListener("touchmove", onTouchMove);
+        },
     };
 };
 
@@ -165,7 +174,7 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
     assetId,
     databaseId,
     assetKey,
-    versionId
+    versionId,
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const initializationRef = useRef(false);
@@ -181,22 +190,26 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
             try {
                 console.log("PlayCanvas Gaussian Splat Viewer: Starting initialization");
                 setLoadingMessage("Initializing viewer...");
-                
+
                 // Create canvas directly in DOM
-                const canvas = document.createElement('canvas');
-                canvas.style.width = '100%';
-                canvas.style.height = '100%';
-                canvas.style.display = 'block';
-                canvas.style.backgroundColor = '#1a1a1a';
-                canvas.style.touchAction = 'none';
-                
+                const canvas = document.createElement("canvas");
+                canvas.style.width = "100%";
+                canvas.style.height = "100%";
+                canvas.style.display = "block";
+                canvas.style.backgroundColor = "#1a1a1a";
+                canvas.style.touchAction = "none";
+
                 // Prevent context menu and wheel scrolling
-                canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-                canvas.addEventListener('wheel', (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                }, { passive: false });
-                
+                canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+                canvas.addEventListener(
+                    "wheel",
+                    (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                    },
+                    { passive: false }
+                );
+
                 if (containerRef.current) {
                     containerRef.current.appendChild(canvas);
                     console.log("PlayCanvas Gaussian Splat Viewer: Canvas added to DOM");
@@ -217,14 +230,14 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                         alpha: false,
                         preserveDrawingBuffer: false,
                         preferWebGl2: true,
-                        powerPreference: "high-performance"
-                    }
+                        powerPreference: "high-performance",
+                    },
                 });
 
                 // Configure application settings for high quality
                 app.scene.clusteredLightingEnabled = false;
                 app.autoRender = true;
-                
+
                 // Set high resolution
                 const pixelRatio = window.devicePixelRatio || 1;
                 app.graphicsDevice.maxPixelRatio = pixelRatio;
@@ -232,12 +245,12 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                 app.setCanvasResolution(pc.RESOLUTION_AUTO);
 
                 // Create camera
-                const camera = new pc.Entity('Camera');
-                camera.addComponent('camera', {
+                const camera = new pc.Entity("Camera");
+                camera.addComponent("camera", {
                     clearColor: new pc.Color(0.1, 0.1, 0.1, 1.0),
                     fov: 75,
                     nearClip: 0.1,
-                    farClip: 1000
+                    farClip: 1000,
                 });
                 camera.setPosition(0, 2, 5);
                 app.root.addChild(camera);
@@ -247,12 +260,12 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                 cameraControlsRef.current = cameraControls;
 
                 // Create light
-                const light = new pc.Entity('DirectionalLight');
-                light.addComponent('light', {
-                    type: 'directional',
+                const light = new pc.Entity("DirectionalLight");
+                light.addComponent("light", {
+                    type: "directional",
                     color: new pc.Color(1, 1, 1),
                     intensity: 1,
-                    castShadows: false
+                    castShadows: false,
                 });
                 light.setEulerAngles(45, 30, 0);
                 app.root.addChild(light);
@@ -262,17 +275,22 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                     if (canvas && containerRef.current) {
                         const rect = containerRef.current.getBoundingClientRect();
                         const pixelRatio = window.devicePixelRatio || 1;
-                        
+
                         // Update canvas size
                         canvas.width = rect.width * pixelRatio;
                         canvas.height = rect.height * pixelRatio;
-                        canvas.style.width = rect.width + 'px';
-                        canvas.style.height = rect.height + 'px';
-                        
+                        canvas.style.width = rect.width + "px";
+                        canvas.style.height = rect.height + "px";
+
                         // Update PlayCanvas graphics device
                         app.graphicsDevice.setResolution(canvas.width, canvas.height);
-                        
-                        console.log("PlayCanvas Gaussian Splat Viewer: Resized to", canvas.width, "x", canvas.height);
+
+                        console.log(
+                            "PlayCanvas Gaussian Splat Viewer: Resized to",
+                            canvas.width,
+                            "x",
+                            canvas.height
+                        );
                     }
                 };
 
@@ -301,30 +319,34 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                 });
 
                 if (response && Array.isArray(response) && response[0] !== false) {
-                    console.log("PlayCanvas Gaussian Splat Viewer: Asset URL retrieved, downloading asset...");
+                    console.log(
+                        "PlayCanvas Gaussian Splat Viewer: Asset URL retrieved, downloading asset..."
+                    );
                     // Keep "Downloading asset..." message since the actual download happens in pc.Asset
-                    
+
                     try {
                         const assetUrl = response[1]; // URL from downloadAsset
                         const filename = assetKey || assetId;
-                        
+
                         // Create PlayCanvas asset
-                        const asset = new pc.Asset(filename, 'gsplat', {
+                        const asset = new pc.Asset(filename, "gsplat", {
                             url: assetUrl,
-                            filename: filename
+                            filename: filename,
                         });
 
                         // Load the asset
                         asset.ready(() => {
                             try {
-                                console.log("PlayCanvas Gaussian Splat Viewer: Asset ready, creating entity");
-                                
+                                console.log(
+                                    "PlayCanvas Gaussian Splat Viewer: Asset ready, creating entity"
+                                );
+
                                 // Create entity with Gaussian Splat component
-                                const entity = new pc.Entity('GaussianSplat');
-                                
+                                const entity = new pc.Entity("GaussianSplat");
+
                                 // Add GSplat component
-                                entity.addComponent('gsplat', {
-                                    asset: asset
+                                entity.addComponent("gsplat", {
+                                    asset: asset,
                                 });
 
                                 // Set initial rotation for proper orientation
@@ -334,8 +356,12 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                                 app.root.addChild(entity);
 
                                 // Set up automatic sorting updates
-                                if (entity.gsplat && entity.gsplat.instance && entity.gsplat.instance.sorter) {
-                                    entity.gsplat.instance.sorter.on('updated', () => {
+                                if (
+                                    entity.gsplat &&
+                                    entity.gsplat.instance &&
+                                    entity.gsplat.instance.sorter
+                                ) {
+                                    entity.gsplat.instance.sorter.on("updated", () => {
                                         // console.log("PlayCanvas Gaussian Splat Viewer: Splat sorting updated");
                                     });
                                 }
@@ -345,34 +371,42 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
                                 camera.setPosition(distance, distance * 0.5, distance);
                                 camera.lookAt(0, 0, 0);
 
-                                console.log("PlayCanvas Gaussian Splat Viewer: Gaussian Splat loaded successfully");
-                                
+                                console.log(
+                                    "PlayCanvas Gaussian Splat Viewer: Gaussian Splat loaded successfully"
+                                );
+
                                 // Hide loading indicator
                                 setIsLoading(false);
-                                
                             } catch (error) {
-                                console.error("PlayCanvas Gaussian Splat Viewer: Error creating GSplat entity:", error);
+                                console.error(
+                                    "PlayCanvas Gaussian Splat Viewer: Error creating GSplat entity:",
+                                    error
+                                );
                                 setIsLoading(false); // Hide loading on error
                             }
                         });
 
-                        asset.on('error', (err: string) => {
-                            console.error("PlayCanvas Gaussian Splat Viewer: Asset loading error:", err);
+                        asset.on("error", (err: string) => {
+                            console.error(
+                                "PlayCanvas Gaussian Splat Viewer: Asset loading error:",
+                                err
+                            );
                             setIsLoading(false); // Hide loading on error
                         });
 
                         app.assets.add(asset);
                         app.assets.load(asset);
-                        
                     } catch (error) {
-                        console.error("PlayCanvas Gaussian Splat Viewer: Error processing asset:", error);
+                        console.error(
+                            "PlayCanvas Gaussian Splat Viewer: Error processing asset:",
+                            error
+                        );
                         setIsLoading(false); // Hide loading on error
                     }
                 } else {
                     console.error("PlayCanvas Gaussian Splat Viewer: Failed to download asset");
                     setIsLoading(false); // Hide loading on error
                 }
-
             } catch (error) {
                 console.error("PlayCanvas Gaussian Splat Viewer: Initialization error:", error);
                 setIsLoading(false); // Hide loading on error
@@ -384,7 +418,7 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
         // Cleanup function
         return () => {
             console.log("PlayCanvas Gaussian Splat Viewer: Cleaning up");
-            
+
             // Clean up camera controls event listeners
             if (cameraControlsRef.current && cameraControlsRef.current.destroy) {
                 cameraControlsRef.current.destroy();
@@ -393,13 +427,13 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
     }, [assetKey, assetId, databaseId, versionId]);
 
     return (
-        <div 
+        <div
             ref={containerRef}
-            style={{ 
-                width: "100%", 
-                height: "100%", 
+            style={{
+                width: "100%",
+                height: "100%",
                 backgroundColor: "#1a1a1a",
-                position: "relative"
+                position: "relative",
             }}
             onWheel={(e) => {
                 e.preventDefault();
@@ -407,22 +441,22 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
             }}
         >
             {/* Loading overlay */}
-            {isLoading && (
-                <LoadingSpinner message={loadingMessage} />
-            )}
-            
+            {isLoading && <LoadingSpinner message={loadingMessage} />}
+
             {/* Info Panel */}
-            <div style={{
-                position: "absolute",
-                top: "10px",
-                right: "10px",
-                color: "white",
-                fontSize: "12px",
-                backgroundColor: "rgba(0,0,0,0.7)",
-                padding: "8px",
-                borderRadius: "4px",
-                zIndex: 1000
-            }}>
+            <div
+                style={{
+                    position: "absolute",
+                    top: "10px",
+                    right: "10px",
+                    color: "white",
+                    fontSize: "12px",
+                    backgroundColor: "rgba(0,0,0,0.7)",
+                    padding: "8px",
+                    borderRadius: "4px",
+                    zIndex: 1000,
+                }}
+            >
                 PlayCanvas Gaussian Splat Viewer
                 <br />
                 Mouse: Rotate | Wheel: Zoom | Right-click: Pan

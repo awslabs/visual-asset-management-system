@@ -256,6 +256,8 @@ export class CoreVAMSStack extends cdk.Stack {
                     vpceSecurityGroup: this.vpceSecurityGroup,
                     isolatedSubnets: this.subnetsIsolated,
                     privateSubnets: this.subnetsPrivate,
+                    importGlobalPipelineWorkflowFunctionName:
+                        apiBuilderNestedStack.importGlobalPipelineWorkflowFunctionName,
                 }
             );
             pipelineBuilderNestedStack.addDependency(storageResourcesNestedStack);
@@ -287,6 +289,16 @@ export class CoreVAMSStack extends cdk.Stack {
                 value: `${apiNestedStack.apiEndpoint}`,
                 description: "API Gateway endpoint",
             });
+
+            const importGlobalPipelineWorkflowFunctionNameOutput = new cdk.CfnOutput(
+                this,
+                "ImportGlobalPipelineWorkflowFunctionNameOutput",
+                {
+                    value: apiBuilderNestedStack.importGlobalPipelineWorkflowFunctionName,
+                    description:
+                        "Lambda function name for importing global pipelines and workflows from IaC deployments",
+                }
+            );
 
             let useCasefunctionNumber = 1;
             for (const pipelineVamsExecuteLambdaFunction of pipelineBuilderNestedStack.pipelineVamsLambdaFunctionNames) {

@@ -19,13 +19,13 @@ import {
 } from "@cloudscape-design/components";
 import { useLocation, useParams } from "react-router";
 
-import ControlledMetadata from "../metadata/ControlledMetadata";
+import FileMetadata from "../metadata/FileMetadata";
 import { fetchAsset } from "../../services/APIService";
 import { FileVersionsTable } from "../filemanager/components/FileVersionsTable";
 // File format constants no longer needed - handled by plugin system
 import DynamicViewer from "../../visualizerPlugin/components/DynamicViewer";
 import AssetSelectorWithModal from "../selectors/AssetSelectorWithModal";
-import { ErrorBoundary } from "react-error-boundary";
+
 import Synonyms from "../../synonyms";
 import { HorizontalResizableSplitter } from "../filemanager/components/HorizontalResizableSplitter";
 import "./ViewFile.css";
@@ -432,21 +432,13 @@ export default function ViewFile() {
 
                                                 {/* Metadata - only show for single file mode and non-archived files */}
                                                 {!isMultiFileMode && (
-                                                    <ErrorBoundary
-                                                        fallback={
-                                                            <div>
-                                                                Metadata failed to load due to an
-                                                                error. Contact your VAMS
-                                                                administrator for help.
-                                                            </div>
-                                                        }
-                                                    >
-                                                        <ControlledMetadata
-                                                            databaseId={databaseId!}
-                                                            assetId={assetId!}
-                                                            prefix={singleFileInfo?.key || ""}
-                                                        />
-                                                    </ErrorBoundary>
+                                                    <FileMetadata
+                                                        databaseId={databaseId!}
+                                                        assetId={assetId!}
+                                                        prefix={singleFileInfo?.key || ""}
+                                                        showHeader={false}
+                                                        className="viewfile-metadata"
+                                                    />
                                                 )}
 
                                                 {/* File Versions Container - only show for single file mode and non-directories */}

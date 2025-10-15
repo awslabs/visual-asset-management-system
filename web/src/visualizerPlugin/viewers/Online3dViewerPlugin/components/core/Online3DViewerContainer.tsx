@@ -13,7 +13,6 @@ import { Toolbar } from "../layout/Toolbar";
 import { ResizableLeftPanel } from "../layout/ResizableLeftPanel";
 import { ResizableRightPanel } from "../layout/ResizableRightPanel";
 import { LoadingOverlay } from "./LoadingOverlay";
-import "./Online3DViewerContainer.css";
 
 // Inner component that uses the context
 const Online3DViewerInner: React.FC<Online3DViewerProps> = ({

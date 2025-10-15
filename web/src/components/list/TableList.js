@@ -342,16 +342,19 @@ export default function TableList(props) {
                     >
                         <div
                             id="textFilterCapture"
-                            style={{ display: "flex", alignItems: "center", gap: "8px" }}
+                            style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "8px",
+                                maxWidth: "100%",
+                            }}
                         >
-                            <div style={{ flex: 1 }}>
-                                <TextFilter
-                                    id={"test"}
-                                    {...filterProps}
-                                    countText={getMatchesCountText(filteredItemsCount)}
-                                    filteringAriaLabel={`Filter ${pluralName}`}
-                                />
-                            </div>
+                            <TextFilter
+                                id={"test"}
+                                {...filterProps}
+                                countText={getMatchesCountText(filteredItemsCount)}
+                                filteringAriaLabel={`Filter ${pluralName}`}
+                            />
                             <Button
                                 iconName="refresh"
                                 variant="icon"

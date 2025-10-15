@@ -5,7 +5,7 @@
 
 import React from "react";
 import ListDefinition from "./types/ListDefinition";
-import { Badge, Link, StatusIndicator } from "@cloudscape-design/components";
+import { Badge, Link, StatusIndicator, Popover } from "@cloudscape-design/components";
 import ColumnDefinition from "./types/ColumnDefinition";
 import Synonyms from "../../../synonyms";
 
@@ -67,6 +67,8 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
             header: "Description",
             cellWrapper: (props) => {
                 const { item } = props;
+                const MAX_LENGTH = 100;
+
                 if (!item.description) {
                     if (!item.workflowId) {
                         if (
@@ -103,7 +105,26 @@ export const WorkflowExecutionListDefinition = new ListDefinition({
                     }
                     return <></>;
                 }
-                return <>{item?.description}</>;
+
+                const description = item?.description || "";
+
+                // If description is longer than MAX_LENGTH, truncate and add tooltip
+                if (description.length > MAX_LENGTH) {
+                    const truncated = description.substring(0, MAX_LENGTH) + "...";
+                    return (
+                        <Popover
+                            dismissButton={false}
+                            position="top"
+                            size="large"
+                            triggerType="text"
+                            content={description}
+                        >
+                            {truncated}
+                        </Popover>
+                    );
+                }
+
+                return <>{description}</>;
             },
             sortingField: "description",
         }),

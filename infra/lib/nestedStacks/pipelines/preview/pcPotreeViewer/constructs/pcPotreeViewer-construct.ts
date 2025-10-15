@@ -34,6 +34,7 @@ import { Service } from "../../../../../helper/service-helper";
 import * as Config from "../../../../../../config/config";
 import { generateUniqueNameHash } from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
+import * as cr from "aws-cdk-lib/custom-resources";
 
 export interface PcPotreeViewerConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -42,6 +43,7 @@ export interface PcPotreeViewerConstructProps extends cdk.StackProps {
     pipelineSubnets: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: LayerVersion;
+    importGlobalPipelineWorkflowFunctionName: string;
 }
 
 /**
@@ -476,6 +478,55 @@ export class PcPotreeViewerConstruct extends NestedStack {
             }
 
             index = index + 1;
+        }
+
+        // Create custom resource to automatically register pipeline and workflow
+        if (props.config.app.pipelines.usePreviewPcPotreeViewer.autoRegisterWithVAMS === true) {
+            const importFunction = lambda.Function.fromFunctionArn(
+                this,
+                "ImportFunction",
+                `arn:aws:lambda:${region}:${account}:function:${props.importGlobalPipelineWorkflowFunctionName}`
+            );
+
+            const importProvider = new cr.Provider(this, "ImportProvider", {
+                onEventHandler: importFunction,
+            });
+            const currentTimestamp = new Date().toISOString();
+
+            // Register E57, LAZ, LAS, PLY point cloud preview pipeline and workflow
+            new cdk.CustomResource(this, "PreviewPcPotreeViewerLasPipelineWorkflow", {
+                serviceToken: importProvider.serviceToken,
+                properties: {
+                    timestamp: currentTimestamp,
+                    pipelineId: "preview-pc-potree-viewer-las-laz-e57-ply",
+                    pipelineDescription:
+                        "PotreeViewer Point Cloud Preview Pipeline - LAZ, LAS, E57, and PLY files using PDAL and PotreeConverter",
+                    pipelineType: "previewFile",
+                    pipelineExecutionType: "Lambda",
+                    assetType: ".all",
+                    outputType: ".octree",
+                    waitForCallback: "Enabled", // Asynchronous pipeline
+                    lambdaName: PcPotreeViewerPipelineVamsExecuteFunction.functionName,
+                    taskTimeout: "14400", // 4 hours
+                    taskHeartbeatTimeout: "",
+                    inputParameters: "",
+                    workflowId: "preview-pc-potree-viewer-las-laz-e57-ply",
+                    workflowDescription:
+                        "Automated workflow for LAZ, LAS, E57, and PLY point cloud preview generation using PotreeViewer Pipeline",
+                },
+            });
+
+            //Nag supression
+            NagSuppressions.addResourceSuppressions(
+                importProvider,
+                [
+                    {
+                        id: "AwsSolutions-IAM5",
+                        reason: "* Wildcard permissions needed for pipelineWorkflow lambda import and execution for custom resource",
+                    },
+                ],
+                true
+            );
         }
 
         //Output VAMS Pipeline Execution Function name

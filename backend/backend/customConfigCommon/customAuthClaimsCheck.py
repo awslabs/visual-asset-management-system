@@ -28,8 +28,6 @@ def customMFATokenScopeCheckOverride(user, lambdaRequest):
                 authorizerJwt = lambdaRequest['requestContext']['authorizer']['jwt']['claims']
             elif 'lambda' in lambdaRequest['requestContext']['authorizer']:
                 authorizerJwt = lambdaRequest['requestContext']['authorizer']['lambda']
-            elif 'lambdaCrossCall' in lambdaRequest:
-                authorizerJwt = lambdaRequest['lambdaCrossCall']
             else:
                 authorizerJwt = None
 

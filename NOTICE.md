@@ -106,11 +106,12 @@ This software includes third party software subject to the following copyrights:
 
 Python Libraries
 
-| Name    | Version | Related Pipeline             | License                |
-| ------- | ------- | ---------------------------- | ---------------------- |
-| pillow  | 10.3.0  | GENAI 3D METADATA GENERATION | HPND--MIT/3-Clause-BSD |
-| NumPy   | latest  | MULTIPLE                     | BSD-3-Clause           |
-| TriMesh | latest  | CONVERSION 3D BASIC          | MIT License            |
+| Name     | Version | Related Pipeline             | License                     |
+| -------- | ------- | ---------------------------- | --------------------------- |
+| pillow   | 10.3.0  | GENAI 3D METADATA GENERATION | HPND--MIT/3-Clause-BSD      |
+| NumPy    | latest  | MULTIPLE                     | BSD-3-Clause                |
+| TriMesh  | latest  | CONVERSION 3D BASIC          | MIT License                 |
+| CadQuery | latest  | METADATA EXTRACTION          | Apache 2.0/LGPL-2.1 LICENSE |
 
 Other Libraries (Use-case Pipelines)
 
@@ -120,12 +121,9 @@ Other Libraries (Use-case Pipelines)
 | PotreeConverter | [potreeconverter@develop-latest] (https://github.com/potree/PotreeConverter) | POTREE VIEWER                | BSD-2-Clause |
 | Blender         | [blender@master-latest] (https://github.com/blender)                         | GENAI 3D METADATA GENERATION | GNU GPLv3    |
 
-Third Party Products
-
-| Name                       | Version                                                                                                              | Related Pipeline | Licenses |
-| :------------------------- | :------------------------------------------------------------------------------------------------------------------- | :--------------- | :------- |
-| RapidPipeline 3D Processor | [0.0.4](https://aws.amazon.com/marketplace/pp/prodview-zdg4blxeviyyi?sr=0-1&ref_=beagle&applicationId=AWSMPContessa) | RAPID PIPELINE   | Custom   |
+Third Party AWS Marketplace Products (Use-case Pipelines)
 
 | Name                          | Version                                                                                                              | Related Pipeline | Licenses                                                                                                            |
 | :---------------------------- | :------------------------------------------------------------------------------------------------------------------- | :--------------- | :------------------------------------------------------------------------------------------------------------------ |
+| RapidPipeline 3D Processor    | [0.0.4](https://aws.amazon.com/marketplace/pp/prodview-zdg4blxeviyyi?sr=0-1&ref_=beagle&applicationId=AWSMPContessa) | RAPID PIPELINE   | Custom                                                                                                              |
 | VNTANA 3D Optimization Engine | [1.0.0](https://aws.amazon.com/marketplace/pp/prodview-ooio3bidshgy4?applicationId=AWSMPContessa&ref_=beagle&sr=0-1) | MODEL OPS        | [EULA](https://aws.amazon.com/marketplace/pp/prodview-ooio3bidshgy4?applicationId=AWSMPContessa&ref_=beagle&sr=0-1) |

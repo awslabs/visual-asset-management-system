@@ -235,9 +235,8 @@ i[class*=" icon-"]:before {
     src: url("../../assets/Quicksand-Regular-K32YVORR.ttf");
 }
 
-/* Core styles from core.css */
-html,
-body {
+/* Core styles from core.css - SCOPED to .ov-container to prevent global pollution */
+.ov-container {
     color: var(--ov_foreground_color);
     background: var(--ov_background_color);
     font-size: 16px;
@@ -246,28 +245,28 @@ body {
     height: 100%;
     margin: 0px;
     padding: 0px;
-    overflow: hidden;
+    /* REMOVED overflow: hidden to prevent scrollbar issues on parent page */
 }
 
-a {
+.ov-container a {
     color: var(--ov_button_color);
     text-decoration: none;
 }
 
-.only_on_model {
+.ov-container .only_on_model {
     display: var(--ov_only_on_model_display);
 }
 
-input,
-select,
-textarea {
+.ov-container input,
+.ov-container select,
+.ov-container textarea {
     font-family: Quicksand, Helvetica, sans-serif;
     font-size: 16px;
     outline: none;
 }
 
 @media (max-width: 800px) {
-    .only_full_width {
+    .ov-container .only_full_width {
         display: none;
     }
 }

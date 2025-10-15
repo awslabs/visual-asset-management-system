@@ -621,6 +621,293 @@ Two additional settings enable your job to end with a timeout error by defining 
 
 If you would like your job check in to show that it is still running and fail the step if it does not check in within some amount of time less than the task timeout, define the Task Heartbeat Timeout on the create pipeline screen also. If more time than the specified seconds elapses between heartbeats from the task, this state fails with a States.Timeout error name.
 
+### Registering Pipelines in CDK
+
+VAMS provides an automated pipeline registration system that allows you to register your custom pipelines and workflows directly during CDK deployment. This eliminates the need for manual pipeline registration through the UI and ensures your pipelines are available immediately after deployment.
+
+#### Overview
+
+The pipeline registration system uses CloudFormation custom resources to automatically:
+
+-   Register new pipelines in the global VAMS database
+-   Create associated workflows for pipeline execution
+-   Configure pipeline parameters and execution settings
+-   Handle pipeline updates and cleanup during stack operations
+
+#### Prerequisites
+
+Before registering a pipeline, ensure:
+
+1. Your pipeline Lambda function name contains "vams" (required for `executeWorkflow` permissions)
+2. Your pipeline Lambda function is properly configured with required environment variables
+3. The `autoRegisterWithVAMS` configuration flag is enabled for your pipeline
+
+#### Configuration Setup
+
+First, enable automatic registration in your pipeline configuration in `config.json`:
+
+```json
+{
+    "app": {
+        "pipelines": {
+            "useYourPipeline": {
+                "enabled": true,
+                "autoRegisterWithVAMS": true
+            }
+        }
+    }
+}
+```
+
+#### CDK Implementation
+
+##### In Your VAMS Pipeline Construct
+
+Add the custom resource registration logic to your pipeline construct:
+
+```typescript
+import * as cdk from "aws-cdk-lib";
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as cr from "aws-cdk-lib/custom-resources";
+
+export interface YourPipelineConstructProps extends cdk.StackProps {
+    config: Config.Config;
+    storageResources: storageResources;
+    vpc: ec2.IVpc;
+    pipelineSubnets: ec2.ISubnet[];
+    pipelineSecurityGroups: ec2.ISecurityGroup[];
+    lambdaCommonBaseLayer: LayerVersion;
+    importGlobalPipelineWorkflowFunctionName: string;
+}
+
+export class YourPipelineConstruct extends Construct {
+    constructor(scope: Construct, id: string, props: YourPipelineConstructProps) {
+        super(scope, id);
+
+        // Create your pipeline Lambda function
+        const yourPipelineFunction = new lambda.Function(this, "YourPipelineFunction", {
+            // Function configuration
+            functionName: "your-vams-pipeline-function", // Must contain "vams"
+            // ... other configuration
+        });
+
+        // Create custom resource to automatically register pipeline and workflow
+        if (props.config?.app?.pipelines?.useYourPipeline?.autoRegisterWithVAMS === true) {
+            const region = cdk.Stack.of(this).region;
+            const account = cdk.Stack.of(this).account;
+
+            const importFunction = lambda.Function.fromFunctionArn(
+                this,
+                "ImportFunction",
+                `arn:aws:lambda:${region}:${account}:function:${props.importGlobalPipelineWorkflowFunctionName}`
+            );
+
+            const importProvider = new cr.Provider(this, "ImportProvider", {
+                onEventHandler: importFunction,
+            });
+
+            const currentTimestamp = new Date().toISOString();
+
+            // Register your pipeline and workflow
+            new cdk.CustomResource(this, "YourPipelineWorkflow", {
+                serviceToken: importProvider.serviceToken,
+                properties: {
+                    timestamp: currentTimestamp, // Forces re-execution on every deployment
+                    pipelineId: "your-custom-pipeline-id",
+                    pipelineDescription: "Description of your custom pipeline",
+                    pipelineType: "standardFile", // or "previewFile"
+                    pipelineExecutionType: "Lambda",
+                    assetType: ".input-extension", // e.g., ".obj", ".gltf"
+                    outputType: ".output-extension", // e.g., ".glb", ".usdz"
+                    waitForCallback: "Enabled", // "Enabled" for async, "Disabled" for sync
+                    lambdaName: yourPipelineFunction.functionName,
+                    taskTimeout: "3600", // Optional: timeout in seconds (max 86400)
+                    taskHeartbeatTimeout: "300", // Optional: heartbeat timeout (max 3600)
+                    inputParameters: JSON.stringify({
+                        // Optional: pipeline-specific parameters
+                        customParam1: "value1",
+                        customParam2: "value2",
+                    }),
+                    workflowId: "your-custom-workflow-id",
+                    workflowDescription: "Description of your custom workflow",
+                },
+            });
+        }
+    }
+}
+```
+
+#### Separate CDK Project Integration
+
+If you're developing your pipeline in a separate CDK project, you can still use the VAMS registration system by importing the Lambda function name:
+
+##### 1. External CDK Project Setup
+
+```typescript
+import * as cdk from "aws-cdk-lib";
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as cr from "aws-cdk-lib/custom-resources";
+
+export class ExternalPipelineStack extends cdk.Stack {
+    constructor(scope: Construct, id: string, props: cdk.StackProps) {
+        super(scope, id, props);
+
+        // Your pipeline Lambda function
+        const myPipelineFunction = new lambda.Function(this, "MyPipelineFunction", {
+            functionName: "my-external-vams-pipeline", // Must contain "vams"
+            runtime: lambda.Runtime.PYTHON_3_12,
+            handler: "index.handler",
+            code: lambda.Code.fromAsset("./lambda"),
+            timeout: cdk.Duration.minutes(15),
+        });
+
+        // Import the VAMS registration function (replace with actual ARN)
+        const vamsImportFunction = lambda.Function.fromFunctionArn(
+            this,
+            "VamsImportFunction",
+            "arn:aws:lambda:us-east-1:123456789012:function:your-vams-stack-importGlobalPipelineWorkflow"
+        );
+
+        const importProvider = new cr.Provider(this, "VamsImportProvider", {
+            onEventHandler: vamsImportFunction,
+        });
+
+        const currentTimestamp = new Date().toISOString();
+
+        // Register with VAMS
+        new cdk.CustomResource(this, "RegisterWithVams", {
+            serviceToken: importProvider.serviceToken,
+            properties: {
+                timestamp: currentTimestamp,
+                pipelineId: "external-pipeline-id",
+                pipelineDescription: "External pipeline for custom processing",
+                pipelineType: "standardFile",
+                pipelineExecutionType: "Lambda",
+                assetType: ".custom",
+                outputType: ".processed",
+                waitForCallback: "Enabled",
+                lambdaName: myPipelineFunction.functionName,
+                taskTimeout: "7200",
+                taskHeartbeatTimeout: "600",
+                inputParameters: JSON.stringify({
+                    processingMode: "advanced",
+                    quality: "high",
+                }),
+                workflowId: "external-workflow-id",
+                workflowDescription: "External workflow for custom processing",
+            },
+        });
+    }
+}
+```
+
+##### 2. Finding the VAMS Import Function ARN
+
+To find the import function ARN from your VAMS deployment:
+
+```bash
+# List Lambda functions to find the import function
+aws lambda list-functions --query 'Functions[?contains(FunctionName, `importGlobalPipelineWorkflow`)].FunctionArn'
+
+# Or use CDK outputs if available
+aws cloudformation describe-stacks --stack-name your-vams-stack-name --query 'Stacks[0].Outputs[?contains(OutputKey, `ImportFunction`)].OutputValue'
+```
+
+#### Custom Resource Properties
+
+The custom resource accepts the following properties:
+
+##### Required Properties
+
+| Property                | Type   | Description                                        | Example                              |
+| ----------------------- | ------ | -------------------------------------------------- | ------------------------------------ |
+| `timestamp`             | string | Current timestamp to force re-execution            | `new Date().toISOString()`           |
+| `pipelineId`            | string | Unique pipeline identifier (3-63 chars)            | `"my-custom-pipeline"`               |
+| `pipelineDescription`   | string | Human-readable pipeline description                | `"Custom 3D model processor"`        |
+| `pipelineType`          | string | Pipeline type: `"standardFile"` or `"previewFile"` | `"standardFile"`                     |
+| `pipelineExecutionType` | string | Execution type: `"Lambda"`                         | `"Lambda"`                           |
+| `assetType`             | string | Input file extension                               | `".obj"`                             |
+| `outputType`            | string | Output file extension                              | `".glb"`                             |
+| `waitForCallback`       | string | Async mode: `"Enabled"` or `"Disabled"`            | `"Enabled"`                          |
+| `lambdaName`            | string | Lambda function name (must contain "vams")         | `"my-vams-pipeline-function"`        |
+| `workflowId`            | string | Unique workflow identifier                         | `"my-custom-workflow"`               |
+| `workflowDescription`   | string | Human-readable workflow description                | `"Automated 3D processing workflow"` |
+
+##### Optional Properties
+
+| Property               | Type   | Description                        | Range      | Default      |
+| ---------------------- | ------ | ---------------------------------- | ---------- | ------------ |
+| `taskTimeout`          | string | Task timeout in seconds            | 1-86400    | No timeout   |
+| `taskHeartbeatTimeout` | string | Heartbeat timeout in seconds       | 1-3600     | No heartbeat |
+| `inputParameters`      | string | JSON string of pipeline parameters | Valid JSON | `"{}"`       |
+
+#### Lambda Function Naming Requirements
+
+**Critical**: Your pipeline Lambda function name MUST contain "vams" to ensure proper permissions for the `executeWorkflow` system to invoke your pipeline. Examples of valid names:
+
+-   ✅ `my-vams-pipeline-function`
+-   ✅ `vams-custom-processor`
+-   ✅ `image-vams-converter`
+-   ❌ `my-pipeline-function` (missing "vams")
+-   ❌ `custom-processor` (missing "vams")
+
+#### Pipeline Types
+
+-   **`standardFile`**: Processes input files and produces output files
+-   **`previewFile`**: Generates preview/thumbnail files for visualization
+
+#### Execution Modes
+
+-   **`waitForCallback: "Enabled"`**: Asynchronous execution using Step Functions task tokens
+    -   Use for long-running processes (>15 minutes)
+    -   Requires calling `SendTaskSuccess` or `SendTaskFailure`
+    -   More cost-effective for long processes
+-   **`waitForCallback: "Disabled"`**: Synchronous execution
+    -   Use for quick processes (<15 minutes)
+    -   Lambda function must complete within timeout
+    -   Simpler implementation
+
+#### Error Handling
+
+The registration system includes comprehensive error handling:
+
+-   **Validation Errors**: Invalid parameters are caught during deployment
+-   **Registration Failures**: Failed registrations are logged and reported
+-   **Cleanup**: Pipelines are automatically cleaned up when stacks are destroyed
+-   **Idempotency**: Re-deployments update existing pipelines safely
+
+#### Troubleshooting
+
+##### Common Issues
+
+1. **Permission Denied**: Ensure your Lambda function name contains "vams"
+2. **Validation Errors**: Check that all required properties are provided and valid
+3. **Import Function Not Found**: Verify the import function ARN is correct
+4. **Registration Timeout**: Check CloudWatch logs for the import function
+
+##### Debugging Steps
+
+1. Check CloudFormation events for custom resource status
+2. Review CloudWatch logs for the import function
+3. Verify pipeline configuration in VAMS UI after deployment
+4. Test pipeline execution through VAMS workflows
+
+##### Log Locations
+
+-   **Import Function Logs**: `/aws/lambda/your-stack-importGlobalPipelineWorkflow`
+-   **Pipeline Function Logs**: `/aws/lambda/your-pipeline-function-name`
+-   **CloudFormation Events**: CloudFormation console → Stack → Events
+
+#### Best Practices
+
+1. **Use Descriptive IDs**: Make pipeline and workflow IDs descriptive and unique
+2. **Version Your Pipelines**: Include version information in descriptions
+3. **Test Locally**: Test your pipeline logic before deploying
+4. **Monitor Execution**: Set up CloudWatch alarms for pipeline failures
+5. **Document Parameters**: Clearly document `inputParameters` structure
+6. **Use Appropriate Timeouts**: Set realistic timeout values based on processing time
+7. **Handle Errors Gracefully**: Implement proper error handling in your pipeline code
+
 ### Special Configurations
 
 #### Static WebApp - ALB w/ Manual VPC Interface Endpoint Creation
@@ -987,6 +1274,205 @@ def lambda_handler(event, context):
     }
 ```
 
+## Outputting Metadata from Pipelines
+
+Pipelines can generate and output metadata that will be automatically added to VAMS assets. This is useful for pipelines that analyze assets and extract information such as labels, dimensions, quality metrics, or other computed properties.
+
+### Metadata Output Location
+
+Metadata files should be written to the `outputS3AssetMetadataPath` provided in the pipeline event payload. This path is unique for each pipeline execution and is automatically processed after the pipeline completes.
+
+### Metadata File Format
+
+Metadata files must be JSON files with the naming pattern `*_metadata.json`. VAMS supports two types of metadata files:
+
+#### 1. Root Asset Metadata (`asset_metadata.json`)
+
+This file adds metadata to the root asset itself. Place a file named `asset_metadata.json` at the root of the metadata output path.
+
+**Example:**
+
+```json
+{
+    "processingDate": "2024-01-15T10:30:00Z",
+    "pipelineVersion": "1.2.3",
+    "qualityScore": "95",
+    "dimensions": {
+        "width": 1024,
+        "height": 768,
+        "depth": 512
+    },
+    "tags": ["processed", "optimized", "validated"]
+}
+```
+
+#### 2. File-Level Metadata (`{filename}_metadata.json`)
+
+These files add metadata to specific files within the asset. The metadata filename should match the target file with `_metadata.json` appended.
+
+**Example:** For a file at `/folder1/folder2/model.glb`, create `/folder1/folder2/model.glb_metadata.json`
+
+```json
+{
+    "fileSize": "2048576",
+    "triangleCount": "15000",
+    "textureResolution": "2048x2048",
+    "materialCount": "3",
+    "processingTime": "45.2"
+}
+```
+
+### Metadata Field Processing
+
+VAMS processes metadata fields according to the following rules:
+
+1. **String Fields**: Added as-is to the metadata
+
+    ```json
+    {
+        "author": "John Doe",
+        "version": "1.0"
+    }
+    ```
+
+2. **List Fields**: If all elements are strings, joined with commas; otherwise converted to JSON string
+
+    ```json
+    {
+        "tags": ["tag1", "tag2", "tag3"], // Becomes: "tag1,tag2,tag3"
+        "coordinates": [1.5, 2.3, 4.1] // Becomes: "[1.5, 2.3, 4.1]"
+    }
+    ```
+
+3. **Dictionary Fields**: Converted to JSON string (supports any nesting level)
+
+    ```json
+    {
+        "dimensions": {
+            "width": 1024,
+            "height": 768,
+            "units": "pixels"
+        }
+        // Becomes: "{\"width\": 1024, \"height\": 768, \"units\": \"pixels\"}"
+    }
+    ```
+
+4. **Reserved Fields**: `assetId` and `databaseId` fields are automatically excluded
+
+### Metadata Behavior
+
+-   **New Metadata**: If no metadata exists for the asset/file, a new metadata entry is created with:
+
+    -   `databaseId`: The database ID of the asset
+    -   `assetId`: The asset ID (for root) or full file path (for file-level)
+    -   `_metadata_last_updated`: Current timestamp
+
+-   **Existing Metadata**: If metadata already exists:
+
+    -   New fields are added
+    -   Existing fields are overwritten with new values
+    -   `_metadata_last_updated` is updated to current timestamp
+
+-   **File-Level Metadata Storage**: File-level metadata is stored with the full file path as the `assetId`:
+    -   Format: `/{assetId}/folder1/folder2/filename.ext`
+    -   Example: `/x1c688932-ad0f-49c0-971d-578939126947/models/building.glb`
+
+### Example Pipeline Implementation
+
+Here's an example of a pipeline that generates both root and file-level metadata:
+
+```python
+import json
+import boto3
+from datetime import datetime
+
+s3_client = boto3.client('s3')
+
+def lambda_handler(event, context):
+    # Parse event
+    body = json.loads(event['body']) if isinstance(event['body'], str) else event['body']
+
+    input_file = body['inputS3AssetFilePath']
+    metadata_path = body['outputS3AssetMetadataPath']
+
+    # Extract bucket and key from S3 URI
+    bucket = metadata_path.split('/')[2]
+    base_key = '/'.join(metadata_path.split('/')[3:])
+
+    # Generate root asset metadata
+    root_metadata = {
+        "processingDate": datetime.now().isoformat(),
+        "pipelineType": "analysis",
+        "status": "completed",
+        "metrics": {
+            "processingTime": 12.5,
+            "confidence": 0.95
+        }
+    }
+
+    # Write root metadata
+    s3_client.put_object(
+        Bucket=bucket,
+        Key=f"{base_key}/asset_metadata.json",
+        Body=json.dumps(root_metadata),
+        ContentType='application/json'
+    )
+
+    # Generate file-level metadata for a specific file
+    file_metadata = {
+        "analyzed": "true",
+        "fileType": "3D Model",
+        "vertexCount": "25000",
+        "faceCount": "15000"
+    }
+
+    # Write file-level metadata
+    # For a file at /models/building.glb, create /models/building.glb_metadata.json
+    s3_client.put_object(
+        Bucket=bucket,
+        Key=f"{base_key}/models/building.glb_metadata.json",
+        Body=json.dumps(file_metadata),
+        ContentType='application/json'
+    )
+
+    return {
+        'statusCode': 200,
+        'body': json.dumps({'message': 'Metadata generated successfully'})
+    }
+```
+
+### Best Practices
+
+1. **Use Descriptive Field Names**: Choose clear, meaningful field names that describe the metadata
+2. **Include Timestamps**: Add processing timestamps to track when metadata was generated
+3. **Validate JSON**: Ensure all metadata files are valid JSON before writing to S3
+4. **Handle Errors Gracefully**: Metadata generation failures shouldn't cause pipeline failures
+5. **Document Metadata Schema**: Document what metadata fields your pipeline generates
+6. **Use Appropriate Data Types**: Use strings for text, numbers for metrics, objects for structured data
+7. **Avoid Reserved Fields**: Don't use `assetId` or `databaseId` as metadata field names
+8. **Keep File Paths Consistent**: Ensure file-level metadata paths match the actual file structure
+
+### Troubleshooting
+
+**Metadata Not Appearing:**
+
+-   Verify files are named with `_metadata.json` suffix
+-   Check that JSON is valid and properly formatted
+-   Ensure files are written to the correct `outputS3AssetMetadataPath`
+-   Review CloudWatch logs for processing errors
+
+**Metadata Overwriting Issues:**
+
+-   Remember that existing metadata fields are overwritten by new values
+-   Use unique field names to avoid unintended overwrites
+-   Check `_metadata_last_updated` timestamp to verify when metadata was last modified
+
+**File-Level Metadata Not Found:**
+
+-   Verify the metadata filename exactly matches the target file with `_metadata.json` appended
+-   Ensure the directory structure in metadata path matches the asset structure
+-   Check that the file exists in the asset before adding metadata
+
 ## Use-case Specific Pipelines - Execution Through VAMS Pipelines
 
 This section describes use-case specific pipelines that can be activated in the infrastructure deployment configuration file `/infra/config/config.json`. These pipelines can be setup through VAMS pipelines and workflows and/or some may be called directly through other triggering mechanisms. See the [Configuration Guide](./ConfigurationGuide.md) for the use-case pipeline configuration options.
@@ -1010,6 +1496,24 @@ NOTE: Pipeline must be registered in VAMS WITHOUT the option of "Wait for Callba
 | Input File Types Supported                                       | Base Lambda Function Name    |
 | :--------------------------------------------------------------- | :--------------------------- |
 | STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ (3D Meshes) | vamsExecute3dBasicConversion |
+
+### Standard Type - Mesh/CAD Metadata Extraction Pipeline (Synchronous)
+
+The Mesh/CAD Metadata Extraction Pipeline is used to extract basic metadata attributes from CAD and mesh files and output them as file-level metadata.
+
+If you wish to trigger this pipeline additionally/manually through VAMS pipeline, you can setup a new VAMS pipeline using the table below. You will need to lookup the lambda function name in the AWS console based on the base deployment name listed.
+
+The pipeline uses the third-party open-source Trimesh and CADQuery libraries to extract metadata from various 3D file formats. The extracted metadata includes information such as dimensions, vertex/face counts, bounding box information, and other file-specific attributes.
+
+The pipeline automatically detects the file type and applies the appropriate metadata extraction method (CAD vs mesh). The extracted metadata is output as a JSON file to the `outputS3AssetMetadataPath` with the naming pattern `{filename}_metadata.json`, which VAMS automatically processes and adds to the asset's file-level metadata.
+
+There are no defined input parameter configurations for this pipeline. This pipeline ignores inputMetadata as it's not needed for the operation of this pipeline.
+
+NOTE: Pipeline must be registered in VAMS WITHOUT the option of "Wait for Callback with the Task Token"
+
+| Input File Types Supported                                                               | Base Lambda Function Name                    |
+| :--------------------------------------------------------------------------------------- | :------------------------------------------- |
+| STL, OBJ, PLY, GLTF, GLB, 3MF, XAML, 3DXML, DAE, XYZ, STP, DXF (3D Meshes and CAD Files) | vamsExecuteMeshCadMetadataExtractionPipeline |
 
 ### Preview Type - PotreeViewer Point Cloud Visualizer Pipeline (Asynchronous)
 

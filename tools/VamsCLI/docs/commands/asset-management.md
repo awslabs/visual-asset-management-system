@@ -10,15 +10,15 @@ Create a new asset in VAMS.
 
 **Options:**
 
--   `-d, --database-id`: Database ID where the asset will be created (required)
--   `--asset-id`: Specific asset ID (auto-generated if not provided)
--   `--name`: Asset name (required unless using --json-input)
--   `--description`: Asset description (required unless using --json-input)
--   `--distributable/--no-distributable`: Whether the asset is distributable
--   `--tags`: Asset tags (can be used multiple times)
--   `--bucket-key`: Existing S3 bucket key to use
--   `--json-input`: JSON input file path or JSON string with all asset data
--   `--json-output`: Output raw JSON response
+-   `-d, --database-id`: **[REQUIRED]** Database ID where the asset will be created
+-   `--asset-id`: **[OPTIONAL]** Specific asset ID (auto-generated if not provided)
+-   `--name`: **[REQUIRED unless using --json-input]** Asset name
+-   `--description`: **[REQUIRED unless using --json-input]** Asset description
+-   `--distributable/--no-distributable`: **[REQUIRED unless using --json-input]** Whether the asset is distributable
+-   `--tags`: **[OPTIONAL]** Asset tags (can be used multiple times)
+-   `--bucket-key`: **[OPTIONAL]** Existing S3 bucket key to use
+-   `--json-input`: **[OPTIONAL]** JSON input file path or JSON string with all asset data
+-   `--json-output`: **[OPTIONAL]** Output raw JSON response
 
 **Examples:**
 

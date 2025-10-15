@@ -44,7 +44,7 @@ export interface SplatControls {
     fitToScreen: () => void;
 }
 
-export type PlyType = 'splat' | 'pc';
+export type PlyType = "splat" | "pc";
 
 // Settings and configuration specific to Gaussian Splat viewing
 export interface ViewerSettings {

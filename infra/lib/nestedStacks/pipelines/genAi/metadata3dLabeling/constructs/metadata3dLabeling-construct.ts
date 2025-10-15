@@ -31,6 +31,7 @@ import { generateUniqueNameHash } from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { layerBundlingCommand } from "../../../../../helper/lambda";
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as cr from "aws-cdk-lib/custom-resources";
 
 export interface Metadata3dLabelingConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -39,6 +40,7 @@ export interface Metadata3dLabelingConstructProps extends cdk.StackProps {
     pipelineSubnets: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: LayerVersion;
+    importGlobalPipelineWorkflowFunctionName: string;
 }
 
 /**
@@ -422,6 +424,58 @@ export class Metadata3dLabelingConstruct extends NestedStack {
         });
         this.pipelineVamsLambdaFunctionName =
             Metadata3dLabelingPipelineExecuteFunction.functionName;
+
+        // Create custom resource to automatically register pipeline and workflow
+        if (props.config.app.pipelines.useGenAiMetadata3dLabeling.autoRegisterWithVAMS === true) {
+            const importFunction = lambda.Function.fromFunctionArn(
+                this,
+                "ImportFunction",
+                `arn:aws:lambda:${region}:${account}:function:${props.importGlobalPipelineWorkflowFunctionName}`
+            );
+
+            const importProvider = new cr.Provider(this, "ImportProvider", {
+                onEventHandler: importFunction,
+            });
+            const currentTimestamp = new Date().toISOString();
+
+            // Register GLB metadata labeling pipeline and workflow
+            new cdk.CustomResource(this, "GenAiMetadata3dLabelingGlbPipelineWorkflow", {
+                serviceToken: importProvider.serviceToken,
+                properties: {
+                    timestamp: currentTimestamp,
+                    pipelineId: "genai-metadata-3d-labeling-obj-glb-fbx-ply-stl-usd",
+                    pipelineDescription:
+                        "GenAI 3D Metadata Labeling Pipeline (Asset-level metadata generation from file) - 3D Mesh files using Blender Image Extraction. Supported Input Formats: OBJ, GLB/GLTF, FBX, ABC, DAE, PLY, STL, USD",
+                    pipelineType: "standardFile",
+                    pipelineExecutionType: "Lambda",
+                    assetType: ".all",
+                    outputType: ".all",
+                    waitForCallback: "Enabled", // Asynchronous pipeline
+                    lambdaName: Metadata3dLabelingPipelineExecuteFunction.functionName,
+                    taskTimeout: "18000", // 5 hours
+                    taskHeartbeatTimeout: "",
+                    inputParameters: JSON.stringify({
+                        includeAllAssetFileHierarchyFiles: "True",
+                        seedMetadataGenerationWithInputMetadata: "True",
+                    }),
+                    workflowId: "genai-metadata-3d-labeling-obj-glb-fbx-ply-stl-usd",
+                    workflowDescription:
+                        "GenAI 3D Metadata Labeling Pipeline (Asset-level metadata generation from file) - 3D Mesh files using Blender Image Extraction. Supported Input Formats: OBJ, GLB/GLTF, FBX, ABC, DAE, PLY, STL, USD",
+                },
+            });
+
+            //Nag supression
+            NagSuppressions.addResourceSuppressions(
+                importProvider,
+                [
+                    {
+                        id: "AwsSolutions-IAM5",
+                        reason: "* Wildcard permissions needed for pipelineWorkflow lambda import and execution for custom resource",
+                    },
+                ],
+                true
+            );
+        }
 
         //Nag Supressions
         const reason =

@@ -183,6 +183,36 @@ export class AuthBuilderNestedStack extends NestedStack {
             }
         }
 
+        //Deploy DynamoDB system user login profile
+        const awsSdkCallUserSystemUser: AwsSdkCall = {
+            service: "DynamoDB",
+            action: "putItem",
+            parameters: {
+                TableName: props.storageResources.dynamo.userStorageTable.tableName,
+                Item: {
+                    userId: {
+                        S: "SYSTEM_USER",
+                    },
+                    email: {
+                        S: "VAMS_SYSTEM@DO.NOT.REPLY.com",
+                    },
+                    createdOn: {
+                        S: new Date().toISOString(),
+                    },
+                },
+                //ConditionExpression: "attribute_not_exists(userId)",
+            },
+            physicalResourceId: PhysicalResourceId.of(
+                props.storageResources.dynamo.userStorageTable.tableName + `_system_initialization`
+            ),
+        };
+
+        new AwsCustomResource(this, `userStorageTable_system_CustomResource`, {
+            onCreate: awsSdkCallUserSystemUser,
+            onUpdate: awsSdkCallUserSystemUser,
+            role: authDefaultCustomResourceRole,
+        });
+
         //Deploy DynamoDB admin user login profile
         const awsSdkCallUserAdmin: AwsSdkCall = {
             service: "DynamoDB",
