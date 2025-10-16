@@ -522,13 +522,6 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
-    //If using Location services, for now must use cognito due to IDP authenticated role need
-    if (config.app.useLocationService.enabled && !config.app.authProvider.useCognito.enabled) {
-        throw new Error(
-            "Configuration Error: Cannot use location services without using the Cognito authentication method."
-        );
-    }
-
     //API Configuration Error Checks
     if (config.app.api.globalRateLimit <= 0) {
         throw new Error(

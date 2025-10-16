@@ -43,7 +43,7 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
     -   Implemented a new CDK config option in `config.app.openSearch.reindexOnCdkDeploy` that can trigger a complete index clear and re-index of assets and files. This can also be used as CDK context argument `reindexOnCdkDeploy` for the cdk deploy command. Note: Only use this after having CDK deploying at least once with v2.3 changes, otherwise the reindex may not work or error.
     -   A new CDK custom tool section and migration scripts has been added to help manually trigger a reindex outside of a CDK deploy
 -   Maps on the backend and UI frontend is updated to use the new location service APIKey method and removes the older raster map and place functionality
-    -   Note: This removes the last place that cognito identities are used which means the location services functionality can now be used for external IDP solutions
+    -   Note: This removes the last place that cognito identities are used which means the location services functionality can now be used for external IDP solutions. Cognito is no longer required to enable locaiton services. Only requirement now is commercial cloud partition (GovCloud doesn't support APIKey implementation).
     -   Note: This change removes the cognito authenticatedRole and association with the identity pool. Unauthenticated role (no permissions assigned) still remains for now as it is needed for basic auth login by the web Amplify-SDK v1.
 -   **Web** Added a draggable splitter in ViewAsset page between the file manager tree view and details panel
 -   Added a new API endpoint for asset file streaming (similar to asset preview auxiliary files) at `GET /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`

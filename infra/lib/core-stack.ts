@@ -340,10 +340,7 @@ export class CoreVAMSStack extends cdk.Stack {
         }
 
         //Deploy Location Services (Nested Stack) and setup feature enabled
-        if (
-            props.config.app.useLocationService.enabled &&
-            props.config.app.authProvider.useCognito.enabled
-        ) {
+        if (props.config.app.useLocationService.enabled) {
             const locationServiceNestedStack = new LocationServiceNestedStack(
                 this,
                 "LocationService",
