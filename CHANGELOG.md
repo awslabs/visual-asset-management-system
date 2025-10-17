@@ -94,6 +94,7 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
 -   Updated pipeline CDK export names and job definition names to be variable per the stack deploying it to further reduce conflicts of same stack deployments in the same region
 -   Update CDK ApiBuilder core logic to not be wrapped in a function anymore to make it easier to have global class variables in the CDK nested stack
 -   Enforce S3 bucket object ownership on static website bucket
+-   Update CSP to include workerSrc directives which are required for certain viewers to work
 -   Updated `GenAIMetadataLabelingPipeline` to use the latest Claude Sonnet 4.5 GenAI model for commercial and Sonnet 4.0 in GovCloud (previously used 3.0) and pass model ID now from CDK configuration
 -   Updated `conversion3dBasic` pipeline to use the latest Trimesh version (4.8.3)
 -   Update package dependencies and fixed any associated breaking changes

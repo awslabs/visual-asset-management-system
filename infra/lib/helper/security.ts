@@ -23,6 +23,7 @@ import { join } from "path";
 interface CSPAdditionalConfig {
     connectSrc?: string[];
     scriptSrc?: string[];
+    workerSrc?: string[];
     imgSrc?: string[];
     mediaSrc?: string[];
     fontSrc?: string[];
@@ -286,6 +287,12 @@ export function generateContentSecurityPolicy(
         "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
     ];
 
+    let workerSrc = [
+        "'self'",
+        "blob:",
+        "data:",
+    ]
+
     let imgSrc = ["'self'", "blob:", "data:", `https://${Service("S3").Endpoint}/`];
 
     let mediaSrc = ["'self'", "blob:", "data:", `https://${Service("S3").Endpoint}/`];
@@ -318,6 +325,7 @@ export function generateContentSecurityPolicy(
     if (additionalCSPConfig) {
         connectSrc = mergeCSPSources(connectSrc, additionalCSPConfig.connectSrc);
         scriptSrc = mergeCSPSources(scriptSrc, additionalCSPConfig.scriptSrc);
+        workerSrc = mergeCSPSources(workerSrc, additionalCSPConfig.workerSrc);
         imgSrc = mergeCSPSources(imgSrc, additionalCSPConfig.imgSrc);
         mediaSrc = mergeCSPSources(mediaSrc, additionalCSPConfig.mediaSrc);
         fontSrc = mergeCSPSources(fontSrc, additionalCSPConfig.fontSrc);
@@ -325,10 +333,11 @@ export function generateContentSecurityPolicy(
     }
 
     const csp =
-        `base-uri 'none'` +
+        `base-uri 'none';` +
         `default-src 'none'; style-src ${styleSrc.join(" ")}; upgrade-insecure-requests;` +
         `connect-src ${connectSrc.join(" ")}; ` +
         `script-src ${scriptSrc.join(" ")}; ` +
+        `worker-src ${workerSrc.join(" ")}; ` +
         `img-src ${imgSrc.join(" ")}; ` +
         `media-src ${mediaSrc.join(" ")}; ` +
         `object-src 'none'; ` +
