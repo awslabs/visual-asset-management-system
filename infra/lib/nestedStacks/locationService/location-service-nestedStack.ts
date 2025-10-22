@@ -6,7 +6,7 @@
 import * as cdk from "aws-cdk-lib";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ssm from "aws-cdk-lib/aws-ssm";
-import { aws_location, Stack, NestedStack } from "aws-cdk-lib";
+import { aws_location, Stack, NestedStack, RemovalPolicy } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import * as Service from "../../helper/service-helper";
 import { NagSuppressions } from "cdk-nag";
@@ -33,6 +33,9 @@ export class LocationServiceNestedStack extends NestedStack {
             },
             description: "API Key for VAMS Location Services Maps",
         });
+
+        //Retain the API key as an API key has to be around for 90 days before it can be deleted. 
+        apiKey.applyRemovalPolicy(RemovalPolicy.RETAIN);
 
         // Store API Key in SSM Parameter Store
         const apiKeySSMParameter = new ssm.StringParameter(this, "LocationServiceApiKeyARNSSM", {
