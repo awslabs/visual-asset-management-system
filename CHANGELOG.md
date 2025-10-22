@@ -97,6 +97,8 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
 -   Update CSP to include workerSrc directives which are required for certain viewers to work
 -   Updated `GenAIMetadataLabelingPipeline` to use the latest Claude Sonnet 4.5 GenAI model for commercial and Sonnet 4.0 in GovCloud (previously used 3.0) and pass model ID now from CDK configuration
 -   Updated `conversion3dBasic` pipeline to use the latest Trimesh version (4.8.3)
+-   Updated $inputMetadata for pipeline inputs to separate out asset and file metadata fields
+-   Updated DeveloperGuide.md documentation for pipelines on all the input variables and their formats that are passed to pipelines. 
 -   Update package dependencies and fixed any associated breaking changes
 
 ### Known Outstanding Issues

@@ -1222,6 +1222,383 @@ Below is the input metadata schema JSON object constructed and passed into each 
     }
 ```
 
+### Pipeline Execution Input Parameters - Detailed Reference
+
+This section provides comprehensive documentation of all input parameters passed to pipeline Lambda functions during workflow execution.
+
+#### Complete Lambda Event Payload Structure
+
+When a workflow executes a pipeline, the Lambda function receives an event with the following complete structure:
+
+```json
+{
+    "body": {
+        "inputS3AssetFilePath": "s3://bucket-name/asset-path/file.ext",
+        "outputS3AssetFilesPath": "s3://bucket-name/pipelines/pipeline-name/job-id/output/execution-id/files/",
+        "outputS3AssetPreviewPath": "s3://bucket-name/pipelines/pipeline-name/job-id/output/execution-id/previews/",
+        "outputS3AssetMetadataPath": "s3://bucket-name/pipelines/pipeline-name/job-id/output/execution-id/metadata/",
+        "inputOutputS3AssetAuxiliaryFilesPath": "s3://auxiliary-bucket/pipelines/pipeline-name/",
+        "bucketAssetAuxiliary": "auxiliary-bucket-name",
+        "bucketAsset": "asset-bucket-name",
+        "inputAssetFileKey": "asset-path/file.ext",
+        "inputAssetLocationKey": "asset-path/",
+        "outputType": ".output-extension",
+        "inputMetadata": "{...JSON string...}",
+        "inputParameters": "{...JSON string...}",
+        "executingUserName": "username",
+        "executingRequestContext": {...request context object...},
+        "TaskToken": "AQCEAAAAKgAAAA..." // Only present if waitForCallback is enabled
+    }
+}
+```
+
+#### Input Metadata Schema (inputMetadata)
+
+The `inputMetadata` field contains a JSON string that, when parsed, provides comprehensive context about the asset and file being processed. **As of VAMS v2.3+**, metadata is separated into asset-level and file-level metadata:
+
+```json
+{
+    "VAMS": {
+        "assetData": {
+            "assetName": "My 3D Model",
+            "description": "A detailed architectural model",
+            "tags": ["architecture", "building", "3d-model"]
+        },
+        "assetMetadata": {
+            "creator": "John Doe",
+            "dateCreated": "2024-01-15",
+            "projectName": "Downtown Plaza",
+            "customField1": "value1",
+            "customField2": "value2"
+        },
+        "fileMetadata": {
+            "fileSize": "2048576",
+            "fileFormat": "glTF 2.0",
+            "triangleCount": "15000",
+            "textureResolution": "2048x2048",
+            "processingDate": "2024-01-20T10:30:00Z"
+        }
+    }
+}
+```
+
+**Metadata Field Descriptions:**
+
+-   **`assetData`**: Core asset information from the VAMS asset record
+    -   `assetName`: User-provided name of the asset
+    -   `description`: User-provided description of the asset
+    -   `tags`: Array of tags associated with the asset
+-   **`assetMetadata`**: Base asset-level metadata (always present)
+    -   Contains all metadata fields associated with the asset itself
+    -   Includes custom metadata fields added by users or previous pipelines
+    -   Does NOT include `databaseId` or `assetId` system fields
+-   **`fileMetadata`**: File-specific metadata (only present when a specific file is selected for execution)
+    -   Contains metadata specific to the file being processed
+    -   Only populated when workflow is executed on a specific file (not the entire asset)
+    -   Includes file-level custom metadata from previous pipeline executions
+    -   Empty object `{}` when workflow is executed on the asset as a whole
+
+**Important Notes:**
+
+-   The `inputMetadata` is provided as a JSON string and must be parsed before use
+-   System fields (`databaseId`, `assetId`) are automatically removed from both metadata objects
+-   File metadata is only present when executing a workflow on a specific file within an asset
+-   Pipelines can use this metadata to make processing decisions or include it in output
+
+#### Input Parameters (inputParameters)
+
+The `inputParameters` field contains optional pipeline-specific configuration provided during pipeline creation. This is a JSON string that must be parsed:
+
+```json
+{
+    "quality": "high",
+    "compressionLevel": 5,
+    "generateLODs": true,
+    "targetPolyCount": 10000,
+    "customOption": "value"
+}
+```
+
+**Usage Guidelines:**
+
+-   Parameters are defined when creating the pipeline in VAMS
+-   Must be valid JSON format
+-   Used to configure pipeline behavior without modifying code
+-   Empty string `""` if no parameters were specified
+-   Pipelines should validate and provide defaults for missing parameters
+
+#### S3 Path Parameters
+
+**Input Paths:**
+
+-   **`inputS3AssetFilePath`**: Full S3 URI to the input file
+    -   Format: `s3://bucket-name/path/to/file.ext`
+    -   For first pipeline: Original asset file
+    -   For subsequent pipelines: Output from previous pipeline
+-   **`inputAssetFileKey`**: S3 key (path without bucket) of the input file
+-   **`inputAssetLocationKey`**: S3 key of the asset's base directory
+
+**Output Paths (Shared Across All Pipelines in Workflow):**
+
+-   **`outputS3AssetFilesPath`**: Where to write processed output files
+    -   Unique per workflow execution
+    -   Shared by all pipelines in the workflow
+    -   Files written here become the new asset version
+-   **`outputS3AssetPreviewPath`**: Where to write preview/thumbnail files
+    -   Used for generating visual previews
+    -   Automatically associated with the asset
+-   **`outputS3AssetMetadataPath`**: Where to write metadata JSON files
+    -   Files must follow naming pattern: `*_metadata.json`
+    -   See "Outputting Metadata from Pipelines" section for details
+
+**Auxiliary Path (Pipeline-Specific):**
+
+-   **`inputOutputS3AssetAuxiliaryFilesPath`**: Working directory for temporary files
+    -   Not unique per execution (persistent across executions)
+    -   Used for caching, intermediate files, or pipeline-specific data
+    -   Format: `s3://auxiliary-bucket/pipelines/pipeline-name/`
+
+#### Execution Context Parameters
+
+-   **`executingUserName`**: Username of the user who triggered the workflow
+    -   Used for audit logging and permission checks
+    -   Can be used to customize processing based on user
+-   **`executingRequestContext`**: Complete API Gateway request context
+    -   Contains authentication and authorization information
+    -   Used for making authenticated calls back to VAMS APIs
+    -   Includes JWT claims and user roles
+
+#### Callback Parameters (Asynchronous Pipelines)
+
+When a pipeline is configured with "Wait for Callback" enabled:
+
+-   **`TaskToken`**: Step Functions task token for async completion
+    -   Must be included in `SendTaskSuccess` or `SendTaskFailure` calls
+    -   Allows pipeline to run longer than Lambda's 15-minute timeout
+    -   See "Implementing pipelines outside of Lambda" section for usage
+
+#### Pipeline Chaining Behavior
+
+When multiple pipelines are configured in a workflow:
+
+1. **First Pipeline**: Receives the original asset file as input
+2. **Subsequent Pipelines**: Receive output from previous pipeline as input
+3. **All Pipelines**: Write to the same shared output paths
+4. **Final Output**: Last pipeline's output becomes the new asset version
+
+**Example Workflow with 3 Pipelines:**
+
+```
+Pipeline 1: Convert OBJ to GLB
+  Input:  s3://bucket/asset/model.obj
+  Output: s3://bucket/pipelines/convert/job-123/output/exec-456/files/model.glb
+
+Pipeline 2: Optimize GLB
+  Input:  s3://bucket/pipelines/convert/job-123/output/exec-456/files/model.glb
+  Output: s3://bucket/pipelines/convert/job-123/output/exec-456/files/model-optimized.glb
+
+Pipeline 3: Generate LODs
+  Input:  s3://bucket/pipelines/convert/job-123/output/exec-456/files/model-optimized.glb
+  Output: s3://bucket/pipelines/convert/job-123/output/exec-456/files/model-lod0.glb
+          s3://bucket/pipelines/convert/job-123/output/exec-456/files/model-lod1.glb
+          s3://bucket/pipelines/convert/job-123/output/exec-456/files/model-lod2.glb
+```
+
+### Workflow Creation Parameters
+
+This section documents the parameters used when creating or updating workflows through the VAMS API.
+
+#### Required Workflow Fields
+
+When creating a workflow via the `/workflows` API endpoint, the following fields are required:
+
+```json
+{
+    "databaseId": "database-uuid",
+    "workflowId": "my-workflow-id",
+    "description": "Workflow description",
+    "specifiedPipelines": {
+        "functions": [
+            {
+                "name": "pipeline-id",
+                "databaseId": "database-uuid",
+                "outputType": ".glb",
+                "pipelineType": "standardFile",
+                "pipelineExecutionType": "Lambda",
+                "waitForCallback": "Enabled",
+                "taskTimeout": "3600",
+                "taskHeartbeatTimeout": "300",
+                "inputParameters": "{\"quality\": \"high\"}",
+                "userProvidedResource": "{\"resourceId\": \"lambda-function-name\"}"
+            }
+        ]
+    }
+}
+```
+
+#### Workflow Field Descriptions
+
+**Top-Level Fields:**
+
+-   **`databaseId`**: Database ID where the workflow will be stored
+    -   Can be "GLOBAL" for global workflows accessible across all databases
+    -   Must match the database ID of all included pipelines
+-   **`workflowId`**: Unique identifier for the workflow
+    -   Must be unique within the database
+    -   Used to reference the workflow in API calls
+    -   Alphanumeric with hyphens allowed
+-   **`description`**: Human-readable description of the workflow
+    -   Maximum 256 characters
+    -   Displayed in the VAMS UI
+
+**Pipeline Configuration (specifiedPipelines.functions array):**
+
+Each pipeline in the workflow must specify:
+
+-   **`name`**: Pipeline ID to execute
+    -   Must reference an existing pipeline in VAMS
+    -   User must have GET permissions on the pipeline
+-   **`databaseId`**: Database ID of the pipeline
+    -   Must match workflow's databaseId (or be "GLOBAL")
+-   **`outputType`**: Expected output file extension
+    -   Example: `.glb`, `.usdz`, `.png`
+    -   Used for validation and file type detection
+-   **`pipelineType`**: Type of pipeline
+    -   `"standardFile"`: Processes and outputs standard asset files
+    -   `"previewFile"`: Generates preview/thumbnail files
+-   **`pipelineExecutionType`**: How the pipeline is executed
+    -   Currently only `"Lambda"` is supported
+-   **`waitForCallback`**: Async execution mode
+    -   `"Enabled"`: Pipeline uses Step Functions task tokens (for long-running processes)
+    -   `"Disabled"`: Pipeline must complete within Lambda timeout (15 minutes)
+-   **`taskTimeout`**: Maximum execution time in seconds (optional)
+    -   Only applicable when `waitForCallback` is "Enabled"
+    -   Range: 1 to 86400 seconds (24 hours)
+    -   Default: No timeout (up to 1 year)
+-   **`taskHeartbeatTimeout`**: Heartbeat interval in seconds (optional)
+    -   Only applicable when `waitForCallback` is "Enabled"
+    -   Range: 1 to 3600 seconds (1 hour)
+    -   Pipeline must send heartbeat within this interval or task fails
+    -   Default: No heartbeat required
+-   **`inputParameters`**: Pipeline-specific configuration (optional)
+    -   Must be valid JSON string
+    -   Passed to pipeline Lambda function in `inputParameters` field
+    -   Example: `"{\"quality\": \"high\", \"compression\": 5}"`
+-   **`userProvidedResource`**: Lambda function configuration
+    -   Must be JSON string with `resourceId` field
+    -   `resourceId`: Name of the Lambda function to invoke
+    -   Lambda function name must contain "vams" for permissions
+
+#### Workflow Creation vs Update Behavior
+
+VAMS automatically handles workflow creation and updates:
+
+**Creating a New Workflow:**
+
+-   Creates a new Step Functions state machine
+-   Generates unique state machine name with "vams-" prefix
+-   Stores workflow configuration in DynamoDB
+-   Records creation timestamp and user
+
+**Updating an Existing Workflow:**
+
+-   Updates the existing Step Functions state machine definition
+-   Preserves execution history
+-   Updates DynamoDB record with new configuration
+-   Records modification timestamp and user
+
+**Orphaned Workflow Recovery:**
+
+-   If DynamoDB record exists but state machine was deleted
+-   Automatically creates a new state machine
+-   Preserves workflow ID and configuration
+
+#### Pipeline Execution Order
+
+Pipelines in the `functions` array execute sequentially:
+
+1. First pipeline receives original asset file as input
+2. Each subsequent pipeline receives previous pipeline's output as input
+3. All pipelines write to shared output directories
+4. Final pipeline's output becomes the new asset version
+
+**Example Multi-Pipeline Workflow:**
+
+```json
+{
+    "databaseId": "my-database",
+    "workflowId": "3d-optimization-workflow",
+    "description": "Convert and optimize 3D models",
+    "specifiedPipelines": {
+        "functions": [
+            {
+                "name": "obj-to-glb-converter",
+                "databaseId": "my-database",
+                "outputType": ".glb",
+                "pipelineType": "standardFile",
+                "pipelineExecutionType": "Lambda",
+                "waitForCallback": "Disabled",
+                "userProvidedResource": "{\"resourceId\": \"vams-convert-obj-glb\"}"
+            },
+            {
+                "name": "glb-optimizer",
+                "databaseId": "my-database",
+                "outputType": ".glb",
+                "pipelineType": "standardFile",
+                "pipelineExecutionType": "Lambda",
+                "waitForCallback": "Enabled",
+                "taskTimeout": "7200",
+                "inputParameters": "{\"targetPolyCount\": 10000, \"generateLODs\": true}",
+                "userProvidedResource": "{\"resourceId\": \"vams-optimize-glb\"}"
+            },
+            {
+                "name": "preview-generator",
+                "databaseId": "my-database",
+                "outputType": ".png",
+                "pipelineType": "previewFile",
+                "pipelineExecutionType": "Lambda",
+                "waitForCallback": "Disabled",
+                "userProvidedResource": "{\"resourceId\": \"vams-generate-preview\"}"
+            }
+        ]
+    }
+}
+```
+
+#### Global Output Paths in Workflows
+
+All pipelines in a workflow share the same output directories:
+
+-   **Output Files Path**: `s3://bucket/pipelines/{first-pipeline-name}/{first-job-id}/output/{execution-id}/files/`
+-   **Preview Path**: `s3://bucket/pipelines/{first-pipeline-name}/{first-job-id}/output/{execution-id}/previews/`
+-   **Metadata Path**: `s3://bucket/pipelines/{first-pipeline-name}/{first-job-id}/output/{execution-id}/metadata/`
+
+**Key Points:**
+
+-   Paths are based on the FIRST pipeline in the workflow
+-   All pipelines write to the same directories
+-   Execution ID ensures uniqueness across workflow runs
+-   Final output from all pipelines is processed together as a single asset version
+
+#### Workflow Permissions
+
+Users must have appropriate permissions to create/update workflows:
+
+-   **Workflow Permissions**: PUT permission on the workflow object
+-   **Pipeline Permissions**: GET permission on all included pipelines
+-   **Database Permissions**: Access to the specified database
+-   **Global Workflows**: Can only include global pipelines
+
+#### Best Practices for Workflow Creation
+
+1. **Pipeline Ordering**: Order pipelines logically based on data flow
+2. **Output Types**: Ensure each pipeline's output type matches the next pipeline's expected input
+3. **Timeout Configuration**: Set appropriate timeouts for long-running pipelines
+4. **Input Parameters**: Use input parameters for configuration instead of hardcoding values
+5. **Error Handling**: Pipelines should handle errors gracefully and provide meaningful error messages
+6. **Testing**: Test individual pipelines before combining them into workflows
+7. **Documentation**: Document expected input/output formats and parameter options
+
 A simple lambda handler is provided below for reference. You may chose to override your own function in place of `write_input_output` function in below code.
 
 ```
