@@ -11,6 +11,7 @@ import * as cdk from "aws-cdk-lib";
 import { Stack, NestedStack } from "aws-cdk-lib";
 import { SecurityGroupGatewayPipelineConstruct } from "./constructs/securitygroup-gateway-pipeline-construct";
 import { PcPotreeViewerBuilderNestedStack } from "./preview/pcPotreeViewer/pcPotreeViewerBuilder-nestedStack";
+import { SplatToolboxBuilderNestedStack } from "./3dRecon/splatToolbox/splatToolboxBuilder-nestedStack";
 import { Metadata3dLabelingNestedStack } from "./genAi/metadata3dLabeling/metadata3dLabelingBuilder-nestedStack";
 import { RapidPipelineNestedStack } from "./multi/rapidPipeline/rapidPipeline-nestedStack";
 import { Conversion3dBasicNestedStack } from "./conversion/3dBasic/conversion3dBasicBuilder-nestedStack";
@@ -78,6 +79,28 @@ export class PipelineBuilderNestedStack extends NestedStack {
             //Add function name to array for stack output
             this.pipelineVamsLambdaFunctionNames.push(
                 conversion3dBasicPipelineNestedStack.pipelineVamsLambdaFunctionName
+            );
+        }
+
+        if (props.config.app.pipelines.useSplatToolbox.enabled) {
+            const splatToolboxPipelineNestedStack = new SplatToolboxBuilderNestedStack(
+                this,
+                "SplatToolboxBuilderNestedStack",
+                {
+                    ...props,
+                    config: props.config,
+                    storageResources: props.storageResources,
+                    vpc: props.vpc,
+                    pipelineSubnets: pipelineNetwork.privateSubnets.pipeline,
+                    pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                    importGlobalPipelineWorkflowFunctionName:
+                        props.importGlobalPipelineWorkflowFunctionName,
+                }
+            );
+            //Add function name to array for stack output
+            this.pipelineVamsLambdaFunctionNames.push(
+                splatToolboxPipelineNestedStack.pipelineVamsLambdaFunctionName
             );
         }
 

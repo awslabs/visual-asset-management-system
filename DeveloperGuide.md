@@ -1973,6 +1973,28 @@ NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback 
 
 See VNTANA [documentation](https://www.vntana.com/resource/platform-inputs/) for all supported input and output formats.
 
+
+### Standard Type - Open Source 3D Reconstruction Toolbox for Gaussian Splats Pipeline (Asynchronous)
+
+The Open Source 3D Reconstruction Toolbox for Gaussian Splats is a pipeline that allows generation of 3D objects (splats) from images or videos.
+
+If you wish to trigger this pipelines additionally/manually through VAMS pipeline, you can setup a new VAMS pipeline using the table below. You will need to lookup the lambda function name in the AWS console based on the base deployment name listed.
+
+The pipeline uses an open source tool from [AWS Open Source 3D Reconstruction Toolbox for Gaussian Splats](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws). VAMS only uses the container code from the repo and will spin up the below architecture. For more information, see the [README.md](backendPipelines/3dRecon/splatToolbox/README.md) within the backend pipeline code.
+
+The pipeline uses input metadata and pipeline input parameters to configure the toolbox. To set these parameters, be sure to set either the `inputMetadata` fields in the input media inside VAMS or ensure the pipeline has the appropriate `inputParameters`. Both can be set, but the `inputMetadata` takes precedence over any `inputParameters` within the pipeline. To see the full list of configuration parameters to set for pipeline, see the [official repo documentation](](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws)).
+
+NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback with the Task Token".
+
+![Open Source 3D Reconstruction Toolbox for Gaussian Splat Pipeline Architecture](/diagrams/pipeline_usecase_splatToolbox.png)
+
+| Input File Types Supported                          | Base Lambda Function Name |
+| :-------------------------------------------------- | :------------------------ |
+| ZIP, MP4, MOV                                       | vamsExecuteSplatToolbox   |
+
+See [AWS documentation](https://aws-solutions-library-samples.github.io/compute/open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws.html#deploy-the-guidance) for all configurations.
+
+
 ## OpenSearch Reindexing
 
 VAMS v2.3 introduces a Lambda-based reindexing system that allows you to rebuild OpenSearch indexes either automatically during CDK deployment or manually via Lambda invocation.

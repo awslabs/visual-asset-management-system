@@ -340,7 +340,8 @@ export class VPCBuilderNestedStack extends NestedStack {
             if (
                 (props.config.app.useAlb.enabled && props.config.app.useAlb.usePublicSubnet) ||
                 props.config.app.pipelines.useRapidPipeline.enabled ||
-                props.config.app.pipelines.useModelOps.enabled
+                props.config.app.pipelines.useModelOps.enabled ||
+                props.config.app.pipelines.useSplatToolbox.enabled
             ) {
                 subnetConfigurations.push(subnetPublicConfig);
                 subnetConfigurations.push(subnetPrivateConfig);
@@ -537,7 +538,8 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
                 props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
                 props.config.app.pipelines.useRapidPipeline.enabled ||
-                props.config.app.pipelines.useModelOps.enabled
+                props.config.app.pipelines.useModelOps.enabled ||
+                props.config.app.pipelines.useSplatToolbox.enabled
             ) {
                 // Create VPC endpoint for Batch
                 new ec2.InterfaceVpcEndpoint(this, "BatchEndpoint", {
@@ -594,7 +596,8 @@ export class VPCBuilderNestedStack extends NestedStack {
             // AWS Marketplace Pipeline Required Endpoint on Private Subnet (not isolated)
             if (
                 props.config.app.pipelines.useModelOps.enabled ||
-                props.config.app.pipelines.useRapidPipeline.enabled
+                props.config.app.pipelines.useRapidPipeline.enabled ||
+                props.config.app.pipelines.useSplatToolbox.enabled
             ) {
                 // Create VPC endpoint for ECS
                 new ec2.InterfaceVpcEndpoint(this, "ECSEndpoint", {

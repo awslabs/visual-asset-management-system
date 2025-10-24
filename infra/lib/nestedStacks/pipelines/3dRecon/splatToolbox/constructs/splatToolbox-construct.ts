@@ -8,9 +8,9 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as path from "path";
 import * as sqs from "aws-cdk-lib/aws-sqs";
-import * as lambda from "aws-cdk-lib/aws-lambda";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import { SqsEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
 import { LambdaSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
@@ -20,11 +20,11 @@ import { Construct } from "constructs";
 import {
     buildConstructPipelineFunction,
     buildOpenPipelineFunction,
-    buildVamsExecutePcPotreeViewerPipelineFunction,
-    buildSqsExecutePcPotreeViewerPipelineFunction,
+    buildVamsExecuteSplatToolboxPipelineFunction,
+    buildSqsExecuteSplatToolboxPipelineFunction,
     buildPipelineEndFunction,
-} from "../lambdaBuilder/pcPotreeViewerFunctions";
-import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
+} from "../lambdaBuilder/splatToolboxFunctions";
+import { BatchGpuPipelineConstruct } from "../../../constructs/batch-gpu-pipeline";
 import { NagSuppressions } from "cdk-nag";
 import { CfnOutput } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -35,8 +35,11 @@ import * as Config from "../../../../../../config/config";
 import { generateUniqueNameHash } from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import * as cr from "aws-cdk-lib/custom-resources";
+import { execSync } from "child_process";
+import * as fs from "fs";
+import * as os from "os";
 
-export interface PcPotreeViewerConstructProps extends cdk.StackProps {
+export interface SplatToolboxConstructProps extends cdk.StackProps {
     config: Config.Config;
     storageResources: storageResources;
     vpc: ec2.IVpc;
@@ -49,32 +52,29 @@ export interface PcPotreeViewerConstructProps extends cdk.StackProps {
 /**
  * Default input properties
  */
-const defaultProps: Partial<PcPotreeViewerConstructProps> = {
+const defaultProps: Partial<SplatToolboxConstructProps> = {
     //stackName: "",
     //env: {},
 };
 
-/**
- * Deploys a specific batch to ECS workflow for a particular container image for the website visualizer files
- * Creates:
- * - SNS
- * - SFN
- * - Batch
- * - ECR Image
- * - ECS
- * - IAM Roles / Policy Documents for permissions to S3 / Lambda
- * On redeployment, will automatically invalidate the CloudFront distribution cache
- */
-export class PcPotreeViewerConstruct extends NestedStack {
+
+export class SplatToolboxConstruct extends Construct {
     public pipelineVamsLambdaFunctionName: string;
 
-    constructor(parent: Construct, name: string, props: PcPotreeViewerConstructProps) {
+    constructor(parent: Construct, name: string, props: SplatToolboxConstructProps) {
         super(parent, name);
 
         props = { ...defaultProps, ...props };
 
         const region = Stack.of(this).region;
         const account = Stack.of(this).account;
+
+        const splatGitHubRepoLink = "https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws.git"
+        const splatGitHubRepoCommitHash = "0200c497584f511e54a129cbd1a783df98aeb4b2"
+
+        // Download and Sync splat toolbox repository container files
+        this.syncSplatToolboxContainer(splatGitHubRepoLink, splatGitHubRepoCommitHash);
+
 
         /**
          * Batch Resources
@@ -141,7 +141,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
             ],
         });
 
-        const containerExecutionRole = new iam.Role(this, "PcPotreeViewerContainerExecutionRole", {
+        const containerExecutionRole = new iam.Role(this, "SplatToolboxContainerExecutionRole", {
             assumedBy: Service("ECS_TASKS").Principal,
             inlinePolicies: {
                 InputBucketPolicy: inputBucketPolicy,
@@ -156,8 +156,11 @@ export class PcPotreeViewerConstruct extends NestedStack {
             ],
         });
 
-        const containerJobRole = new iam.Role(this, "PcPotreeViewerContainerJobRole", {
-            assumedBy: Service("ECS_TASKS").Principal,
+        const containerJobRole = new iam.Role(this, "SplatToolboxContainerJobRole", {
+            assumedBy: new iam.CompositePrincipal(
+                Service("ECS_TASKS").Principal,
+                Service("SAGEMAKER").Principal
+            ),
             inlinePolicies: {
                 InputBucketPolicy: inputBucketPolicy,
                 OutputBucketPolicy: outputBucketPolicy,
@@ -168,46 +171,21 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     "service-role/AmazonECSTaskExecutionRolePolicy"
                 ),
                 iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
+                iam.ManagedPolicy.fromAwsManagedPolicyName(
+                    "AmazonSageMakerFullAccess"
+                ),
             ],
         });
 
-        /**
-         * AWS Batch Job Definition & Compute Env for PDAL Container
-         */
-        const pdalBatchPipeline = new BatchFargatePipelineConstruct(
-            this,
-            "BatchFargatePipeline_PDAL",
-            {
-                config: props.config,
-                vpc: props.vpc,
-                subnets: props.pipelineSubnets,
-                securityGroups: props.pipelineSecurityGroups,
-                jobRole: containerJobRole,
-                executionRole: containerExecutionRole,
-                imageAssetPath: path.join(
-                    "..",
-                    "..",
-                    "..",
-                    "..",
-                    "..",
-                    "backendPipelines",
-                    "preview",
-                    "pcPotreeViewer",
-                    "container"
-                ),
-                dockerfileName: "Dockerfile_PDAL",
-                batchJobDefinitionName: "PcPotreeViewerJob_PDAL"+props.config.name+"_"+props.config.app.baseStackName,
-            }
-        );
+
 
         /**
-         * AWS Batch Job Definition & Compute Env for Potree Container
+         * AWS Batch Job Definition & Compute Env for Splat Toolbox Container
          */
-        const potreeBatchPipeline = new BatchFargatePipelineConstruct(
+        const splatToolboxBatchPipeline = new BatchGpuPipelineConstruct(
             this,
-            "BatchFargatePipeline_Potree",
+            "BatchPipeline_SplatToolbox",
             {
-                config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
                 securityGroups: props.pipelineSecurityGroups,
@@ -220,12 +198,13 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     "..",
                     "..",
                     "backendPipelines",
-                    "preview",
-                    "pcPotreeViewer",
+                    "3dRecon",
+                    "splatToolbox",
                     "container"
                 ),
-                dockerfileName: "Dockerfile_Potree",
-                batchJobDefinitionName: "PcPotreeViewerJob_Potree"+props.config.name+"_"+props.config.app.baseStackName,
+                dockerfileName: "Dockerfile",
+                containerExecutionCommand: ["python", "__main__.py"],
+                batchJobDefinitionName: `SplatToolboxGpuJob-${props.config.name+"_"+props.config.app.baseStackName}`,
             }
         );
 
@@ -261,7 +240,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
             causePath: sfn.JsonPath.stringAt("$.error.Cause"),
             errorPath: sfn.JsonPath.stringAt("$.error.Error"),
         });
-
+        
         // end state evaluation: success or failure
         const endStatesChoice = new sfn.Choice(this, "EndStatesChoice")
             .when(sfn.Condition.isPresent("$.error"), failState)
@@ -285,64 +264,37 @@ export class PcPotreeViewerConstruct extends NestedStack {
             outputPath: "$.Payload",
         }).next(endStatesChoice);
 
-        // error handler passthrough - PDAL Batch
-        const handlePdalError = new sfn.Pass(this, "HandlePdalError", {
+        // error handler passthrough - Batch
+        const handleSplatBatchError = new sfn.Pass(this, "HandleSplatBatchError", {
             resultPath: "$",
         }).next(pipeLineEndTask);
 
-        // error handler passthrough - Potree Batch
-        const handlePotreeError = new sfn.Pass(this, "HandlePotreeError", {
-            resultPath: "$",
-        }).next(pipeLineEndTask);
-
-        // batch job Potree Converter
-        const potreeConverterBatchJob = new tasks.BatchSubmitJob(this, "PotreeConverterBatchJob", {
+        // batch job Splat Toolbox
+        const splatToolboxBatchJob = new tasks.BatchSubmitJob(this, "SplatToolboxBatchJob", {
             jobName: sfn.JsonPath.stringAt("$.jobName"),
-            jobDefinitionArn: potreeBatchPipeline.batchJobDefinition.jobDefinitionArn,
-            jobQueueArn: potreeBatchPipeline.batchJobQueue.jobQueueArn,
+            jobDefinitionArn: splatToolboxBatchPipeline.batchJobDefinition.attrJobDefinitionArn,
+            jobQueueArn: splatToolboxBatchPipeline.batchJobQueue.ref,
             containerOverrides: {
                 command: [...sfn.JsonPath.listAt("$.definition")],
                 environment: {
-                    TASK_TOKEN: sfn.JsonPath.taskToken,
+                    EXTERNAL_SFN_TASK_TOKEN: sfn.JsonPath.stringAt("$.externalSfnTaskToken"),
                     AWS_REGION: region,
+                    INPUT_PARAMETERS: sfn.JsonPath.stringAt("$.inputParameters"),
+                    INPUT_METADATA: sfn.JsonPath.stringAt("$.inputMetadata"),
                 },
             },
+            integrationPattern: sfn.IntegrationPattern.RUN_JOB,
         })
-            .addCatch(handlePotreeError, {
+            .addCatch(handleSplatBatchError, {
                 resultPath: "$.error",
             })
-            .next(pipeLineEndTask);
-
-        // batch job PDAL
-        const pdalConverterBatchJob = new tasks.BatchSubmitJob(this, "PdalConverterBatchJob", {
-            jobName: sfn.JsonPath.stringAt("$.jobName"),
-            jobDefinitionArn: pdalBatchPipeline.batchJobDefinition.jobDefinitionArn,
-            jobQueueArn: pdalBatchPipeline.batchJobQueue.jobQueueArn,
-            containerOverrides: {
-                command: [...sfn.JsonPath.listAt("$.definition")],
-                environment: {
-                    TASK_TOKEN: sfn.JsonPath.taskToken,
-                    AWS_REGION: region,
-                },
-            },
-        })
-            .addCatch(handlePdalError, {
-                resultPath: "$.error",
-            })
-            .next(potreeConverterBatchJob);
+            .next(successState);
 
         /**
          * SFN Definition
          */
         const sfnPipelineDefinition = sfn.Chain.start(
-            constructPipelineTask.next(
-                new sfn.Choice(this, "FilePathExtensionCheck")
-                    .when(
-                        sfn.Condition.stringEquals("$.currentStageType", "POTREE"),
-                        potreeConverterBatchJob
-                    )
-                    .otherwise(pdalConverterBatchJob)
-            )
+            constructPipelineTask.next(splatToolboxBatchJob)
         );
 
         /**
@@ -350,14 +302,14 @@ export class PcPotreeViewerConstruct extends NestedStack {
          */
         const stateMachineLogGroup = new logs.LogGroup(
             this,
-            "PcPotreeViewerProcessing-StateMachineLogGroup",
+            "SplatToolboxProcessing-StateMachineLogGroup",
             {
                 logGroupName:
-                    "/aws/vendedlogs/VAMSstateMachine-PreviewPcPotreeViewerPipeline" +
+                    "/aws/vendedlogs/VAMSstateMachine-SplatToolboxPipeline" +
                     generateUniqueNameHash(
                         props.config.env.coreStackName,
                         props.config.env.account,
-                        "PcPotreeViewerProcessing-StateMachineLogGroup",
+                        "SplatToolboxProcessing-StateMachineLogGroup",
                         10
                     ),
                 retention: logs.RetentionDays.TEN_YEARS,
@@ -370,7 +322,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
          */
         const pipelineStateMachine = new sfn.StateMachine(
             this,
-            "PcPotreeViewerProcessing-StateMachine",
+            "SplatToolboxProcessing-StateMachine",
             {
                 definitionBody: sfn.DefinitionBody.fromChainable(sfnPipelineDefinition),
                 timeout: Duration.hours(5),
@@ -388,7 +340,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
          */
 
         //Build Lambda Web Visualizer Pipeline Resources to Open the Pipeline through a SNS Topic Subscription
-        const allowedInputFileExtensions = ".laz,.las,.e57,.ply";
+        const allowedInputFileExtensions = ".zip,.mp4,.mov";
         const openPipelineFunction = buildOpenPipelineFunction(
             this,
             props.lambdaCommonBaseLayer,
@@ -402,8 +354,8 @@ export class PcPotreeViewerConstruct extends NestedStack {
         );
 
         //Build Lambda VAMS Execution Function (as an optional pipeline execution action)
-        const PcPotreeViewerPipelineVamsExecuteFunction =
-            buildVamsExecutePcPotreeViewerPipelineFunction(
+        const SplatToolboxPipelineVamsExecuteFunction =
+            buildVamsExecuteSplatToolboxPipelineFunction(
                 this,
                 props.lambdaCommonBaseLayer,
                 props.storageResources.s3.assetAuxiliaryBucket,
@@ -414,77 +366,8 @@ export class PcPotreeViewerConstruct extends NestedStack {
                 props.storageResources.encryption.kmsKey
             );
 
-        if (props.config.app.pipelines.usePreviewPcPotreeViewer.sqsAutoRunOnAssetModified === true) {
-
-            //Add subscription for each bucket to kick-off lambda function of pipeline (as the main pipeline execution action)
-            const assetBucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
-            let index = 0;
-            for (const record of assetBucketRecords) {
-                const onS3ObjectCreatedQueue = new sqs.Queue(
-                    this,
-                    "pcPotreePipelineS3EventCreated-" + record.bucket,
-                    {
-                        queueName: `${props.config.name}-${props.config.app.baseStackName}-pcPotreePipelineS3EventCreated-${index}`,
-                        visibilityTimeout: cdk.Duration.seconds(360), // Corresponding function's is 300.
-                        encryption: props.storageResources.encryption.kmsKey
-                            ? sqs.QueueEncryption.KMS
-                            : sqs.QueueEncryption.SQS_MANAGED,
-                        encryptionMasterKey: props.storageResources.encryption.kmsKey,
-                        enforceSSL: true,
-                    }
-                );
-                onS3ObjectCreatedQueue.grantSendMessages(Service("SNS").Principal);
-
-                //Build Lambda SNS Execution Function (as an optional pipeline execution action)
-                const PcPotreeViewerPipelineSqsExecuteFunction =
-                    buildSqsExecutePcPotreeViewerPipelineFunction(
-                        this,
-                        props.lambdaCommonBaseLayer,
-                        props.storageResources.s3.assetAuxiliaryBucket,
-                        openPipelineFunction,
-                        record.bucket.bucketName,
-                        record.prefix,
-                        index,
-                        props.config,
-                        props.vpc,
-                        props.pipelineSubnets,
-                        props.storageResources.encryption.kmsKey
-                    );
-
-                //Add event notifications for syncing
-                if (record.snsS3ObjectCreatedTopic) {
-                    record.snsS3ObjectCreatedTopic.addSubscription(
-                        new SqsSubscription(onS3ObjectCreatedQueue)
-                    );
-                }
-
-                onS3ObjectCreatedQueue.grantConsumeMessages(PcPotreeViewerPipelineSqsExecuteFunction);
-
-                // The functions poll the respective queues, which is populated by messages sent to the topic.
-                const esmPcCreated = new lambda.EventSourceMapping(
-                    this,
-                    `SQSEventSourceBucketSyncPCCreated-${index}`,
-                    {
-                        eventSourceArn: onS3ObjectCreatedQueue.queueArn,
-                        target: PcPotreeViewerPipelineSqsExecuteFunction,
-                        batchSize: 1, // Max configurable records w/o maxBatchingWindow.
-                        maxBatchingWindow: cdk.Duration.seconds(0), // Max configurable time to wait before function is invoked.
-                    }
-                );
-
-                // Due to cdk version upgrade, not all regions support tags for EventSourceMapping
-                // this line should remove the tags for regions that dont support it (govcloud currently not supported)
-                if (props.config.app.govCloud.enabled) {
-                    const cfnEsm = esmPcCreated.node.defaultChild as lambda.CfnEventSourceMapping;
-                    cfnEsm.addPropertyDeletionOverride("Tags");
-                }
-
-                index = index + 1;
-            }
-        }
-
         // Create custom resource to automatically register pipeline and workflow
-        if (props.config.app.pipelines.usePreviewPcPotreeViewer.autoRegisterWithVAMS === true) {
+        if (props.config.app.pipelines.useSplatToolbox.autoRegisterWithVAMS === true) {
             const importFunction = lambda.Function.fromFunctionArn(
                 this,
                 "ImportFunction",
@@ -494,52 +377,75 @@ export class PcPotreeViewerConstruct extends NestedStack {
             const importProvider = new cr.Provider(this, "ImportProvider", {
                 onEventHandler: importFunction,
             });
-            const currentTimestamp = new Date().toISOString();
-
-            // Register E57, LAZ, LAS, PLY point cloud preview pipeline and workflow
-            new cdk.CustomResource(this, "PreviewPcPotreeViewerLasPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    timestamp: currentTimestamp,
-                    pipelineId: "preview-pc-potree-viewer-las-laz-e57-ply",
-                    pipelineDescription:
-                        "PotreeViewer Point Cloud Preview Pipeline - LAZ, LAS, E57, and PLY files using PDAL and PotreeConverter",
-                    pipelineType: "previewFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".octree",
-                    waitForCallback: "Enabled", // Asynchronous pipeline
-                    lambdaName: PcPotreeViewerPipelineVamsExecuteFunction.functionName,
-                    taskTimeout: "14400", // 4 hours
-                    taskHeartbeatTimeout: "",
-                    inputParameters: "",
-                    workflowId: "preview-pc-potree-viewer-las-laz-e57-ply",
-                    workflowDescription:
-                        "Automated workflow for LAZ, LAS, E57, and PLY point cloud preview generation using PotreeViewer Pipeline",
-                },
-            });
-
-            //Nag supression
-            NagSuppressions.addResourceSuppressions(
-                importProvider,
+            
+            NagSuppressions.addResourceSuppressionsByPath(
+                Stack.of(this),
+                `/${this.toString()}/ImportProvider/framework-onEvent/ServiceRole/DefaultPolicy/Resource`,
                 [
                     {
                         id: "AwsSolutions-IAM5",
-                        reason: "* Wildcard permissions needed for pipelineWorkflow lambda import and execution for custom resource",
+                        reason: "Custom resource provider requires wildcard permissions to invoke the import function with version qualifiers",
+                        appliesTo: [
+                            `Resource::arn:aws:lambda:${region}:${account}:function:<importGlobalPipelineWorkflow15C3C6ED>:*`,
+                        ],
                     },
                 ],
                 true
             );
+            // Register Splat Toolbox pipeline and workflow for Objects
+            new cdk.CustomResource(this, "3dReconSplatToolboxObjectsPipelineWorkflow", {
+                serviceToken: importProvider.serviceToken,
+                properties: {
+                    pipelineId: "3dRecon-splat-toolbox-objects",
+                    pipelineDescription:
+                        "3D Gaussian Splat Pipeline - Auto process images and videos into 3D splat objects - .zip (2D video), mov, .mp4 inputs",
+                    pipelineType: "standardFile",
+                    pipelineExecutionType: "Lambda",
+                    assetType: ".all",
+                    outputType: ".all",
+                    waitForCallback: "Enabled", // Asynchronous pipeline
+                    lambdaName: SplatToolboxPipelineVamsExecuteFunction.functionName,
+                    taskTimeout: "28800", // 8 hours
+                    taskHeartbeatTimeout: "",
+                    inputParameters: "",
+                    workflowId: "3dRecon-splat-toolbox-objects",
+                    workflowDescription:
+                        "3D Gaussian Splat Pipeline - Auto process images and 2D videos into 3D splat objects - .zip (2D video), mov, .mp4 inputs",
+                },
+            });
+
+            // Register Splat Toolbox pipeline and workflow for Environment Generation
+            new cdk.CustomResource(this, "3dReconSplatToolboxEnvironmentPipelineWorkflow", {
+                serviceToken: importProvider.serviceToken,
+                properties: {
+                    pipelineId: "3dRecon-splat-toolbox-environments-360",
+                    pipelineDescription:
+                        "3D Gaussian Splat Pipeline - Auto process 360 videos into 3D splat objects - .zip (360 video), mov, .mp4 inputs",
+                    pipelineType: "standardFile",
+                    pipelineExecutionType: "Lambda",
+                    assetType: ".all",
+                    outputType: ".all",
+                    waitForCallback: "Enabled", // Asynchronous pipeline
+                    lambdaName: SplatToolboxPipelineVamsExecuteFunction.functionName,
+                    taskTimeout: "172800", // 48 hours
+                    taskHeartbeatTimeout: "",
+                    inputParameters: JSON.stringify({ SPHERICAL_CAMERA: true }),
+                    workflowId: "3dRecon-splat-toolbox-environments-360",
+                    workflowDescription:
+                        "3D Gaussian Splat Pipeline - Auto process 360 videos into 3D splat objects - .zip (360 video), mov, .mp4 inputs",
+                },
+            });
         }
 
         //Output VAMS Pipeline Execution Function name
-        new CfnOutput(this, "PcPotreeViewerLambdaExecutionFunctionName", {
-            value: PcPotreeViewerPipelineVamsExecuteFunction.functionName,
+        new CfnOutput(this, "SplatToolboxLambdaExecutionFunctionName", {
+            value: SplatToolboxPipelineVamsExecuteFunction.functionName,
             description:
-                "The Point Cloud Potree Viewer Pipeline Lambda Function Name to use in a VAMS Pipeline",
+                "The Splat Toolbox Pipeline Lambda Function Name to use in a VAMS Pipeline",
+            exportName: "SplatToolboxLambdaExecutionFunctionName",
         });
         this.pipelineVamsLambdaFunctionName =
-            PcPotreeViewerPipelineVamsExecuteFunction.functionName;
+            SplatToolboxPipelineVamsExecuteFunction.functionName;
 
         //Nag Supressions
         NagSuppressions.addResourceSuppressions(
@@ -582,7 +488,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*PcPotreeViewerProcessing-StateMachine/Role/.*/g",
+                            regex: "^Resource::.*SplatToolboxProcessing-StateMachine/Role/.*/g",
                         },
                     ],
                 },
@@ -616,7 +522,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*vamsExecutePreviewPcPotreeViewerPipeline/ServiceRole/.*/g",
+                            regex: "^Resource::.*vamsExecuteSplatToolboxPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -654,39 +560,9 @@ export class PcPotreeViewerConstruct extends NestedStack {
             true
         );
 
-        // NagSuppressions.addResourceSuppressionsByPath(
-        //     Stack.of(this),
-        //     `/${this.toString()}/BatchFargatePipeline_PDAL/PipelineBatchComputeEnvironment/Resource-Service-Instance-Role/Resource`,
-        //     [
-        //         {
-        //             id: "AwsSolutions-IAM4",
-        //             reason: "The IAM role for AWS Batch Compute Environment uses AWSBatchServiceRole",
-        //             appliesTo: [
-        //                 "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSBatchServiceRole",
-        //             ],
-        //         },
-        //     ],
-        //     true
-        // );
-
-        // NagSuppressions.addResourceSuppressionsByPath(
-        //     Stack.of(this),
-        //     `/${this.toString()}/BatchFargatePipeline_Potree/PipelineBatchComputeEnvironment/Resource-Service-Instance-Role/Resource`,
-        //     [
-        //         {
-        //             id: "AwsSolutions-IAM4",
-        //             reason: "The IAM role for AWS Batch Compute Environment uses AWSBatchServiceRole",
-        //             appliesTo: [
-        //                 "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSBatchServiceRole",
-        //             ],
-        //         },
-        //     ],
-        //     true
-        // );
-
         NagSuppressions.addResourceSuppressionsByPath(
             Stack.of(this),
-            `/${this.toString()}/PcPotreeViewerProcessing-StateMachine/Role/DefaultPolicy/Resource`,
+            `/${this.toString()}/SplatToolboxProcessing-StateMachine/Role/DefaultPolicy/Resource`,
             [
                 {
                     id: "AwsSolutions-IAM5",
@@ -751,11 +627,11 @@ export class PcPotreeViewerConstruct extends NestedStack {
 
         NagSuppressions.addResourceSuppressionsByPath(
             Stack.of(this),
-            `/${this.toString()}/vamsExecutePreviewPcPotreeViewerPipeline/ServiceRole/DefaultPolicy/Resource`,
+            `/${this.toString()}/vamsExecuteSplatToolboxPipeline/ServiceRole/DefaultPolicy/Resource`,
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "vamsExecutePreviewPcPotreeViewerPipeline requires AWS Managed Policies, AWSLambdaBasicExecutionRole and AWSLambdaVPCAccessExecutionRole",
+                    reason: "vamsExecuteSplatToolboxPipeline requires AWS Managed Policies, AWSLambdaBasicExecutionRole and AWSLambdaVPCAccessExecutionRole",
                     appliesTo: [
                         "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole",
                         "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
@@ -763,12 +639,12 @@ export class PcPotreeViewerConstruct extends NestedStack {
                 },
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "vamsExecutePreviewPcPotreeViewerPipeline uses default policy that contains wildcard",
+                    reason: "vamsExecuteSplatToolboxPipeline uses default policy that contains wildcard",
                     appliesTo: ["Resource::*"],
                 },
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "vamsExecutePreviewPcPotreeViewerPipeline uses default policy that contains wildcard",
+                    reason: "vamsExecuteSplatToolboxPipeline uses default policy that contains wildcard",
                     appliesTo: [
                         "Action::kms:GenerateDataKey*",
                         {
@@ -800,5 +676,98 @@ export class PcPotreeViewerConstruct extends NestedStack {
             ],
             true
         );
+
+        NagSuppressions.addResourceSuppressionsByPath(
+            Stack.of(this),
+            `/${this.toString()}/BatchPipeline_SplatToolbox/BatchServiceRole/Resource`,
+            [
+                {
+                    id: "AwsSolutions-IAM4",
+                    reason: "The IAM role for AWS Batch Service uses AWSBatchServiceRole managed policy which is required for batch operations",
+                    appliesTo: [
+                        "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSBatchServiceRole",
+                    ],
+                },
+            ],
+            true
+        );
+
+        NagSuppressions.addResourceSuppressionsByPath(
+            Stack.of(this),
+            `/${this.toString()}/BatchPipeline_SplatToolbox/BatchInstanceRole/Resource`,
+            [
+                {
+                    id: "AwsSolutions-IAM4",
+                    reason: "The ECS Instance Role for EC2 Batch Compute Environment requires AmazonEC2ContainerServiceforEC2Role managed policy",
+                    appliesTo: [
+                        "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role",
+                    ],
+                },
+            ],
+            true
+        );
+    }
+
+    private syncSplatToolboxContainer(gitHubLink: string, gitHubCommitHash: string): void {
+        try {
+            console.log('Downloading/Syncing Splat Toolbox repository...');
+            const tempDir = path.join(os.tmpdir(), 'splat-toolbox-repo');
+            const targetDir = path.resolve(__dirname, '..', '..', '..', '..', '..', '..', '..', 'backendPipelines', '3dRecon', 'splatToolbox', 'container');
+            
+            if (fs.existsSync(tempDir)) {
+                fs.rmSync(tempDir, { recursive: true, force: true });
+            }
+
+            execSync(`git clone ${gitHubLink} "${tempDir}"`, { stdio: 'inherit' });
+            execSync(`git -C "${tempDir}" checkout ${gitHubCommitHash}`, { stdio: 'inherit' });
+
+            const sourceDir = path.join(tempDir, 'source', 'container');
+            if (fs.existsSync(sourceDir)) {
+                console.log(`Copying from ${sourceDir} to ${targetDir}`);
+                if (!fs.existsSync(targetDir)) {
+                    fs.mkdirSync(targetDir, { recursive: true });
+                }
+                const copyRecursive = (src: string, dest: string) => {
+                    const stats = fs.statSync(src);
+                    if (stats.isDirectory()) {
+                        if (!fs.existsSync(dest)) {
+                            fs.mkdirSync(dest);
+                        }
+                        const files = fs.readdirSync(src);
+                        for (const file of files) {
+                            copyRecursive(path.join(src, file), path.join(dest, file));
+                        }
+                    } else {
+                        fs.copyFileSync(src, dest);
+                    }
+                };
+                const files = fs.readdirSync(sourceDir);
+                for (const file of files) {
+                    copyRecursive(path.join(sourceDir, file), path.join(targetDir, file));
+                }
+                
+                // Modify Dockerfile to add __main__.py copy
+                const dockerfilePath = path.join(targetDir, 'Dockerfile');
+                if (fs.existsSync(dockerfilePath)) {
+                    let dockerfileContent = fs.readFileSync(dockerfilePath, 'utf8');
+                    
+                    // Add COPY for __main__.py if not already present
+                    if (!dockerfileContent.includes('COPY ./__main__.py')) {
+                        // Find the COPY ./src/main.py line and add __main__.py before it
+                        dockerfileContent = dockerfileContent.replace(
+                            /(COPY \.\/src\/main\.py)/,
+                            'COPY ./__main__.py                                                  ${CODE_PATH}\n$1'
+                        );
+                        fs.writeFileSync(dockerfilePath, dockerfileContent);
+                        console.log('Added __main__.py to Dockerfile');
+                    }
+                }
+            }
+            
+            fs.rmSync(tempDir, { recursive: true, force: true });
+            console.log('Repository sync completed successfully');
+        } catch (error) {
+            console.warn('Repository sync failed, continuing with existing files:', error);
+        }
     }
 }

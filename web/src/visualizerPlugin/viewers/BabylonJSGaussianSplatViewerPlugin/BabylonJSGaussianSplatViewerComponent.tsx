@@ -7,6 +7,9 @@ import React, { useEffect, useRef, useState } from "react";
 import { downloadAsset } from "../../../services/APIService";
 import { BabylonJSGaussianSplatViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
+import * as BABYLON from "@babylonjs/core";
+import "@babylonjs/loaders";
+import "@babylonjs/core/Meshes/GaussianSplatting/gaussianSplattingMesh";
 
 const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatViewerProps> = ({
     assetId,
@@ -95,11 +98,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                     console.log("BabylonJS Gaussian Splat Viewer: Canvas added to DOM");
                 }
 
-                // Load BabylonJS
-                const BABYLON = (window as any).BABYLON;
-                if (!BABYLON) {
-                    throw new Error("BabylonJS not available");
-                }
+                // BabylonJS is now imported at the top
 
                 // Create engine with inspector disabled
                 const engine = new BABYLON.Engine(canvas, true, {
@@ -108,7 +107,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                     disableWebGL2Support: false,
                 });
                 const scene = new BABYLON.Scene(engine);
-                scene.clearColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+                scene.clearColor = new BABYLON.Color4(0.1, 0.1, 0.1, 1);
 
                 // Create camera with fine controls
                 const camera = new BABYLON.ArcRotateCamera(
@@ -182,35 +181,23 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                     // Keep "Downloading asset..." message since the actual download happens in GaussianSplattingMesh
 
                     try {
-                        // Configure progressive loading if desired
-                        BABYLON.GaussianSplattingMesh.ProgressiveUpdateAmount = 1; // Show updates every batch
-
-                        // Disable any debug/inspector UI that might be triggered
-                        if (BABYLON.DebugLayer) {
-                            BABYLON.DebugLayer.InspectorURL = null;
-                        }
-
-                        // Create empty GaussianSplattingMesh and load data asynchronously
-                        const gaussianSplat = new BABYLON.GaussianSplattingMesh(
-                            "GaussianSplat",
-                            undefined, // No URL in constructor
-                            scene,
-                            false // keepInRam
-                        );
-
                         console.log(
-                            "BabylonJS Gaussian Splat Viewer: GaussianSplattingMesh created, loading file..."
+                            "BabylonJS Gaussian Splat Viewer: Loading Gaussian Splat with SceneLoader..."
                         );
 
-                        // Use loadFileAsync to properly wait for the download to complete
-                        gaussianSplat
-                            .loadFileAsync(response[1])
-                            .then(() => {
-                                console.log(
-                                    "BabylonJS Gaussian Splat Viewer: File loaded successfully, positioning camera"
-                                );
+                        BABYLON.SceneLoader.ImportMeshAsync(
+                            "",
+                            "",
+                            response[1],
+                            scene
+                        ).then((result) => {
+                            console.log(
+                                "BabylonJS Gaussian Splat Viewer: File loaded successfully, positioning camera"
+                            );
 
-                                const boundingInfo = gaussianSplat.getBoundingInfo();
+                            if (result.meshes.length > 0) {
+                                const mesh = result.meshes[0];
+                                const boundingInfo = mesh.getBoundingInfo();
                                 const center = boundingInfo.boundingBox.center;
                                 const radius = boundingInfo.boundingSphere.radius;
 
@@ -220,17 +207,16 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                                 console.log(
                                     "BabylonJS Gaussian Splat Viewer: Camera positioned for optimal viewing"
                                 );
+                            }
 
-                                // Hide loading indicator only when file is fully loaded
-                                setIsLoading(false);
-                            })
-                            .catch((error: unknown) => {
-                                console.error(
-                                    "BabylonJS Gaussian Splat Viewer: Error loading file:",
-                                    error
-                                );
-                                setIsLoading(false);
-                            });
+                            setIsLoading(false);
+                        }).catch((error: unknown) => {
+                            console.error(
+                                "BabylonJS Gaussian Splat Viewer: Error loading file:",
+                                error
+                            );
+                            setIsLoading(false);
+                        });
                     } catch (error) {
                         console.error(
                             "BabylonJS Gaussian Splat Viewer: Error creating GaussianSplattingMesh:",

@@ -144,6 +144,10 @@ export function getConfig(app: cdk.App): Config {
         config.app.openSearch.reindexOnCdkDeploy = false;
     }
 
+    if (config.app.pipelines.useSplatToolbox.enabled == undefined) {
+        config.app.pipelines.useSplatToolbox.enabled = false;
+    }
+
     if (config.app.pipelines.usePreviewPcPotreeViewer.enabled == undefined) {
         config.app.pipelines.usePreviewPcPotreeViewer.enabled = false;
     }
@@ -280,6 +284,7 @@ export function getConfig(app: cdk.App): Config {
     if (
         config.app.useAlb.enabled ||
         config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
+        config.app.pipelines.useSplatToolbox.enabled ||
         config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
         config.app.pipelines.useRapidPipeline.enabled ||
         config.app.pipelines.useModelOps.enabled ||
@@ -652,6 +657,12 @@ export interface ConfigPublic {
             usePreviewPcPotreeViewer: {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
+                sqsAutoRunOnAssetModified: boolean;
+            };
+            useSplatToolbox: {
+                enabled: boolean;
+                autoRegisterWithVAMS: boolean;
+                sqsAutoRunOnAssetModified: boolean;
             };
             useGenAiMetadata3dLabeling: {
                 enabled: boolean;
