@@ -24,6 +24,8 @@ Service.SetConfig(config);
 
 console.log("DEPLOYMENT CONFIGURATION 👉", config);
 
+
+
 if (config.enableCdkNag) {
     Aspects.of(app).add(new AwsSolutionsChecks({ verbose: true }));
 }

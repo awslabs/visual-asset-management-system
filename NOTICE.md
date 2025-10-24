@@ -120,6 +120,8 @@ Other Libraries (Use-case Pipelines)
 | PDAL            | [pdal@master-latest] (https://github.com/PDAL/PDAL)                          | POTREE VIEWER                | BSD          |
 | PotreeConverter | [potreeconverter@develop-latest] (https://github.com/potree/PotreeConverter) | POTREE VIEWER                | BSD-2-Clause |
 | Blender         | [blender@master-latest] (https://github.com/blender)                         | GENAI 3D METADATA GENERATION | GNU GPLv3    |
+| SplatToolbox    | [guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws@feature/batch-sogs-vggt] (https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | SPLAT TOOLBOX  | MIT |
+
 
 Third Party AWS Marketplace Products (Use-case Pipelines)
 
