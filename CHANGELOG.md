@@ -85,6 +85,7 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
 -   Permanently deleting asset files via the API did not remove the files metadata records
 -   Fix backend bug in `/upload` that was preventing multiple zero-byte files from being uploaded/completed in the same request.
 -   Added additional check in create asset API to validate there is no forward slash in the assetId (if provided)
+-   Added additional check in create asset API to validate assetId does not conflict with an existing key in the default S3 bucket or that a custom bucketKey provided does exist in S3 when provided
 
 ### Chores
 

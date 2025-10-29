@@ -286,6 +286,52 @@ def verify_all_required_tags_satisfied(assetTags):
     if len(missingTagTypesForError) > 0:
         raise ValueError(f"Asset Details are missing tags of required tag types: {missingTagTypesForError}")
 
+def check_s3_prefix_exists(bucket_name, prefix):
+    """
+    Check if an S3 prefix (folder) exists by listing objects with that prefix
+    
+    Args:
+        bucket_name: S3 bucket name
+        prefix: S3 prefix to check (should end with '/')
+        
+    Returns:
+        bool: True if prefix exists (has objects), False otherwise
+    """
+    try:
+        response = s3_client.list_objects_v2(
+            Bucket=bucket_name,
+            Prefix=prefix,
+            MaxKeys=1  # Only need to know if at least one object exists
+        )
+        return 'Contents' in response and len(response['Contents']) > 0
+    except Exception as e:
+        logger.exception(f"Error checking S3 prefix existence: {e}")
+        raise VAMSGeneralErrorResponse("Error validating S3 location")
+
+def check_s3_key_exists(bucket_name, key):
+    """
+    Check if a specific S3 key exists
+    
+    Args:
+        bucket_name: S3 bucket name
+        key: S3 key to check
+        
+    Returns:
+        bool: True if key exists, False otherwise
+    """
+    try:
+        s3_client.head_object(Bucket=bucket_name, Key=key)
+        return True
+    except s3_client.exceptions.ClientError as e:
+        if e.response['Error']['Code'] == '404':
+            return False
+        else:
+            logger.exception(f"Error checking S3 key existence: {e}")
+            raise VAMSGeneralErrorResponse("Error validating S3 location")
+    except Exception as e:
+        logger.exception(f"Error checking S3 key existence: {e}")
+        raise VAMSGeneralErrorResponse("Error validating S3 location")
+
 def create_prefix_folder(bucket, prefix):
     """Create a prefix folder in S3 bucket"""
     try:
@@ -415,10 +461,26 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
     if request_model.bucketExistingKey:
         # Use the provided existing key (must still be at the base path for the database id -> bucket id provided)
         s3_key = normalize_s3_path(s3_bucket_prefix, request_model.bucketExistingKey)
+        logger.info(f"Validating existing S3 key: {s3_key} in bucket: {s3_bucket}")
+        
+        # Check if the key exists in S3 (full path: bucketPrefix/bucketExistingKey)
+        if not check_s3_key_exists(s3_bucket, s3_key):
+            error_msg = "The specified bucketExistingKey does not exist in the asset's database default S3 bucket"
+            logger.error(error_msg)
+            raise VAMSGeneralErrorResponse(error_msg)
+        
         logger.info(f"Using existing S3 key: {s3_key} in bucket: {s3_bucket}")
     else:
         # Create a new prefix folder
         s3_key = s3_bucket_prefix + assetId + '/'
+        logger.info(f"Validating new prefix uniqueness: {s3_key} in bucket: {s3_bucket}")
+        
+        # Check if the prefix already exists (full path: bucketPrefix/assetId/)
+        if check_s3_prefix_exists(s3_bucket, s3_key):
+            error_msg = "Asset identifier is not unique for the given S3 bucket location"
+            logger.error(error_msg)
+            raise VAMSGeneralErrorResponse(error_msg)
+        
         logger.info(f"Creating new prefix folder: {s3_key} in bucket: {s3_bucket}")
         create_prefix_folder(s3_bucket, s3_key)
     

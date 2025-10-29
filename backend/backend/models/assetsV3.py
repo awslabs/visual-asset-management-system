@@ -49,12 +49,11 @@ class CreateAssetRequestModel(BaseModel, extra=Extra.ignore):
     """Request model for creating a new asset (metadata only)"""
     databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
     assetId: Optional[str] = Field(None, min_length=1, max_length=256, strip_whitespace=False, pattern=filename_pattern)
-    s3AssetBucket: Optional[str] = None
     assetName: str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
     description: str = Field(min_length=4, max_length=256, strip_whitespace=True)
     isDistributable: bool
     tags: Optional[list[str]] = []
-    bucketExistingKey: Optional[str] = None  # Optional existing key in the S3 bucket
+    bucketExistingKey: Optional[str] = None  # Optional existing key in the database default S3 bucket
 
     @root_validator
     def validate_fields(cls, values):
