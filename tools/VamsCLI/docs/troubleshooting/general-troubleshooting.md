@@ -2,40 +2,188 @@
 
 This document covers debug mode usage, performance optimization, recovery procedures, and general VamsCLI troubleshooting.
 
-## Debug Mode
+## Logging and Verbose Mode
 
-For detailed error information, use debug mode:
+VamsCLI provides comprehensive logging capabilities for troubleshooting and debugging.
 
-```bash
-vamscli --debug <command>
-```
+### Automatic Error Logging
 
-This provides:
+**All errors and warnings are automatically logged to file**, regardless of verbose mode:
 
--   Full stack traces for errors
--   Detailed API request/response information
--   Internal state information
+**Log File Location:**
+
+-   **Windows**: `%APPDATA%\vamscli\logs\vamscli.log`
+-   **macOS**: `~/Library/Application Support/vamscli/logs/vamscli.log`
+-   **Linux**: `~/.config/vamscli/logs/vamscli.log`
+
+**What Gets Logged:**
+
+-   All command invocations (start/end, duration, success/failure)
+-   All exceptions with full stack traces
+-   All API requests and responses (with sensitive data redacted)
+-   All warnings
+-   Configuration details
 -   Timing information
 
-**Example:**
+**Log Format:**
 
-```bash
-vamscli --debug auth login -u user@example.com
-vamscli --debug assets create -d my-db --name "Test Asset"
+```
+[2025-01-27 11:55:28] [INFO] [default] [assets.list] Command started: assets.list
+[2025-01-27 11:55:29] [DEBUG] [default] [assets.list] API Request: GET /database/my-db/assets
+[2025-01-27 11:55:29] [DEBUG] [default] [assets.list] API Response: 200 (0.23s)
+[2025-01-27 11:55:29] [INFO] [default] [assets.list] Command completed successfully (duration: 0.25s)
 ```
 
-### Advanced Debug Mode
+**Log Rotation:**
 
-For maximum debugging information:
+-   Maximum file size: 10MB
+-   Backup count: 5 files
+-   Automatic rotation when size limit reached
+-   Files: `vamscli.log`, `vamscli.log.1`, `vamscli.log.2`, etc.
+
+### Verbose Mode
+
+For detailed output in the console, use the `--verbose` flag:
 
 ```bash
-# Set environment variable for detailed logging
-export VAMSCLI_DEBUG=1
-vamscli --debug <command>
+vamscli --verbose <command>
+```
 
-# For Windows PowerShell
-$env:VAMSCLI_DEBUG = "1"
+**Verbose Mode Features:**
+
+-   **Configuration Details**: Shows profile name, API gateway URL, CLI version
+-   **API Request/Response Logging**: Displays all API calls with timing
+-   **Full Stack Traces**: Shows complete error details for debugging
+-   **Timing Information**: Shows command execution duration
+-   **Warning Messages**: Displays all warnings in console
+
+**Example Verbose Output:**
+
+```bash
+$ vamscli --verbose assets get my-db my-asset
+
+📋 Using profile: default
+📋 API Gateway: https://api.example.com
+📋 CLI Version: 2.2.0
+
+→ API Request: GET /database/my-db/assets/my-asset
+← API Response: 200 (0.23s)
+
+Asset Details:
+  Asset ID: my-asset
+  Database: my-db
+  ...
+
+✓ Command completed successfully in 0.25s
+```
+
+**Verbose Mode with Errors:**
+
+```bash
+$ vamscli --verbose assets get my-db nonexistent
+
+📋 Using profile: default
+📋 API Gateway: https://api.example.com
+📋 CLI Version: 2.2.0
+
+→ API Request: GET /database/my-db/assets/nonexistent
+← API Response: 404 (0.18s)
+
+✗ Asset Error: Asset 'nonexistent' not found
+
+VERBOSE ERROR DETAILS:
+Traceback (most recent call last):
+  File "vamscli/commands/assets.py", line 123, in get
+    result = api_client.get_asset(database_id, asset_id)
+  File "vamscli/utils/api_client.py", line 456, in get_asset
+    raise AssetNotFoundError(f"Asset '{asset_id}' not found")
+vamscli.utils.exceptions.AssetNotFoundError: Asset 'nonexistent' not found
+
+✗ Command failed after 0.20s
+```
+
+### Debug Mode (Legacy)
+
+For backward compatibility, `--debug` mode is still supported:
+
+```bash
 vamscli --debug <command>
+```
+
+**Note**: `--verbose` is now the recommended approach for detailed output. The `--debug` flag provides similar functionality but with less structured output.
+
+### Viewing Log Files
+
+**View recent log entries:**
+
+```bash
+# Windows PowerShell
+Get-Content "$env:APPDATA\vamscli\logs\vamscli.log" -Tail 50
+
+# macOS/Linux
+tail -50 ~/.config/vamscli/logs/vamscli.log
+```
+
+**Search log files for specific errors:**
+
+```bash
+# Windows PowerShell
+Select-String -Path "$env:APPDATA\vamscli\logs\vamscli.log" -Pattern "ERROR"
+
+# macOS/Linux
+grep "ERROR" ~/.config/vamscli/logs/vamscli.log
+```
+
+**View logs for specific command:**
+
+```bash
+# Windows PowerShell
+Select-String -Path "$env:APPDATA\vamscli\logs\vamscli.log" -Pattern "assets.create"
+
+# macOS/Linux
+grep "assets.create" ~/.config/vamscli/logs/vamscli.log
+```
+
+**View logs for specific profile:**
+
+```bash
+# Windows PowerShell
+Select-String -Path "$env:APPDATA\vamscli\logs\vamscli.log" -Pattern "\[production\]"
+
+# macOS/Linux
+grep "\[production\]" ~/.config/vamscli/logs/vamscli.log
+```
+
+### Log File Management
+
+**Check log file size:**
+
+```bash
+# Windows PowerShell
+Get-Item "$env:APPDATA\vamscli\logs\vamscli.log" | Select-Object Length, LastWriteTime
+
+# macOS/Linux
+ls -lh ~/.config/vamscli/logs/vamscli.log
+```
+
+**Clear log files (if needed):**
+
+```bash
+# Windows PowerShell
+Remove-Item "$env:APPDATA\vamscli\logs\vamscli.log*"
+
+# macOS/Linux
+rm ~/.config/vamscli/logs/vamscli.log*
+```
+
+**Archive log files:**
+
+```bash
+# Windows PowerShell
+Compress-Archive -Path "$env:APPDATA\vamscli\logs" -DestinationPath "vamscli-logs-$(Get-Date -Format 'yyyy-MM-dd').zip"
+
+# macOS/Linux
+tar -czf "vamscli-logs-$(date +%Y-%m-%d).tar.gz" ~/.config/vamscli/logs/
 ```
 
 ## Getting Detailed Information

@@ -237,14 +237,6 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
         for file_info in files:
             validate_file_for_upload(file_info.local_path, upload_type, file_info.relative_key)
         
-        # Validate preview files have base files (for assetFile uploads)
-        if upload_type == "assetFile":
-            valid, missing_files = validate_preview_files_have_base_files(files)
-            if not valid:
-                raise PreviewFileError(
-                    f"Preview files missing base files: {', '.join(missing_files)}"
-                )
-        
         # Create upload sequences with enhanced validation
         try:
             sequences = create_upload_sequences(files)

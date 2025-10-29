@@ -106,6 +106,14 @@ AUTH_FILE_NAME = "auth_profile.json"
 CREDENTIALS_FILE_NAME = "credentials.json"
 DEFAULT_PROFILE_NAME = "default"
 
+# Logging Configuration
+LOG_DIR_NAME = "logs"
+LOG_FILE_NAME = "vamscli.log"
+LOG_MAX_BYTES = 10 * 1024 * 1024  # 10MB
+LOG_BACKUP_COUNT = 5
+LOG_FORMAT = "[%(asctime)s] [%(levelname)s] [%(profile)s] [%(command)s] %(message)s"
+LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
 # Profile validation
 PROFILE_NAME_MIN_LENGTH = 3
 PROFILE_NAME_MAX_LENGTH = 50

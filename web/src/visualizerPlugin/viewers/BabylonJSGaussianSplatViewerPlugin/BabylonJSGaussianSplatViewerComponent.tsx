@@ -185,38 +185,35 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                             "BabylonJS Gaussian Splat Viewer: Loading Gaussian Splat with SceneLoader..."
                         );
 
-                        BABYLON.SceneLoader.ImportMeshAsync(
-                            "",
-                            "",
-                            response[1],
-                            scene
-                        ).then((result) => {
-                            console.log(
-                                "BabylonJS Gaussian Splat Viewer: File loaded successfully, positioning camera"
-                            );
-
-                            if (result.meshes.length > 0) {
-                                const mesh = result.meshes[0];
-                                const boundingInfo = mesh.getBoundingInfo();
-                                const center = boundingInfo.boundingBox.center;
-                                const radius = boundingInfo.boundingSphere.radius;
-
-                                camera.setTarget(center);
-                                camera.radius = Math.max(radius * 2, 5);
-
+                        BABYLON.SceneLoader.ImportMeshAsync("", "", response[1], scene)
+                            .then((result) => {
                                 console.log(
-                                    "BabylonJS Gaussian Splat Viewer: Camera positioned for optimal viewing"
+                                    "BabylonJS Gaussian Splat Viewer: File loaded successfully, positioning camera"
                                 );
-                            }
 
-                            setIsLoading(false);
-                        }).catch((error: unknown) => {
-                            console.error(
-                                "BabylonJS Gaussian Splat Viewer: Error loading file:",
-                                error
-                            );
-                            setIsLoading(false);
-                        });
+                                if (result.meshes.length > 0) {
+                                    const mesh = result.meshes[0];
+                                    const boundingInfo = mesh.getBoundingInfo();
+                                    const center = boundingInfo.boundingBox.center;
+                                    const radius = boundingInfo.boundingSphere.radius;
+
+                                    camera.setTarget(center);
+                                    camera.radius = Math.max(radius * 2, 5);
+
+                                    console.log(
+                                        "BabylonJS Gaussian Splat Viewer: Camera positioned for optimal viewing"
+                                    );
+                                }
+
+                                setIsLoading(false);
+                            })
+                            .catch((error: unknown) => {
+                                console.error(
+                                    "BabylonJS Gaussian Splat Viewer: Error loading file:",
+                                    error
+                                );
+                                setIsLoading(false);
+                            });
                     } catch (error) {
                         console.error(
                             "BabylonJS Gaussian Splat Viewer: Error creating GaussianSplattingMesh:",

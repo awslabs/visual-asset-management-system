@@ -58,7 +58,8 @@ class UploadSequence:
 def calculate_file_parts(file_size: int) -> List[Dict[str, Any]]:
     """Calculate parts for a single file based on size."""
     if file_size == 0:
-        return [{"part_number": 1, "start_byte": 0, "end_byte": 0, "size": 0}]
+        # Zero-byte files have no parts - backend expects num_parts: 0
+        return []
     
     # Determine chunk size based on file size
     if file_size > MAX_FILE_SIZE_SMALL_CHUNKS:
@@ -128,11 +129,11 @@ def collect_files_from_directory(directory: Path, recursive: bool = False,
     if not directory.is_dir():
         raise InvalidFileError(f"Path is not a directory: {directory}")
     
-    # Normalize asset location
+    # Normalize asset location - ensure it starts with / and ends with /
+    if not asset_location.startswith('/'):
+        asset_location = '/' + asset_location
     if not asset_location.endswith('/'):
         asset_location += '/'
-    if asset_location.startswith('/'):
-        asset_location = asset_location[1:]
     
     # Collect files
     pattern = "**/*" if recursive else "*"
@@ -159,11 +160,11 @@ def collect_files_from_list(file_paths: List[str], asset_location: str = "/") ->
     """Collect files from a list of file paths."""
     files = []
     
-    # Normalize asset location
+    # Normalize asset location - ensure it starts with / and ends with /
+    if not asset_location.startswith('/'):
+        asset_location = '/' + asset_location
     if not asset_location.endswith('/'):
         asset_location += '/'
-    if asset_location.startswith('/'):
-        asset_location = asset_location[1:]
     
     # Check for duplicate filenames
     filenames = []

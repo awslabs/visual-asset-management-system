@@ -57,7 +57,6 @@ const defaultProps: Partial<SplatToolboxConstructProps> = {
     //env: {},
 };
 
-
 export class SplatToolboxConstruct extends Construct {
     public pipelineVamsLambdaFunctionName: string;
 
@@ -69,12 +68,12 @@ export class SplatToolboxConstruct extends Construct {
         const region = Stack.of(this).region;
         const account = Stack.of(this).account;
 
-        const splatGitHubRepoLink = "https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws.git"
-        const splatGitHubRepoCommitHash = "0200c497584f511e54a129cbd1a783df98aeb4b2"
+        const splatGitHubRepoLink =
+            "https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws.git";
+        const splatGitHubRepoCommitHash = "0200c497584f511e54a129cbd1a783df98aeb4b2";
 
         // Download and Sync splat toolbox repository container files
         this.syncSplatToolboxContainer(splatGitHubRepoLink, splatGitHubRepoCommitHash);
-
 
         /**
          * Batch Resources
@@ -171,13 +170,9 @@ export class SplatToolboxConstruct extends Construct {
                     "service-role/AmazonECSTaskExecutionRolePolicy"
                 ),
                 iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
-                iam.ManagedPolicy.fromAwsManagedPolicyName(
-                    "AmazonSageMakerFullAccess"
-                ),
+                iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonSageMakerFullAccess"),
             ],
         });
-
-
 
         /**
          * AWS Batch Job Definition & Compute Env for Splat Toolbox Container
@@ -204,7 +199,9 @@ export class SplatToolboxConstruct extends Construct {
                 ),
                 dockerfileName: "Dockerfile",
                 containerExecutionCommand: ["python", "__main__.py"],
-                batchJobDefinitionName: `SplatToolboxGpuJob-${props.config.name+"_"+props.config.app.baseStackName}`,
+                batchJobDefinitionName: `SplatToolboxGpuJob-${
+                    props.config.name + "_" + props.config.app.baseStackName
+                }`,
             }
         );
 
@@ -240,7 +237,7 @@ export class SplatToolboxConstruct extends Construct {
             causePath: sfn.JsonPath.stringAt("$.error.Cause"),
             errorPath: sfn.JsonPath.stringAt("$.error.Error"),
         });
-        
+
         // end state evaluation: success or failure
         const endStatesChoice = new sfn.Choice(this, "EndStatesChoice")
             .when(sfn.Condition.isPresent("$.error"), failState)
@@ -377,7 +374,7 @@ export class SplatToolboxConstruct extends Construct {
             const importProvider = new cr.Provider(this, "ImportProvider", {
                 onEventHandler: importFunction,
             });
-            
+
             NagSuppressions.addResourceSuppressionsByPath(
                 Stack.of(this),
                 `/${this.toString()}/ImportProvider/framework-onEvent/ServiceRole/DefaultPolicy/Resource`,
@@ -444,8 +441,7 @@ export class SplatToolboxConstruct extends Construct {
                 "The Splat Toolbox Pipeline Lambda Function Name to use in a VAMS Pipeline",
             exportName: "SplatToolboxLambdaExecutionFunctionName",
         });
-        this.pipelineVamsLambdaFunctionName =
-            SplatToolboxPipelineVamsExecuteFunction.functionName;
+        this.pipelineVamsLambdaFunctionName = SplatToolboxPipelineVamsExecuteFunction.functionName;
 
         //Nag Supressions
         NagSuppressions.addResourceSuppressions(
@@ -710,18 +706,41 @@ export class SplatToolboxConstruct extends Construct {
 
     private syncSplatToolboxContainer(gitHubLink: string, gitHubCommitHash: string): void {
         try {
-            console.log('Downloading/Syncing Splat Toolbox repository...');
-            const tempDir = path.join(os.tmpdir(), 'splat-toolbox-repo');
-            const targetDir = path.resolve(__dirname, '..', '..', '..', '..', '..', '..', '..', 'backendPipelines', '3dRecon', 'splatToolbox', 'container');
-            
+            const targetDir = path.resolve(
+                __dirname,
+                "..",
+                "..",
+                "..",
+                "..",
+                "..",
+                "..",
+                "..",
+                "backendPipelines",
+                "3dRecon",
+                "splatToolbox",
+                "container"
+            );
+
+            // Check if Dockerfile already exists - if so, skip the entire sync process
+            const dockerfilePath = path.join(targetDir, "Dockerfile");
+            if (fs.existsSync(dockerfilePath)) {
+                console.log(
+                    "Splat Toolbox already exists in target pipeline directory. Skipping repository sync."
+                );
+                return;
+            }
+
+            console.log("Downloading/Syncing Splat Toolbox repository...");
+            const tempDir = path.join(os.tmpdir(), "splat-toolbox-repo");
+
             if (fs.existsSync(tempDir)) {
                 fs.rmSync(tempDir, { recursive: true, force: true });
             }
 
-            execSync(`git clone ${gitHubLink} "${tempDir}"`, { stdio: 'inherit' });
-            execSync(`git -C "${tempDir}" checkout ${gitHubCommitHash}`, { stdio: 'inherit' });
+            execSync(`git clone ${gitHubLink} "${tempDir}"`, { stdio: "inherit" });
+            execSync(`git -C "${tempDir}" checkout ${gitHubCommitHash}`, { stdio: "inherit" });
 
-            const sourceDir = path.join(tempDir, 'source', 'container');
+            const sourceDir = path.join(tempDir, "source", "container");
             if (fs.existsSync(sourceDir)) {
                 console.log(`Copying from ${sourceDir} to ${targetDir}`);
                 if (!fs.existsSync(targetDir)) {
@@ -745,29 +764,29 @@ export class SplatToolboxConstruct extends Construct {
                 for (const file of files) {
                     copyRecursive(path.join(sourceDir, file), path.join(targetDir, file));
                 }
-                
+
                 // Modify Dockerfile to add __main__.py copy
-                const dockerfilePath = path.join(targetDir, 'Dockerfile');
+                const dockerfilePath = path.join(targetDir, "Dockerfile");
                 if (fs.existsSync(dockerfilePath)) {
-                    let dockerfileContent = fs.readFileSync(dockerfilePath, 'utf8');
-                    
+                    let dockerfileContent = fs.readFileSync(dockerfilePath, "utf8");
+
                     // Add COPY for __main__.py if not already present
-                    if (!dockerfileContent.includes('COPY ./__main__.py')) {
+                    if (!dockerfileContent.includes("COPY ./__main__.py")) {
                         // Find the COPY ./src/main.py line and add __main__.py before it
                         dockerfileContent = dockerfileContent.replace(
                             /(COPY \.\/src\/main\.py)/,
-                            'COPY ./__main__.py                                                  ${CODE_PATH}\n$1'
+                            "COPY ./__main__.py                                                  ${CODE_PATH}\n$1"
                         );
                         fs.writeFileSync(dockerfilePath, dockerfileContent);
-                        console.log('Added __main__.py to Dockerfile');
+                        console.log("Added __main__.py to Dockerfile");
                     }
                 }
             }
-            
+
             fs.rmSync(tempDir, { recursive: true, force: true });
-            console.log('Repository sync completed successfully');
+            console.log("Repository sync completed successfully");
         } catch (error) {
-            console.warn('Repository sync failed, continuing with existing files:', error);
+            console.warn("Repository sync failed, continuing with existing files:", error);
         }
     }
 }

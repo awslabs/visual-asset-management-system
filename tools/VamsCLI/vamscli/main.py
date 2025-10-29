@@ -90,6 +90,7 @@ def handle_profile_option(ctx: click.Context, param: click.Parameter, value: Opt
 
 @click.group(invoke_without_command=True)
 @click.option('--version', is_flag=True, help='Show version information')
+@click.option('--verbose', is_flag=True, help='Enable verbose output with detailed error information, API requests/responses, and timing')
 @click.option('--profile', 
               default=DEFAULT_PROFILE_NAME,
               callback=handle_profile_option,
@@ -98,7 +99,7 @@ def handle_profile_option(ctx: click.Context, param: click.Parameter, value: Opt
 @click.option('--setup-check', is_flag=True, hidden=True, callback=check_setup_required, expose_value=False, is_eager=False)
 @click.pass_context
 @handle_global_exceptions()
-def cli(ctx: click.Context, version: bool):
+def cli(ctx: click.Context, version: bool, verbose: bool):
     """
     VamsCLI - Command Line Interface for Visual Asset Management System (VAMS).
     
@@ -115,7 +116,25 @@ def cli(ctx: click.Context, version: bool):
         vamscli setup https://api.example.com
         vamscli auth login -u john.doe@example.com
         vamscli auth status
+        vamscli --verbose assets list  # Run with verbose output
     """
+    # Initialize logging system (wrapped in try/catch to prevent logging failures from breaking CLI)
+    try:
+        from .utils.logging import initialize_logging, set_context
+        initialize_logging(verbose)
+        
+        # Set profile context for logging
+        profile_name = ctx.obj.get('profile_name', DEFAULT_PROFILE_NAME) if ctx.obj else DEFAULT_PROFILE_NAME
+        set_context(profile_name=profile_name)
+    except Exception:
+        # Don't fail if logging initialization fails
+        pass
+    
+    # Store verbose flag in context for all commands
+    if ctx.obj is None:
+        ctx.obj = {}
+    ctx.obj['verbose'] = verbose
+    
     if version:
         click.echo(f"VamsCLI version {get_version()}")
         return

@@ -521,6 +521,18 @@ export function storageResourcesBuilder(scope: Construct, config: Config.Config)
         },
     });
 
+    assetStorageTable.addGlobalSecondaryIndex({
+        indexName: "assetIdGSI",
+        partitionKey: {
+            name: "assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
     const databaseStorageTable = new dynamodb.Table(scope, "DatabaseStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {

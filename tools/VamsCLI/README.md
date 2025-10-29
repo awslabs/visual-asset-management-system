@@ -7,6 +7,7 @@ VamsCLI is a command-line interface for the Visual Asset Management System (VAMS
 -   **Easy Setup**: Simple configuration with any VAMS base URL (CloudFront, ALB, API Gateway, or custom domain)
 -   **Secure Authentication**: AWS Cognito integration with MFA support and override token system
 -   **Feature Switches**: Automatic detection and management of backend-controlled feature flags
+-   **Comprehensive Logging**: Automatic error logging to file with verbose mode for detailed output
 -   **Asset Management**: Create, update, and manage assets with comprehensive metadata support
 -   **File Upload System**: Advanced file upload with chunking, progress monitoring, and retry logic
 -   **Version Checking**: Automatic version compatibility checking
@@ -234,11 +235,72 @@ VamsCLI provides comprehensive documentation organized by functional area:
 -   **[Authentication Guide](docs/AUTHENTICATION.md)** - Authentication system details
 -   **[Development Guide](docs/DEVELOPMENT.md)** - Development and contribution guidelines
 
+## Logging and Verbose Mode
+
+VamsCLI provides comprehensive logging and debugging capabilities:
+
+### Automatic Error Logging
+
+**All errors and warnings are automatically logged to file:**
+
+-   **Windows**: `%APPDATA%\vamscli\logs\vamscli.log`
+-   **macOS**: `~/Library/Application Support/vamscli/logs/vamscli.log`
+-   **Linux**: `~/.config/vamscli/logs/vamscli.log`
+
+**What Gets Logged:**
+
+-   All command invocations with timing
+-   All exceptions with full stack traces
+-   All API requests and responses
+-   All warnings
+-   Configuration details
+
+**Log Rotation**: Automatic rotation at 10MB with 5 backup files.
+
+### Verbose Mode
+
+For detailed console output, use the `--verbose` flag:
+
+```bash
+# Run any command with verbose output
+vamscli --verbose assets list
+vamscli --verbose auth login -u user@example.com
+vamscli --verbose --profile production database list
+```
+
+**Verbose Mode Shows:**
+
+-   Configuration details (profile, API gateway, CLI version)
+-   API request/response details with timing
+-   Full stack traces for errors
+-   Command execution duration
+-   Warning messages
+
+**Example:**
+
+```bash
+$ vamscli --verbose assets get my-db my-asset
+
+📋 Using profile: default
+📋 API Gateway: https://api.example.com
+📋 CLI Version: 2.2.0
+
+→ API Request: GET /database/my-db/assets/my-asset
+← API Response: 200 (0.23s)
+
+Asset Details: ...
+
+✓ Command completed successfully in 0.25s
+```
+
+For more details, see the [Global Options Documentation](docs/commands/global-options.md) and [General Troubleshooting Guide](docs/troubleshooting/general-troubleshooting.md).
+
 ## Global Options
 
 VamsCLI supports global options for enhanced functionality:
 
 -   **`--version`** - Show version information
+-   **`--verbose`** - Enable verbose output with detailed error information, API requests/responses, and timing
 -   **`--profile`** - Profile name to use for the command
 
 ## Environment Variables

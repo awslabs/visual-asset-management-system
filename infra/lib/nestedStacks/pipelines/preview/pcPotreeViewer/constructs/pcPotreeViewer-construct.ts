@@ -196,7 +196,11 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     "container"
                 ),
                 dockerfileName: "Dockerfile_PDAL",
-                batchJobDefinitionName: "PcPotreeViewerJob_PDAL"+props.config.name+"_"+props.config.app.baseStackName,
+                batchJobDefinitionName:
+                    "PcPotreeViewerJob_PDAL" +
+                    props.config.name +
+                    "_" +
+                    props.config.app.baseStackName,
             }
         );
 
@@ -225,7 +229,11 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     "container"
                 ),
                 dockerfileName: "Dockerfile_Potree",
-                batchJobDefinitionName: "PcPotreeViewerJob_Potree"+props.config.name+"_"+props.config.app.baseStackName,
+                batchJobDefinitionName:
+                    "PcPotreeViewerJob_Potree" +
+                    props.config.name +
+                    "_" +
+                    props.config.app.baseStackName,
             }
         );
 
@@ -414,8 +422,9 @@ export class PcPotreeViewerConstruct extends NestedStack {
                 props.storageResources.encryption.kmsKey
             );
 
-        if (props.config.app.pipelines.usePreviewPcPotreeViewer.sqsAutoRunOnAssetModified === true) {
-
+        if (
+            props.config.app.pipelines.usePreviewPcPotreeViewer.sqsAutoRunOnAssetModified === true
+        ) {
             //Add subscription for each bucket to kick-off lambda function of pipeline (as the main pipeline execution action)
             const assetBucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
             let index = 0;
@@ -458,7 +467,9 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     );
                 }
 
-                onS3ObjectCreatedQueue.grantConsumeMessages(PcPotreeViewerPipelineSqsExecuteFunction);
+                onS3ObjectCreatedQueue.grantConsumeMessages(
+                    PcPotreeViewerPipelineSqsExecuteFunction
+                );
 
                 // The functions poll the respective queues, which is populated by messages sent to the topic.
                 const esmPcCreated = new lambda.EventSourceMapping(

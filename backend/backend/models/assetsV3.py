@@ -60,6 +60,15 @@ class CreateAssetRequestModel(BaseModel, extra=Extra.ignore):
     def validate_fields(cls, values):
         #Validate fields that require more scrutiny past the basic data type (str, bool, etc.) or custom validation logic
         logger.info("Validating custom parameters")
+        
+        # Validate assetId doesn't contain forward slashes
+        asset_id = values.get('assetId', None)
+        if asset_id and '/' in asset_id:
+            message = "Asset identifier cannot contain forward slashes"
+            logger.error(message)
+            raise ValueError(message)
+        
+        # Validate tags
         (valid, message) = validate({
             'tags': {
                 'value': values.get('tags'), 
@@ -220,8 +229,9 @@ class CompleteUploadRequestModel(BaseModel, extra=Extra.ignore):
             logger.error(message)
             raise ValueError(message)
             
-        # Check for duplicate uploadIds
-        upload_ids = [file.uploadIdS3 for file in values.get('files', [])]
+        # Check for duplicate uploadIds, but allow "zero-byte" to be duplicated
+        # (multiple zero-byte files all get uploadIdS3="zero-byte" from initialization)
+        upload_ids = [file.uploadIdS3 for file in values.get('files', []) if file.uploadIdS3 != "zero-byte"]
         if len(upload_ids) != len(set(upload_ids)):
             message = "Duplicate uploadIdS3 values are not allowed"
             logger.error(message)

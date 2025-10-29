@@ -287,11 +287,7 @@ export function generateContentSecurityPolicy(
         "'sha256-fUpTbA+CO0BMxLmoVHffhbh3ZTLkeobgwlFl5ICCQmg='", // script in index.html
     ];
 
-    let workerSrc = [
-        "'self'",
-        "blob:",
-        "data:",
-    ]
+    let workerSrc = ["'self'", "blob:", "data:"];
 
     let imgSrc = ["'self'", "blob:", "data:", `https://${Service("S3").Endpoint}/`];
 

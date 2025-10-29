@@ -8,11 +8,11 @@ This version includes significant enhancements to VAMS to include a new CLI tool
 
 ### ⚠ BREAKING CHANGES
 
-All APIGateway authorizers were swapped for custom lambda authorizers to provide more flexibility in implementing additional functionality. This may cause issues with your organization so please review with your security teams. Authorizer changes may require forced cache resets on API gateways if new authorizations are not follwoing new rules set. (https://docs.aws.amazon.com/cli/latest/reference/apigatewayv2/reset-authorizers-cache.html)
+All APIGateway authorizers were swapped for custom lambda authorizers to provide more flexibility in implementing additional functionality. This may cause issues with your organization so please review with your security teams. Authorizer changes may require forced cache resets on API gateways if new authorizations are not following new rules set. (https://docs.aws.amazon.com/cli/latest/reference/apigatewayv2/reset-authorizers-cache.html)
 
 Changes to BatchFargate CDK construct naming for use-case pipeline naming may require you to deploy CDK without batch pipelines and then again with to properly re-deploy them. Not doing this with existing deployed pipelines (Metadata 3D Labeling and PcPotree) will result in a CDK deployment error within ECS Fargate. This may also require you to update your VAMS pipeline/workflow lambda function names after re-deployment.
 
-In order to get lambdas to work behind a VPC again (broken as of V2.2), MFA for roles cannot be supported if Cognito is on and all lamdbas are behind a behind (CDK config flag) or OpenSearch provisioned is turned on (CDK config flag).
+In order to get lambdas to work behind a VPC again (broken as of V2.2), MFA for roles cannot be supported if Cognito is on and all lambdas are behind a VPC (CDK config flag) or OpenSearch provisioned is turned on (CDK config flag).
 
 OpenSearch has new indexes and requires the data migration script or new re-indexing tool script to be run on existing assets and files to re-index open search with existing data.
 
@@ -21,7 +21,7 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
 ### Features
 
 -   **CLI** VAMS now has a CLI tool that can be used to automate VAMS operations. It includes operations so far for authentication, database, asset, assetLinks, assetLinkMetadata, metadata, metadataSchema, tags, TagTypes, search, featureSwitch, and files. More operations to match API functionality to come in future releases such as more admin functionalities of VAMS.
--   **Web** The website viewer system has been rewritten to support a plugin based dynamically loaded viewing system which allows for much easier capability to add new viewers and adds more functionality. Documentation can be found at: `web\src\visualizerPlugin\README.md`
+-   **Web** The website viewer system has been rewritten to support a plugin-based dynamically loaded viewing system which allows for much easier capability to add new viewers and adds more functionality. Documentation can be found at: `web\src\visualizerPlugin\README.md`
     -   Support for multiple viewers per file types which is now controlled with a drop-down as part of the viewer
     -   Support to define which viewers are for multiple files or single files
     -   Support for custom parameters as part of viewer plugin configuration which allows for token configuration for paid/ISV integrations
@@ -39,11 +39,11 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
     -   Asset link relationship data will now additionally be indexed (excluding asset link metadata for now)
     -   **UI** Assets (now "Assets and Files") has a completely new search page with many new filtering capabilities and options.
     -   **Web** Search map view will now allow for many more metadata fields to be used for adding map marker or area placement (any asset with `location` (GP/GS) and `longitude` (string or number) / `latitude` (string or number) combination metadata will show up)
-    -   Search now has it's origional API of `/search` and a new `/search/simple` API for a simplified search input
+    -   Search now has its original API of `/search` and a new `/search/simple` API for a simplified search input
     -   Implemented a new CDK config option in `config.app.openSearch.reindexOnCdkDeploy` that can trigger a complete index clear and re-index of assets and files. This can also be used as CDK context argument `reindexOnCdkDeploy` for the cdk deploy command. Note: Only use this after having CDK deploying at least once with v2.3 changes, otherwise the reindex may not work or error.
-    -   A new CDK custom tool section and migration scripts has been added to help manually trigger a reindex outside of a CDK deploy
--   Maps on the backend and UI frontend is updated to use the new location service APIKey method and removes the older raster map and place functionality
-    -   Note: This removes the last place that cognito identities are used which means the location services functionality can now be used for external IDP solutions. Cognito is no longer required to enable locaiton services. Only requirement now is commercial cloud partition (GovCloud doesn't support APIKey implementation).
+    -   A new CDK custom tool section and migration scripts have been added to help manually trigger a reindex outside of a CDK deploy
+-   Maps on the backend and UI frontend are updated to use the new location service APIKey method and removes the older raster map and place functionality
+    -   Note: This removes the last place that cognito identities are used which means the location services functionality can now be used for external IDP solutions. Cognito is no longer required to enable location services. Only requirement now is commercial cloud partition (GovCloud doesn't support APIKey implementation).
     -   Note: This change removes the cognito authenticatedRole and association with the identity pool. Unauthenticated role (no permissions assigned) still remains for now as it is needed for basic auth login by the web Amplify-SDK v1.
 -   **Web** Added a draggable splitter in ViewAsset page between the file manager tree view and details panel
 -   Added a new API endpoint for asset file streaming (similar to asset preview auxiliary files) at `GET /database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`
@@ -51,18 +51,18 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
 -   All HTTP APIGateway authorizers were swapped for custom lambda authorizers.
     -   New Lambda Layer specifically with libraries for the lambda authorizers
     -   New support for CDK configured IP range restrictions for API Gateway calls that are managed in the authorizer
--   Added new uploadFile backend logic with an SQS queue to handle final processing of large >1GB files asynchonously. This prevented APIGateway->Lambda timesouts (30 seconds)
+-   Added new uploadFile backend logic with an SQS queue to handle final processing of large >1GB files asynchronously. This prevented APIGateway->Lambda timeouts (30 seconds)
 -   Added WXYZ, Boolean, Date, 4x4 Matrix, Geoshape, GeoPoint, LLA (Latitude Longitude, Altitude), and JSON asset link metadata value types.
     -   **UI** Added additional `Matrix` static asset link type metadata field of type 4x4 Matrix.
-    -   **Web** Defaulted `rotation` static asset link metdata field to WXYZ field type (from XYZ)
--   Asset link parent-child relationships now support an additional key of `assetLinkAliasId` that can be added to allow multiple parent->child relationships of the same assets. This is common in scene or engineering assembly build-outs where a parent may contain multiple of the same type of asset below it (i.e. same screws on a panel or same trees in a forest scene). T
+    -   **Web** Defaulted `rotation` static asset link metadata field to WXYZ field type (from XYZ)
+-   Asset link parent-child relationships now support an additional key of `assetLinkAliasId` that can be added to allow multiple parent->child relationships of the same assets. This is common in scene or engineering assembly build-outs where a parent may contain multiple of the same type of asset below it (i.e. same screws on a panel or same trees in a forest scene).
 -   **Web** Changed Pipeline Edit/Create to make Asset Type and Output Type a required string text field. This removes the last place that requires specific VAMS extensions to be preloaded. These fields usages are expected to be overhauled along with overall pipelines in a future release.
 -   Refactored createWorkflow to not require the stepfunctions library anymore which entirely removes the additional heavyweight lambda layer created specifically for this function. This should speed up CDK deployments, reduce CDK package size, and reduce security posture by limiting backend libraries needed. Additionally, some other upgrades were done to createWorkflow as part of the refactor:
-    -   Updating an existing workflow no longer create a new AWS step function workflow but modifies the definition of the existing (preserves job history)
-    -   Updated to the new backed error handling logic used since v2.2
-    -   GovCloud configuration restrictions updated to not include a hard use requirement of openSearch provisioned. OpenSearch serveless is supported now in GovCloud environments.
+    -   Updating an existing workflow no longer creates a new AWS step function workflow but modifies the definition of the existing (preserves job history)
+    -   Updated to the new backend error handling logic used since v2.2
+    -   GovCloud configuration restrictions updated to not include a hard use requirement of openSearch provisioned. OpenSearch serverless is supported now in GovCloud environments.
 -   Added backend and CDK capability to auto-register deployed pipelines as global pipelines and workflows in VAMS.
-    -   Defaulted many pipelines to now have defualt entries added to make it easier out of the box to execute on those pipelines/workflows.
+    -   Defaulted many pipelines to now have default entries added to make it easier out of the box to execute on those pipelines/workflows.
 -   Added `SYSTEM_USER` to admin role during CDK deployment and enabled lambda cross-call logic during authorization checks. System user is used for authorized lambda cross-calls where a requesting user context may not be present (such as calling lambdas from CDK deployments or external side-car solutions). IAM permissions must be used in this case to control access to direct lambda calls that can to inject a `lambdaCrossCall` object into the event.
 -   Added new asynchronous lambda-based `meshCadMetadataExtraction` pipeline and workflow that is `disabled by default` in all CDK configuration files. This pipeline can extract basic attributes and add them to the asset metadata for certain MESH and CAD file types selected. It uses Trimesh (MIT license) and cadQuery (Apache 2.0). Note: cadQuery further uses OpenCascade which is a LGPL-2.1 licensed.
 -   Pipelines also now have `inputAssetLocationKey` data on execution to provide the asset root prefix of where the asset is located in the assets S3 bucket (used for generating relative paths as needed, such as for file-level metadata)
@@ -83,6 +83,8 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
 -   Updated SearchBuilder and PCPotreePipeline SQS queues to use new name format to prevent overlaps of stacks within a AWS region
 -   Fix GenAIMetadataLabelingPipeline to now handle the v2.2 VAMS functionalities of multi-file assets with folders
 -   Permanently deleting asset files via the API did not remove the files metadata records
+-   Fix backend bug in `/upload` that was preventing multiple zero-byte files from being uploaded/completed in the same request.
+-   Added additional check in create asset API to validate there is no forward slash in the assetId (if provided)
 
 ### Chores
 
@@ -97,8 +99,9 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
 -   Update CSP to include workerSrc directives which are required for certain viewers to work
 -   Updated `GenAIMetadataLabelingPipeline` to use the latest Claude Sonnet 4.5 GenAI model for commercial and Sonnet 4.0 in GovCloud (previously used 3.0) and pass model ID now from CDK configuration
 -   Updated `conversion3dBasic` pipeline to use the latest Trimesh version (4.8.3)
+-   Added a new `assetIdGSI` Global Secondary Index on the assets dynamoDB table with PK: assetId, SK: databaseId to allow for easier querying without scans when just assetId is provided.
 -   Updated $inputMetadata for pipeline inputs to separate out asset and file metadata fields
--   Updated DeveloperGuide.md documentation for pipelines on all the input variables and their formats that are passed to pipelines. 
+-   Updated DeveloperGuide.md documentation for pipelines on all the input variables and their formats that are passed to pipelines.
 -   Update package dependencies and fixed any associated breaking changes
 
 ### Known Outstanding Issues

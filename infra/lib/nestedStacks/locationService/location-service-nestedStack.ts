@@ -34,7 +34,7 @@ export class LocationServiceNestedStack extends NestedStack {
             description: "API Key for VAMS Location Services Maps",
         });
 
-        //Retain the API key as an API key has to be around for 90 days before it can be deleted. 
+        //Retain the API key as an API key has to be around for 90 days before it can be deleted.
         apiKey.applyRemovalPolicy(RemovalPolicy.RETAIN);
 
         // Store API Key in SSM Parameter Store

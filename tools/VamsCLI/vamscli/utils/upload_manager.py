@@ -215,10 +215,13 @@ class UploadManager:
             file_parts[file_key].append(part_upload)
         
         # Check which files completed successfully
-        for file_key, parts in file_parts.items():
-            all_parts_successful = all(part.status == "completed" for part in parts)
+        # First, handle all files from the sequence (including zero-byte files with no parts)
+        for file_info in sequence.files:
+            file_key = file_info.relative_key
+            parts = file_parts.get(file_key, [])
             
-            if all_parts_successful:
+            # Zero-byte files have no parts, so they're automatically successful
+            if len(parts) == 0:
                 successful_files.add(file_key)
                 
                 # Find the corresponding file response to get uploadIdS3
@@ -227,16 +230,30 @@ class UploadManager:
                 completion_files.append({
                     "relativeKey": file_key,
                     "uploadIdS3": file_response["uploadIdS3"],
-                    "parts": [
-                        {
-                            "PartNumber": part.part_number,
-                            "ETag": part.etag
-                        }
-                        for part in sorted(parts, key=lambda p: p.part_number)
-                    ]
+                    "parts": []  # Empty parts list for zero-byte files
                 })
             else:
-                failed_files.add(file_key)
+                all_parts_successful = all(part.status == "completed" for part in parts)
+                
+                if all_parts_successful:
+                    successful_files.add(file_key)
+                    
+                    # Find the corresponding file response to get uploadIdS3
+                    file_response = next(f for f in init_response["files"] if f["relativeKey"] == file_key)
+                    
+                    completion_files.append({
+                        "relativeKey": file_key,
+                        "uploadIdS3": file_response["uploadIdS3"],
+                        "parts": [
+                            {
+                                "PartNumber": part.part_number,
+                                "ETag": part.etag
+                            }
+                            for part in sorted(parts, key=lambda p: p.part_number)
+                        ]
+                    })
+                else:
+                    failed_files.add(file_key)
         
         # Complete upload if we have any successful files
         completion_result = None

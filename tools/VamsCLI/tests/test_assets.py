@@ -147,6 +147,39 @@ class TestAssetCreateCommand:
         assert result.exit_code == 2  # Click error for missing required option
         assert 'Missing option' in result.output
     
+    def test_create_rejects_asset_id_in_json_input(self, cli_runner, assets_command_mocks):
+        """Test that assetId in JSON input is rejected."""
+        with assets_command_mocks as mocks:
+            json_data = {
+                'assetName': 'Test Asset',
+                'description': 'Test description',
+                'isDistributable': True,
+                'assetId': 'custom-asset-id'  # Should be rejected
+            }
+            
+            result = cli_runner.invoke(cli, [
+                'assets', 'create',
+                '-d', 'test-database',
+                '--json-input', json.dumps(json_data)
+            ])
+            
+            assert result.exit_code == 2  # Click BadParameter error
+            assert 'assetId cannot be specified' in result.output
+            assert 'CLI or web front-end' in result.output
+            assert 'automatically generated' in result.output
+            
+            # Verify API was not called
+            mocks['api_client'].create_asset.assert_not_called()
+    
+    def test_create_no_asset_id_option_exists(self, cli_runner):
+        """Test that --asset-id option no longer exists."""
+        result = cli_runner.invoke(cli, ['assets', 'create', '--help'])
+        assert result.exit_code == 0
+        assert '--asset-id' not in result.output
+        # Verify other options still exist
+        assert '--database-id' in result.output
+        assert '--name' in result.output
+        assert '--description' in result.output
     
     def test_create_asset_already_exists(self, cli_runner, assets_command_mocks):
         """Test asset creation when asset already exists."""

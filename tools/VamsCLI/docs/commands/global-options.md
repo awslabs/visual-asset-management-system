@@ -23,6 +23,69 @@ vamscli --profile production auth status
 vamscli --profile staging assets list
 ```
 
+### `--verbose`
+
+Enable verbose output with detailed error information, API requests/responses, and timing.
+
+```bash
+vamscli --verbose assets list
+vamscli --verbose auth login -u user@example.com
+vamscli --verbose --profile production database list
+```
+
+**Verbose Mode Features:**
+
+-   **Configuration Details**: Shows profile name, API gateway URL, CLI version
+-   **API Request/Response Logging**: Displays all API calls with timing
+-   **Full Stack Traces**: Shows complete error details for debugging
+-   **Timing Information**: Shows command execution duration
+-   **Warning Messages**: Displays all warnings in console
+
+**Example Verbose Output:**
+
+```bash
+$ vamscli --verbose assets get my-db my-asset
+
+📋 Using profile: default
+📋 API Gateway: https://api.example.com
+📋 CLI Version: 2.2.0
+
+→ API Request: GET /database/my-db/assets/my-asset
+← API Response: 200 (0.23s)
+
+Asset Details:
+  Asset ID: my-asset
+  Database: my-db
+  ...
+
+✓ Command completed successfully in 0.25s
+```
+
+**Verbose Mode with Errors:**
+
+```bash
+$ vamscli --verbose assets get my-db nonexistent
+
+📋 Using profile: default
+📋 API Gateway: https://api.example.com
+📋 CLI Version: 2.2.0
+
+→ API Request: GET /database/my-db/assets/nonexistent
+← API Response: 404 (0.18s)
+
+✗ Asset Error: Asset 'nonexistent' not found
+
+VERBOSE ERROR DETAILS:
+Traceback (most recent call last):
+  File "vamscli/commands/assets.py", line 123, in get
+    result = api_client.get_asset(database_id, asset_id)
+  File "vamscli/utils/api_client.py", line 456, in get_asset
+    raise AssetNotFoundError(f"Asset '{asset_id}' not found")
+vamscli.utils.exceptions.AssetNotFoundError: Asset 'nonexistent' not found
+
+✗ Command failed after 0.20s
+```
+
 ## Token Override Authentication
 
 Token override options are now part of the `auth login` command for better organization. See the [Setup and Authentication Guide](setup-auth.md) for complete details.

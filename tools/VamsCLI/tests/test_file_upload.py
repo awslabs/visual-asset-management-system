@@ -94,11 +94,8 @@ class TestFileProcessor:
         """Test part calculation for empty files."""
         parts = calculate_file_parts(0)
         
-        assert len(parts) == 1
-        assert parts[0]["part_number"] == 1
-        assert parts[0]["start_byte"] == 0
-        assert parts[0]["end_byte"] == 0
-        assert parts[0]["size"] == 0
+        # Zero-byte files should have no parts (backend expects num_parts: 0)
+        assert len(parts) == 0
     
     def test_file_info_creation(self):
         """Test FileInfo object creation."""
@@ -177,8 +174,8 @@ class TestFileProcessor:
             files = collect_files_from_list([str(file1), str(file2)], "/test/")
             
             assert len(files) == 2
-            assert files[0].relative_key == "test/file1.txt"
-            assert files[1].relative_key == "test/file2.jpg"
+            assert files[0].relative_key == "/test/file1.txt"
+            assert files[1].relative_key == "/test/file2.jpg"
     
     def test_collect_files_from_list_duplicate_names(self):
         """Test collecting files with duplicate names."""
@@ -220,11 +217,11 @@ class TestFileProcessor:
             files = collect_files_from_directory(tmp_path, recursive=True)
             assert len(files) == 3
             
-            # Check relative keys
+            # Check relative keys - should all start with /
             relative_keys = [f.relative_key for f in files]
-            assert "file1.txt" in relative_keys
-            assert "file2.jpg" in relative_keys
-            assert "subdir/file3.png" in relative_keys
+            assert "/file1.txt" in relative_keys
+            assert "/file2.jpg" in relative_keys
+            assert "/subdir/file3.png" in relative_keys
     
     def test_create_upload_sequences_small_files(self):
         """Test creating upload sequences for small files."""
@@ -275,53 +272,50 @@ class TestFileProcessor:
         preview_files = [f for f in sequences[1].files if f.is_preview_file]
         assert len(preview_files) == 1
     
-    def test_validate_preview_files_have_base_files_valid(self):
-        """Test preview file validation with valid base files."""
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp1:
-            tmp1.write(b"content1")
-            tmp1_path = tmp1.name
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp2:
-            tmp2.write(b"content2")
-            tmp2_path = tmp2.name
-        
-        try:
-            files = [
-                FileInfo(tmp1_path, "file1", 1024),  # Base file (without extension in relative_key)
-                FileInfo(tmp2_path, "file1.previewFile.jpg", 1024),  # Preview file matching base
-            ]
+    def test_path_normalization_default_location(self):
+        """Test path normalization with default location (/)."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            (tmp_path / "file1.txt").write_text("content1")
             
-            valid, missing = validate_preview_files_have_base_files(files)
+            files = collect_files_from_directory(tmp_path, recursive=False, asset_location="/")
             
-            assert valid
-            assert len(missing) == 0
-        finally:
-            Path(tmp1_path).unlink()
-            Path(tmp2_path).unlink()
+            assert len(files) == 1
+            # Path should start with /
+            assert files[0].relative_key.startswith("/")
+            assert files[0].relative_key == "/file1.txt"
     
-    def test_validate_preview_files_have_base_files_missing(self):
-        """Test preview file validation with missing base files."""
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp1:
-            tmp1.write(b"content1")
-            tmp1_path = tmp1.name
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp2:
-            tmp2.write(b"content2")
-            tmp2_path = tmp2.name
-        
-        try:
-            files = [
-                FileInfo(tmp1_path, "file1.txt", 1024),
-                FileInfo(tmp2_path, "file2.previewFile.jpg", 1024),  # Missing base file
-            ]
+    def test_path_normalization_custom_location(self):
+        """Test path normalization with custom location."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            (tmp_path / "file1.txt").write_text("content1")
             
-            valid, missing = validate_preview_files_have_base_files(files)
+            # Test with location without leading slash
+            files = collect_files_from_directory(tmp_path, recursive=False, asset_location="test")
+            assert files[0].relative_key == "/test/file1.txt"
             
-            assert not valid
-            assert "file2.previewFile.jpg" in missing
-        finally:
-            Path(tmp1_path).unlink()
-            Path(tmp2_path).unlink()
+            # Test with location with leading slash
+            files = collect_files_from_directory(tmp_path, recursive=False, asset_location="/test")
+            assert files[0].relative_key == "/test/file1.txt"
+            
+            # Test with location with trailing slash
+            files = collect_files_from_directory(tmp_path, recursive=False, asset_location="test/")
+            assert files[0].relative_key == "/test/file1.txt"
+    
+    def test_path_normalization_file_list(self):
+        """Test path normalization for file list collection."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            file1 = Path(tmp_dir) / "file1.txt"
+            file1.write_text("content1")
+            
+            # Test with default location
+            files = collect_files_from_list([str(file1)], "/")
+            assert files[0].relative_key == "/file1.txt"
+            
+            # Test with custom location
+            files = collect_files_from_list([str(file1)], "test")
+            assert files[0].relative_key == "/test/file1.txt"
     
     def test_format_file_size(self):
         """Test file size formatting."""
@@ -1251,11 +1245,8 @@ class TestZeroByteFileSupport:
         """Test part calculation for zero-byte files."""
         parts = calculate_file_parts(0)
         
-        assert len(parts) == 1
-        assert parts[0]["part_number"] == 1
-        assert parts[0]["start_byte"] == 0
-        assert parts[0]["end_byte"] == 0
-        assert parts[0]["size"] == 0
+        # Zero-byte files should have no parts (backend expects num_parts: 0)
+        assert len(parts) == 0
     
     def test_upload_sequences_with_zero_byte_files(self):
         """Test upload sequence creation with zero-byte files."""

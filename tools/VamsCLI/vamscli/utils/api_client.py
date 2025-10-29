@@ -78,6 +78,10 @@ class APIClient:
     def _make_request(self, method: str, endpoint: str, include_auth: bool = True, 
                      retry_count: int = 0, throttle_retry_count: int = 0, **kwargs) -> requests.Response:
         """Make HTTP request with error handling and retries for both auth and throttling."""
+        # Import logging utilities
+        from .logging import log_api_request, log_api_response
+        import time
+        
         # Pre-flight validation for override tokens
         self._validate_token_before_request(include_auth)
         
@@ -85,8 +89,35 @@ class APIClient:
         headers = self._get_headers(include_auth)
         retry_config = get_retry_config()
         
+        # Log API request (always to file, console if verbose)
         try:
+            log_api_request(method, url, headers, kwargs.get('json') or kwargs.get('data'))
+        except Exception:
+            # Don't fail if logging fails
+            pass
+        
+        try:
+            start_time = time.time()
             response = self.session.request(method, url, headers=headers, **kwargs)
+            duration = time.time() - start_time
+            
+            # Log API response (always to file, console if verbose)
+            try:
+                response_data = None
+                try:
+                    if response.content:
+                        # Try to parse as JSON for better formatting
+                        try:
+                            response_data = response.json()
+                        except Exception:
+                            # If not JSON, use text
+                            response_data = response.text
+                except Exception:
+                    pass
+                log_api_response(response.status_code, response_data, duration)
+            except Exception:
+                # Don't fail if logging fails
+                pass
             
             # Handle 429 rate limiting with exponential backoff
             if response.status_code == 429:

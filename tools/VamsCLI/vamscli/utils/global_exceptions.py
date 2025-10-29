@@ -1,6 +1,7 @@
 """Global exception handler for VamsCLI."""
 
 import sys
+import time
 import click
 
 
@@ -70,14 +71,61 @@ def handle_global_exceptions():
     exceptions are handled by individual commands.
     
     Supports JSON output formatting when --json-output flag is detected in arguments.
+    Enhanced with comprehensive logging for all exceptions and command execution.
     """
     def decorator(func):
         import functools
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            # Import logging utilities
+            from .logging import (
+                get_logger, log_command_start, log_command_end,
+                log_error, _is_verbose_mode
+            )
+            
+            logger = get_logger()
+            start_time = time.time()
+            command_name = func.__name__
+            
+            # Log command start
             try:
-                return func(*args, **kwargs)
+                log_command_start(command_name, kwargs)
+            except Exception:
+                # Don't fail if logging fails
+                pass
+            
+            try:
+                # Execute command
+                result = func(*args, **kwargs)
+                
+                # Log successful completion
+                duration = time.time() - start_time
+                try:
+                    log_command_end(command_name, True, duration)
+                except Exception:
+                    pass
+                
+                return result
+                
             except Exception as e:
+                # Log exception with full details
+                duration = time.time() - start_time
+                try:
+                    log_error(f"Exception in {command_name}", e)
+                    log_command_end(command_name, False, duration)
+                except Exception:
+                    # Don't fail if logging fails
+                    pass
+                
+                # Display verbose error details if requested
+                verbose = _is_verbose_mode()
+                if verbose and not isinstance(e, click.ClickException):
+                    import traceback
+                    click.echo("\n" + "="*60, err=True)
+                    click.echo("VERBOSE ERROR DETAILS:", err=True)
+                    click.echo("="*60, err=True)
+                    click.echo(traceback.format_exc(), err=True)
+                    click.echo("="*60 + "\n", err=True)
                 # Import here to avoid circular imports
                 from .exceptions import (
                     SetupRequiredError, AuthenticationError, APIUnavailableError, ProfileError,

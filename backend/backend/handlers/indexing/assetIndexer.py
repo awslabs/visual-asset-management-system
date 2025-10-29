@@ -553,14 +553,39 @@ def handle_asset_stream(event_record: Dict[str, Any]) -> IndexOperationResponse:
     """Handle DynamoDB asset table stream for asset indexing"""
     try:
         event_name = event_record.get('eventName', '')
+        dynamodb_data = event_record.get('dynamodb', {})
         
-        # Get the record data
+        # For REMOVE events with NEW_IMAGE stream type, extract IDs from Keys
         if event_name == 'REMOVE':
-            # For deletes, use the old image
-            record_data = event_record.get('dynamodb', {}).get('OldImage', {})
-        else:
-            # For inserts/updates, use the new image
-            record_data = event_record.get('dynamodb', {}).get('NewImage', {})
+            # DynamoDB streams with NEW_IMAGE view type don't include OldImage
+            # But Keys are always available for REMOVE events
+            keys = dynamodb_data.get('Keys', {})
+            database_id = keys.get('databaseId', {}).get('S')
+            asset_id = keys.get('assetId', {}).get('S')
+            
+            if not database_id or not asset_id:
+                logger.warning("Missing database ID or asset ID in REMOVE event keys")
+                return IndexOperationResponse(
+                    success=True,
+                    message="Missing IDs in keys, skipping",
+                    indexName=opensearch_asset_index,
+                    operation="skip"
+                )
+            
+            logger.info(f"Processing REMOVE event for asset: {database_id}/{asset_id}")
+            
+            # Create delete request
+            request = AssetIndexRequest(
+                databaseId=database_id,
+                assetId=asset_id,
+                operation="delete"
+            )
+            
+            # Process the delete request
+            return process_asset_index_request(request)
+        
+        # For INSERT/MODIFY events, use NewImage
+        record_data = dynamodb_data.get('NewImage', {})
         
         if not record_data:
             logger.warning("No record data found in asset stream event")
@@ -584,14 +609,14 @@ def handle_asset_stream(event_record: Dict[str, Any]) -> IndexOperationResponse:
                 operation="skip"
             )
         
-        # Determine operation
-        operation = "delete" if event_name == 'REMOVE' else "index"
+        # For INSERT/MODIFY, always index
+        logger.info(f"Processing {event_name} event for asset: {database_id}/{asset_id}")
         
         # Create asset index request
         request = AssetIndexRequest(
             databaseId=database_id,
             assetId=asset_id,
-            operation=operation
+            operation="index"
         )
         
         # Process the request

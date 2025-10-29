@@ -44,7 +44,8 @@ export class SplatToolboxBuilderNestedStack extends NestedStack {
             pipelineSubnets: props.pipelineSubnets,
             pipelineSecurityGroups: props.pipelineSecurityGroups,
             lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-            importGlobalPipelineWorkflowFunctionName: props.importGlobalPipelineWorkflowFunctionName,
+            importGlobalPipelineWorkflowFunctionName:
+                props.importGlobalPipelineWorkflowFunctionName,
         });
 
         this.pipelineVamsLambdaFunctionName = splatToolboxPipeline.pipelineVamsLambdaFunctionName;

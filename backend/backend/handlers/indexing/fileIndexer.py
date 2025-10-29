@@ -202,6 +202,99 @@ def get_asset_details(database_id: str, asset_id: str) -> Optional[Dict[str, Any
     except Exception as e:
         logger.exception(f"Error getting asset details for {database_id}/{asset_id}: {e}")
         return None
+
+def lookup_database_id_for_permanent_delete(
+    asset_id: str, 
+    bucket_name: str, 
+    bucket_prefix: str
+) -> Tuple[Optional[str], bool]:
+    """
+    Lookup database_id for permanently deleted file using 3-step process:
+    1. Query assetIdGSI with just asset_id
+    2. If multiple results, filter by bucket match
+    3. If still ambiguous, return error
+    
+    Args:
+        asset_id: The asset ID to lookup
+        bucket_name: The S3 bucket name from the event
+        bucket_prefix: The S3 bucket prefix from the event
+    
+    Returns:
+        Tuple of (database_id, success) where success indicates if lookup succeeded
+    """
+    try:
+        # Step 1: Query assetIdGSI with just asset_id
+        logger.info(f"Looking up database_id for permanently deleted file with asset_id: {asset_id}")
+        
+        response = asset_storage_table.query(
+            IndexName='assetIdGSI',
+            KeyConditionExpression=Key('assetId').eq(asset_id)
+        )
+        
+        items = response.get('Items', [])
+        
+        if len(items) == 0:
+            logger.warning(f"No assets found with asset_id: {asset_id}")
+            return None, False
+        
+        if len(items) == 1:
+            # Single match - use this database_id
+            database_id = items[0].get('databaseId')
+            logger.info(f"Found single asset match for {asset_id}, database_id: {database_id}")
+            return database_id, True
+        
+        # Step 2: Multiple matches - filter by bucket
+        logger.info(f"Found {len(items)} assets with asset_id {asset_id}, filtering by bucket")
+        
+        matching_assets = []
+        for item in items:
+            bucket_id = item.get('bucketId')
+            if not bucket_id:
+                continue
+            
+            # Get bucket details
+            bucket_details = get_bucket_details(bucket_id)
+            if not bucket_details:
+                continue
+            
+            # Normalize bucket prefix for comparison
+            item_bucket_name = bucket_details.get('bucketName')
+            item_bucket_prefix = bucket_details.get('baseAssetsPrefix', '/')
+            
+            # Ensure both prefixes are normalized the same way
+            if not item_bucket_prefix.endswith('/'):
+                item_bucket_prefix += '/'
+            if not item_bucket_prefix.startswith('/') and item_bucket_prefix != '/':
+                item_bucket_prefix = '/' + item_bucket_prefix
+            
+            event_bucket_prefix = bucket_prefix
+            if not event_bucket_prefix.endswith('/'):
+                event_bucket_prefix += '/'
+            if not event_bucket_prefix.startswith('/') and event_bucket_prefix != '/':
+                event_bucket_prefix = '/' + event_bucket_prefix
+            
+            # Compare bucket name and prefix
+            if item_bucket_name == bucket_name and item_bucket_prefix == event_bucket_prefix:
+                matching_assets.append(item)
+                logger.info(f"Bucket match found: database_id={item.get('databaseId')}, bucket={item_bucket_name}, prefix={item_bucket_prefix}")
+        
+        if len(matching_assets) == 1:
+            # Single match after bucket filtering
+            database_id = matching_assets[0].get('databaseId')
+            logger.info(f"Found single bucket match for {asset_id}, database_id: {database_id}")
+            return database_id, True
+        
+        # Step 3: Still ambiguous or no matches
+        if len(matching_assets) == 0:
+            logger.error(f"No bucket matches found for asset_id {asset_id} with bucket {bucket_name} and prefix {bucket_prefix}")
+            return None, False
+        else:
+            logger.error(f"Multiple assets ({len(matching_assets)}) match asset_id {asset_id} with bucket {bucket_name} and prefix {bucket_prefix}, cannot determine unique database_id")
+            return None, False
+            
+    except Exception as e:
+        logger.exception(f"Error looking up database_id for asset_id {asset_id}: {e}")
+        return None, False
        
 
 def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> Dict[str, Any]:
@@ -606,40 +699,264 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                     operation="skip"
                 )
         
-        # Extract asset ID and database ID from S3 object metadata
-        try:
-            s3_response = s3_client.head_object(Bucket=bucket_name, Key=s3_key)
-            s3_metadata = s3_response.get('Metadata', {})
+        # Handle ObjectRemoved:Delete events specially
+        if "Delete" in event_name:
+            logger.info(f"Processing delete event for file: {s3_key}")
             
-            asset_id = s3_metadata.get('assetid')
-            database_id = s3_metadata.get('databaseid')
+            # For delete events, we need to parse asset ID from S3 key path
+            # Typical structure: {basePrefix}{assetId}/{filePath}
+            # We'll try to extract the asset ID from the path
             
-            if not asset_id or not database_id:
-                logger.warning(f"Missing asset/database ID in S3 metadata for {s3_key}")
-                return IndexOperationResponse(
-                    success=True,
-                    message="Missing metadata, skipping",
-                    indexName=opensearch_file_index,
-                    operation="skip"
+            # Check versioning to determine if archived or permanently deleted
+            try:
+                versions_response = s3_client.list_object_versions(
+                    Bucket=bucket_name,
+                    Prefix=s3_key,
+                    MaxKeys=10
                 )
                 
-        except ClientError as e:
-            if e.response['Error']['Code'] == 'NoSuchKey':
-                # File was deleted, we need to handle this differently
-                # For now, we'll skip since we can't determine the asset/database ID
-                logger.warning(f"File deleted but cannot determine asset/database ID: {s3_key}")
+                delete_markers = versions_response.get('DeleteMarkers', [])
+                versions = versions_response.get('Versions', [])
+                
+                # Check if this specific key has a delete marker and versions
+                has_delete_marker = any(marker['Key'] == s3_key for marker in delete_markers)
+                has_versions = any(v['Key'] == s3_key for v in versions)
+                
+                if has_delete_marker and has_versions:
+                    # File is archived (delete marker exists but versions remain)
+                    logger.info(f"File is archived (has delete marker and versions): {s3_key}")
+                    
+                    # Get metadata from latest version
+                    latest_version = None
+                    for version in versions:
+                        if version['Key'] == s3_key:
+                            if latest_version is None or version['LastModified'] > latest_version['LastModified']:
+                                latest_version = version
+                    
+                    if latest_version:
+                        # Get metadata from the version
+                        try:
+                            version_response = s3_client.head_object(
+                                Bucket=bucket_name,
+                                Key=s3_key,
+                                VersionId=latest_version['VersionId']
+                            )
+                            s3_metadata = version_response.get('Metadata', {})
+                            asset_id = s3_metadata.get('assetid')
+                            database_id = s3_metadata.get('databaseid')
+                            
+                            if asset_id and database_id:
+                                # File is archived - need to index with archived flag
+                                # Get asset details to calculate relative path
+                                asset_details = get_asset_details(database_id, asset_id)
+                                if not asset_details:
+                                    logger.warning(f"Asset not found for archived file: {database_id}/{asset_id}")
+                                    return IndexOperationResponse(
+                                        success=True,
+                                        message="Asset not found for archived file, skipping",
+                                        indexName=opensearch_file_index,
+                                        operation="skip"
+                                    )
+                                
+                                # Get bucket details
+                                bucket_details = get_bucket_details(asset_details.get('bucketId'))
+                                if not bucket_details:
+                                    logger.warning(f"Bucket details not found for archived file asset: {asset_id}")
+                                    return IndexOperationResponse(
+                                        success=True,
+                                        message="Bucket details not found for archived file, skipping",
+                                        indexName=opensearch_file_index,
+                                        operation="skip"
+                                    )
+                                
+                                # Calculate relative path
+                                asset_location = asset_details.get('assetLocation', {})
+                                asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
+                                
+                                if s3_key.startswith(asset_base_key):
+                                    relative_path = s3_key[len(asset_base_key):]
+                                else:
+                                    relative_path = s3_key
+                                
+                                # Ensure relative path starts with a slash
+                                if not relative_path.startswith('/'):
+                                    relative_path = '/' + relative_path
+                                
+                                # Get file metadata
+                                file_metadata = get_file_metadata(database_id, asset_id, relative_path)
+                                
+                                # Get S3 file info from the version we already have
+                                s3_file_info = {
+                                    'size': latest_version.get('Size'),
+                                    'lastModified': latest_version.get('LastModified').isoformat() if latest_version.get('LastModified') else None,
+                                    'etag': latest_version.get('ETag', '').strip('"'),
+                                    'versionId': latest_version.get('VersionId', 'null'),
+                                    'contentType': None
+                                }
+                                
+                                # Build document with archived flag
+                                document = build_file_document(
+                                    FileIndexRequest(
+                                        databaseId=database_id,
+                                        assetId=asset_id,
+                                        filePath=relative_path,
+                                        bucketName=bucket_name,
+                                        s3Key=s3_key,
+                                        isArchived=True,
+                                        operation="index"
+                                    ),
+                                    asset_details,
+                                    bucket_details,
+                                    file_metadata,
+                                    s3_file_info,
+                                    True  # is_archived
+                                )
+                                
+                                # Index the archived file
+                                success = index_file_document(document)
+                                
+                                return IndexOperationResponse(
+                                    success=success,
+                                    message="Archived file indexed" if success else "Failed to index archived file",
+                                    documentId=f"{database_id}#{asset_id}#{relative_path}",
+                                    indexName=opensearch_file_index,
+                                    operation="index"
+                                )
+                            else:
+                                logger.warning(f"Missing metadata in archived version for {s3_key}")
+                                return IndexOperationResponse(
+                                    success=True,
+                                    message="Missing metadata in archived version, skipping",
+                                    indexName=opensearch_file_index,
+                                    operation="skip"
+                                )
+                        except Exception as e:
+                            logger.warning(f"Error getting metadata from version: {e}")
+                            return IndexOperationResponse(
+                                success=True,
+                                message="Error accessing archived version metadata",
+                                indexName=opensearch_file_index,
+                                operation="skip"
+                            )
+                    else:
+                        logger.warning(f"No versions found for archived file: {s3_key}")
+                        return IndexOperationResponse(
+                            success=True,
+                            message="No versions found for archived file",
+                            indexName=opensearch_file_index,
+                            operation="skip"
+                        )
+                else:
+                    # File is permanently deleted (no versions or no delete marker)
+                    logger.info(f"File is permanently deleted: {s3_key}")
+                    
+                    # Try to parse asset ID from S3 key path
+                    # Typical structure: {basePrefix}{assetId}/{filePath}
+                    # Asset ID is typically a UUID or identifier before the first slash after prefix
+                    
+                    # Split the key and try to find the asset ID
+                    # This is a heuristic approach - asset ID is usually the first path component
+                    key_parts = s3_key.split('/')
+                    if len(key_parts) >= 2:
+                        # Assume asset ID is the first component (or second if first is empty/prefix)
+                        potential_asset_id = key_parts[0] if key_parts[0] else (key_parts[1] if len(key_parts) > 1 else None)
+                        
+                        if potential_asset_id:
+                            # Get bucket info from event record (passed from lambda_handler)
+                            # These are stored at the top level of the event
+                            event_bucket_name = event_record.get('ASSET_BUCKET_NAME', bucket_name)
+                            event_bucket_prefix = event_record.get('ASSET_BUCKET_PREFIX', '/')
+                            
+                            # Lookup database_id using the new helper function
+                            database_id, lookup_success = lookup_database_id_for_permanent_delete(
+                                potential_asset_id,
+                                event_bucket_name,
+                                event_bucket_prefix
+                            )
+                            
+                            if lookup_success and database_id:
+                                logger.info(f"Successfully looked up database_id {database_id} for permanently deleted file")
+                                asset_id = potential_asset_id
+                                
+                                # Calculate relative path from S3 key
+                                # S3 key format: {assetId}/{filePath}
+                                if len(key_parts) > 1:
+                                    relative_path = '/' + '/'.join(key_parts[1:])
+                                else:
+                                    relative_path = '/' + s3_key
+                                
+                                # For permanent deletes, directly delete from OpenSearch
+                                success = delete_file_document(database_id, asset_id, relative_path)
+                                
+                                return IndexOperationResponse(
+                                    success=success,
+                                    message="Permanently deleted file removed from index" if success else "Failed to delete file document",
+                                    documentId=f"{database_id}#{asset_id}#{relative_path}",
+                                    indexName=opensearch_file_index,
+                                    operation="delete"
+                                )
+                            else:
+                                logger.warning(f"Cannot determine database_id for permanently deleted file: {s3_key}")
+                                return IndexOperationResponse(
+                                    success=True,
+                                    message="Cannot identify permanently deleted file, skipping",
+                                    indexName=opensearch_file_index,
+                                    operation="skip"
+                                )
+                        else:
+                            logger.warning(f"Cannot parse asset ID from S3 key: {s3_key}")
+                            return IndexOperationResponse(
+                                success=True,
+                                message="Cannot parse asset ID from S3 key",
+                                indexName=opensearch_file_index,
+                                operation="skip"
+                            )
+                    else:
+                        logger.warning(f"Cannot parse asset ID from S3 key: {s3_key}")
+                        return IndexOperationResponse(
+                            success=True,
+                            message="Cannot parse asset ID from S3 key",
+                            indexName=opensearch_file_index,
+                            operation="skip"
+                        )
+                        
+            except Exception as e:
+                logger.exception(f"Error checking file versioning status: {e}")
                 return IndexOperationResponse(
-                    success=True,
-                    message="File deleted but metadata unavailable",
+                    success=False,
+                    message=f"Error checking file versioning: {str(e)}",
                     indexName=opensearch_file_index,
-                    operation="skip"
+                    operation="error"
                 )
-            else:
-                raise e
-        
-        # Determine operation based on event type
-        operation = "delete" if "Delete" in event_name else "index"
-        is_archived = "Delete" in event_name
+        else:
+            # For non-delete events, extract metadata from current object
+            try:
+                s3_response = s3_client.head_object(Bucket=bucket_name, Key=s3_key)
+                s3_metadata = s3_response.get('Metadata', {})
+                
+                asset_id = s3_metadata.get('assetid')
+                database_id = s3_metadata.get('databaseid')
+                
+                if not asset_id or not database_id:
+                    logger.warning(f"Missing asset/database ID in S3 metadata for {s3_key}")
+                    return IndexOperationResponse(
+                        success=True,
+                        message="Missing metadata, skipping",
+                        indexName=opensearch_file_index,
+                        operation="skip"
+                    )
+                
+                operation = "index"
+                is_archived = False
+                    
+            except ClientError as e:
+                logger.exception(f"Error getting S3 object metadata: {e}")
+                return IndexOperationResponse(
+                    success=False,
+                    message=f"Error getting S3 metadata: {str(e)}",
+                    indexName=opensearch_file_index,
+                    operation="error"
+                )
         
         # Calculate relative file path
         # This requires getting the asset details to determine the base prefix
@@ -840,6 +1157,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         
         results = []
         
+        # Extract bucket info from top-level event (if present)
+        asset_bucket_name = event.get('ASSET_BUCKET_NAME')
+        asset_bucket_prefix = event.get('ASSET_BUCKET_PREFIX', '/')
+        
         # Handle different event sources
         if 'Records' in event:
             for record in event['Records']:
@@ -847,6 +1168,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 
                 if event_source == 'aws:s3':
                     # Direct S3 bucket notification
+                    # Pass bucket info to the record for permanent delete lookups
+                    if asset_bucket_name:
+                        record['ASSET_BUCKET_NAME'] = asset_bucket_name
+                        record['ASSET_BUCKET_PREFIX'] = asset_bucket_prefix
                     result = handle_s3_notification(record)
                     results.append(result)
                     
@@ -869,6 +1194,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                             if 'Records' in sns_message:
                                 for s3_record in sns_message['Records']:
                                     if s3_record.get('eventSource') == 'aws:s3':
+                                        # Pass bucket info to the S3 record for permanent delete lookups
+                                        if asset_bucket_name:
+                                            s3_record['ASSET_BUCKET_NAME'] = asset_bucket_name
+                                            s3_record['ASSET_BUCKET_PREFIX'] = asset_bucket_prefix
                                         result = handle_s3_notification(s3_record)
                                         results.append(result)
                             else:

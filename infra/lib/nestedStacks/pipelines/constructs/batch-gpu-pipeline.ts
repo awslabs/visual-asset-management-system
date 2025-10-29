@@ -1,7 +1,7 @@
 /*
  * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * GPU-specific batch pipeline construct for SplatToolbox and other GPU workloads
  */
 import * as ec2 from "aws-cdk-lib/aws-ec2";
@@ -66,7 +66,7 @@ export class BatchGpuPipelineConstruct extends Construct {
             description: "Security group for Batch compute environment with internet access",
             allowAllOutbound: true,
         });
-        
+
         // Create launch template
         const launchTemplate = new ec2.CfnLaunchTemplate(this, "BatchLaunchTemplate", {
             launchTemplateData: {
@@ -87,14 +87,14 @@ export class BatchGpuPipelineConstruct extends Construct {
                         tags: [
                             {
                                 key: "Name",
-                                value: `VAMS-Batch-GPU-${props.batchJobDefinitionName}`
-                            }
-                        ]
-                    }
-                ]
+                                value: `VAMS-Batch-GPU-${props.batchJobDefinitionName}`,
+                            },
+                        ],
+                    },
+                ],
             },
         });
-        
+
         // Create on-demand compute environment
         const batchEnvironment = new CfnComputeEnvironment(
             this,
@@ -132,7 +132,7 @@ export class BatchGpuPipelineConstruct extends Construct {
             path.join(__dirname, props.imageAssetPath),
             {
                 file: props.dockerfileName,
-                platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64
+                platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64,
             }
         );
 
@@ -140,7 +140,7 @@ export class BatchGpuPipelineConstruct extends Construct {
         const tempTaskDef = new ecs.TaskDefinition(this, "TempTaskDef", {
             compatibility: ecs.Compatibility.EC2,
         });
-        
+
         const container = tempTaskDef.addContainer("Container", {
             image: containerImage,
             memoryLimitMiB: 1024,

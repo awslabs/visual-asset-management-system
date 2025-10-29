@@ -31,6 +31,7 @@ def requires_setup_and_auth(func):
     This decorator performs:
     1. Setup validation (raises SetupRequiredError if not configured)
     2. API availability check (raises APIUnavailableError if API is down)
+    3. Configuration logging in verbose mode
     
     This replaces the need for individual commands to check setup and handle
     global infrastructure concerns.
@@ -41,6 +42,9 @@ def requires_setup_and_auth(func):
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
+        # Import logging utilities
+        from .logging import log_config_info, _is_verbose_mode
+        
         # Get context from args if available
         ctx = None
         for arg in args:
@@ -60,7 +64,20 @@ def requires_setup_and_auth(func):
         
         # API availability check (global infrastructure concern)
         try:
+            # Load configuration
             config = profile_manager.load_config()
+            
+            # Log configuration in verbose mode (wrapped in try/catch)
+            try:
+                if _is_verbose_mode():
+                    log_config_info(config)
+                    click.echo(f"\n📋 Using profile: {profile_manager.profile_name}", err=True)
+                    click.echo(f"📋 API Gateway: {config.get('api_gateway_url', 'Unknown')}", err=True)
+                    click.echo(f"📋 CLI Version: {config.get('cli_version', 'Unknown')}\n", err=True)
+            except Exception:
+                # Don't fail if logging fails
+                pass
+            
             api_gateway_url = config.get('api_gateway_url')
             
             if api_gateway_url:
@@ -71,7 +88,7 @@ def requires_setup_and_auth(func):
             # Re-raise API unavailable errors as global infrastructure errors
             raise
         except Exception:
-            # If we can't check availability, continue with the command
+            # If we can't check availability or load config, continue with the command
             # This prevents the availability check from blocking legitimate operations
             pass
         

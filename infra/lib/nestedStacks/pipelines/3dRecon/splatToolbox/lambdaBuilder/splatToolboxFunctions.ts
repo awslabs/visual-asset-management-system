@@ -66,7 +66,7 @@ export function buildSqsExecuteSplatToolboxPipelineFunction(
                 : undefined,
         environment: {
             OPEN_PIPELINE_FUNCTION_NAME: openPipelineLambdaFunction.functionName,
-            S3_ASSETAUXILIARY_BUCKET_NAME: assetAuxiliaryBucket.bucketName
+            S3_ASSETAUXILIARY_BUCKET_NAME: assetAuxiliaryBucket.bucketName,
         },
     });
 
