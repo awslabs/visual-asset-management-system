@@ -22,7 +22,7 @@ def list():
         if not profiles_info:
             click.echo("No profiles found.")
             click.echo("Run 'vamscli setup <api-gateway-url>' to create your first profile.")
-            return
+            return {"profiles": [], "message": "No profiles found"}
         
         # Get active profile
         active_profile = ProfileManager().get_active_profile()
@@ -63,9 +63,12 @@ def list():
                 click.echo("  Saved Credentials: Yes")
             
             click.echo()
+        
+        return {"profiles": profiles_info, "active_profile": active_profile}
             
     except Exception as e:
         click.echo(f"Error listing profiles: {e}", err=True)
+        return {"profiles": [], "error": str(e)}
 
 
 @profile.command()
@@ -107,6 +110,13 @@ def switch(profile_name: str):
             click.echo("Status: Not authenticated")
             click.echo(f"Run 'vamscli auth login -u <username>' to authenticate")
         
+        return {
+            "success": True,
+            "profile_name": profile_name,
+            "message": f"Switched to profile '{profile_name}'",
+            "profile_info": profile_info
+        }
+        
     except (ProfileError, InvalidProfileNameError) as e:
         click.echo(f"✗ {e}", err=True)
         raise click.ClickException(str(e))
@@ -137,7 +147,11 @@ def delete(profile_name: str, force: bool):
         profile_manager = ProfileManager(profile_name)
         if not profile_manager.profile_exists():
             click.echo(f"Profile '{profile_name}' does not exist.")
-            return
+            return {
+                "success": False,
+                "profile_name": profile_name,
+                "message": f"Profile '{profile_name}' does not exist"
+            }
         
         # Confirm deletion unless force is used
         if not force:
@@ -150,7 +164,11 @@ def delete(profile_name: str, force: bool):
             
             if not click.confirm(f"Are you sure you want to delete profile '{profile_name}'?"):
                 click.echo("Deletion cancelled.")
-                return
+                return {
+                    "success": False,
+                    "profile_name": profile_name,
+                    "message": "Deletion cancelled by user"
+                }
         
         # Delete the profile
         profile_manager.delete_profile(profile_name)
@@ -162,6 +180,13 @@ def delete(profile_name: str, force: bool):
         # Show active profile
         active_profile = ProfileManager().get_active_profile()
         click.echo(f"Active profile is now: {active_profile}")
+        
+        return {
+            "success": True,
+            "profile_name": profile_name,
+            "message": f"Profile '{profile_name}' deleted successfully",
+            "active_profile": active_profile
+        }
         
     except (ProfileError, InvalidProfileNameError) as e:
         click.echo(f"✗ {e}", err=True)
@@ -188,7 +213,11 @@ def info(profile_name: str):
         
         if not profile_manager.profile_exists():
             click.echo(f"Profile '{profile_name}' does not exist.")
-            return
+            return {
+                "profile_name": profile_name,
+                "exists": False,
+                "message": f"Profile '{profile_name}' does not exist"
+            }
         
         profile_info = profile_manager.get_profile_info()
         
@@ -229,6 +258,12 @@ def info(profile_name: str):
         if profile_info['has_credentials']:
             click.echo("  Saved Credentials: Yes")
         
+        return {
+            "profile_name": profile_name,
+            "exists": True,
+            "profile_info": profile_info
+        }
+        
     except (ProfileError, InvalidProfileNameError) as e:
         click.echo(f"✗ {e}", err=True)
         raise click.ClickException(str(e))
@@ -246,9 +281,19 @@ def current():
         
         click.echo(f"Current active profile: {active_profile}")
         
+        result = {
+            "active_profile": active_profile,
+            "has_config": False,
+            "has_auth": False,
+            "config": {},
+            "auth_profile": {}
+        }
+        
         if profile_manager.has_config():
             config = profile_manager.load_config()
             click.echo(f"API Gateway: {config.get('api_gateway_url', 'Unknown')}")
+            result["has_config"] = True
+            result["config"] = config
         
         if profile_manager.has_auth_profile():
             auth_profile = profile_manager.load_auth_profile()
@@ -256,8 +301,20 @@ def current():
                 user_id = auth_profile.get('user_id', 'Unknown')
                 token_type = auth_profile.get('token_type', 'cognito')
                 click.echo(f"Authenticated as: {user_id} ({'Override' if token_type == 'override' else 'Cognito'})")
+                result["has_auth"] = True
+                result["auth_profile"] = auth_profile
         else:
             click.echo("Status: Not authenticated")
         
+        return result
+        
     except Exception as e:
         click.echo(f"Error getting current profile: {e}", err=True)
+        return {
+            "active_profile": None,
+            "error": str(e),
+            "has_config": False,
+            "has_auth": False,
+            "config": {},
+            "auth_profile": {}
+        }

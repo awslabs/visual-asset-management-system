@@ -146,6 +146,8 @@ def create(ctx: click.Context, tag_type_name: Optional[str], description: Option
             )
             click.echo(f"  Message: {result.get('message', 'Tag types created')}")
         
+        return result
+        
     except TagTypeAlreadyExistsError as e:
         click.echo(
             click.style(f"✗ Tag Type Already Exists: {e}", fg='red', bold=True),
@@ -236,6 +238,8 @@ def update(ctx: click.Context, tag_type_name: str, description: Optional[str],
             )
             click.echo(f"  Message: {result.get('message', 'Tag types updated')}")
         
+        return result
+        
     except TagTypeNotFoundError as e:
         click.echo(
             click.style(f"✗ Tag Type Not Found: {e}", fg='red', bold=True),
@@ -296,6 +300,8 @@ def delete(ctx: click.Context, tag_type_name: str, confirm: bool, json_output: b
             )
             click.echo(f"  Tag Type: {tag_type_name}")
             click.echo(f"  Message: {result.get('message', 'Tag type deleted')}")
+        
+        return result
         
     except TagTypeNotFoundError as e:
         click.echo(
@@ -365,3 +371,5 @@ def list(ctx: click.Context, show_tags: bool, json_output: bool):
         # Show pagination info if available
         if result.get('message', {}).get('NextToken'):
             click.echo(f"\nMore results available. Use pagination to see additional tag types.")
+    
+    return result

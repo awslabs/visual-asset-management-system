@@ -167,7 +167,7 @@ def list(ctx: click.Context, show_deleted: bool, max_items: Optional[int], page_
         databases = result.get('Items', [])
         if not databases:
             click.echo("No databases found.")
-            return
+            return result
         
         click.echo(f"\nFound {len(databases)} database(s):")
         click.echo("-" * 80)
@@ -189,6 +189,8 @@ def list(ctx: click.Context, show_deleted: bool, max_items: Optional[int], page_
         next_token = result.get('NextToken')
         if next_token:
             click.echo(f"More results available. Use --starting-token '{next_token}' to see additional databases.")
+    
+    return result
 
 
 @database.command()
@@ -256,6 +258,8 @@ def create(ctx: click.Context, database_id: str, description: Optional[str], def
             )
             click.echo(f"  Database ID: {result.get('databaseId', database_id)}")
             click.echo(f"  Message: {result.get('message', 'Database created')}")
+        
+        return result
         
     except click.BadParameter as e:
         click.echo(
@@ -350,6 +354,8 @@ def update(ctx: click.Context, database_id: str, description: Optional[str], def
             click.echo(f"  Database ID: {result.get('databaseId', database_id)}")
             click.echo(f"  Message: {result.get('message', 'Database updated')}")
         
+        return result
+        
     except click.BadParameter as e:
         click.echo(
             click.style(f"✗ Invalid JSON input: {e}", fg='red', bold=True),
@@ -412,6 +418,8 @@ def get(ctx: click.Context, database_id: str, show_deleted: bool, json_output: b
         else:
             click.echo(format_database_output(result))
         
+        return result
+        
     except DatabaseNotFoundError as e:
         click.echo(
             click.style(f"✗ Database Not Found: {e}", fg='red', bold=True),
@@ -469,7 +477,7 @@ def delete(ctx: click.Context, database_id: str, confirm: bool, json_output: boo
         
         if not click.confirm("Are you sure you want to proceed?"):
             click.echo("Deletion cancelled.")
-            return
+            return None
         
         click.echo(f"Deleting database '{database_id}'...")
         
@@ -484,6 +492,8 @@ def delete(ctx: click.Context, database_id: str, confirm: bool, json_output: boo
             )
             click.echo(f"  Database ID: {database_id}")
             click.echo(f"  Message: {result.get('message', 'Database deleted')}")
+        
+        return result
         
     except DatabaseNotFoundError as e:
         click.echo(
@@ -547,7 +557,7 @@ def list_buckets(ctx: click.Context, max_items: Optional[int], page_size: Option
         buckets = result.get('Items', [])
         if not buckets:
             click.echo("No bucket configurations found.")
-            return
+            return result
         
         click.echo(f"\nFound {len(buckets)} bucket configuration(s):")
         click.echo("-" * 80)
@@ -562,3 +572,5 @@ def list_buckets(ctx: click.Context, max_items: Optional[int], page_size: Option
         next_token = result.get('NextToken')
         if next_token:
             click.echo(f"More results available. Use --starting-token '{next_token}' to see additional buckets.")
+    
+    return result

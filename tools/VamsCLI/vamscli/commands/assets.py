@@ -263,6 +263,9 @@ def create(ctx: click.Context, database_id: str, name: Optional[str],
             click.echo(f"  Database: {database_id}")
             click.echo(f"  Message: {result.get('message', 'Asset created')}")
         
+        # Return result for use by wrapper commands
+        return result
+        
     except AssetAlreadyExistsError as e:
         click.echo(
             click.style(f"✗ Asset Already Exists: {e}", fg='red', bold=True),
@@ -343,6 +346,8 @@ def archive(ctx: click.Context, asset_id: str, database: str, reason: Optional[s
             click.echo()
             click.echo("The asset has been moved to archived state and will not appear in normal listings.")
             click.echo("Use 'vamscli assets get --show-archived' to view archived assets.")
+        
+        return result
         
     except AssetNotFoundError as e:
         click.echo(
@@ -458,6 +463,8 @@ def delete(ctx: click.Context, asset_id: str, database: str, reason: Optional[st
                 click.style("The asset and all associated data have been permanently removed.", fg='yellow')
             )
         
+        return result
+        
     except AssetNotFoundError as e:
         click.echo(
             click.style(f"✗ Asset Not Found: {e}", fg='red', bold=True),
@@ -551,6 +558,8 @@ def update(ctx: click.Context, asset_id: str, database_id: str, name: Optional[s
             click.echo(f"  Timestamp: {result.get('timestamp', 'N/A')}")
             click.echo(f"  Message: {result.get('message', 'Asset updated')}")
         
+        return result
+        
     except AssetNotFoundError as e:
         click.echo(
             click.style(f"✗ Asset Not Found: {e}", fg='red', bold=True),
@@ -606,6 +615,8 @@ def get(ctx: click.Context, asset_id: str, database_id: str, show_archived: bool
         else:
             click.echo(f"Retrieving asset '{asset_id}' from database '{database_id}'...")
             click.echo(format_asset_output(result))
+        
+        return result
         
     except AssetNotFoundError as e:
         click.echo(
@@ -671,28 +682,29 @@ def list(ctx: click.Context, database_id: Optional[str], show_archived: bool, js
             items = result.get('Items', [])
             if not items:
                 click.echo("No assets found.")
-                return
-            
-            click.echo(f"\nFound {len(items)} asset(s):")
-            click.echo("-" * 80)
-            
-            for asset in items:
-                click.echo(f"ID: {asset.get('assetId', 'N/A')}")
-                click.echo(f"Database: {asset.get('databaseId', 'N/A')}")
-                click.echo(f"Name: {asset.get('assetName', 'N/A')}")
-                click.echo(f"Description: {asset.get('description', 'N/A')}")
-                click.echo(f"Distributable: {'Yes' if asset.get('isDistributable') else 'No'}")
-                click.echo(f"Status: {asset.get('status', 'Active').title()}")
-                
-                tags = asset.get('tags', [])
-                if tags:
-                    click.echo(f"Tags: {', '.join(tags)}")
-                
+            else:
+                click.echo(f"\nFound {len(items)} asset(s):")
                 click.echo("-" * 80)
-            
-            # Show pagination info if available
-            if result.get('NextToken'):
-                click.echo(f"More results available. Use pagination to see additional assets.")
+                
+                for asset in items:
+                    click.echo(f"ID: {asset.get('assetId', 'N/A')}")
+                    click.echo(f"Database: {asset.get('databaseId', 'N/A')}")
+                    click.echo(f"Name: {asset.get('assetName', 'N/A')}")
+                    click.echo(f"Description: {asset.get('description', 'N/A')}")
+                    click.echo(f"Distributable: {'Yes' if asset.get('isDistributable') else 'No'}")
+                    click.echo(f"Status: {asset.get('status', 'Active').title()}")
+                    
+                    tags = asset.get('tags', [])
+                    if tags:
+                        click.echo(f"Tags: {', '.join(tags)}")
+                    
+                    click.echo("-" * 80)
+                
+                # Show pagination info if available
+                if result.get('NextToken'):
+                    click.echo(f"More results available. Use pagination to see additional assets.")
+        
+        return result
         
     except DatabaseNotFoundError as e:
         click.echo(
@@ -929,6 +941,8 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
             
             click.echo(f"Total: {len(links)} file(s)")
             click.echo(f"Links expire in: {links[0].get('expiresIn', 86400) // 3600} hours" if links else "")
+        
+        return result
         
     except (FileDownloadError, DownloadError, AssetDownloadError, PreviewNotFoundError,
             AssetNotDistributableError, DownloadTreeError) as e:

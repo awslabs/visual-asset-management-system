@@ -181,6 +181,8 @@ def get(ctx: click.Context, database_id: str, asset_id: str, file_path: str, jso
             click.echo(format_metadata_output(metadata, indent=1))
         else:
             click.echo("\nNo metadata found.")
+    
+    return result
 
 
 @metadata.command()
@@ -261,6 +263,8 @@ def create(ctx: click.Context, database_id: str, asset_id: str, file_path: str, 
         
         click.echo(f"\nCreated metadata:")
         click.echo(format_metadata_output(metadata, indent=1))
+    
+    return result
 
 
 @metadata.command()
@@ -341,6 +345,8 @@ def update(ctx: click.Context, database_id: str, asset_id: str, file_path: str, 
         
         click.echo(f"\nUpdated metadata:")
         click.echo(format_metadata_output(metadata, indent=1))
+    
+    return result
 
 
 @metadata.command()
@@ -382,7 +388,7 @@ def delete(ctx: click.Context, database_id: str, asset_id: str, file_path: str, 
     target = f"file '{file_path}'" if file_path else f"asset '{asset_id}'"
     if not click.confirm(f"Are you sure you want to delete all metadata for {target} in database '{database_id}'?"):
         click.echo("Operation cancelled.")
-        return
+        return None
     
     # Get profile manager and API client
     profile_manager = get_profile_manager_from_context(ctx)
@@ -405,3 +411,5 @@ def delete(ctx: click.Context, database_id: str, asset_id: str, file_path: str, 
     else:
         click.echo(click.style("✓ Metadata deleted successfully!", fg='green', bold=True))
         click.echo(f"Target: {target} in database '{database_id}'")
+    
+    return result

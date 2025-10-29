@@ -146,3 +146,5 @@ def get(ctx: click.Context, database: str, max_items: int, page_size: int,
     else:
         formatted_output = format_metadata_schema_output(result)
         click.echo(formatted_output)
+    
+    return result

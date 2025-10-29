@@ -462,6 +462,8 @@ def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[st
         elif output_format == 'csv':
             csv_output = _format_csv_output(result, "asset")
             click.echo(csv_output)
+        
+        return result
     
     except SearchDisabledError as e:
         # Command-specific business logic error
@@ -587,6 +589,8 @@ def files(ctx: click.Context, query: Optional[str], metadata_query: Optional[str
         elif output_format == 'csv':
             csv_output = _format_csv_output(result, "file")
             click.echo(csv_output)
+        
+        return result
     
     except SearchDisabledError as e:
         # Command-specific business logic error
@@ -709,6 +713,8 @@ def simple(ctx: click.Context, query: Optional[str], asset_name: Optional[str], 
         elif output_format == 'csv':
             csv_output = _format_csv_output(result, "mixed")
             click.echo(csv_output)
+        
+        return result
     
     except SearchDisabledError as e:
         # Command-specific business logic error
@@ -772,6 +778,8 @@ def mapping(ctx: click.Context, output_format: str, jsonoutput: bool):
         elif output_format == 'csv':
             csv_output = _format_mapping_csv(mapping)
             click.echo(csv_output)
+        
+        return mapping
     
     except SearchDisabledError as e:
         # Command-specific business logic error

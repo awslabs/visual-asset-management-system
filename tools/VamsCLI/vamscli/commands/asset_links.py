@@ -268,6 +268,8 @@ def create(ctx: click.Context, from_asset_id: str, from_database_id: str,
                 click.echo(f"  Tags: {', '.join(link_data.get('tags'))}")
             click.echo(f"  Message: {result.get('message', 'Asset link created')}")
         
+        return result
+        
     except AssetLinkAlreadyExistsError as e:
         click.echo(
             click.style(f"✗ Asset Link Already Exists: {e}", fg='red', bold=True),
@@ -343,6 +345,8 @@ def get(ctx: click.Context, asset_link_id: str, json_output: bool):
             click.echo(json.dumps(result, indent=2))
         else:
             click.echo(format_asset_link_output(result))
+        
+        return result
         
     except AssetLinkNotFoundError as e:
         click.echo(
@@ -430,6 +434,8 @@ def update(ctx: click.Context, asset_link_id: str, alias_id: Optional[str], tags
                 click.echo(f"  New Tags: {', '.join(update_data.get('tags'))}")
             click.echo(f"  Message: {result.get('message', 'Asset link updated')}")
         
+        return result
+        
     except AssetLinkNotFoundError as e:
         click.echo(
             click.style(f"✗ Asset Link Not Found: {e}", fg='red', bold=True),
@@ -483,7 +489,7 @@ def delete(ctx: click.Context, asset_link_id: str, json_output: bool):
         
         if not click.confirm("Are you sure you want to proceed?"):
             click.echo("Deletion cancelled.")
-            return
+            return None
         
         click.echo(f"Deleting asset link '{asset_link_id}'...")
         
@@ -498,6 +504,8 @@ def delete(ctx: click.Context, asset_link_id: str, json_output: bool):
             )
             click.echo(f"  Asset Link ID: {asset_link_id}")
             click.echo(f"  Message: {result.get('message', 'Asset link deleted')}")
+        
+        return result
         
     except AssetLinkNotFoundError as e:
         click.echo(
@@ -552,6 +560,8 @@ def list_links(ctx: click.Context, database_id: str, asset_id: str, tree_view: b
             click.echo(f"\nAsset Links for {asset_id} in database {database_id}:")
             click.echo("=" * 60)
             click.echo(format_asset_links_list_output(result))
+        
+        return result
         
     except AssetNotFoundError as e:
         click.echo(

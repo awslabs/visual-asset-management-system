@@ -256,6 +256,8 @@ def list(ctx: click.Context, asset_link_id: str, json_output: bool):
             metadata_list = result.get('metadata', [])
             format_metadata_output(metadata_list)
         
+        return result
+        
     except AssetLinkNotFoundError as e:
         click.echo(
             click.style(f"✗ Asset Link Error: {e}", fg='red', bold=True),
@@ -398,6 +400,8 @@ def create(ctx: click.Context, asset_link_id: str, key: Optional[str],
             click.echo(f"Value: {metadata_data['metadataValue']}")
             click.echo(f"Type: {metadata_data['metadataValueType']}")
         
+        return result
+        
     except AssetLinkNotFoundError as e:
         click.echo(
             click.style(f"✗ Asset Link Error: {e}", fg='red', bold=True),
@@ -495,6 +499,8 @@ def update(ctx: click.Context, asset_link_id: str, metadata_key: str,
             click.echo(f"New Value: {metadata_data['metadataValue']}")
             click.echo(f"Type: {metadata_data['metadataValueType']}")
         
+        return result
+        
     except AssetLinkNotFoundError as e:
         click.echo(
             click.style(f"✗ Asset Link Error: {e}", fg='red', bold=True),
@@ -548,6 +554,8 @@ def delete(ctx: click.Context, asset_link_id: str, metadata_key: str, json_outpu
                 click.style("✓ Asset link metadata deleted successfully!", fg='green', bold=True)
             )
             click.echo(f"Deleted key: {metadata_key}")
+        
+        return result
         
     except AssetLinkNotFoundError as e:
         click.echo(

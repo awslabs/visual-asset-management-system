@@ -269,6 +269,8 @@ def create(ctx: click.Context, database: str, asset: str, comment: str, use_late
         else:
             click.echo(format_operation_output(result))
         
+        return result
+        
     except AssetNotFoundError as e:
         click.echo(
             click.style(f"✗ Asset Not Found: {e}", fg='red', bold=True),
@@ -346,6 +348,8 @@ def revert(ctx: click.Context, database: str, asset: str, version: str, comment:
             click.echo(json.dumps(result, indent=2))
         else:
             click.echo(format_operation_output(result))
+        
+        return result
         
     except AssetNotFoundError as e:
         click.echo(
@@ -426,6 +430,8 @@ def list(ctx: click.Context, database: str, asset: str, max_items: int, starting
         else:
             click.echo(format_version_list_output(result))
         
+        return result
+        
     except AssetNotFoundError as e:
         click.echo(
             click.style(f"✗ Asset Not Found: {e}", fg='red', bold=True),
@@ -475,6 +481,8 @@ def get(ctx: click.Context, database: str, asset: str, version: str, json_output
             click.echo(json.dumps(result, indent=2))
         else:
             click.echo(format_version_details_output(result))
+        
+        return result
         
     except AssetNotFoundError as e:
         click.echo(

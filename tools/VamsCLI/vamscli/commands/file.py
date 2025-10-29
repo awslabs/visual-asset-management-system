@@ -364,6 +364,8 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
         # Exit with appropriate code
         if not result["overall_success"]:
             sys.exit(1)
+        
+        return result
             
     except (InvalidFileError, FileTooLargeError, PreviewFileError, 
             UploadSequenceError, FileUploadError) as e:
@@ -420,6 +422,8 @@ def create_folder(ctx: click.Context, database_id: str, asset_id: str, folder_pa
         else:
             click.echo(click.style("✓ Folder created successfully!", fg='green', bold=True))
             click.echo(f"Path: {folder_path}")
+        
+        return result
         
     except (AssetNotFoundError, InvalidAssetDataError, InvalidPathError, FileAlreadyExistsError) as e:
         # Only handle command-specific business logic errors
@@ -504,6 +508,8 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
             if result.get('nextToken'):
                 click.echo(f"\nNext token: {result['nextToken']}")
         
+        return result
+        
     except AssetNotFoundError as e:
         # Only handle command-specific business logic errors
         if json_output:
@@ -571,6 +577,8 @@ def revert_file(ctx: click.Context, database_id: str, asset_id: str, file_path: 
             click.echo(f"Reverted from version: {result.get('revertedFromVersionId', version_id)}")
             if result.get('newVersionId'):
                 click.echo(f"New version ID: {result.get('newVersionId')}")
+        
+        return result
         
     except (AssetNotFoundError, InvalidAssetDataError, InvalidVersionError) as e:
         # Only handle command-specific business logic errors
@@ -662,6 +670,8 @@ def set_primary_file(ctx: click.Context, database_id: str, asset_id: str, file_p
                 click.echo(f"Type: {final_type}")
             click.echo(f"File: {file_path}")
         
+        return result
+        
     except (AssetNotFoundError, InvalidAssetDataError) as e:
         # Only handle command-specific business logic errors
         if json_output:
@@ -716,6 +726,8 @@ def delete_asset_preview(ctx: click.Context, database_id: str, asset_id: str, js
         else:
             click.echo(click.style("✓ Asset preview deleted successfully!", fg='green', bold=True))
             click.echo(f"Asset: {asset_id}")
+        
+        return result
         
     except AssetNotFoundError as e:
         # Only handle command-specific business logic errors
@@ -779,6 +791,8 @@ def delete_auxiliary_files(ctx: click.Context, database_id: str, asset_id: str, 
             click.echo(f"Path prefix: {file_path}")
             if result.get('deletedCount'):
                 click.echo(f"Files deleted: {result.get('deletedCount')}")
+        
+        return result
         
     except (AssetNotFoundError, InvalidAssetDataError) as e:
         # Only handle command-specific business logic errors
@@ -875,6 +889,8 @@ def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: st
                     if not result.get('isFolder'):
                         click.echo(f"    Size: {version.get('size', 0)} bytes")
         
+        return result
+        
     except AssetNotFoundError as e:
         # Only handle command-specific business logic errors
         if json_output:
@@ -946,6 +962,8 @@ def move_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
                 affected_count = len(result['affectedFiles'])
                 if affected_count > 2:  # More than just source and dest
                     click.echo(f"Additional files affected: {affected_count - 2}")
+        
+        return result
         
     except (AssetNotFoundError, InvalidAssetDataError, InvalidPathError, FileAlreadyExistsError) as e:
         # Only handle command-specific business logic errors
@@ -1031,6 +1049,8 @@ def copy_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
                 if affected_count > 1:  # More than just the main file
                     click.echo(f"Additional files copied: {affected_count - 1}")
         
+        return result
+        
     except (AssetNotFoundError, InvalidAssetDataError, InvalidPathError, FileAlreadyExistsError) as e:
         # Only handle command-specific business logic errors
         if json_output:
@@ -1104,6 +1124,8 @@ def archive_file(ctx: click.Context, database_id: str, asset_id: str, file_path:
                 affected_count = len(result['affectedFiles'])
                 click.echo(f"Files archived: {affected_count}")
         
+        return result
+        
     except (AssetNotFoundError, InvalidAssetDataError) as e:
         # Only handle command-specific business logic errors
         if json_output:
@@ -1169,6 +1191,8 @@ def unarchive_file(ctx: click.Context, database_id: str, asset_id: str, file_pat
                 affected_count = len(result['affectedFiles'])
                 if affected_count > 1:
                     click.echo(f"Additional files unarchived: {affected_count - 1}")
+        
+        return result
         
     except (AssetNotFoundError, InvalidAssetDataError) as e:
         # Only handle command-specific business logic errors
@@ -1247,6 +1271,8 @@ def delete_file(ctx: click.Context, database_id: str, asset_id: str, file_path: 
             if result.get('affectedFiles'):
                 affected_count = len(result['affectedFiles'])
                 click.echo(f"Files deleted: {affected_count}")
+        
+        return result
         
     except (AssetNotFoundError, InvalidAssetDataError) as e:
         # Only handle command-specific business logic errors
