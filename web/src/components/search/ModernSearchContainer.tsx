@@ -305,7 +305,9 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
 
     const handleClearSearch = () => {
         searchState.clearSearch();
-        setRecordType("asset");
+        // Don't reset recordType - preserve the current search mode (asset/file)
+        setMetadataSearchMode("both");
+        setMetadataOperator("OR");
         showSuccess("Search cleared", "All filters and search terms have been cleared");
     };
 

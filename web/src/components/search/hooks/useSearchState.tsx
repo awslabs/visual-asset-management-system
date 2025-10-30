@@ -157,7 +157,9 @@ function searchReducer(state: SearchState, action: SearchAction): SearchState {
         case "CLEAR_SEARCH":
             return {
                 ...initialState,
-                filters: state.filters, // Keep current record type filter
+                filters: {
+                    _rectype: state.filters._rectype, // Only preserve record type filter
+                },
             };
 
         case "RESET_PAGINATION":

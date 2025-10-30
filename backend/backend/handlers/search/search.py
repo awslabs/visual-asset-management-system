@@ -475,11 +475,12 @@ class FieldClassifier:
             return query
         
         # Characters that need escaping in OpenSearch query_string
+        # NOTE: Hyphen (-) is NOT escaped as it's commonly used in identifiers and should match literally
         if preserve_wildcards:
             # Don't escape * and ? if user wants wildcards
-            special_chars = r'+-=&|><!(){}[]^"~:\/'
+            special_chars = r'+=&|><!(){}[]^"~:\/'
         else:
-            special_chars = r'+-=&|><!(){}[]^"~*?:\/'
+            special_chars = r'+=&|><!(){}[]^"~*?:\/'
         
         escaped = query
         for char in special_chars:
@@ -564,17 +565,45 @@ class SimpleSearchQueryBuilder:
         # Build search queries based on parameters
         search_queries = []
         
-        # General keyword search
+        # General keyword search with hyphen support
         if request.query:
             escaped_query = self.field_classifier.escape_opensearch_query_string(request.query)
             searchable_fields = self._get_simple_searchable_fields(index_type)
-            search_queries.append({
+            
+            # Build dual-field search for hyphen support
+            query_should_clauses = []
+            
+            # 1. Search analyzed text fields
+            query_should_clauses.append({
                 "query_string": {
                     "query": f"*{escaped_query}*",
                     "fields": searchable_fields,
                     "default_operator": "OR",
                     "analyze_wildcard": True,
                     "lenient": True
+                }
+            })
+            
+            # 2. Search keyword fields for exact hyphenated matches
+            keyword_fields = [f"{field}.keyword" for field in searchable_fields 
+                             if field.startswith(("str_", "list_")) and not field.endswith(".keyword")]
+            
+            if keyword_fields:
+                query_should_clauses.append({
+                    "query_string": {
+                        "query": f"*{escaped_query}*",
+                        "fields": keyword_fields,
+                        "default_operator": "OR",
+                        "analyze_wildcard": True,
+                        "lenient": True
+                    }
+                })
+            
+            # Add combined query to search_queries
+            search_queries.append({
+                "bool": {
+                    "should": query_should_clauses,
+                    "minimum_should_match": 1
                 }
             })
         
@@ -887,7 +916,7 @@ class DualIndexQueryBuilder:
         return {"bool": bool_query} if bool_query else {"match_all": {}}
     
     def _build_general_search_query(self, query: str, include_metadata: bool, index_type: str) -> Dict[str, Any]:
-        """Build general text search query for specific index"""
+        """Build general text search query for specific index with hyphen support"""
         if not query:
             return {}
         
@@ -897,13 +926,41 @@ class DualIndexQueryBuilder:
         # Use query_string for better special character handling
         escaped_query = self.field_classifier.escape_opensearch_query_string(query)
         
-        return {
+        # Build dual-field search: text fields + keyword fields for hyphen support
+        should_clauses = []
+        
+        # 1. Search analyzed text fields (for partial matches and tokenized terms)
+        should_clauses.append({
             "query_string": {
                 "query": f"*{escaped_query}*",
                 "fields": searchable_fields,
                 "default_operator": "OR",
                 "analyze_wildcard": True,
                 "lenient": True
+            }
+        })
+        
+        # 2. Search keyword fields (for exact hyphenated matches)
+        # Only add keyword variants for string and list fields that support .keyword subfield
+        keyword_fields = [f"{field}.keyword" for field in searchable_fields 
+                         if field.startswith(("str_", "list_")) and not field.endswith(".keyword")]
+        
+        if keyword_fields:
+            should_clauses.append({
+                "query_string": {
+                    "query": f"*{escaped_query}*",
+                    "fields": keyword_fields,
+                    "default_operator": "OR",
+                    "analyze_wildcard": True,
+                    "lenient": True
+                }
+            })
+        
+        # Return bool query with should clauses (OR logic)
+        return {
+            "bool": {
+                "should": should_clauses,
+                "minimum_should_match": 1
             }
         }
     
@@ -1112,6 +1169,13 @@ class DualIndexQueryBuilder:
                 # Simple string sort field
                 field_with_keyword = add_keyword_suffix_if_needed(sort_item)
                 sanitized_sort.append(field_with_keyword)
+            elif hasattr(sort_item, 'field') and hasattr(sort_item, 'order'):
+                # Handle Pydantic SearchSortModel objects
+                field_name = sort_item.field
+                order = sort_item.order
+                field_with_keyword = add_keyword_suffix_if_needed(field_name)
+                logger.info(f"[Sort] Transforming Pydantic SearchSortModel: field={field_name} -> {field_with_keyword}, order={order}")
+                sanitized_sort.append({field_with_keyword: {"order": order}})
             elif isinstance(sort_item, dict):
                 # Check if this is the frontend format: {"field": "fieldname", "order": "asc|desc"}
                 if "field" in sort_item and "order" in sort_item:

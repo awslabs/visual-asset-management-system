@@ -193,18 +193,14 @@ class SearchRequestModel(BaseModel, extra=Extra.ignore):
         # Validate sort fields
         sort_config = values.get('sort', [])
         if sort_config:
-            valid_sort_fields = [
-                '_score', '_id', 'str_assetname', 'str_databaseid', 'str_assettype', 
-                'str_fileext', 'date_lastmodified', 'num_size', 'list_tags'
-            ]
-            
+        
             for sort_item in sort_config:
                 if isinstance(sort_item, str):
-                    if sort_item not in valid_sort_fields and not sort_item.startswith(('str_', 'num_', 'date_', 'bool_', 'list_')):
+                    if not sort_item.startswith(('str_', 'num_', 'date_', 'bool_', 'list_')):
                         logger.warning(f"Sort field {sort_item} may not be properly mapped")
                 elif isinstance(sort_item, dict):
                     for field_name in sort_item.keys():
-                        if field_name not in valid_sort_fields and not field_name.startswith(('str_', 'num_', 'date_', 'bool_', 'list_')):
+                        if not field_name.startswith(('str_', 'num_', 'date_', 'bool_', 'list_')):
                             logger.warning(f"Sort field {field_name} may not be properly mapped")
         
         return values
