@@ -343,5 +343,8 @@ report
 
 # ENV
 venv/
-
 Combined.pem
+
+#Kiro Misc
+.kiro/specs/*
+.kiro/settings/*

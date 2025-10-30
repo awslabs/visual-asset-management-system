@@ -30,13 +30,14 @@ Sample use cases that have leveraged early iterations of VAMS include:
 
 ## Web Interface Screenshots
 
-![Database View](./diagrams/screenshots/database_view.png)
-![Asset Search](./diagrams/screenshots/assets.png)
-![Asset Details](./diagrams/screenshots/asset_detail_view.jpeg)
-![3D Model Viewer](./diagrams/screenshots/model_view.png)
-![Asset Metadata](./diagrams/screenshots/metadata.png)
-![Asset Versioning](./diagrams/screenshots/asset_versioning.png)
-![Workflows](./diagrams/screenshots/workflow_view.png)
+![Database View](./documentation/diagrams/screenshots/database_view.png)
+![Asset Search](./documentation/diagrams/screenshots/assets.png)
+![Asset Details](./documentation/diagrams/screenshots/asset_detail_view.png)
+![3D Model Viewer](./documentation/diagrams/screenshots/model_view.png)
+![Asset Metadata](./documentation/diagrams/screenshots/metadata.png)
+![Asset Relationships](./diagrams/screenshots/relationships.png)
+![Asset Versioning](./documentation/diagrams/screenshots/asset_versioning.png)
+![Workflows](./documentation/diagrams/screenshots/workflow_view.png)
 
 ## Access Methods
 
@@ -87,7 +88,7 @@ Direct REST API integration for custom applications and integrations:
 
 ## Architecture Overview
 
-![VAMS Configuration Architecture](./diagrams/Commercial-GovCloud-VAMS_Architecture.png)
+![VAMS Configuration Architecture](./documentation/diagrams/Commercial-GovCloud-VAMS_Architecture.png)
 
 ## Install
 
@@ -121,7 +122,7 @@ For windows direct deployments, some changes may be needed to the below instruct
 
 You can identify stable releases by their tag. Fetch the tags `git fetch --all --tags` and then `git checkout tags/TAG` or `git checkout -b TAG tags/TAG` where TAG is the actual desired tag. A list of tags is found by running `git tag --list` or on the [releases page](https://github.com/awslabs/visual-asset-management-system/releases).
 
-Note: If you are running behind a HTTPS SSL proxy that requires network nodes to have a custom SSL certificate, head to the [CDK SSL Deploy in the developer guide](./DeveloperGuide.md#CDK-Deploy-with-Custom-SSL-Cert-Proxy) to learn more.
+Note: If you are running behind a HTTPS SSL proxy that requires network nodes to have a custom SSL certificate, head to the [CDK SSL Deploy in the developer guide](./documentation/DeveloperGuide.md#CDK-Deploy-with-Custom-SSL-Cert-Proxy) to learn more.
 
 1. `cd ./web && nvm use` - make sure you're node version matches the project. Make sure Docker daemon is running.
 
@@ -133,7 +134,7 @@ Note: If you are running behind a HTTPS SSL proxy that requires network nodes to
 
 5. If you haven't already bootstrapped your aws account with CDK. `cdk bootstrap aws://101010101010/us-east-1` - replace with your account and region. If you are boostrapping a GovCloud account, run `export AWS_REGION=[gov-cloud-region]` as the AWS SDK needs to be informed to use GovCloud endpoints. Note: Use the least-permissive AWS IAM role for boostrapping that can still generate the needed AWS components from CloudFormation for VAMS.
 
-6. Modify the `config.json` in `/infra/config` to set the VAMS deployment parameters and features you would like to deploy. Recommended minimum fields to update are `region`, `adminEmailAddress`, and `baseStackName` when using the default provided template. More information about the configuration options can be found in the [Configuration Guide](./ConfigurationGuide.md).
+6. Modify the `config.json` in `/infra/config` to set the VAMS deployment parameters and features you would like to deploy. Recommended minimum fields to update are `region`, `adminEmailAddress`, and `baseStackName` when using the default provided template. More information about the configuration options can be found in the [Configuration Guide](./documentation/ConfigurationGuide.md).
 
 7. (Optional) Override the the CDK stack name and region for deployment with environment variables `export AWS_REGION=us-east-1 && export STACK_NAME=dev` - replace with the region you would like to deploy to and the name you want to associate with the cloudformation stack that the CDK will deploy.
 
@@ -153,7 +154,7 @@ Note: If you are running behind a HTTPS SSL proxy that requires network nodes to
 
 2. Check email for temporary account password to log in with the email address you provided.
 
-3. (Optional) Follow [Create New VAMS User in permission guide](./PermissionsGuide.md#create-new-vams-user) to add additional users
+3. (Optional) Follow [Create New VAMS User in permission guide](./documentation/PermissionsGuide.md#create-new-vams-user) to add additional users
 
 ### Multiple Deployments With Different or Same Region in Single Account
 
@@ -177,17 +178,17 @@ VAMS can be deployed with a external buckets to enable using non-VAMS created bu
 
 VAMS backend allows for basic to advanced configuration based on the environment and use-case need.
 
-See [Configuration Guide](./ConfigurationGuide.md) for instructions.
+See [Configuration Guide](./documentation/ConfigurationGuide.md) for instructions.
 
 ### Permissions Options
 
 VAMS uses a Attribute-based/Role-Based Access Control (ABAC/RBAC) permission system on top of authentication to control fine grained access to various solution functionalities and data elements.
 
-See [Permissions Guide](./PermissionsGuide.md) for how to use the VAMS permission system.
+See [Permissions Guide](./documentation/PermissionsGuide.md) for how to use the VAMS permission system.
 
 ## Architecture components
 
-Refer to the ![Architecture Components in the Developer Guide](./DeveloperGuide.md/#architecture-components).
+Refer to the ![Architecture Components in the Developer Guide](./documentation/DeveloperGuide.md/#architecture-components).
 
 ## Demo and Workshop
 
@@ -195,11 +196,11 @@ Checkout the [VAMS workshop](https://catalog.us-east-1.prod.workshops.aws/worksh
 
 ## Developers
 
-To know more about how VAMS works and for instructions on configuring pipeline & workflow, refer to the Developer Guide [developer guide](./DeveloperGuide.md).
+To know more about how VAMS works and for instructions on configuring pipeline & workflow, refer to the Developer Guide [developer guide](./documentation/DeveloperGuide.md).
 
 ## Writing your own VAMS pipelines
 
-Refer to the ![Writing your own pipelines section in the Developer Guide](./DeveloperGuide.md/#adding-your-own-pipelines).
+Refer to the ![Writing your own pipelines section in the Developer Guide](./documentation/DeveloperGuide.md/#adding-your-own-pipelines).
 
 ## Uninstalling
 
@@ -212,42 +213,7 @@ The costs of this solution can be understood as fixed storage costs and variable
 
 You are responsible for the cost of the AWS services used while running this solution. Ensure that you have [billing alarms](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/monitor_estimated_charges_with_cloudwatch.html) set within the constraints of your budget.
 
-Configuration Options:
-
-0. C-0: Deploy VPC with variable endpoints based on below configuration needs (Optional). Option to import existing VPC/Subnets w/ Endpoints.
-1. C-1: Deploy Static Webpage with Cloudfront (Default) or ALB. ALB requires VPC with 2 AZ
-2. C-2: Deploy OpenSearch with Serverless (Default), Provisioned, or No Open Search. Provisioned requires VPC with 3 AZ
-3. C-3: Deploy all Lambdas in VPC (Optional). Requires VPC with 1 AZ
-4. C-4: Deploy with location services (Default).
-5. C-5: Deploy use-case specific pipelines [i.e. PotreeViewer Pipelines, GenAI Metadata generation] (Optional). Requires VPC with 1 AZ.
-
-An approximate monthly cost breakdown is below (excluding some free tier inclusions):
-
-| Service                                       | Quantity                                                            | Cost (Commercial) | Cost (GovCloud) |
-| :-------------------------------------------- | :------------------------------------------------------------------ | :---------------- | :-------------- |
-| VPC (C-0 + C-1/C-2/C-3/C-5,Optional)          | 1-11x Endpoints per AZ (up to 3 AZ) - based on config options       | $<240.91          | $<311.13        |
-| Amazon Cloudfront (C-1,Default)               | First 1TB - Included in free tier                                   | $0.00             | N/A             |
-| Amazon ALB (C-1,Optional)                     | 1 ALB, 1TB Processed                                                | $24.43            | $52.56          |
-| Amazon API Gateway                            | 150000 requests                                                     | $0.16             | $0.19           |
-| Amazon DynamoDB                               | 750000 writes, 146250 reads, 0.30 GB storage                        | $1.18             | $2.36           |
-| AWS Lambda                                    | 12000 invocations, 2-minute avg. duration, 256 MB memory            | $6                | $6              |
-| AWS Step Functions                            | 92400 state transitions                                             | $2.21             | $2.65           |
-| Amazon S3                                     | 10 GB storage, 4000 PUT requests, 4000 GET requests                 | $0.26             | $0.41           |
-| Amazon Rekognition                            | 9000 Image analysis, 3 Custom Label inference units                 | $22.32            | N/A             |
-| Amazon Elastic Container Registry             | ECR (In region) 40GB                                                | $4                | $4              |
-| Amazon Open Search Serverless (C-2,Default)   | 2x Index OCU, 2x Search OCU, 100GB Data                             | $703.20           | N/A             |
-| Amazon Open Search Provisioned (C-2,Optional) | 3x Data (r6g.large.search), 3x Master (r6g.large.search), 240GB EBS | $743.66           | $915.52         |
-| Amazon Location Service (C-4,Default)         | 1000 Map tiles Retrieved                                            | $40.00            | N/A             |
-
-Below are the additional costs for including use-case specific pipeline features in your deployment (C-5, Optional):
-
-| Service            | Quantity                                     | Cost (Commercial) | Cost (GovCloud) |
-| :----------------- | :------------------------------------------- | :---------------- | :-------------- |
-| Batch Fargate      | 10 hours of processing                       | $3.56             | $4.88           |
-| Amazon S3          | 300 GB storage, 30GB transfer out            | $9.60             | $16.34          |
-| Amazon Cloudwatch  | 1GB logs - VPC Flowlogs/API Gateway/Pipeline | $3.28             | $4.12           |
-| Amazon Bedrock     | 1M Tokens - Claude Sonnet                    | $18               | $NA             |
-| Amazon Rekognition | 10k Image Processing                         | $7.50             | $9              |
+Refer to the ![Costs Guide](./documentation/Costs.md).
 
 ## Security
 
@@ -289,6 +255,7 @@ See the [CONTRIBUTING](./CONTRIBUTING.md) file for how to contribute.
 ## License
 
 See the [LICENSE](./LICENSE) file for our project's licensing.
+See the [NOTICE](./NOTICE.md) file for third party project licensing.
 
 Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 

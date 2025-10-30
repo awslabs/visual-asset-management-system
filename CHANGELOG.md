@@ -103,6 +103,7 @@ OpenSearch has new indexes and requires the data migration script or new re-inde
 -   Added a new `assetIdGSI` Global Secondary Index on the assets dynamoDB table with PK: assetId, SK: databaseId to allow for easier querying without scans when just assetId is provided.
 -   Updated $inputMetadata for pipeline inputs to separate out asset and file metadata fields
 -   Updated DeveloperGuide.md documentation for pipelines on all the input variables and their formats that are passed to pipelines.
+-   Moved documentation files and diagrams to new Documentation folder, added Costs.md documentation to reduce main README.md size.
 -   Update package dependencies and fixed any associated breaking changes
 
 ### Known Outstanding Issues

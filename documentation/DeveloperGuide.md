@@ -23,7 +23,7 @@ Pipelines are a feature in VAMS that allow you to edit
 
 #### Workflows Execution
 
-![Workflows Execution](/diagrams/workflow_execution.jpeg)
+![Workflows Execution](./diagrams/workflow_execution.jpeg)
 
 ### Frontend WebApp
 
@@ -427,7 +427,7 @@ If you need to deploy VAMS CDK using custom SSL certificates due to internal org
 
 1. Download to your host machine the .pem certificate that is valid for your HTTPS proxy to a specific path
 2. Set the following environments variables to the file path in step 1: `$AWS_CA_BUNDLE` and `$NODE_EXTRA_CA_CERTS`
-3. Modify the Dockerbuild files specified and instructed in ![Local Docker BUilds](#Local-Docker-Builds---Custom-Build-Settings) and add the following lines (for Python PIP installs) below. Update `/local/OShost/path/Combined.pem` to the local host path relative to the Dockerfile location.
+3. Modify the Dockerbuild files specified and instructed in ![Local Docker Builds](#Local-Docker-Builds---Custom-Build-Settings) and add the following lines (for Python PIP installs) below. Update `/local/OShost/path/Combined.pem` to the local host path relative to the Dockerfile location.
 
 ```
 COPY /local/OShost/path/Combined.pem /var/task/Combined.crt
@@ -963,7 +963,7 @@ The CDK deployment deploys the VAMS stack into your account. The components that
 5. [S3 Buckets](https://aws.amazon.com/s3/) for assets, cdk deployments and log storage
 6. [Cognito User Pool](https://docs.aws.amazon.com/cognito/) for authentication
 7. [Open Search Collection](https://aws.amazon.com/opensearch-service/features/serverless/) for searching the assets using metadata
-   ![ARCHITECTURE](./VAMS_Architecture.jpg)
+   ![ARCHITECTURE](./diagrams/Commercial-GovCloud-VAMS_Architecture.png)
 
 # API Schema
 
@@ -1857,7 +1857,7 @@ This section describes use-case specific pipelines that can be activated in the 
 
 Pipeline architectures can either be synchronous or asynchonous. If asynchronous, the option of "Wait for Callback with the Task Token" must be used when adding the pipeline to VAMS.
 
-See the [NOTICE file](./NOTICE.md) for specific third-party license information regarding each of these pipelines.
+See the [NOTICE file](../NOTICE.md) for specific third-party license information regarding each of these pipelines.
 
 ### Standard Type - 3D Basic Converter Pipeline (Synchronous)
 
@@ -1905,7 +1905,7 @@ There are no defined input parameter configurations for this pipeline. This pipe
 
 NOTE: If pipeline registered separately in VAMS Pipelines, it must be registered in VAMS with the option of "Wait for Callback with the Task Token"
 
-![Preview PotreeViewer Pipeline Architecture](/diagrams/pipeline_usecase_previewPotreeViewer.png)
+![Preview PotreeViewer Pipeline Architecture](./diagrams/pipeline_usecase_previewPotreeViewer.png)
 
 | Input File Types Supported        | Base Lambda Function Name - VAMS trigger | Base Lambda Function Name - SNS trigger |
 | :-------------------------------- | :--------------------------------------- | --------------------------------------- |
@@ -1913,7 +1913,7 @@ NOTE: If pipeline registered separately in VAMS Pipelines, it must be registered
 
 ### Standard Type - GenerativeAI 3D Metadata Labeling Pipeline (Asynchronous)
 
-> Notice: This use-case pipeline uses a open-source library that is GPL licensed. Please refer to the ![NOTICE File](/NOTICE.md) and review with your organizations legal team before enabling use.
+> Notice: This use-case pipeline uses a open-source library that is GPL licensed. Please refer to the ![NOTICE File](../NOTICE.md) and review with your organizations legal team before enabling use.
 
 The GenerativeAI 3D Metadata labeling Pipeline is used to generate 2D renders and metadata JSON labeling information for 3D mesh asset files. This is useful to auto-label asset data as it is ingested.
 
@@ -1934,7 +1934,7 @@ The following inputParameters are supported:
 
 NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback with the Task Token"
 
-![GenAI Metadata 3D Labeling Pipeline Architecture](/diagrams/pipeline_usecase_genAiMetadata3dLabeling.png)
+![GenAI Metadata 3D Labeling Pipeline Architecture](./diagrams/pipeline_usecase_genAiMetadata3dLabeling.png)
 
 | Input File Types Supported                              | Base Lambda Function Name                  |
 | :------------------------------------------------------ | :----------------------------------------- |
@@ -1980,14 +1980,14 @@ The Open Source 3D Reconstruction Toolbox for Gaussian Splats is a pipeline that
 
 If you wish to trigger this pipelines additionally/manually through VAMS pipeline, you can setup a new VAMS pipeline using the table below. You will need to lookup the lambda function name in the AWS console based on the base deployment name listed.
 
-The pipeline uses an open source tool from [AWS Open Source 3D Reconstruction Toolbox for Gaussian Splats](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws). VAMS only uses the container code from the repo and will spin up the below architecture. For more information, see the [README.md](backendPipelines/3dRecon/splatToolbox/README.md) within the backend pipeline code.
+The pipeline uses an open source tool from [AWS Open Source 3D Reconstruction Toolbox for Gaussian Splats](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws). VAMS only uses the container code from the repo and will spin up the below architecture. For more information, see the [README.md](../backendPipelines/3dRecon/splatToolbox/README.md) within the backend pipeline code.
 
 The pipeline uses input metadata and pipeline input parameters to configure the toolbox. To set these parameters, be sure to set either the `inputMetadata` fields in the input media inside VAMS or ensure the pipeline has the appropriate `inputParameters`. Both can be set, but the `inputMetadata` takes precedence over any `inputParameters` within the pipeline. To see the full list of configuration parameters to set for pipeline, see the [official repo documentation](<](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws)>).
 
 NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback with the Task Token".
 NOTE: This pipeline is very large and requires signifnant build time during the initial deployment! Factor in several GB of download and upload and an extra hour for deployment.
 
-![Open Source 3D Reconstruction Toolbox for Gaussian Splat Pipeline Architecture](/diagrams/pipeline_usecase_splatToolbox.png)
+![Open Source 3D Reconstruction Toolbox for Gaussian Splat Pipeline Architecture](../diagrams/pipeline_usecase_splatToolbox.png)
 
 | Input File Types Supported | Base Lambda Function Name |
 | :------------------------- | :------------------------ |
@@ -2258,9 +2258,9 @@ For detailed VamsCLI development information, see the documentation in the CLI t
 
 **Development Resources:**
 
--   **[Development Guide](./tools/VamsCLI/docs/DEVELOPMENT.md)** - Complete development setup, architecture, and contribution guidelines
--   **[Installation Guide](./tools/VamsCLI/docs/INSTALLATION.md)** - Installation methods and requirements
--   **[Authentication Guide](./tools/VamsCLI/docs/AUTHENTICATION.md)** - Authentication system details
+-   **[Development Guide](../tools/VamsCLI/docs/DEVELOPMENT.md)** - Complete development setup, architecture, and contribution guidelines
+-   **[Installation Guide](../tools/VamsCLI/docs/INSTALLATION.md)** - Installation methods and requirements
+-   **[Authentication Guide](../tools/VamsCLI/docs/AUTHENTICATION.md)** - Authentication system details
 
 The CLI tool includes comprehensive developer documentation covering architecture, testing strategies, development patterns, and extension guidelines for organizations wanting to customize or extend the CLI functionality.
 
@@ -2272,7 +2272,7 @@ Within the web folder You can do `npm run start` to start a local frontend appli
 
 VAMS uses a modular plugin system for file viewers that allows easy addition of new visualizers without modifying core code. The system supports various file types including 3D models, point clouds, images, videos, audio, HTML documents, and data visualizations.
 
-For complete documentation on adding new file visualizers, see the **[Visualizer Plugin System Documentation](./web/src/visualizerPlugin/README.md)**.
+For complete documentation on adding new file visualizers, see the **[Visualizer Plugin System Documentation](../web/src/visualizerPlugin/README.md)**.
 
 ### Quick Start - Adding a New Viewer
 
@@ -2296,7 +2296,7 @@ The current plugin system includes viewers for:
 -   **HTML**: `.html` (HTMLViewerPlugin)
 -   **Data**: `.rds`, `.fcs`, `.csv` (ThreeDimensionalPlotterPlugin, ColumnarViewerPlugin)
 
-For detailed information on the architecture, configuration options, and step-by-step instructions, see the **[Visualizer Plugin System Documentation](./web/src/visualizerPlugin/README.md)**.
+For detailed information on the architecture, configuration options, and step-by-step instructions, see the **[Visualizer Plugin System Documentation](../web/src/visualizerPlugin/README.md)**.
 
 # Preview Files
 
