@@ -20,6 +20,7 @@ from .commands.metadata import metadata
 from .commands.metadata_schema import metadata_schema
 from .commands.features import features
 from .commands.search import search
+from .commands.industry import industry
 from .utils.profile import ProfileManager
 from .utils.exceptions import SetupRequiredError
 from .utils.global_exceptions import handle_global_exceptions
@@ -159,6 +160,7 @@ cli.add_command(metadata)
 cli.add_command(metadata_schema)
 cli.add_command(features)
 cli.add_command(search)
+cli.add_command(industry)
 
 
 @cli.command()
