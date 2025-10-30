@@ -1987,7 +1987,7 @@ The pipeline uses input metadata and pipeline input parameters to configure the 
 NOTE: Pipeline must be registered in VAMS with the option of "Wait for Callback with the Task Token".
 NOTE: This pipeline is very large and requires signifnant build time during the initial deployment! Factor in several GB of download and upload and an extra hour for deployment.
 
-![Open Source 3D Reconstruction Toolbox for Gaussian Splat Pipeline Architecture](../diagrams/pipeline_usecase_splatToolbox.png)
+![Open Source 3D Reconstruction Toolbox for Gaussian Splat Pipeline Architecture](./diagrams/pipeline_usecase_splatToolbox.png)
 
 | Input File Types Supported | Base Lambda Function Name |
 | :------------------------- | :------------------------ |
